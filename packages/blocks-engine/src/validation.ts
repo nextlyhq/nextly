@@ -32,6 +32,11 @@ import {
   isBlockType,
   renderedDomId,
 } from "./document";
+import {
+  ENTRY_CONTENT_ISSUE_CODES,
+  entryContentIssues,
+  type EntryContentIssueCode,
+} from "./entry-content";
 import { describeValue, pointer } from "./issue-text";
 import {
   DEFAULT_LIMITS,
@@ -401,7 +406,8 @@ export type IssueCode =
   | keyof typeof DOCUMENT_ISSUE_CODES
   | BindingIssueCode
   | keyof typeof LIST_ISSUE_CODES
-  | keyof typeof CONDITION_ISSUE_CODES;
+  | keyof typeof CONDITION_ISSUE_CODES
+  | EntryContentIssueCode;
 
 /**
  * The stable issue-code vocabulary, each with a one-line description. Tests
@@ -421,6 +427,9 @@ export const ISSUE_CODES: { readonly [Code in IssueCode]: string } = {
   // A block's visibility condition codes, the ones the renderer reports for
   // the same conditions, so an author sees one name for one problem.
   ...CONDITION_ISSUE_CODES,
+  // The Entry content block's own rules, from the module that reads the
+  // block, so the save, the editor and the API refuse one alike.
+  ...ENTRY_CONTENT_ISSUE_CODES,
 };
 
 /**
@@ -716,7 +725,14 @@ export function validateDocument(
               ...(ctx.stored === undefined ? {} : { stored: ctx.stored }),
               maxNodes: survey.limits.maxNodes,
             }
-          ).map(withoutNodeId))
+          ).map(withoutNodeId)),
+      // The Entry content block: in a template only, one per template, and
+      // its field named as text. Whether that field is a blocks field of the
+      // template's collection is the server's to judge, with the schema.
+      ...entryContentIssues(envelope.nodes, {
+        documentKind: envelope.kind,
+        maxNodes: survey.limits.maxNodes,
+      }).map(withoutNodeId)
     );
   }
 

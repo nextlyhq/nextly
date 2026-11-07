@@ -298,6 +298,7 @@ vi.mock("../template-preview-client", () => ({
       hasPrev: false,
       mayCreate: true,
       labels: { singular: "Post", plural: "Posts" },
+      blocksFields: [{ name: "body", label: "Body" }],
     },
   })),
   readPreviewEntry: vi.fn(async ({ id }: { id: string }) => ({

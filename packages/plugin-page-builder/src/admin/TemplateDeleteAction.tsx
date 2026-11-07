@@ -47,6 +47,7 @@ import { useMemo, useState, type JSX } from "react";
 
 import type { TemplateAction } from "../templates/template-actions-contract";
 
+import { DESTRUCTIVE_CONFIRM_CLASS } from "./destructive-confirm";
 import { DryRunVerdictWords, useDryRunVerdict } from "./dry-run-verdict";
 import {
   inSentence,
@@ -214,6 +215,8 @@ export function TemplateDeleteAction({
             <Button
               type="button"
               variant="destructive"
+              // The page builder's confirming red, as its other dialogs take.
+              className={DESTRUCTIVE_CONFIRM_CLASS}
               // Offered only once the dry run says the site would accept it.
               disabled={busy || verdict.kind !== "allowed"}
               onClick={confirm}

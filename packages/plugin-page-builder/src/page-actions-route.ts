@@ -12,6 +12,9 @@
  *   limit and offset, as the list's inspector does.
  * - **set-conditions** sets a block's visibility conditions, as the block's
  *   "Show when" controls do.
+ * - **place-entry-content** places a template's Entry content block, and
+ *   **set-entry-content-field** chooses the blocks field it draws, as the
+ *   Add panel and the block's Field menu do.
  * - **bind-prop** binds a block's prop to a field, as the inspector's bind
  *   button does.
  * - **unbind-prop** unbinds it, keeping in its place what a visitor sees now,
@@ -38,6 +41,8 @@
 import {
   applyOps,
   COLLECTION_LIST_TYPE,
+  ENTRY_CONTENT_FIELD_PROP,
+  ENTRY_CONTENT_TYPE,
   namesListSource,
   COMPONENT_INSTANCE_TYPE,
   findNode,
@@ -99,6 +104,7 @@ import {
   storedFingerprint,
 } from "./judged-writes";
 import { readingAsUser, type ComponentStore } from "./library-route";
+import { readEntryBlocksFields } from "./templates/entry-content-fields";
 import {
   carryingTemplateTarget,
   templateTargetOf,
@@ -477,6 +483,12 @@ async function opsFor(
   unbound?: UnbindAnswer;
 }> {
   switch (action.kind) {
+    case "place-entry-content":
+      return placeEntryContentOps(ctx, action, document, source.templateTarget);
+    case "set-entry-content-field":
+      return {
+        ops: [entryContentFieldUpdate(document, action.nodeId, action.field)],
+      };
     case "insert-pattern":
       return insertPatternOps(ctx, action.patternId, action.at, document);
     case "place-component":
@@ -599,6 +611,77 @@ async function requireReadable(
       logContext: { reason: "page-action-missing-component" },
     });
   }
+}
+
+/**
+ * The insert op that places an Entry content block: with the field named,
+ * else the template's collection's one top-level blocks field where it has
+ * exactly one, so the stored choice is explicit. With several and none
+ * named, it is placed naming none, and the write is refused until one is
+ * chosen. Whether it may be placed here at all (a template, one of them) is
+ * the write's to judge, as an editor save is.
+ */
+async function placeEntryContentOps(
+  ctx: PageActionsContext,
+  action: Extract<PageAction, { kind: "place-entry-content" }>,
+  document: BlockDocument,
+  templateTarget: string | undefined
+): Promise<{ ops: readonly BuilderOp[]; insertedId: string }> {
+  const field = action.field ?? (await onlyBlocksFieldOf(ctx, templateTarget));
+  const node: BlockNode = {
+    id: newId(),
+    type: ENTRY_CONTENT_TYPE,
+    version: 1,
+    props: field === undefined ? {} : { [ENTRY_CONTENT_FIELD_PROP]: field },
+  };
+  return {
+    ops: [
+      {
+        kind: "insert",
+        node,
+        at: action.at ?? { index: document.nodes.length },
+      },
+    ],
+    insertedId: node.id,
+  };
+}
+
+/**
+ * The template's collection's one top-level blocks field, or nothing where
+ * it has none or several, or the page is no template.
+ */
+async function onlyBlocksFieldOf(
+  ctx: PageActionsContext,
+  templateTarget: string | undefined
+): Promise<string | undefined> {
+  if (templateTarget === undefined) return undefined;
+  // A failed read aborts the action rather than placing the block with a
+  // guess; a collection the site does not have offers no field to choose.
+  const read = await readEntryBlocksFields(
+    ctx.services.collections,
+    templateTarget
+  );
+  const fields = read?.fields ?? [];
+  return fields.length === 1 ? fields[0]?.name : undefined;
+}
+
+/** The update op that chooses the field an Entry content block draws. */
+function entryContentFieldUpdate(
+  document: BlockDocument,
+  nodeId: string,
+  field: string
+): BuilderOp {
+  const node = findNode(document.nodes, nodeId);
+  if (node === undefined || node.type !== ENTRY_CONTENT_TYPE) {
+    throw refusedAction([
+      `There is no Entry content block "${nodeId}" on this page.`,
+    ]);
+  }
+  return {
+    kind: "update",
+    id: nodeId,
+    patch: { props: { ...node.props, [ENTRY_CONTENT_FIELD_PROP]: field } },
+  };
 }
 
 /** The update op that rewrites one placement's props. */

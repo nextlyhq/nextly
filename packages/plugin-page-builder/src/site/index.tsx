@@ -16,6 +16,12 @@
  * A server component, read through Nextly's cache and tagged with the site
  * code Single, so a save refreshes every page and pages stay static.
  *
+ * Under Cache Components the read must go through the app's own `"use cache"`
+ * function (`src/nextly/cached-read.ts`), imported by the layout that renders
+ * `<SiteCode>`. Without it the read falls back to `unstable_cache`, whose miss
+ * is a query still pending when a prerender stops, so a build fails now and
+ * then; `<SiteCode>` refuses that read and names the fix instead.
+ *
  * @module site
  * @experimental
  */
@@ -78,13 +84,55 @@ function skippedPaths(props: SiteCodeProps): string[] {
   return (props.skip ?? DEFAULT_SKIP).map(path => `${base}${path}`);
 }
 
-/** The stored site code, read through Nextly's cache, tagged by its Single. */
+/** Where the site code page says how to mount `<SiteCode>` under Cache Components. */
+const CACHE_COMPONENTS_DOCS_URL =
+  "https://nextlyhq.com/docs/page-builder/site-code#with-cache-components";
+
+/**
+ * What `<SiteCode>` says when it would read under Cache Components with no
+ * `"use cache"` read function registered: the file to add and the line that
+ * imports it, so the person reading a failed build can fix it from here.
+ */
+const UNREGISTERED_READ_MESSAGE =
+  "<SiteCode> can't read the site code: Cache Components is on, and this app " +
+  'has registered no "use cache" read function, so the read would go through ' +
+  "unstable_cache and can fail the prerender. Add src/nextly/cached-read.ts " +
+  "(its Cache Components version), then import it from the layout that " +
+  'renders <SiteCode>: import "@/nextly/cached-read"; (or a relative path ' +
+  `where the app has no "@/" alias). How: ${CACHE_COMPONENTS_DOCS_URL}`;
+
+/**
+ * The stored site code, read through Nextly's cache, tagged by its Single.
+ *
+ * Under Cache Components with no `"use cache"` read function registered it
+ * throws rather than read: registration is a side effect of whichever modules
+ * import the app's `cached-read.ts`, so a route that imports none of them
+ * (`/_not-found` among them) would read through `unstable_cache` and fail its
+ * prerender only some of the time. A plain `Error`, since its message is the
+ * fix and the build prints it as is.
+ */
 async function readStoredSiteCode(slug: string): Promise<unknown> {
-  const [{ getCachedNextly }, { cachedFind, nextlySingleTags }] =
-    await Promise.all([
-      import("@nextlyhq/plugin-sdk"),
-      import("nextly/runtime"),
-    ]);
+  const [
+    { getCachedNextly },
+    {
+      cacheComponentsEnabled,
+      cachedFind,
+      cachedReadRegistered,
+      nextlySingleTags,
+    },
+  ] = await Promise.all([
+    import("@nextlyhq/plugin-sdk"),
+    import("nextly/runtime"),
+  ]);
+  // Whether this app builds with Cache Components on, read here, in code the
+  // app bundles, because Next.js inlines `process.env.__NEXT_CACHE_COMPONENTS`
+  // only into that; nextly, loaded as a server external, cannot see it.
+  if (
+    cacheComponentsEnabled(process.env.__NEXT_CACHE_COMPONENTS) &&
+    !cachedReadRegistered()
+  ) {
+    throw new Error(UNREGISTERED_READ_MESSAGE);
+  }
   return cachedFind(
     async () => {
       const nextly = await getCachedNextly();

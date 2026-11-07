@@ -67,6 +67,7 @@ describe("core block registration", () => {
       "core/columns",
       "core/divider",
       "core/embed",
+      "core/entry-content",
       "core/form",
       "core/gallery",
       "core/heading",
@@ -76,6 +77,7 @@ describe("core block registration", () => {
       "core/rich-text",
       "core/section",
       "core/spacer",
+      "core/table-of-contents",
       "core/text",
     ]);
   });

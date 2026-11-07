@@ -33,6 +33,12 @@ export const TEMPLATE_ENTRY_COLLECTION_FIELD = "entryCollection";
 /** The field an entry's own design names the one entry it serves in, by id. */
 export const TEMPLATE_ENTRY_ID_FIELD = "entryId";
 
+/** The field holding the key of the entry an own design serves, unique. */
+export const TEMPLATE_ENTRY_FIELD = "entry";
+
+/** The field naming the template an own design was copied from. */
+export const TEMPLATE_FORKED_FROM_FIELD = "forkedFrom";
+
 /**
  * The fields a template names the collection it draws in, in order: a
  * collection's template by `collection`, an entry's own design by
@@ -42,6 +48,17 @@ export const TEMPLATE_TARGET_FIELDS: readonly string[] = [
   TEMPLATE_COLLECTION_FIELD,
   TEMPLATE_ENTRY_COLLECTION_FIELD,
 ];
+
+/**
+ * The text field whose value is an entry's part of its address: a collection
+ * with none has nothing to serve an entry at, so it may have no template. The
+ * guard refuses one by it, and the template form offers only the collections
+ * that declare it.
+ */
+export const TEMPLATE_ENTRY_ADDRESS_FIELD = "slug";
+
+/** The template field holding the address its collection's entries are served at. */
+export const TEMPLATE_ADDRESS_FIELD = "address";
 
 /** Where the entries a template may preview are listed. */
 export const TEMPLATE_PREVIEW_ENTRIES_PATH = "/template-preview/entries";
@@ -88,8 +105,18 @@ export interface PreviewCollectionLabels {
 }
 
 /**
+ * One top-level blocks field of the template's collection, which an Entry
+ * content block may draw: its name, and what the admin calls it.
+ */
+export interface PreviewBlocksField {
+  readonly name: string;
+  readonly label: string;
+}
+
+/**
  * The list's meta: its pagination, whether the author may create an entry
- * of the collection, and the collection's names.
+ * of the collection, the collection's names, and its top-level blocks
+ * fields.
  */
 export interface PreviewEntriesMeta {
   readonly total: number;
@@ -100,6 +127,8 @@ export interface PreviewEntriesMeta {
   readonly hasPrev: boolean;
   readonly mayCreate: boolean;
   readonly labels: PreviewCollectionLabels;
+  /** The collection's top-level blocks fields, in its order. */
+  readonly blocksFields: readonly PreviewBlocksField[];
 }
 
 /** What the list answers: the canonical list envelope. */

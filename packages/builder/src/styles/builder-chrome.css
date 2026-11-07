@@ -3947,13 +3947,16 @@
 }
 
 /*
- * A block whose visibility conditions decide who sees it. The canvas draws it
- * for whoever the page would show it to, and this badge says it isn't shown
- * to everyone: a faint dashed outline round the block with a tab on its top
- * edge, so the badge reads as this block's and never covers what it draws. Red when its
- * conditions can't be checked, since visitors then never see it.
+ * The at-rest mark: a faint dashed outline round a block the canvas says
+ * something about whether or not it is selected, with its tabs on the top
+ * edge, so they read as this block's and never cover what it draws. A block
+ * whose visibility conditions decide who sees it ("Conditional", red when
+ * its conditions can't be checked, since visitors then never see it, and
+ * "Shown for this post" while conditions are applied for the entry), and
+ * an Entry content block, which draws the entry's own content
+ * ("Entry content · Body"). A block that is both carries both tabs.
  */
-.nx-canvas-mark[data-mark="conditioned"] {
+.nx-canvas-mark[data-mark="at-rest"] {
   box-sizing: border-box;
   border: 1px dashed
     color-mix(in oklch, var(--nx-muted-foreground) 55%, transparent);
@@ -3962,26 +3965,35 @@
   box-shadow: none;
 }
 
-.nx-canvas-mark[data-mark="conditioned"][data-condition="unchecked"] {
+.nx-canvas-mark[data-mark="at-rest"][data-condition="unchecked"] {
   border-color: color-mix(in oklch, var(--nx-destructive) 70%, transparent);
 }
 
 /* Selected, the selection ring outlines the block, and the dash steps back:
    after the red rule, so it wins on order at the same specificity. */
-.nx-canvas-mark[data-mark="conditioned"][data-condition-selected] {
+.nx-canvas-mark[data-mark="at-rest"][data-at-rest-selected] {
   border-color: transparent;
 }
 
-/* The badge: a tab on the outline's top edge, its foot on the dash, so it
-   reads as this block's mark and not the one above. */
-.nx-canvas-mark__condition {
+/* The tabs: on the outline's top edge, their feet on the dash, so they read
+   as this block's mark and not the one above. */
+.nx-canvas-mark__tabs {
   position: absolute;
   right: calc(var(--nx-tag-inset-side, 0px) - 1px);
   bottom: 100%;
   display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.nx-canvas-mark__tab {
+  display: inline-flex;
+  flex: none;
   align-items: center;
   gap: 4px;
-  max-width: 100%;
+  min-width: 0;
   overflow: hidden;
   padding: 1px 8px;
   border: 1px solid var(--nx-border);
@@ -3992,35 +4004,50 @@
     500 11px/16px var(--font-sans, system-ui),
     sans-serif;
   white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
-.nx-canvas-mark__condition > svg {
+/* The Entry content tab gives way first on a narrow block: its words are
+   the longer, and the field is named in Layers and the inspector too. */
+.nx-canvas-mark__tab[data-tab="entry-content"] {
+  flex: 0 1 auto;
+}
+
+.nx-canvas-mark__tab > svg {
   flex: none;
 }
 
-/* At the top of what's on screen: a tab on the outline's bottom edge. */
-.nx-canvas-mark[data-condition-tag="below"] > .nx-canvas-mark__condition {
+/* At the top of what's on screen: tabs on the outline's bottom edge. */
+.nx-canvas-mark[data-tab-at="below"] > .nx-canvas-mark__tabs {
   top: 100%;
   bottom: auto;
+  align-items: flex-start;
+}
+
+.nx-canvas-mark[data-tab-at="below"] .nx-canvas-mark__tab {
   border-radius: 0 0 4px 4px;
 }
 
 /* A block taller than what's on screen: inside its top corner, the outer
-   corner square with the dash, so it's seen. */
-.nx-canvas-mark[data-condition-tag="inside"] > .nx-canvas-mark__condition {
+   corner square with the dash, so they're seen. */
+.nx-canvas-mark[data-tab-at="inside"] > .nx-canvas-mark__tabs {
   top: -1px;
   bottom: auto;
+  align-items: flex-start;
+}
+
+.nx-canvas-mark[data-tab-at="inside"] .nx-canvas-mark__tab {
   border-radius: 0 0 0 4px;
 }
 
-.nx-canvas-mark[data-condition="unchecked"] > .nx-canvas-mark__condition {
+.nx-canvas-mark__tab[data-tab="unchecked"] {
   border-color: var(--nx-destructive);
   color: var(--nx-destructive);
 }
 
 /* Shown for the previewed entry while conditions apply: a tick in the
    success colour, the words in the foreground's. */
-.nx-canvas-mark[data-condition="shown"] > .nx-canvas-mark__condition > svg {
+.nx-canvas-mark__tab[data-tab="shown"] > svg {
   color: var(--nx-success);
 }
 
@@ -8682,11 +8709,15 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
- * A chosen option longer than the menu button ("Load when near the screen")
- * stays on one line, cut with an ellipsis, rather than wrapping the button
- * to two lines in a row of one-line fields.
+ * A chosen option longer than the menu button ("Load when near the screen",
+ * Entry content's "Members Only (removed)") stays on one line, cut with an
+ * ellipsis, rather than wrapping the button to two lines in a row of
+ * one-line fields. Entry content's Field names the whole of it in its
+ * trigger's title.
  */
-.nx-inspector__field[data-content-control="select"] [data-slot="select-value"] {
+.nx-inspector__field[data-content-control="select"] [data-slot="select-value"],
+.nx-inspector__field[data-content-control="entryField"]
+  [data-slot="select-value"] {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -10840,6 +10871,40 @@ label[data-named-above] .nx-style-inspector__field-label-text {
     sans-serif;
   font-size: 0.6875rem;
   letter-spacing: 0.04em;
+}
+
+/*
+ * The Entry content block's Content tab: under its Field menu, the line
+ * saying whose content it draws, and Open entry beside it, a quiet action at
+ * the line's start, as the proposal draws them.
+ */
+.nx-inspector__entry-content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-block-start: 0.5rem;
+}
+
+.nx-inspector__entry-content > button {
+  gap: 0.375rem;
+}
+
+/* A field the collection no longer has, still chosen: marked as the field
+   the canvas's red note names, its value in the same red. */
+[data-content-control="entryField"]
+  [data-slot="select-trigger"][aria-invalid="true"] {
+  border-color: var(--nx-destructive);
+  color: var(--nx-destructive);
+}
+
+/*
+ * A row marking a problem with its block: an Entry content block whose field
+ * the collection no longer has. In the destructive ink, as the canvas's note
+ * and the inspector's Field say it, the words read out beside the icon.
+ */
+.nx-layer-row__badge[data-problem] {
+  color: var(--nx-destructive);
 }
 
 /*

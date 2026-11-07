@@ -44,7 +44,7 @@ import type {
 import { conditionAllows } from "../visibility";
 
 import { ICON_TYPE, iconMayDraw } from "./icon";
-import { IMAGE_TYPE, imageMayDraw } from "./image";
+import { firstMediaRead, IMAGE_TYPE, imageMayDraw } from "./image";
 import { readClaimOf } from "./props";
 
 /** Where a prop's value comes from: as set, or a list item's field path. */
@@ -549,7 +549,11 @@ async function stepGoesOn(called: Promise<void> | undefined): Promise<boolean> {
   return true;
 }
 
-/** Every media id the entries' images draw, from their filled props, once. */
+/**
+ * Every media record the entries' images read first, once: from each image
+ * as the render fills it, its bound value included, so an image drawn from
+ * an address (a bound URL field, or a fallback) reads nothing ahead.
+ */
 function mediaIdsOf(
   entries: readonly {
     readonly item: Record<string, unknown>;
@@ -561,26 +565,27 @@ function mediaIdsOf(
   for (const { item, nodes } of entries) {
     const context = drawnWith(item);
     for (const node of nodes) {
-      const id = textOf(filledProps(node, context)[MEDIA_ID_PROP]);
+      const filled = filledNode(node, context);
+      const id = firstMediaRead(filled.props, filled.bound);
       if (id !== undefined) ids.add(id);
     }
   }
   return [...ids];
 }
 
-/** A node's props as the render fills them for one entry. */
-function filledProps(
+/** A node's props as the render fills them for one entry, and what each bound prop holds. */
+function filledNode(
   node: BlockNode,
   context: PageContext
-): Readonly<Record<string, unknown>> {
+): {
+  readonly props: Readonly<Record<string, unknown>>;
+  readonly bound: BoundValues | undefined;
+} {
   const run = context.itemBindingRun;
-  return run === undefined
-    ? node.props
-    : fillItemBindings(node, context, run).props;
+  if (run === undefined) return { props: node.props, bound: undefined };
+  const filled = fillItemBindings(node, context, run);
+  return { props: filled.props, bound: filled.bound };
 }
-
-/** The prop an image names its media record by. */
-const MEDIA_ID_PROP = "mediaId";
 
 /** Each item's related entry, set beside it under the field it follows. */
 function placeRows(

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { CANVAS_FRAME_SHEET } from "./canvas-frame-sheet";
 import { EMPTY_CONTAINER_SELECTOR } from "./empty-slot";
+import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 /**
  * The canvas is drawn on the PAGE's surface, not on the editor's.
@@ -660,5 +661,29 @@ describe("the Source menu's note where no related source is offered", () => {
     expect(declared(words, "padding-inline")).toBe(
       declared(ruleFor(".nx-font-pick__option"), "padding")?.split(" ")[1]
     );
+  });
+});
+
+describe("the hidden-block marker drawn in the canvas frame", () => {
+  // The line a block its conditions hide is drawn as, while they are
+  // applied. It sits in the page, so the canvas zoom paints it; the frame's
+  // sheet holds its words at a size the author can read at any zoom.
+  const body = ruleIn(
+    CANVAS_FRAME_SHEET,
+    `.${CANVAS_ROOT_CLASS} .nx-condition-hidden`
+  );
+
+  it("is never under 11px on screen, and its own 13px at full size, in pixels whatever the site's root size", () => {
+    // max(13px, 11px / zoom): at zoom 1 the first wins; at a Fit of 58% the
+    // second, which the zoom then paints at 11px. Pixels, so a site setting
+    // its root below 16px lowers neither.
+    expect(declared(body, "font-size")).toBe(
+      "max(13px, calc(11px / var(--nx-canvas-zoom, 1)))"
+    );
+  });
+
+  it("keeps its shape at every zoom, its spacing in its own text's units", () => {
+    expect(declared(body, "gap")).toBe("0.6em");
+    expect(declared(body, "padding")).toBe("0.45em 0.75em");
   });
 });

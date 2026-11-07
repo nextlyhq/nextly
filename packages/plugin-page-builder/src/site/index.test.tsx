@@ -1,22 +1,60 @@
 /**
  * `<SiteCode>`: what runs or styles the page reaches it only through the
  * loader, as inert data; what is inert is written as is; nothing renders in
- * draft mode; a place with no code still writes the paths it skips; and a
- * stored entry the rules refuse is left out.
+ * draft mode; a place with no code still writes the paths it skips; a
+ * stored entry the rules refuse is left out; and its own read goes through
+ * the app's `"use cache"` function under Cache Components, or refuses.
  *
  * @module site/index.test
  */
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SITE_CODE_BOOTSTRAP } from "../site-code/bootstrap";
+import { SITE_CODE_SLUG } from "../site-code/storage";
 
 let draft = false;
 vi.mock("next/headers", () => ({
   draftMode: async () => ({ isEnabled: draft }),
 }));
 
+/** What the stand-ins for Nextly's cache record, and what they answer. */
+const runtime = {
+  /** Whether the app has registered its `"use cache"` read function. */
+  registered: false,
+  /** The options each `cachedFind` call was given. */
+  cachedFinds: [] as { tags: string[]; keyParts: string[] }[],
+};
+
+// `cachedFind` and the registration are stood in for, so a test decides
+// whether the app registered a read function and sees what the read asked
+// for; the tag helpers and `cacheComponentsEnabled` stay Nextly's own, so the
+// tags asserted are the ones a Single save expires.
+vi.mock("nextly/runtime", async importOriginal => {
+  const actual = await importOriginal<typeof import("nextly/runtime")>();
+  return {
+    ...actual,
+    cachedReadRegistered: () => runtime.registered,
+    cachedFind: async (
+      reader: () => Promise<unknown>,
+      options: { tags: string[]; keyParts: string[] }
+    ) => {
+      runtime.cachedFinds.push(options);
+      return reader();
+    },
+  };
+});
+
+/** The stored site code document the stand-in Nextly answers with. */
+let storedDocument: unknown = null;
+const findSingle = vi.fn(async () => storedDocument);
+vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
+  ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk")>()),
+  getCachedNextly: async () => ({ findSingle }),
+}));
+
 const { SiteCode } = await import("./index");
+const { nextlySingleTags } = await import("nextly/runtime");
 
 /** A stored site code document holding `head` and `body`. */
 const stored =
@@ -31,6 +69,14 @@ async function html(props: Parameters<typeof SiteCode>[0]): Promise<string> {
 
 beforeEach(() => {
   draft = false;
+  runtime.registered = false;
+  runtime.cachedFinds = [];
+  storedDocument = null;
+  findSingle.mockClear();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("<SiteCode>", () => {
@@ -179,5 +225,79 @@ describe("<SiteCode>", () => {
       '<script type="application/json" data-nx-site-code="head">' +
         '{"slot":"head","skip":["/admin","/studio"],"entries":[]}</script>'
     );
+  });
+});
+
+describe("<SiteCode> reading the stored code itself", () => {
+  /** A stored document whose head holds one meta tag. */
+  const META = { tag: "meta", attrs: { name: "a", content: "b" } };
+
+  it("refuses under Cache Components with no read function registered, naming the fix", async () => {
+    // The value Next.js inlines into the app's bundle when Cache Components is on.
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
+    storedDocument = { head: [META], body: [] };
+    const read = SiteCode({ slot: "head" });
+    await expect(read).rejects.toThrow("src/nextly/cached-read.ts");
+    await expect(read).rejects.toThrow('import "@/nextly/cached-read";');
+    await expect(read).rejects.toThrow(
+      "https://nextlyhq.com/docs/page-builder/site-code#with-cache-components"
+    );
+    // Refused before reading: no unstable_cache read is left pending.
+    expect(runtime.cachedFinds).toEqual([]);
+    expect(findSingle).not.toHaveBeenCalled();
+  });
+
+  it("reads through the cache under Cache Components once a read function is registered", async () => {
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
+    runtime.registered = true;
+    storedDocument = { head: [META], body: [] };
+    const element = await SiteCode({ slot: "head" });
+    expect(renderToStaticMarkup(element ?? <></>)).toContain(
+      '<meta name="a" content="b"/>'
+    );
+    expect(runtime.cachedFinds).toHaveLength(1);
+    expect(findSingle).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: SITE_CODE_SLUG, overrideAccess: true })
+    );
+  });
+
+  it("reads through the cache as before without Cache Components, with nothing registered", async () => {
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "false");
+    storedDocument = { head: [META], body: [] };
+    const element = await SiteCode({ slot: "head" });
+    expect(renderToStaticMarkup(element ?? <></>)).toContain(
+      '<meta name="a" content="b"/>'
+    );
+    expect(runtime.cachedFinds).toHaveLength(1);
+  });
+
+  it("reads through the caller's own read under Cache Components without asking", async () => {
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
+    const read = vi.fn(async () => ({ head: [META], body: [] }));
+    const element = await SiteCode({ slot: "head", read });
+    expect(renderToStaticMarkup(element ?? <></>)).toContain(
+      '<meta name="a" content="b"/>'
+    );
+    expect(read).toHaveBeenCalledWith(SITE_CODE_SLUG);
+    expect(runtime.cachedFinds).toEqual([]);
+  });
+
+  it("tags the read with exactly the Single's tags, which a site code save expires", async () => {
+    // A save to the site code Single expires `nextlySingleTags(slug)`: core
+    // proves a Single update flushes that tag in
+    // packages/nextly/src/domains/collections/__tests__/cache-revalidation.integration.test.ts
+    // ("flushes the single tag on a single update"). Tagged with exactly
+    // those, the cached read is what that save refreshes, and nothing else's.
+    runtime.registered = true;
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
+    await SiteCode({ slot: "head" });
+    await SiteCode({ slot: "body", slug: "renamed-site-code" });
+    expect(runtime.cachedFinds.map(options => options.tags)).toEqual([
+      nextlySingleTags(SITE_CODE_SLUG),
+      nextlySingleTags("renamed-site-code"),
+    ]);
+    expect(nextlySingleTags(SITE_CODE_SLUG)).toEqual([
+      `nextly:single:${SITE_CODE_SLUG}`,
+    ]);
   });
 });

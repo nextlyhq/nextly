@@ -113,6 +113,7 @@ import {
   ENTRY_DESIGN_SECTION_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
   TEMPLATE_DELETE_COMPONENT,
+  TEMPLATE_DESIGN_DETAILS_COMPONENT,
   TEMPLATE_OWN_DESIGNS_COMPONENT,
 } from "./builder-view";
 import { canvasBindingsRoute } from "./canvas-bindings-route";
@@ -177,6 +178,7 @@ import { seedCompositionGraphLock } from "./composition-graph-lock";
 import { manifestRoute } from "./composition-manifest";
 import { registerCompositionRejudge } from "./composition-rejudge";
 import { COMPOSITION_SERVICE, compositionService } from "./composition-service";
+import { conditionsPreviewEntryRoute } from "./conditions-preview-route";
 import { withBlockLooks, withCoreLooks } from "./core-looks";
 import { declaredSingleSlugs, isOrphanedSingle } from "./declared-singles";
 import {
@@ -362,6 +364,7 @@ import {
   holdTemplateCollection,
   templateCollectionDelete,
 } from "./templates/collection-delete";
+import { readEntryBlocksFields } from "./templates/entry-content-fields";
 import {
   designUnderWhere,
   registerEntryDesignCascade,
@@ -370,6 +373,7 @@ import { judgeTemplateInTransaction } from "./templates/entry-design-write";
 import { entryDesignsRoute } from "./templates/entry-designs-route";
 import {
   templateActionsRoute,
+  templateCollectionRetargetRoute,
   templateRoutingRoute,
 } from "./templates/template-actions-route";
 import {
@@ -377,6 +381,7 @@ import {
   checkedTemplateAddresses,
   type PageBuilderTemplateOptions,
 } from "./templates/template-addresses";
+import { templateCollectionChoicesRoute } from "./templates/template-collection-choices-route";
 import {
   addressHolderReader,
   registerTemplateGuard,
@@ -2737,6 +2742,13 @@ export const pageBuilder = (
         // template's lists and conditions are judged against the collection
         // it draws, read from the template itself.
         templates: templateTargets(ctx.services.ownCollections, templates),
+        // A collection's top-level blocks fields, for the field a template's
+        // Entry content block draws: read per write, so a field removed a
+        // moment ago is refused at the next save that newly chooses it.
+        // A failed read is thrown, so the save refuses rather than storing
+        // a field nobody checked.
+        entryBlocksFields: collection =>
+          readEntryBlocksFields(ctx.services.collections, collection),
         listFields: listFieldsFrom({
           record: collection =>
             ctx.services.collections.getCollection(collection, {}),
@@ -3902,10 +3914,23 @@ export const pageBuilder = (
         // author asking. Reads only: which entry is previewed is not stored.
         templatePreviewEntriesRoute({ guard: requireTemplateGuard }),
         templatePreviewEntryRoute({ guard: requireTemplateGuard }),
+        // What a visitor reads of the page being edited, for applying its
+        // visibility conditions: published values and public fields only,
+        // for a page the caller may open in the editor.
+        conditionsPreviewEntryRoute({ guard: requireTemplateGuard }),
         // Whether this caller may set or change a template address: what the
         // template form asks before it offers the address for editing. Not a
         // security boundary: the field's rules and the action decide.
         templateRoutingRoute(),
+        // Whether a saved template may be pointed at another collection, by
+        // the guard's own rule, for a caller who may change that template:
+        // what the template form asks before it offers the change, since the
+        // collection list leaves out what the author may not read.
+        templateCollectionRetargetRoute({ guard: requireTemplateGuard }),
+        // The collections the template form offers: those the caller may
+        // read that the guard lets a template draw, judged by the guard's
+        // own rule, for a caller who may create or change templates.
+        templateCollectionChoicesRoute({ guard: requireTemplateGuard }),
         // A collection's own designs, its template and its names, read as
         // the caller: what the admin's Design section, Design column and the
         // template's own designs list draw from.
@@ -4275,6 +4300,12 @@ export const pageBuilder = (
               {
                 title: "Own designs",
                 component: TEMPLATE_OWN_DESIGNS_COMPONENT,
+              },
+              // On an own design instead: the entry it serves and the
+              // template it was copied from, which the form does not draw.
+              {
+                title: "Own design",
+                component: TEMPLATE_DESIGN_DETAILS_COMPONENT,
               },
             ],
           },

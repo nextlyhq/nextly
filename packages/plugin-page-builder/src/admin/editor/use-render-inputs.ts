@@ -14,7 +14,9 @@ import {
   registryNestingSource,
   getBlock,
   paginatedList,
+  revealConditioned,
   visitorUnreadableBindings,
+  walkNodes,
   type BlockDocument,
   type BreakpointId,
   type StyleState,
@@ -935,6 +937,27 @@ function sourceHiddenFromVisitors(
   return isEntry ? (bindings.entry ?? null) !== null : true;
 }
 
+/**
+ * `marks` kept for the blocks `held` holds: the editor's own, never a block
+ * composed in for drawing. The same map, by identity, where every block is
+ * held. Exported for its own test.
+ */
+export function heldOnly<Value>(
+  held: BlockDocument,
+  drawn: BlockDocument,
+  marks: ReadonlyMap<string, Value>
+): ReadonlyMap<string, Value> {
+  // Nothing was composed in, so every mark is on a block the editor holds.
+  if (held === drawn || marks.size === 0) return marks;
+  // One walk of the held blocks, then one lookup a mark.
+  const ids = new Set<string>();
+  walkNodes(held.nodes, node => {
+    ids.add(node.id);
+  });
+  const kept = new Map([...marks].filter(([id]) => ids.has(id)));
+  return kept.size === marks.size ? marks : kept;
+}
+
 /** No region: what a page with no Layout draws around it. */
 const NO_DEFINITIONS: DefinitionsById = new Map();
 
@@ -942,7 +965,7 @@ const NO_DEFINITIONS: DefinitionsById = new Map();
 function drawnTree(
   document: BlockDocument,
   definitions: DefinitionsById,
-  render: PageRenderInputs
+  render: Pick<PageRenderInputs, "styleContext" | "limits">
 ): BlockDocument | null {
   return prepareDocumentForRead(document, {
     resolver: registeredBlocks(),
@@ -950,6 +973,27 @@ function drawnTree(
     definitions,
     ...(render.limits === undefined ? {} : { limits: render.limits }),
   });
+}
+
+/**
+ * The page's tree as the canvas's bindings are asked of it: its conditioned
+ * blocks lifted first, as the canvas draws them whoever the page would show
+ * them to (and, while conditions are applied, a shown one as itself), so a
+ * bound prop inside one is read with the rest: an Entry content block's
+ * composed blocks among them, under conditions of its own. The renderer's
+ * pipeline otherwise holds a conditioned block back, as a visitor's page
+ * does, and the canvas would draw its bound props' fallbacks. `gated`, the
+ * page as that pipeline prepares it, stands in where nothing is conditioned.
+ */
+export function askedPageTree(
+  document: BlockDocument,
+  definitions: DefinitionsById,
+  render: Pick<PageRenderInputs, "styleContext" | "limits">,
+  gated?: BlockDocument | null
+): BlockDocument | null {
+  const revealed = revealConditioned(document);
+  if (revealed === document && gated !== undefined) return gated;
+  return drawnTree(revealed, definitions, render);
 }
 
 /**
@@ -969,6 +1013,12 @@ export function useBoundCanvasRender(
   canvasRender: PageRenderInputs,
   drawn: {
     readonly document: BlockDocument;
+    /**
+     * The document as the editor holds it, where `document` is that with an
+     * entry's content composed in (a template's Entry content): only its
+     * blocks are marked. Absent, `document` is the one held.
+     */
+    readonly stored?: BlockDocument;
     readonly regions: readonly {
       readonly document: BlockDocument;
       readonly definitions?: DefinitionsById;
@@ -994,14 +1044,25 @@ export function useBoundCanvasRender(
   >;
 } {
   const { document, regions } = drawn;
+  // The blocks the editor holds, which a mark may name: a composed Entry
+  // content's blocks are the entry's, edited on the entry, so none of them
+  // is marked, though their bindings are read.
+  const marksOf = drawn.stored ?? document;
   const pageTree = useMemo(
     () => drawnTree(document, canvasRender.definitions, canvasRender),
     [document, canvasRender]
   );
+  // The page's tree as its bindings are asked of it: with its conditioned
+  // blocks, which the canvas draws whoever the page would show them to.
+  const askedTree = useMemo(
+    () =>
+      askedPageTree(document, canvasRender.definitions, canvasRender, pageTree),
+    [document, canvasRender, pageTree]
+  );
   const trees = useMemo(
     () =>
       [
-        pageTree,
+        askedTree,
         ...regions.map(region =>
           drawnTree(
             region.document,
@@ -1010,7 +1071,7 @@ export function useBoundCanvasRender(
           )
         ),
       ].filter((tree): tree is BlockDocument => tree !== null),
-    [pageTree, regions, canvasRender]
+    [askedTree, regions, canvasRender]
   );
   // A custom source's row collection is asked for with the page's own, so
   // its item bindings draw with that collection's field shapes.
@@ -1030,15 +1091,20 @@ export function useBoundCanvasRender(
   const visitorUnreadable = useMemo(() => {
     const shapes = bindings.fieldShapes;
     if (shapes === undefined || pageTree === null) return NONE_UNREADABLE;
-    return visitorUnreadableBindings(pageTree, {
-      schema: shapes,
-      ...(bindings.entryRef === undefined
-        ? {}
-        : { entryRef: bindings.entryRef }),
-      props: { get: getBlock },
-      unreadableSource: ref => sourceHiddenFromVisitors(bindings, shapes, ref),
-    });
-  }, [pageTree, bindings]);
+    return heldOnly(
+      marksOf,
+      document,
+      visitorUnreadableBindings(pageTree, {
+        schema: shapes,
+        ...(bindings.entryRef === undefined
+          ? {}
+          : { entryRef: bindings.entryRef }),
+        props: { get: getBlock },
+        unreadableSource: ref =>
+          sourceHiddenFromVisitors(bindings, shapes, ref),
+      })
+    );
+  }, [pageTree, bindings, marksOf, document]);
   return { canvasRender: bound, visitorUnreadable };
 }
 

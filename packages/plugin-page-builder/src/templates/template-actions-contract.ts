@@ -12,6 +12,7 @@
  * @module templates/template-actions-contract
  */
 import type { TemplateAction } from "@nextlyhq/builder/ops";
+import type { PaginationMeta } from "@nextlyhq/plugin-sdk";
 
 import type { ActionBy } from "../component-actions-contract";
 
@@ -27,6 +28,63 @@ export const TEMPLATE_ROUTING_ROUTE_PATH = "/templates/routing";
 export interface TemplateRoutingAccess {
   /** Whether the caller holds `manage-template-routing`. */
   readonly mayManageRouting: boolean;
+}
+
+/**
+ * Where the template form asks whether a saved template may be pointed at
+ * another collection: `GET /templates/collection-retarget?template=<id>`.
+ */
+export const TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH =
+  "/templates/collection-retarget";
+
+/**
+ * What the template guard's rule says of pointing a saved template at
+ * another collection: allowed; refused while the collection it draws still
+ * exists; or refused until the address it stores is removed.
+ */
+export type TemplateRetargetVerdict =
+  | "allowed"
+  | "collection-exists"
+  | "address-blocks";
+
+/** What the retarget question answers, from the template as stored. */
+export type TemplateCollectionRetarget =
+  | { readonly retarget: "allowed" | "collection-exists" }
+  | {
+      readonly retarget: "address-blocks";
+      /**
+       * Whether the caller may clear that address, which needs
+       * `manage-template-routing`, as the address field's own rule says.
+       */
+      readonly mayClearAddress: boolean;
+    };
+
+/** The retarget question's path for one template, by its id. */
+export function templateCollectionRetargetPath(template: string): string {
+  return `${TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH}?template=${encodeURIComponent(template)}`;
+}
+
+/**
+ * Where the template form lists the collections a template may draw:
+ * `GET /templates/collection-choices`.
+ */
+export const TEMPLATE_COLLECTION_CHOICES_ROUTE_PATH =
+  "/templates/collection-choices";
+
+/** One collection a template may draw, by slug and by name. */
+export interface TemplateCollectionChoice {
+  readonly slug: string;
+  /** Its plural name where it has one, else its name, else its slug. */
+  readonly label: string;
+}
+
+/**
+ * What the choices route answers: the canonical list envelope, every
+ * collection on one page, ordered by name and then slug.
+ */
+export interface TemplateCollectionChoicesResponse {
+  readonly items: readonly TemplateCollectionChoice[];
+  readonly meta: PaginationMeta;
 }
 
 /** One template action request. */

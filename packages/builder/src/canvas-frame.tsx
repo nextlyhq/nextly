@@ -44,6 +44,7 @@
  */
 
 import { DARK_MODE_ATTRIBUTE } from "@nextlyhq/blocks-engine";
+import { ENTRY_CONTENT_NOTE_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
 import * as React from "react";
@@ -1157,6 +1158,14 @@ const PAGE_CHROME_TOKENS: readonly {
       "--font-sans",
       "--radius-sm",
     ],
+  },
+  {
+    // An Entry content block's note to its author holds the admin's words
+    // alone, so it takes the admin's face.
+    selector: `[${ENTRY_CONTENT_NOTE_ATTRIBUTE}]`,
+    // Its face, and the red hue alone: every other colour of it is the
+    // page's own, so it reads on the page in either admin theme.
+    tokens: ["--nx-builder-danger", "--font-sans", "--radius-sm"],
   },
   {
     // A list drawing its empty state holds the site's content, so its tag
