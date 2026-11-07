@@ -26,7 +26,11 @@ import type {
   ComponentDocument,
   ValidationIssue,
 } from "@nextlyhq/blocks-engine";
-import type { DefinitionAction, PageAction } from "@nextlyhq/builder/ops";
+import type {
+  DefinitionAction,
+  PageAction,
+  UnbindAnswer,
+} from "@nextlyhq/builder/ops";
 
 import type { ActionBy } from "./component-actions-contract";
 import type { StoredPageAddress } from "./library-contract";
@@ -48,6 +52,7 @@ export type {
   ExposureTargetInput,
   ListQueryChange,
   PageAction,
+  UnbindAnswer,
   UnbindKeep,
 } from "@nextlyhq/builder/ops";
 
@@ -62,25 +67,6 @@ export interface PageActionRequest {
   readonly publish?: boolean;
 }
 
-/**
- * What an `unbind-prop` action kept in the prop's place, and why, as the
- * inspector's note and an API client both read it.
- *
- * @experimental Settles with the editor's binding controls.
- */
-export interface UnbindAnswer {
-  /**
-   * What was kept: what a visitor sees now, the binding's fallback, the
-   * prop's own value, or a value the caller gave.
-   */
-  readonly kept: "visitor" | "fallback" | "own" | "value";
-  /** The value kept; absent when the prop keeps its own. */
-  readonly value?: unknown;
-  /** The prop an image's address was kept in, where the bound prop could not hold it. */
-  readonly into?: string;
-  /** Why, in words an author reads. */
-  readonly reason: string;
-}
 
 /** @experimental Settles when the composition API ships. */
 export interface PageActionResult {

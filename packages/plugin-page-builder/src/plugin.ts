@@ -63,6 +63,7 @@ import {
   registerPageAddressClaims,
 } from "./address-claims/page-claims-hook";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
+import { bindingFieldsRoute } from "./binding-fields-route";
 import { BINDINGS_TO_FIX_PAGE_HREF } from "./bindings-report/contract";
 import { schemaFingerprint } from "./bindings-report/fingerprint";
 import { BINDINGS_REPORT_JOB, bindingsReportJob } from "./bindings-report/job";
@@ -403,6 +404,7 @@ import { unlinkCopies } from "./templates/unlink-copies";
 import { tokenUsageIndex } from "./token-usage";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
+import { unbindPlanRoute } from "./unbind-plan-route";
 import { usageBackfillJob } from "./usage-backfill-job";
 import {
   backfillScopes,
@@ -3965,6 +3967,12 @@ export const pageBuilder = (
         // The canvas's bound props: the entry being edited, the Singles its
         // bindings read and the site settings, read as the author asking.
         canvasBindingsRoute(),
+        // The fields the inspector's picker offers a binding, as the author
+        // asking may read them, each marked by whether visitors may.
+        bindingFieldsRoute(),
+        // An unbind's plan for the inspector, against the document it holds:
+        // the same decision as the page actions API's, applied by the editor.
+        unbindPlanRoute({ limits: () => opts.limits ?? DEFAULT_LIMITS }),
         // The documents whose bindings no longer fit, for those who edit
         // pages, each listed only when the caller may read it.
         bindingsToFixRoute({

@@ -54,6 +54,7 @@ import {
   loadInlineRichTextEditor,
   MediaPickerDialog,
   useDocumentIdentity,
+  type DocumentIdentity,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
 import {
@@ -73,6 +74,7 @@ import {
 } from "react-hook-form";
 
 import { siteSheet } from "../../site-style";
+import { bindingFieldsReader, unbindPlanner } from "../binding-fields-client";
 import { BindingsToFixChip } from "../bindings-report/BindingsToFixChip";
 import { ComponentActionPrompt } from "../ComponentActionPrompt";
 import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
@@ -207,6 +209,13 @@ type EditorView = EditorMount &
      * the entry's related entries; `null` on a Single, which has none.
      */
     entryCollection: string | null | undefined;
+    /**
+     * The entry the document's bindings read: its own, or the entry a
+     * template is previewed with. The binding picker lists its fields.
+     */
+    bindingEntry: DocumentIdentity | null;
+    /** The document being edited, which an unbind is planned against. */
+    editedDocument: DocumentIdentity | null;
   };
 
 /**
@@ -524,7 +533,12 @@ function servicesFor(
   locale: string | undefined,
   readMedia: ReadMediaSummary,
   entryCollection: string | null | undefined,
-  userId: string | null
+  userId: string | null,
+  /** The entry bindings read, and the document an unbind is planned in. */
+  binding: {
+    readonly entry: DocumentIdentity | null;
+    readonly page: DocumentIdentity | null;
+  }
 ): ContentServices {
   let byLocale = servicesByPassages.get(passages);
   if (byLocale === undefined) {
@@ -534,7 +548,13 @@ function servicesFor(
   // All three in the key, as JSON so no language, collection and person can
   // collide: the list count below reads as the person signed in, and the
   // recent icons are theirs.
-  const key = JSON.stringify([locale ?? "", entryCollection ?? null, userId]);
+  const key = JSON.stringify([
+    locale ?? "",
+    entryCollection ?? null,
+    userId,
+    binding.entry,
+    binding.page,
+  ]);
   const recentIcons = recentIconsStore(userId);
   let services = byLocale.get(key);
   if (services === undefined) {
@@ -560,12 +580,25 @@ function servicesFor(
           ? canvasListReadsIn(locale, userId).count(props)
           : canvasNamedQueriesIn(locale, userId).count(props),
       ...(entryCollection === undefined ? {} : { entryCollection }),
+      // The fields a binding can read, as this author reads them, kept a
+      // short while: the picker opens on every bindable prop.
+      listBindingFields: bindingFieldsReader(binding.entry, locale, userId),
+      // An unbind's plan against the document the editor holds, by the same
+      // decision as the page actions API's.
+      ...withPlanUnbind(unbindPlanner(binding.page, locale)),
       // The icons this author chose last, for the Icon control's Recent row.
       ...(recentIcons === undefined ? {} : { recentIcons }),
     };
     byLocale.set(key, services);
   }
   return services;
+}
+
+/** The unbind planner as a service member, absent where none can be planned. */
+function withPlanUnbind(
+  planUnbind: ContentServices["planUnbind"]
+): Pick<ContentServices, "planUnbind"> {
+  return planUnbind === undefined ? {} : { planUnbind };
 }
 
 /** The block verbs the inspector's card offers, as the verbs provider shares them. */
@@ -639,7 +672,8 @@ function editorInspector(
         view.locale,
         view.readMedia,
         view.entryCollection,
-        view.userId
+        view.userId,
+        { entry: view.bindingEntry, page: view.editedDocument }
       )}
       // A placement's exposed passage the canvas is editing in place: its
       // field in the placement panel is held meanwhile, as one editor serves
@@ -1408,6 +1442,8 @@ function EditorBody<TFieldValues extends FieldValues>({
   // The entry the canvas is drawn as: the document's own, or the entry a
   // template is previewed with, whose collection the inspector judges by.
   const identity = useCanvasEntryIdentity();
+  // The document itself, which the inspector's unbind is planned against.
+  const editedDocument = useDocumentIdentity();
   const entryCollection = listEntryCollectionOf(
     identity,
     mount.initialDocument
@@ -1473,6 +1509,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     // The stored document's kind too: a component's lists relate to the
     // entries of the pages placing it, as its save judges them.
     entryCollection,
+    bindingEntry: identity,
+    editedDocument,
     conditionsUnchecked,
     conditionsApplied: conditions.applied,
     conditionsShownLabel: `Shown for this ${conditions.noun}`,
