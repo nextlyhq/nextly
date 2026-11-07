@@ -6,7 +6,10 @@
 import type { BindingFieldShape } from "@nextlyhq/blocks-engine";
 import { describe, expect, it, vi } from "vitest";
 
-import type { BindingFieldsResponse, PickerField } from "./binding-fields-contract";
+import type {
+  BindingFieldsResponse,
+  PickerField,
+} from "./binding-fields-contract";
 import {
   readBindingFields,
   type BindingFieldsReads,
@@ -20,7 +23,10 @@ const DECLARED: Readonly<Record<string, readonly BindingFieldShape[]>> = {
     // Declared, but hidden from this editor by a field rule.
     { name: "cost", type: "number" },
     { name: "author", type: "relationship", relationTo: "users" },
+    // Visitors may not follow it, though they may read the user it names.
+    { name: "reviewer", type: "relationship", relationTo: "users" },
     { name: "meta", type: "group", fields: [{ name: "lede", type: "text" }] },
+    { name: "createdAt", type: "date" },
   ],
   "collection:users": [
     { name: "name", type: "text" },
@@ -28,6 +34,8 @@ const DECLARED: Readonly<Record<string, readonly BindingFieldShape[]>> = {
   ],
   "single:contact": [{ name: "phone", type: "text" }],
   "single:payroll": [{ name: "account", type: "text" }],
+  // Readable by the author, by no visitor: a plugin's own settings.
+  "single:settings": [{ name: "apiMode", type: "text" }],
 };
 
 /** As the editor reads: `cost` and `email` hidden, `payroll` refused. */
@@ -36,11 +44,14 @@ const AS_EDITOR: Readonly<Record<string, Record<string, unknown> | null>> = {
     title: "Spring sale",
     internalNote: "Check stock first",
     author: "u1",
+    reviewer: "u1",
     meta: { lede: "Thirty per cent off (draft)" },
+    createdAt: "2026-03-01T09:00:00.000Z",
   },
   "users:u1": { name: "Ada Lovelace" },
   contact: { phone: "+44 20 7946 0000" },
   payroll: null,
+  settings: { apiMode: "live" },
 };
 
 /** As published: the lede's draft not yet out. */
@@ -49,6 +60,7 @@ const PUBLISHED: Readonly<Record<string, Record<string, unknown> | null>> = {
     title: "Spring sale",
     author: "u1",
     meta: { lede: "Thirty per cent off" },
+    createdAt: "2026-03-01T09:00:00.000Z",
   },
   "users:u1": { name: "Ada Lovelace" },
   contact: { phone: "+44 20 7946 0000" },
@@ -79,6 +91,7 @@ function reads(): BindingFieldsReads {
     singles: async () => [
       { slug: "contact", label: "Contact details" },
       { slug: "payroll", label: "Payroll" },
+      { slug: "settings", label: "Settings" },
     ],
     collectionLabel: async () => "Post",
     site: async () => ({ applicationName: "Northwind Academy" }),
@@ -124,7 +137,9 @@ describe("the picker's fields", () => {
       "title",
       "internalNote",
       "author",
+      "reviewer",
       "meta",
+      "createdAt",
     ]);
     expect(named(named(post, "author")?.fields ?? [], "email")).toBeUndefined();
   });
@@ -169,5 +184,75 @@ describe("the picker's fields", () => {
       public: true,
       preview: "Northwind Academy",
     });
+  });
+
+  it("marks a relation's fields as visitors reach them, through the relation", async () => {
+    const post = fieldsOf(await ask("p1"), "Post");
+    // The reviewer's user is public, but visitors can't follow the reviewer.
+    expect(named(named(post, "reviewer")?.fields ?? [], "name")).toEqual({
+      name: "name",
+      type: "text",
+      public: false,
+    });
+  });
+
+  it("marks a relation's fields a draft's where the relation names another entry", async () => {
+    const answer = await readBindingFields(
+      { source: { kind: "collection", slug: "posts", id: "p1" } },
+      {
+        ...reads(),
+        // Published, the post names no author yet.
+        published: async ref =>
+          rowKey(ref) === "posts:p1"
+            ? { ...PUBLISHED["posts:p1"], author: null }
+            : (PUBLISHED[rowKey(ref)] ?? null),
+      }
+    );
+    const name = named(
+      named(fieldsOf(answer, "Post"), "author")?.fields ?? [],
+      "name"
+    );
+    expect(name).toMatchObject({ public: true, draft: true });
+    expect(name?.preview).toBeUndefined();
+  });
+
+  it("counts the timestamps public where visitors may read the entry", async () => {
+    expect(named(fieldsOf(await ask("p1"), "Post"), "createdAt")).toMatchObject(
+      {
+        public: true,
+      }
+    );
+  });
+
+  it("leaves out a Single no visitor may read any of", async () => {
+    const answer = await ask("p1");
+    expect(answer.sources.some(source => source.label === "Settings")).toBe(
+      false
+    );
+  });
+
+  it("names a Single's own entry by the Single's label", async () => {
+    const answer = await readBindingFields(
+      { source: { kind: "single", slug: "contact" } },
+      reads()
+    );
+    expect(answer.sources[0]).toMatchObject({
+      binding: { source: "entry" },
+      label: "Contact details",
+    });
+  });
+
+  it("fails the ask on a read that fails for any reason but access", async () => {
+    await expect(
+      readBindingFields(
+        { source: { kind: "collection", slug: "posts", id: "p1" } },
+        {
+          ...reads(),
+          asEditor: async () => {
+            throw new Error("connection reset");
+          },
+        }
+      )
+    ).rejects.toThrow("connection reset");
   });
 });
