@@ -2638,6 +2638,7 @@ export const pageBuilder = (
           ...templateAddresses.keys(),
         ],
         holders: [pagesSlug, ...templateAddresses.keys()],
+        entryHolders: [...templateAddresses.keys()],
         startup: () => addressStartup,
       });
       // A page published naming a Layout that is not: it is served inside the

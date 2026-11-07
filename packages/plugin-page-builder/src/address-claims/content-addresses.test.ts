@@ -52,6 +52,7 @@ describe("the addresses listed for pre-rendering", () => {
       defaultLocale: () => "en",
       collections: [],
       holders: ["pages", "posts"],
+      entryHolders: ["posts"],
       startup: () => running,
     });
 
@@ -78,10 +79,77 @@ describe("the addresses listed for pre-rendering", () => {
       defaultLocale: () => "en",
       collections: [],
       holders: ["pages", "posts"],
+      entryHolders: ["posts"],
       startup: () => null,
     });
     expect((await service.addresses("en", { limit: 10 })).paths).toEqual([
       ["blog", "hello"],
     ]);
+  });
+
+  it("are the entries' alone, so the pages' addresses never take a share of the limit", async () => {
+    const listEntries = vi.fn(async () => ({
+      data: [
+        {
+          id: "c0",
+          claimKey: "k0",
+          kind: "address",
+          locale: "en",
+          path: "/about",
+          holderCollection: "pages",
+          holderId: "p1",
+        },
+        {
+          id: "c1",
+          claimKey: "k1",
+          kind: "address",
+          locale: "en",
+          path: "/blog/hello",
+          holderCollection: "posts",
+          holderId: "1",
+        },
+      ],
+      pagination: { total: 1 },
+    }));
+    const service = contentAddressService({
+      claims: {
+        services: { ownCollections: { listEntries }, collections: {} },
+        slug: "claims",
+        dialect: "sqlite",
+      } as unknown as Claims,
+      defaultLocale: () => "en",
+      collections: [],
+      holders: ["pages", "posts"],
+      entryHolders: ["posts"],
+    });
+    expect((await service.addresses("en", { limit: 1 })).paths).toEqual([
+      ["blog", "hello"],
+    ]);
+    // Narrowed in the read itself, so the limit counts entries only.
+    expect(listEntries).toHaveBeenCalledWith(
+      "claims",
+      expect.objectContaining({
+        where: expect.objectContaining({
+          holderCollection: { in: ["posts"] },
+        }),
+        pagination: { limit: 1, page: 1 },
+      })
+    );
+  });
+
+  it("are none, and read nothing, when no collection is served under an address", async () => {
+    const { claims, listEntries } = store();
+    const service = contentAddressService({
+      claims,
+      defaultLocale: () => "en",
+      collections: [],
+      holders: ["pages"],
+      entryHolders: [],
+    });
+    expect(await service.addresses("en", { limit: 10 })).toEqual({
+      paths: [],
+      total: 0,
+    });
+    expect(listEntries).not.toHaveBeenCalled();
   });
 });
