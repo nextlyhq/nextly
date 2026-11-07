@@ -178,6 +178,7 @@ export type {
   BlockBoundaryProps,
   BlockListProps,
   BoundaryBindings,
+  HidingItem,
   ItemHiddenAs,
 } from "./block-boundary";
 // The binding pass's own types, which the props above and a block's `bound`

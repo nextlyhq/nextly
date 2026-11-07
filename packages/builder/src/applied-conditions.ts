@@ -35,16 +35,18 @@ import {
   type ConditionScope,
   type ConditionSubject,
   type DefinitionsById,
+  type BindingFieldShape,
   type DocumentLimits,
   type NodeVisibility,
 } from "@nextlyhq/blocks-engine";
-import { sanitizeDocument } from "@nextlyhq/blocks-react";
+import { sanitizeDocument, type ItemHiddenAs } from "@nextlyhq/blocks-react";
 
 import { storedGroups } from "./condition-checks";
 import { gatedAsStored } from "./condition-gate";
 import {
   conditionDraftOf,
   conditionLine,
+  conditionFieldsOfShapes,
   conditionSentence,
   type ConditionField,
 } from "./condition-model";
@@ -237,6 +239,72 @@ function markerFor(block: HiddenBlock, stored: BlockNode): BlockNode {
     version: 1,
     props,
     ...(devices === undefined ? {} : { visibility: devices }),
+  };
+}
+
+/**
+ * What the canvas reads to say why a list's item hides a block: the fields a
+ * visitor may read of a collection's entries, the same fields as the "Show
+ * when" rows name them where the host lists them, each block's name, and
+ * where the site's days start.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export interface ItemMarkerSources {
+  readonly fieldsOf: (
+    collection: string
+  ) => readonly BindingFieldShape[] | undefined;
+  readonly labelledOf?: (
+    collection: string
+  ) => readonly ConditionField[] | undefined;
+  readonly nameOf: (node: BlockNode) => string;
+  readonly dayStart?: ConditionDayStart;
+}
+
+/**
+ * What the canvas draws where a list's item hides a block, while conditions
+ * apply: the block's marker, saying why this entry hides it, as a hidden
+ * block of the page itself says it. Judged against the item as the published
+ * page judges it; an item whose fields are not known, a named query's row
+ * among them, fails closed there, so its marker says the block can't be
+ * checked.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export function itemHiddenAsOf(sources: ItemMarkerSources): ItemHiddenAs {
+  return (node, item) => {
+    const readable =
+      item.collection === undefined
+        ? undefined
+        : sources.fieldsOf(item.collection);
+    const labelled =
+      item.collection === undefined
+        ? undefined
+        : sources.labelledOf?.(item.collection);
+    const preview: ConditionsPreview = {
+      subject: {
+        fields: {
+          declared: new Set((readable ?? []).map(field => field.name)),
+          readable: readable ?? [],
+        },
+        values: item.values,
+      },
+      noun: "entry",
+      fields: labelled ?? conditionFieldsOfShapes(readable ?? []),
+      ...(sources.dayStart === undefined ? {} : { dayStart: sources.dayStart }),
+    };
+    const verdict = evaluateConditions(storedGate(node), inputOf(preview));
+    // The renderer asks only about a block the item hides; a verdict that
+    // says otherwise draws the block's place empty rather than a false mark.
+    if (verdict.shown) return undefined;
+    return markerFor(
+      {
+        id: node.id,
+        name: sources.nameOf(node),
+        ...reasonOf(node, verdict, preview),
+      },
+      node
+    );
   };
 }
 

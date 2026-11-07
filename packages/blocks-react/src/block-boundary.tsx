@@ -129,11 +129,26 @@ export interface BoundaryConditions {
 
 /**
  * What an editor draws in place of a block a list's item hides: the node to
- * draw there, or nothing to draw nothing.
+ * draw there, or nothing to draw nothing. Told the item, so what it draws can
+ * say why that item hides the block.
  *
  * @experimental
  */
-export type ItemHiddenAs = (node: BlockNode) => BlockNode | undefined;
+export type ItemHiddenAs = (
+  node: BlockNode,
+  item: HidingItem
+) => BlockNode | undefined;
+
+/**
+ * The list item that hides a block: its values, and the collection its
+ * entries come from, absent for a named query's row.
+ *
+ * @experimental
+ */
+export interface HidingItem {
+  readonly values: Readonly<Record<string, unknown>>;
+  readonly collection: string | undefined;
+}
 
 interface DrawnNode {
   readonly node: BlockNode;
@@ -155,11 +170,19 @@ function drawnNodes(
     ...(conditions?.held === undefined ? {} : { held: conditions.held }),
     ...(conditions?.report === undefined ? {} : { report: conditions.report }),
   };
-  const hiddenAs =
-    context.item === undefined ? undefined : conditions?.hiddenAs;
+  const { item } = context;
+  const hiddenAs = item === undefined ? undefined : conditions?.hiddenAs;
+  const hiding: HidingItem | undefined =
+    item === undefined
+      ? undefined
+      : {
+          values: item,
+          collection:
+            context.itemSource === "" ? undefined : context.itemSource,
+        };
   return nodes.flatMap((node): DrawnNode[] => {
     if (conditionAllows(node, context, decided)) return [{ node, shown: true }];
-    const instead = hiddenAs?.(node);
+    const instead = hiding === undefined ? undefined : hiddenAs?.(node, hiding);
     return instead === undefined ? [] : [{ node: instead, shown: false }];
   });
 }

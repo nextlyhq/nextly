@@ -19,6 +19,7 @@ import { describe, expect, it } from "vitest";
 import {
   appliedConditionsOf,
   conditionedBlocksIn,
+  itemHiddenAsOf,
   type ConditionsPreview,
 } from "./applied-conditions";
 import { conditionFieldsOfShapes } from "./condition-model";
@@ -422,5 +423,59 @@ describe("the conditioned blocks a document holds", () => {
       any: false,
       readingEntry: false,
     });
+  });
+});
+
+describe("what the canvas draws where a list's item hides a block", () => {
+  const hiddenAs = itemHiddenAsOf({
+    fieldsOf: collection => (collection === "posts" ? FIELDS : undefined),
+    labelledOf: collection =>
+      collection === "posts"
+        ? conditionFieldsOfShapes(FIELDS).map(field =>
+            field.name === "category" ? { ...field, label: "Category" } : field
+          )
+        : undefined,
+    nameOf: () => "Guide badge",
+  });
+  const badge = block("badge", {
+    visibility: { conditions: [[guides]], devices: { mobile: false } },
+  });
+
+  it("is the block's marker, saying why this entry hides it, on the block's devices", () => {
+    const marker = hiddenAs(badge, {
+      values: { category: "News" },
+      collection: "posts",
+    });
+    expect(marker).toEqual({
+      id: "badge",
+      type: CONDITION_HIDDEN_TYPE,
+      version: 1,
+      props: {
+        name: "Guide badge",
+        reason: "hidden for this entry: Category is not Guides",
+        unchecked: false,
+      },
+      visibility: { devices: { mobile: false } },
+    });
+  });
+
+  it("says the block can't be checked for an item whose fields are not known", () => {
+    for (const collection of ["authors", undefined]) {
+      const marker = hiddenAs(badge, {
+        values: { category: "News" },
+        collection,
+      });
+      expect(marker?.props).toEqual({
+        name: "Guide badge",
+        reason: "can’t be checked, so visitors never see it",
+        unchecked: true,
+      });
+    }
+  });
+
+  it("draws nothing for an item its conditions hold for", () => {
+    expect(
+      hiddenAs(badge, { values: { category: "Guides" }, collection: "posts" })
+    ).toBeUndefined();
   });
 });

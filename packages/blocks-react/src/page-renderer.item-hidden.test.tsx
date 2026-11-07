@@ -132,7 +132,17 @@ describe("an editor told what to draw for a hidden block", () => {
     expect(html.match(/>Hidden for this entry</g)).toHaveLength(2);
     // Asked about the hidden block only, once per item hiding it.
     expect(hiddenAs).toHaveBeenCalledTimes(2);
-    for (const [node] of hiddenAs.mock.calls) expect(node.id).toBe("pill");
+    // Told which item hides it, and where that item comes from.
+    expect(
+      hiddenAs.mock.calls.map(([node, item]) => [
+        node.id,
+        item.values.id,
+        item.collection,
+      ])
+    ).toEqual([
+      ["pill", "2", "posts"],
+      ["pill", "3", "posts"],
+    ]);
     // The marker sits where the pill would: before the item's name.
     expect(html.indexOf(">Hidden for this entry<")).toBeLessThan(
       html.indexOf(">A post<", html.indexOf(">Featured<") + 1)
