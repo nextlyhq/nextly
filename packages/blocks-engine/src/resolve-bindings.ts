@@ -464,8 +464,27 @@ function boundImageOf(
       ? { holds: "address", value: value.trim() }
       : undefined;
   }
+  // An upload field to another collection names records the host's media
+  // lookup does not read, so an id of one would draw an unrelated picture.
+  if (!mayHoldMedia(field)) return undefined;
   if (isPlainRecord(value)) return recordImageOf(value);
   return kind === "media" ? mediaIdImage(value) : imageValueOf(value);
+}
+
+/**
+ * The collection a host's media lookup reads: the media library. An image is
+ * resolved through `resolveMedia(id)` alone, so an id from any other
+ * collection is not one it can draw.
+ */
+const MEDIA_COLLECTION = "media";
+
+/** Whether a field may hold media: it names no collection, or names this one. */
+function mayHoldMedia(field: BindingFieldShape | undefined): boolean {
+  const targets = field?.relationTo;
+  if (targets === undefined) return true;
+  return typeof targets === "string"
+    ? targets === MEDIA_COLLECTION
+    : targets.includes(MEDIA_COLLECTION);
 }
 
 /**
@@ -477,11 +496,11 @@ function recordImageOf(
   record: Readonly<Record<string, unknown>>
 ): ImageValue | undefined {
   // An upload field that may point at several collections stores, and
-  // populates, `{ relationTo, value }`: the media is its value.
-  if (
-    typeof ownEntry(record, "relationTo") === "string" &&
-    Object.hasOwn(record, "value")
-  ) {
+  // populates, `{ relationTo, value }`: the media is its value, and only in
+  // the arm that points at the media library.
+  const arm = ownEntry(record, "relationTo");
+  if (typeof arm === "string" && Object.hasOwn(record, "value")) {
+    if (arm !== MEDIA_COLLECTION) return undefined;
     const value = ownEntry(record, "value");
     return isPlainRecord(value) ? recordImageOf(value) : mediaIdImage(value);
   }

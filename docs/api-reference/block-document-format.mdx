@@ -230,10 +230,11 @@ An image prop (`media` or `upload`) binds to a media field or a URL field:
 
 - **A media field** fills the prop with the record's id, populated or not
   (and through the `{ relationTo, value }` an upload field to several
-  collections holds), and
+  collections holds, in its `media` arm), and
   the image draws exactly as one whose media was picked: the record's address,
   alternative text and size. The block's own alternative text wins over the
-  record's.
+  record's. An upload field to another collection names records the
+  media library doesn't hold, so it renders the fallback.
 - **A URL field** fills it only with an image address: `https://`, `http://`
   or a path on the site (`/media/a.png`). `javascript:`, `data:`, `mailto:`,
   a relative path and `//host` are not image addresses, so they render the

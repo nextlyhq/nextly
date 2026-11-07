@@ -42,6 +42,8 @@ const resolver = createBlockResolver(coreBlocks);
 
 const POSTS: readonly BindingFieldShape[] = [
   { name: "cover", type: "upload", relationTo: "media" },
+  { name: "either", type: "upload", relationTo: ["media", "documents"] },
+  { name: "attachment", type: "upload", relationTo: "documents" },
   { name: "photoUrl", type: "url" },
 ];
 
@@ -277,15 +279,36 @@ describe("an image bound to a field", () => {
 
   it("draws an upload field that may point at several collections by the media it holds", async () => {
     // Stored and populated as `{ relationTo, value }`.
-    for (const cover of [
+    for (const either of [
       { relationTo: "media", value: "m1" },
       { relationTo: "media", value: { id: "m1", filename: "m1.jpg" } },
     ]) {
-      const tags = images(await render(page(boundImage("cover")), { cover }));
+      const tags = images(await render(page(boundImage("either")), { either }));
       expect(tags.map(tag => attribute(tag, "src"))).toEqual([
         "https://cdn.example/m1.jpg",
       ]);
     }
+  });
+
+  it("never draws another collection's record as media, by an id the media library happens to share", async () => {
+    // "m1" names a document here, not the picture the library holds as m1.
+    const fallback = { fallback: "/media/fallback.jpg" };
+    const arm = images(
+      await render(page(boundImage("either", fallback)), {
+        either: { relationTo: "documents", value: "m1" },
+      })
+    );
+    expect(arm.map(tag => attribute(tag, "src"))).toEqual([
+      "/media/fallback.jpg",
+    ]);
+    const other = images(
+      await render(page(boundImage("attachment", fallback)), {
+        attachment: "m1",
+      })
+    );
+    expect(other.map(tag => attribute(tag, "src"))).toEqual([
+      "/media/fallback.jpg",
+    ]);
   });
 });
 
