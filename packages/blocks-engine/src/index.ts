@@ -1319,6 +1319,13 @@ export type {
   NodeBindingResult,
   SourceDemand,
 } from "./resolve-bindings";
+// The bound props a visitor will not see: the page's own binding check, asked
+// with the field shapes a visitor may read, for an editor to say so.
+export { visitorUnreadableBindings } from "./visitor-unreadable-bindings";
+export type {
+  VisitorUnreadableBinding,
+  VisitorUnreadableInput,
+} from "./visitor-unreadable-bindings";
 
 // A collection list's stored query: the one reading of it, shared by the
 // validator, the renderer and the editor, and its save-time judgement.
@@ -1368,6 +1375,7 @@ export {
   conditionIssues,
   conditionOp,
   evaluateConditions,
+  withConditions,
 } from "./visibility-conditions";
 export type {
   ConditionDayStart,

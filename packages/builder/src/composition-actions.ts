@@ -35,7 +35,10 @@ import {
   type ExposureEditResult,
   type ExposureSources,
   type ExposureTarget,
+  CONDITION_MAX,
+  CONDITION_OPS,
   LIST_FILTER_OPS,
+  type ConditionOp,
   type ListFilter,
   type ListRelation,
   type OpPosition,
@@ -98,6 +101,19 @@ export type PageAction =
       readonly query: ListQueryChange;
     }
   /**
+   * Set a block's visibility conditions: an OR of AND groups of
+   * `{ field, op, value? }`, or `null` to show it to everyone. The write is
+   * judged as an editor save is, so an operator conditions do not have, a
+   * field the entry or list item lacks or visitors can't see, and a value
+   * its field does not take are refused. The devices a block shows on are
+   * kept.
+   */
+  | {
+      readonly kind: "set-conditions";
+      readonly nodeId: string;
+      readonly conditions: readonly (readonly ConditionInput[])[] | null;
+    }
+  /**
    * Choose the page's Layout: a Layout's id, or `null` for the site's default.
    * `noHeaderFooter: true` switches the Layout off for this page; absent, it
    * is turned back on, as choosing a Layout in the editor does.
@@ -135,6 +151,17 @@ export interface ListQueryChange {
    * region; the write is refused naming the reason.
    */
   readonly paginate?: boolean | null;
+}
+
+/**
+ * One condition a `set-conditions` action sets, as a block stores it.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export interface ConditionInput {
+  readonly field: string;
+  readonly op: ConditionOp;
+  readonly value?: string | number | boolean;
 }
 
 /** Which part of a block an exposure targets: a prop, or its visibility. */
@@ -249,6 +276,28 @@ const pageActionOptions = [
       offset: z.number().nullable().optional(),
       paginate: z.boolean().nullable().optional(),
     }),
+  }),
+  z.strictObject({
+    kind: z.literal("set-conditions"),
+    nodeId: id,
+    // The shape a block stores, in the operators' own spellings, and no
+    // more: whether a field fits its entry, visitors may read it, or a value
+    // fits it is the page's blocks field to judge on the write, in the
+    // editor's own words.
+    conditions: z
+      .array(
+        z
+          .array(
+            z.strictObject({
+              field: id,
+              op: z.enum(CONDITION_OPS),
+              value: filterScalar.optional(),
+            })
+          )
+          .max(CONDITION_MAX)
+      )
+      .max(CONDITION_MAX)
+      .nullable(),
   }),
   z.strictObject({
     kind: z.literal("set-layout"),

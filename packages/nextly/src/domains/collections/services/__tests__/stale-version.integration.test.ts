@@ -484,7 +484,7 @@ describe.each(getConfiguredTestDialects())(
       expect((await stored(t, `dc_${NOTES}`, id)).title).toBe("theirs");
     });
 
-    it("applies a save from the current version, and one that gives none", async () => {
+    it("applies a save from the current version, and refuses one that gives none", async () => {
       const t = await boot(dialect);
       const created = await handlerOf(t).createEntry(
         { collectionName: NOTES, overrideAccess: true },
@@ -502,8 +502,12 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(third.success, JSON.stringify(third)).toBe(true);
       const unjudged = await update(t, NOTES, id, { title: "fourth" });
-      expect(unjudged.success, JSON.stringify(unjudged)).toBe(true);
-      expect((await stored(t, `dc_${NOTES}`, id)).title).toBe("fourth");
+      expect(unjudged, JSON.stringify(unjudged)).toMatchObject({
+        success: false,
+        statusCode: 428,
+        code: "VERSION_REQUIRED",
+      });
+      expect((await stored(t, `dc_${NOTES}`, id)).title).toBe("third");
     });
 
     it("refuses with 400 a version that is not one, and one from a read of another language", async () => {

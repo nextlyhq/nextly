@@ -55,6 +55,10 @@ import { singleDocumentEditable } from "../domains/singles/services/single-docum
 import { fieldsCarryingReadRules } from "../domains/versions/component-read-access";
 import { NextlyError } from "../errors";
 import { resolveStatusFilter } from "../lib/status-filter";
+import {
+  DOCUMENT_OVERWRITE_KEY,
+  DOCUMENT_VERSION_KEY,
+} from "../lib/system-columns";
 
 import type { PluginStoredValue } from "./contributions";
 import type { PluginRouteIdentity } from "./routes/route-types";
@@ -515,11 +519,18 @@ export async function updateIfUnchanged(
             ? {}
             : { actor: person.authenticatedScope }),
         };
+  // Guarded by its own expectation, judged under the row lock, rather than by
+  // a version: so it says it sets these values whatever else is stored,
+  // unless the plugin's data names a version or that choice itself.
+  const data =
+    DOCUMENT_VERSION_KEY in named.data || DOCUMENT_OVERWRITE_KEY in named.data
+      ? named.data
+      : { ...named.data, [DOCUMENT_OVERWRITE_KEY]: true };
   const nextly = requireNextly();
   if (document.kind === "single") {
     await nextly.updateSingle({
       slug: document.slug,
-      data: named.data,
+      data,
       depth: 0,
       ...inLocale,
       ...as,
@@ -528,7 +539,7 @@ export async function updateIfUnchanged(
     await nextly.update({
       collection: document.slug,
       id: document.id,
-      data: named.data,
+      data,
       depth: 0,
       ...inLocale,
       ...as,

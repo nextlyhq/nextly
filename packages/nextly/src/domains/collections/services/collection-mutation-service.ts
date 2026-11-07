@@ -18,6 +18,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type {
   TransactionContext,
+  TransactionOptions,
   WhereCondition,
 } from "@nextlyhq/adapter-drizzle/types";
 import {
@@ -7595,6 +7596,10 @@ export class CollectionMutationService extends BaseService {
       const inTransactionHandlers = this.inTransactionHandlersFor(
         params.collectionName
       );
+      // Read committed when a handler runs; see `writeTransactionOptions`.
+      const transactionOptions = this.writeTransactionOptions(
+        inTransactionHandlers
+      );
       await this.adapter.transaction(async tx => {
         const rawEntry = await tx.insert<unknown>(tableName, entryData, {
           returning: "*",
@@ -7928,7 +7933,7 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           context: sharedContext,
         });
-      });
+      }, transactionOptions);
       // Set only after the transaction resolves (this line is skipped if it
       // rejected), so a commit failure never flags a durable event that isn't
       // there; from here a post-commit hook failure must not hide the delivery.
@@ -9355,6 +9360,11 @@ export class CollectionMutationService extends BaseService {
         inTransactionHandlers.length > 0;
       // Retry the whole publish+capture transaction on a version_no allocation
       // race, mirroring updateEntry.
+      // Read committed when a handler runs; see `writeTransactionOptions`.
+      const transactionOptions = this.writeTransactionOptions(
+        inTransactionHandlers,
+        versionConflictRetries()
+      );
       await this.adapter.transaction(async tx => {
         // Lock the main row up front. One read serves three needs: it is the
         // liveness check (a row deleted between the pre-transaction read and
@@ -10343,7 +10353,7 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           context: {},
         });
-      }, versionConflictRetries());
+      }, transactionOptions);
 
       // The entry was deleted out from under the publish: nothing was written or
       // recorded, so answer not-found rather than a success for absent content.
@@ -14327,6 +14337,11 @@ export class CollectionMutationService extends BaseService {
       const inTransactionHandlers = this.inTransactionHandlersFor(
         params.collectionName
       );
+      // Read committed when a handler runs; see `writeTransactionOptions`.
+      const transactionOptions = this.writeTransactionOptions(
+        inTransactionHandlers,
+        versionConflictRetries()
+      );
       await this.adapter.transaction(async tx => {
         recorded = false;
         // Reset the payloads the promote fold rebinds, so a retried attempt
@@ -15820,7 +15835,7 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           context: sharedContext,
         });
-      }, versionConflictRetries());
+      }, transactionOptions);
       // The transaction committed (skipped if the retry ultimately threw), so
       // the event is durable; a later hook failure must not hide the delivery.
       eventRecorded = recorded;
@@ -17833,6 +17848,10 @@ export class CollectionMutationService extends BaseService {
       const inTransactionHandlers = this.inTransactionHandlersFor(
         params.collectionName
       );
+      // Read committed when a handler runs; see `writeTransactionOptions`.
+      const transactionOptions = this.writeTransactionOptions(
+        inTransactionHandlers
+      );
       await this.adapter.transaction(async tx => {
         // Lock and re-read the committed row inside the transaction. `entry`
         // above was read before the hooks ran and outside this transaction, so a
@@ -17977,7 +17996,7 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           context: sharedContext,
         });
-      });
+      }, transactionOptions);
       // Set only after the transaction resolves: `deletedRow` is true exactly
       // when the delete committed, so a commit failure never flags a durable
       // event that isn't there; a later hook failure must not hide it. `recorded`
@@ -18775,6 +18794,24 @@ export class CollectionMutationService extends BaseService {
     collection: string
   ): InTransactionHandlerSet {
     return inTransactionHandlersFor(this.hookService.hookRegistry, collection);
+  }
+
+  /**
+   * The options a write's own transaction opens with, given the
+   * in-transaction handlers it runs: with any, it reads committed on every
+   * dialect. A handler may serialize writes with a row lock and then judge
+   * what other writes stored; under MySQL's default, REPEATABLE READ, its
+   * reads would answer from the snapshot the transaction's first read took,
+   * before the writer it waited for committed. PostgreSQL reads committed
+   * already, and SQLite runs one writer at a time. A write running none keeps
+   * the dialect's default.
+   */
+  private writeTransactionOptions(
+    handlers: InTransactionHandlerSet,
+    options?: TransactionOptions
+  ): TransactionOptions | undefined {
+    if (handlers.length === 0) return options;
+    return { ...options, isolationLevel: "read committed" };
   }
 
   /**

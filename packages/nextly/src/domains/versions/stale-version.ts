@@ -126,10 +126,11 @@ export function givenVersionOf(
  * What an update is judged against: the version it gave, or nothing.
  *
  * One decision, taken once at each write path's boundary, before the body's
- * version is dropped: a write with no `_rev`, or one the server exempts, is
- * applied as it always was. `overwrite` is a write that names
- * `_overwrite: true`: it saves over whatever came in between, and the
- * version it gave, if any, says what it replaced.
+ * version is dropped. `overwrite` is a write that names `_overwrite: true`:
+ * it saves over whatever came in between, and the version it gave, if any,
+ * says what it replaced. `unjudged` is a write the server exempts, a release
+ * run's own; any other write that gives neither is refused
+ * (`versionCheckFor`).
  */
 export type VersionCheck =
   | { kind: "judge"; given: DecodedVersion; raw: string }
@@ -172,6 +173,9 @@ function overwriteOf(body: Readonly<Record<string, unknown>>): boolean {
  *
  * @throws NextlyError.validation for a `_rev` that is not a version, or an
  *   `_overwrite` that is not true or false.
+ * @throws NextlyError.versionRequired for a write that gives neither: it
+ *   would replace whatever was saved since its caller last read, unasked.
+ *   The decode alone (`givenVersionOf`) never refuses a missing version.
  */
 export function versionCheckFor(
   body: Readonly<Record<string, unknown>>,
@@ -184,9 +188,16 @@ export function versionCheckFor(
   if (options.exempt) return { kind: "unjudged" };
   if (overwrite)
     return given ? { kind: "overwrite", given } : { kind: "overwrite" };
-  return given
-    ? { kind: "judge", given, raw: body[DOCUMENT_VERSION_KEY] as string }
-    : { kind: "unjudged" };
+  if (given) {
+    return { kind: "judge", given, raw: body[DOCUMENT_VERSION_KEY] as string };
+  }
+  throw NextlyError.versionRequired({
+    keys: {
+      version: DOCUMENT_VERSION_KEY,
+      overwrite: DOCUMENT_OVERWRITE_KEY,
+      revs: DOCUMENT_REVS_KEY,
+    },
+  });
 }
 
 /**
@@ -324,13 +335,23 @@ export interface ReleaseRunTarget {
   entryId?: string;
 }
 
-const releaseRun = new AsyncLocalStorage<ReleaseRunTarget>();
+/** A release run's mark: the document it is for, and whether it was used. */
+interface ReleaseRunMark {
+  readonly target: ReleaseRunTarget;
+  taken: boolean;
+}
+
+const releaseRun = new AsyncLocalStorage<ReleaseRunMark>();
 
 /**
  * Run `operation` as a release run's write to `target`, which is not judged:
  * a scheduled run publishes what its release was given, whatever was saved
- * since. Pinned by the release runner only. A write to any other document
- * made meanwhile, by a hook say, is judged as usual.
+ * since. Pinned by the release runner only, around its one write.
+ *
+ * The mark exempts one write: the first to `target` that is judged, which is
+ * the runner's own, since its version is decided before any hook runs. A
+ * write a hook makes meanwhile, to `target` or to any other document, is
+ * judged as usual.
  *
  * @internal
  */
@@ -338,16 +359,25 @@ export function runAsReleaseRun<T>(
   target: ReleaseRunTarget,
   operation: () => T
 ): T {
-  return releaseRun.run(target, operation);
+  return releaseRun.run({ target, taken: false }, operation);
 }
 
-/** Whether a write to `target` is a release run's own, and so not judged. */
+/**
+ * Whether a write to `target` is a release run's own, and so not judged.
+ * Answers yes once per run: the answer takes the mark, so a later write to
+ * the same document within the run is judged.
+ */
 export function releaseRunExemptFor(target: ReleaseRunTarget): boolean {
-  const pinned = releaseRun.getStore();
-  if (pinned === undefined) return false;
+  const mark = releaseRun.getStore();
+  if (mark === undefined || mark.taken) return false;
+  const pinned = mark.target;
   if (pinned.scopeKind !== target.scopeKind) return false;
   if (pinned.scopeSlug !== target.scopeSlug) return false;
-  return target.scopeKind === "single" || pinned.entryId === target.entryId;
+  if (target.scopeKind !== "single" && pinned.entryId !== target.entryId) {
+    return false;
+  }
+  mark.taken = true;
+  return true;
 }
 
 /** Who made a row's last counted change, as the row records it: ids only. */

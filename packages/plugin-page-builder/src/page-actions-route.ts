@@ -10,6 +10,8 @@
  * - **set-layout** chooses the page's Layout, or switches it off.
  * - **set-list-query** changes a collection list's source, filters, sort,
  *   limit and offset, as the list's inspector does.
+ * - **set-conditions** sets a block's visibility conditions, as the block's
+ *   "Show when" controls do.
  *
  * Each is read, planned and written as the caller. The stored page is read as
  * its working draft, as the editor opens it, and written back as a draft
@@ -43,7 +45,11 @@ import {
   type DocumentLimits,
   type OpPosition,
 } from "@nextlyhq/blocks-engine";
-import { pageActionJsonSchema, pageActionSchema } from "@nextlyhq/builder/ops";
+import {
+  conditionsOp,
+  pageActionJsonSchema,
+  pageActionSchema,
+} from "@nextlyhq/builder/ops";
 import {
   getCachedNextly,
   NextlyError,
@@ -432,6 +438,10 @@ async function opsFor(
       return {
         ops: [listQueryUpdate(document, action.listId, action.query)],
       };
+    case "set-conditions":
+      return {
+        ops: [conditionsUpdate(document, action.nodeId, action.conditions)],
+      };
     case "choose-variant":
       return {
         ops: [
@@ -573,6 +583,24 @@ function listQueryUpdate(
     else props[part] = value;
   }
   return { kind: "update", id: listId, patch: { props } };
+}
+
+/**
+ * The update op that sets one block's visibility conditions, through the
+ * editor's own writer, so the devices it shows on are kept and a block shown
+ * to everyone stores no visibility. Whether each condition fits is the
+ * blocks field's to judge on the write, as for an editor save.
+ */
+function conditionsUpdate(
+  document: BlockDocument,
+  nodeId: string,
+  conditions: Extract<PageAction, { kind: "set-conditions" }>["conditions"]
+): BuilderOp {
+  const op = conditionsOp(document, nodeId, conditions);
+  if (op === null) {
+    throw refusedAction([`There is no block "${nodeId}" on this page.`]);
+  }
+  return op;
 }
 
 /** A placement's props with values set and some fields reset to what they inherit. */
