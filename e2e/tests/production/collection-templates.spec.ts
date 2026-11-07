@@ -4,6 +4,7 @@ import {
   type APIResponse,
 } from "@playwright/test";
 
+import { answeredNotFound } from "../support/not-found";
 import { test } from "../support/visible";
 
 /**
@@ -71,6 +72,18 @@ async function visit(
   return await request.get(path, { headers: { cookie: "" } });
 }
 
+/** Whether `path` answers an anonymous visitor not found. */
+async function notFoundAt(
+  request: APIRequestContext,
+  path: string
+): Promise<boolean> {
+  const response = await visit(request, path);
+  return answeredNotFound({
+    status: response.status(),
+    html: await response.text(),
+  });
+}
+
 test.describe("a collection's entries under its template address", () => {
   test("serves each published post at /blog/<slug> with its own metadata, and a draft or unpublished one as not found", async ({
     page,
@@ -133,15 +146,16 @@ test.describe("a collection's entries under its template address", () => {
     ).not.toContain(SECOND.title);
 
     // 4. A draft holds no address, and is not found.
-    expect((await visit(request, `/blog/${DRAFT.slug}`)).status()).toBe(404);
+    expect(await notFoundAt(request, `/blog/${DRAFT.slug}`)).toBe(true);
 
     // 5. Unpublished, a post gives its address up and is not found.
     const unpublished = await api.patch(
       `${API}/collections/posts/entries/${first}`,
-      { data: { status: "draft" } }
+      // Replaces what is stored: this edit is not about stale ones.
+      { data: { status: "draft", _overwrite: true } }
     );
     expect(unpublished.ok(), await unpublished.text()).toBe(true);
-    expect((await visit(request, `/blog/${FIRST.slug}`)).status()).toBe(404);
+    expect(await notFoundAt(request, `/blog/${FIRST.slug}`)).toBe(true);
     expect((await visit(request, `/blog/${SECOND.slug}`)).status()).toBe(200);
   });
 });

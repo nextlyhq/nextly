@@ -362,6 +362,25 @@ ctx.hooks.onInTransaction("*", async write => {
 });
 ```
 
+`listEntries` reads through the pool too, and waits the same way.
+`listEntriesInTransaction(tx, slug, options, opts)` (`@experimental`) is `listEntries` on the
+transaction's own connection: the same options and `ServiceOpts`, the same access check and
+read hooks, and the same answer, so it sees what the transaction wrote. Under `as: "user"`
+the caller's roles are read on the transaction too. The page's rows are read with a shared
+lock on PostgreSQL and MySQL, held until the transaction ends. It grants nothing
+`listEntries` does not.
+
+```ts
+ctx.hooks.onInTransaction("*", async write => {
+  const { data } = await ctx.services.collections.listEntriesInTransaction(
+    write.transaction,
+    "posts",
+    { where: { id: { in: ["p1", "p2"] } }, select: { id: true, slug: true } }
+  );
+  // ...
+});
+```
+
 `ctx.services.users` may create and update accounts, but not decide who administers the
 site. It refuses, with `NextlyError` code `FORBIDDEN`, to create an install's first
 account (core makes that one super-admin), to give a role that reaches `super-admin`
@@ -489,6 +508,17 @@ argument of `listEntriesInTransaction` or `findEntryByIdInTransaction`. The rows
 locked `FOR UPDATE`, so a second transaction doing the same waits for yours, rather than
 both holding a shared lock that the other's write then waits on, which the database ends by
 refusing one of them.
+
+When your transaction already holds a lock of its own, such as a lock row each of your writes
+updates first, and reads rows another writer may be updating, pass `{ lock: "none" }`
+(`@experimental`) to any of these reads, `getSingleInTransaction` included. The read is then
+a plain read on your transaction's connection: no `FOR SHARE` or `FOR UPDATE`, so it waits
+for no other writer and holds nothing it read. A locking read would wait for that writer
+while the writer waits for your lock, and the database would end the wait by refusing one
+of you as a deadlock. Under READ COMMITTED, PostgreSQL's default, the plain read sees the
+latest committed rows. Under REPEATABLE READ, MySQL's default, it answers from your
+transaction's snapshot, which can be older than a commit your lock was meant to wait for:
+guard against that yourself. On SQLite the three read alike.
 
 #### Reading host content that holds your field type
 

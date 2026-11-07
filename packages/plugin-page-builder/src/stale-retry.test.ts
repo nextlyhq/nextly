@@ -5,6 +5,7 @@
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
+import { GRAPH_SNAPSHOT_RACED } from "./composition-graph-lock";
 import {
   isStaleVersion,
   retryOnStale,
@@ -24,6 +25,44 @@ function reads() {
 }
 
 describe("writing again after a stale refusal", () => {
+  it("tries again after a refusal for a snapshot older than the graph lock, re-worded or not", async () => {
+    const raced = NextlyError.conflict({
+      reason: "state",
+      message: "Try again.",
+      logContext: { cause: GRAPH_SNAPSHOT_RACED },
+    });
+    // As a caller re-words it: its own refusal, the lock's as the cause.
+    const reworded = NextlyError.conflict({
+      reason: "state",
+      message: "The design changed while removing. Try again.",
+      cause: raced,
+      logContext: { cause: GRAPH_SNAPSHOT_RACED },
+    });
+    const read = reads();
+    const attempt = vi
+      .fn<(read: number) => Promise<string>>()
+      .mockRejectedValueOnce(raced)
+      .mockRejectedValueOnce(reworded)
+      .mockImplementation(async from => `written from ${from}`);
+
+    expect(await retryOnStale(read, attempt)).toBe("written from 3");
+  });
+
+  it("does not try again after any other conflict", async () => {
+    const other = NextlyError.conflict({
+      reason: "state",
+      message: "Nothing was removed.",
+      logContext: { cause: "something-else" },
+    });
+    const read = reads();
+    const attempt = vi
+      .fn<(read: number) => Promise<string>>()
+      .mockRejectedValue(other);
+
+    await expect(retryOnStale(read, attempt)).rejects.toBe(other);
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
   it("tries again on a fresh read after a stale refusal, and answers what that try answers", async () => {
     const read = reads();
     const attempt = vi

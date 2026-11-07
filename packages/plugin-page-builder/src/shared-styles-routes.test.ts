@@ -2,6 +2,7 @@
  * The shared styles' routes, against fakes of the store and the usage index:
  * who each asks, what each writes, and what each refuses.
  */
+import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
@@ -138,6 +139,7 @@ describe("the shared-style permission", () => {
     const routes = sharedStyleRoutes({
       configClassIds: new Set(),
       usage: () => usageOf(WHOLE).source,
+      limits: DEFAULT_LIMITS,
     });
     const scope = {
       plugin: "@nextlyhq/plugin-page-builder",

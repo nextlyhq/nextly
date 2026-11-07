@@ -5,7 +5,7 @@
  * one; the write path can, by comparing with the stored forms.
  */
 import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
-import type { PluginFieldWrite } from "@nextlyhq/plugin-sdk";
+import { NextlyError, type PluginFieldWrite } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import type { CompositionSetup } from "./blocks-composition";
@@ -142,5 +142,83 @@ describe("a page write's references to the site's shared styles", () => {
       } as never)
     ).toBe(true);
     expect(siteDefinitions).not.toHaveBeenCalled();
+  });
+});
+
+describe("a blocks field inside named groups", () => {
+  /** A write whose stored value at `at` is `published`, recording each read. */
+  const writeAt = (
+    at: string,
+    published: unknown,
+    read: string[] = []
+  ): PluginFieldWrite =>
+    ({
+      kind: "collection",
+      slug: "pages",
+      id: "p1",
+      inTransaction: false,
+      readStored: async target => {
+        read.push(target.field);
+        return target.field === at && target.form === "published"
+          ? { kind: "value", value: published }
+          : { kind: "absent" };
+      },
+    }) as PluginFieldWrite;
+
+  const validateAt = (value: unknown, path: string, write: PluginFieldWrite) =>
+    setup().field.validate?.(value, {
+      path,
+      field: { name: "body", type: "blocks" },
+      data: {},
+      mode: "update",
+      write,
+    } as never);
+
+  it("refuses a newly added undefined class, read against the stored value at its path", async () => {
+    const read: string[] = [];
+    const result = await validateAt(
+      page(["c-gone"]),
+      "hero.body",
+      writeAt("hero.body", page(["c-card"]), read)
+    );
+    expect(codes(result)).toEqual(["unknown-class"]);
+    expect(read).toContain("hero.body");
+  });
+
+  it("keeps saving a reference the stored value at its path already held", async () => {
+    // The control: the same write, with the reference already stored there.
+    expect(
+      await validateAt(
+        page(["c-gone"]),
+        "hero.body",
+        writeAt("hero.body", page(["c-gone"]))
+      )
+    ).toBe(true);
+  });
+
+  it("refuses an undefined class where the stored read cannot name the field", async () => {
+    // A group kept per language: nothing proves the page held it already.
+    const refusing = {
+      ...writeAt("hero.body", undefined),
+      readStored: async () => {
+        throw NextlyError.invalidInput({
+          message:
+            '"pages.hero.body" cannot be read here: it is inside a group kept per language.',
+        });
+      },
+    } as PluginFieldWrite;
+    expect(
+      codes(await validateAt(page(["c-gone"]), "hero.body", refusing))
+    ).toEqual(["unknown-class"]);
+  });
+
+  it("does not judge a field in a repeater's rows, which has no stored path", async () => {
+    expect(
+      await validateAt(
+        page(["c-gone"]),
+        "rows[0].body",
+        writeAt("rows[0].body", page([]))
+      )
+    ).toBe(true);
   });
 });

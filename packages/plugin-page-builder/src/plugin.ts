@@ -1,11 +1,8 @@
 import {
   allBlocks,
   createNamedQueryRegistry,
-  breakpointContexts,
   DEFAULT_LIMITS,
   namedQueryDeclaration,
-  resolveSiteTokens,
-  tokenIdentity,
   type DocumentLimits,
   type NamedClass,
   type NamedQueryDefinition,
@@ -53,6 +50,7 @@ import {
   contentAddressService,
   type ContentAddressService,
 } from "./address-claims/content-addresses";
+import { ENTRY_SLUG_FIELD } from "./address-claims/entry-claims";
 import {
   registerEntryAddressClaims,
   releaseUndeclared,
@@ -144,7 +142,14 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
-import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
+import {
+  entryDesignKey,
+  TEMPLATE_ENTRY_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_FIELD,
+  TEMPLATE_ENTRY_ID_FIELD,
+  templatesCollection,
+  TEMPLATES_SLUG,
+} from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
 import {
@@ -194,7 +199,7 @@ import type {
   CompositionSetup,
   LayersLockUnjudged,
 } from "./fields/blocks-composition";
-import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
+import { blocksFieldType, BLOCKS_TYPE, onceAsked } from "./fields/blocksField";
 import { listFieldsFrom } from "./fields/list-query-judgement";
 import { hostFetchPolicy } from "./host-policy";
 import type { HostAddress } from "./host-rewrite/contract";
@@ -279,6 +284,7 @@ import {
   firstReadableTitle,
   sharedStyleRoutes,
   storedDocumentsOf,
+  storedSharedStyleUses,
   type SharedStyleUsageSource,
 } from "./shared-styles-routes";
 import {
@@ -293,6 +299,10 @@ import {
   type PageBuilderSiteCodeOptions,
 } from "./site-code/route";
 import { siteCodeSingle } from "./site-code/storage";
+import {
+  siteDefinitionsOfDocument,
+  siteStyleDocumentOn,
+} from "./site-definitions";
 import {
   resolveFontOptions,
   type PageBuilderFontOptions,
@@ -312,13 +322,23 @@ import {
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
 import { siteStyleExpiry } from "./site-style-expiry";
-import { referableClassIds } from "./site-style-record";
-import { blocksSurvey, siteStyleRoute } from "./site-style-route";
 import {
-  loadSiteStyle,
+  registerSiteStyleRemovalLock,
+  type SiteStyleRemovalLockSetup,
+} from "./site-style-removal-lock";
+import {
+  blocksSurvey,
+  builderCollectionsIn,
+  builderSinglesIn,
+  siteLocales as siteLocalesOf,
+  siteStyleRoute,
+} from "./site-style-route";
+import {
   readStoredSiteStyleVersioned,
   SITE_STYLE_SLUG,
+  siteStyleOfDocument,
   siteStyleSingle,
+  suppliedVariableIds,
   type VariablesInUseCheck,
 } from "./site-style-storage";
 import {
@@ -336,6 +356,7 @@ import {
 } from "./spacing-mode-reader";
 import { spacingModeRoute } from "./spacing-mode-route";
 import { spacingModeStore, type SpacingModeStore } from "./spacing-mode-store";
+import { storedDocumentsOnTransaction } from "./stored-documents-on-transaction";
 import {
   holdTemplateCollection,
   templateCollectionDelete,
@@ -1352,6 +1373,90 @@ function installHoldsFor(
       return store?.status === true;
     },
   });
+}
+
+/** The context the plugin's `init` is handed. */
+type InitContext = Parameters<
+  NonNullable<Parameters<typeof definePlugin>[0]["init"]>
+>[0];
+
+/**
+ * The Site Style Single's reads a write is judged by: its record as stored,
+ * through the Direct API or on a write's own transaction, and what it
+ * defines, by the one reading of a record (`site-definitions`).
+ */
+function siteStyleReads(
+  ctx: InitContext,
+  defaults: SiteStyleData
+): {
+  documentOn: (transaction: PluginCollectionTransaction) => Promise<unknown>;
+  styleNow: () => Promise<SiteStyleData>;
+  definitions: NonNullable<CompositionSetup["siteDefinitions"]>;
+} {
+  // The Single as the host renamed it.
+  const slug = ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG;
+  // The record as stored now, read through the Direct API when asked.
+  const documentNow = async (): Promise<unknown> => {
+    // Imported at call time, for the reason `defaultLayoutDeps` gives: this
+    // entry reaches a browser bundle, where the Direct API has no place.
+    const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+    const nextly = await getCachedNextly();
+    return nextly.findSingle({ slug });
+  };
+  // On the transaction's own connection, so the read takes no second one
+  // from the pool while the write holds one, and with no row lock.
+  const documentOn = siteStyleDocumentOn(ctx.services.ownCollections, slug);
+  return {
+    documentOn,
+    styleNow: async () => siteStyleOfDocument(await documentNow(), defaults),
+    definitions: async transaction =>
+      siteDefinitionsOfDocument(
+        transaction === undefined
+          ? await documentNow()
+          : await documentOn(transaction),
+        defaults
+      ),
+  };
+}
+
+/**
+ * The stored documents a removal walks under the composition graph lock,
+ * read on its write's transaction: the plugin's own reads for the
+ * collections and Singles it declared, the host reads for the others, and
+ * the stored read of the blocks type for each working draft. Which hold a
+ * blocks field is read from the registry on the same transaction
+ * (`listHostTypesInTransaction`, which takes no row locks), once per walk:
+ * read from the pool, it would wait for a connection the write's own
+ * transaction holds, for good on a pool of one.
+ */
+function removalDocumentsOn(
+  ctx: InitContext
+): SiteStyleRemovalLockSetup["documentsOn"] {
+  const declared = (slugs: Readonly<Record<string, string | undefined>>) =>
+    new Set(
+      Object.values(slugs).filter((slug): slug is string => slug !== undefined)
+    );
+  const ownCollections = declared(ctx.self.collections);
+  const ownSingles = declared(ctx.self.singles);
+  return write => {
+    // One listing per walk, read on the write's transaction: the collections
+    // and the Singles both come from it, so they describe one registry.
+    const listing = onceAsked(() =>
+      ctx.services.ownCollections.listHostTypesInTransaction(write.transaction)
+    );
+    return storedDocumentsOnTransaction({
+      reads: ctx.services.ownCollections,
+      transaction: write.transaction,
+      readStored: target => write.readStored(BLOCKS_TYPE, target),
+      ownCollections,
+      ownSingles,
+      locales: () => siteLocalesOf(ctx.config),
+      collections: async () =>
+        builderCollectionsIn((await listing()).collections),
+      singles: async () =>
+        builderSinglesIn((await listing()).singles, declaredSingleSlugs(ctx)),
+    });
+  };
 }
 
 /**
@@ -2471,9 +2576,10 @@ export const pageBuilder = (
         )
       );
       // After the collection is held: the row a template write commits is
-      // judged again on its transaction, and a new own design holds its
-      // entry, so one written while the entry is deleted is refused or
-      // deleted with it, whichever path wrote it: see `entry-design-write`.
+      // judged again on its transaction, a new own design holds its entry,
+      // and a write linking a row to the template it was copied from holds
+      // that template, so one written while either is deleted is refused or
+      // seen by the delete, whichever path wrote it: see `entry-design-write`.
       ctx.hooks.onInTransaction(
         templates,
         judgeTemplateInTransaction<PluginCollectionTransaction>(
@@ -2482,7 +2588,8 @@ export const pageBuilder = (
               transaction,
               collection,
               id
-            )
+            ),
+          templates
         )
       );
       // A collection's template and its entries' own designs go with the
@@ -2532,8 +2639,7 @@ export const pageBuilder = (
               const titles = new Map<string, string>();
               for (const entry of found.data as Record<string, unknown>[]) {
                 const title = readableTitleText(entry[field]);
-                // Keyed by an id that is text or a number, as stored ids
-                // are; any other value names no entry to title.
+                // An id is a string or a number, keyed as its text.
                 const id = entry.id;
                 if (
                   (typeof id === "string" || typeof id === "number") &&
@@ -2590,18 +2696,10 @@ export const pageBuilder = (
           }
         );
       // The site's style as a write is judged against: the code's defaults
-      // and the stored record of the Single as renamed, read when asked.
-      const siteStyleNow = async () => {
-        // Imported at call time, for the reason the readers above give: this
-        // entry reaches a browser bundle, where the Direct API has no place.
-        const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-        const nextly = await getCachedNextly();
-        return loadSiteStyle({
-          nextly: { findSingle: args => nextly.findSingle(args) },
-          defaults: configStyle,
-          slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
-        });
-      };
+      // and the Single's stored record, by the one reading every judgement
+      // uses.
+      const siteStyle = siteStyleReads(ctx, configStyle);
+      const siteStyleNow = siteStyle.styleNow;
       composition = {
         store: {
           // The collection components actually live in, resolved the way the
@@ -2668,33 +2766,9 @@ export const pageBuilder = (
           const { declaredFieldShapes } = await import("nextly/runtime");
           return declaredFieldShapes(ref);
         },
-        siteDefinitions: async () => {
-          const style = await siteStyleNow();
-          // Imported at call time: it imports `node:async_hooks`, which a
-          // browser bundle reaching this entry cannot resolve.
-          const { withProvisionalTokenIds } = await import(
-            "./transfer/provisional-variables"
-          );
-          return {
-            // Capped and resolved as the compiler reads the library, so a
-            // page may reference exactly the classes it applies.
-            classIds: referableClassIds(style.classes ?? []),
-            // The ones its stylesheet is emitted under.
-            breakpointIds: new Set(
-              breakpointContexts(siteBreakpoints(style)).map(
-                context => context.id
-              )
-            ),
-            // Every tier of variables, as the stylesheet resolves them, so a
-            // page may name exactly the variables it renders with. An
-            // import's judging writes also count the variables it adds, which
-            // the site style holds only once the import applies; no other
-            // write sees any.
-            tokenIds: withProvisionalTokenIds(
-              new Set(resolveSiteTokens(style.tokens).tokens.map(tokenIdentity))
-            ),
-          };
-        },
+        // Through the Direct API for the validation, and on the write's own
+        // transaction for the judgement under the graph lock.
+        siteDefinitions: siteStyle.definitions,
         hostsOf: indexHostFinder({
           rows: () => usageTableRows(ctx.db, usageTableOf(componentUsageIndex)),
           health: () =>
@@ -2772,7 +2846,44 @@ export const pageBuilder = (
       // Every write changing a blocks value is judged again in its own
       // transaction under the graph lock, so two saves made at once cannot
       // each pass against the graph as it stood before the other.
-      registerCompositionRejudge(ctx, () => composition);
+      // The site's languages, read per write: a held working draft keeps a
+      // reference its live form holds in any of them.
+      registerCompositionRejudge(
+        ctx,
+        () => composition,
+        () => siteLocalesOf(ctx.config)
+      );
+      // What a variable's in-use check reads: the variable index, the block
+      // types the pages are rendered with (read per check), and the stored
+      // documents. It names no document, since the write's author is not a
+      // caller this can ask.
+      const variableCheckSetup = {
+        usage: usageSourceOf(ctx.self.collections, tokenUsageIndex),
+        blocks: allBlocks,
+        documents: async () => storedDocumentsOf(ctx, await bootedNextly()),
+        limits: opts.limits ?? DEFAULT_LIMITS,
+        pathOf: () => "tokens",
+      };
+      // And every write of the site style dropping a variable or a shared
+      // style takes the same lock and reads the stored documents again under
+      // it, so a page cannot commit a first use of what it removes. Read on
+      // the write's own transaction, by the walks the remove routes' rescans
+      // make.
+      registerSiteStyleRemovalLock(ctx, {
+        suppliedVariables: () => suppliedVariableIds(configStyle),
+        // The set the code tier refresh keeps current.
+        suppliedClasses: () => configClassIds,
+        defaults: () => configStyle,
+        siteStyleOn: siteStyle.documentOn,
+        documentsOn: removalDocumentsOn(ctx),
+        variableUses: (ids, documents) =>
+          variableRemovalChecks({
+            ...variableCheckSetup,
+            documents: () => Promise.resolve(documents),
+          }).stillUsed.uses(ids),
+        sharedStyleUses: (ids, documents) =>
+          storedSharedStyleUses(documents, opts.limits ?? DEFAULT_LIMITS)(ids),
+      });
       seedGraphLock = () =>
         seedCompositionGraphLock(ctx.db, ctx.dialect).catch((error: unknown) =>
           ctx.logger.warn(
@@ -2808,16 +2919,8 @@ export const pageBuilder = (
         markDirty: () => usageBookkeeping(ctx.db, ctx.dialect).markDirty(),
       });
       // A write of the site style dropping a variable still in use is
-      // refused, by the check the remove route makes. It names no document,
-      // since the write's author is not a caller this can ask.
-      variablesInUse = variablesInUseCheck({
-        usage: usageSourceOf(ctx.self.collections, tokenUsageIndex),
-        // The block types the pages are rendered with, read per check.
-        blocks: allBlocks,
-        documents: async () => storedDocumentsOf(ctx, await bootedNextly()),
-        limits: opts.limits ?? DEFAULT_LIMITS,
-        pathOf: () => "tokens",
-      });
+      // refused before its transaction, by the check the remove route makes.
+      variablesInUse = variablesInUseCheck(variableCheckSetup);
       registerReadinessNotice(ctx, opts);
       // A page's address, and its paginated list's later pages, held in the
       // address store in the save's own transaction, so two documents never
@@ -3020,6 +3123,95 @@ export const pageBuilder = (
             address: address === null ? null : addressSegments(address),
           };
         },
+        // Hook-free and as the system, as the template is read, and on the
+        // write's own transaction: the routing columns of the entry's own
+        // design alone.
+        ownDesignPublished: async (collection, id, tx) => {
+          const key = entryDesignKey(collection, id);
+          const found =
+            await ctx.services.ownCollections.listEntriesInTransaction(
+              tx,
+              templatesSlug,
+              {
+                where: { [TEMPLATE_ENTRY_FIELD]: { equals: key } },
+                pagination: { limit: 1 },
+                select: {
+                  id: true,
+                  [TEMPLATE_ENTRY_FIELD]: true,
+                  status: true,
+                },
+                depth: 0,
+              }
+            );
+          const row = found.data[0] as Record<string, unknown> | undefined;
+          // Compared again exactly: a database may compare text loosely.
+          return (
+            row?.[TEMPLATE_ENTRY_FIELD] === key && row.status === "published"
+          );
+        },
+        // On the write's own transaction, a page at a time, stopping on a
+        // short page: the total beside a page is an unlocked count.
+        publishedDesigns: async (collection, tx) => {
+          const ids = new Set<string>();
+          for (let page = 1; ; page += 1) {
+            const found =
+              await ctx.services.ownCollections.listEntriesInTransaction(
+                tx,
+                templatesSlug,
+                {
+                  // Published ones only, filtered by the database: a draft
+                  // design keeps no address, so reading and locking it would
+                  // only slow the write. Each row is still compared exactly.
+                  where: {
+                    [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection },
+                    status: { equals: "published" },
+                  },
+                  pagination: { limit: 500, page },
+                  // A unique order, so no design moves between pages.
+                  sort: { field: "id", direction: "asc" },
+                  select: {
+                    id: true,
+                    [TEMPLATE_ENTRY_FIELD]: true,
+                    [TEMPLATE_ENTRY_ID_FIELD]: true,
+                    status: true,
+                  },
+                  depth: 0,
+                }
+              );
+            for (const value of found.data) {
+              const row = value as Record<string, unknown>;
+              const id = row[TEMPLATE_ENTRY_ID_FIELD];
+              // The key its entry makes, compared exactly, so a design
+              // matched loosely by collection is never counted.
+              if (
+                typeof id === "string" &&
+                row[TEMPLATE_ENTRY_FIELD] === entryDesignKey(collection, id) &&
+                row.status === "published"
+              ) {
+                ids.add(id);
+              }
+            }
+            if (found.data.length < 500) return ids;
+          }
+        },
+        // The host's collection, read as the system, as a template's walk
+        // reads it, but on the write's own transaction: a write holding the
+        // pool's last connection never waits for a second one. One read
+        // for every id asked, the columns an entry's address is judged by
+        // alone; whether each is published is the hook's to judge.
+        entriesWithIds: async (collection, ids, tx) => {
+          const found = await ctx.services.collections.listEntriesInTransaction(
+            tx,
+            collection,
+            {
+              where: { id: { in: [...ids] } },
+              pagination: { limit: ids.length },
+              select: { id: true, [ENTRY_SLUG_FIELD]: true, status: true },
+              depth: 0,
+            }
+          );
+          return found.data;
+        },
         storedAddresses: async () =>
           new Map(
             [...(await readStoredAddresses()).entries()].map(
@@ -3032,15 +3224,16 @@ export const pageBuilder = (
           Object.values(ctx.self.collections).includes(collection),
         // The template guard's own judgement of which collections may have
         // one; a localized collection is refused an address.
-        mayHaveTemplate: async collection => {
+        // Given a write's transaction, the registry is read on it.
+        mayHaveTemplate: async (collection, tx) => {
           const problem = await templateCollectionProblem(
             collection,
-            collectionRecord,
+            slug => collectionRecord(slug, tx),
             new Set(Object.values(ctx.self.collections))
           );
           return (
             problem === null &&
-            (await collectionRecord(collection))?.localized !== true
+            (await collectionRecord(collection, tx))?.localized !== true
           );
         },
         storedAddressProblem: (address, collection) =>
@@ -3904,6 +4097,8 @@ export const pageBuilder = (
         ...sharedStyleRoutes({
           configClassIds,
           usage: ctx => usageSourceOf(ctx.self.collections, classUsageIndex),
+          // The bounds the class index and the renderer read a page under.
+          limits: opts.limits ?? DEFAULT_LIMITS,
         }),
         // The Variables panel: how widely each variable is used and where,
         // from the variable usage index and the site's shared styles, and
