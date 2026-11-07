@@ -2,7 +2,10 @@ import type { JSX } from "react";
 
 import { DynamicPluginNav } from "@admin/components/features/dashboard/DynamicPluginNav";
 import { DynamicPluginSectionItems } from "@admin/components/features/dashboard/DynamicPluginSectionItems";
-import { PluginMenuItems } from "@admin/components/features/dashboard/PluginMenuItems";
+import {
+  PluginMenuGroups,
+  PluginMenuItems,
+} from "@admin/components/features/dashboard/PluginMenuItems";
 import * as Icons from "@admin/components/icons";
 import { Layers, Puzzle, FileText, Database } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
@@ -107,15 +110,6 @@ export function SubSidebarContent({
           </p>
           <SidebarMenu>
             <DynamicPluginNav isActive={isActive} search={pluginSearch} />
-            {/* The plugins' own menu items (`contributes.admin.menu`) that
-                live in Plugins, as the narrow sidebar lists them: a plugin
-                with pages of its own, such as a library, is reached here. */}
-            <PluginMenuItems
-              isActive={isActive}
-              section="plugins"
-              search={pluginSearch}
-              hasPanel={hasPanel}
-            />
             {/* Gated on the permission `PLUGIN_BROWSE` itself requires. The
                 panel stays open to a user who can only read a plugin-owned
                 collection, so without this they would be offered a destination
@@ -141,6 +135,15 @@ export function SubSidebarContent({
             )}
           </SidebarMenu>
         </div>
+        {/* Each plugin's own pages (`contributes.admin.menu`), under its
+            name, apart from managing plugins above: a plugin with pages of
+            its own, such as a library, is reached here. */}
+        <PluginMenuGroups
+          isActive={isActive}
+          section="plugins"
+          search={pluginSearch}
+          hasPanel={hasPanel}
+        />
       </div>
     );
   }

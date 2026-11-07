@@ -25,6 +25,7 @@ import {
   menuItemsMatching,
   resolveVisibleMenuItems,
 } from "@admin/lib/plugins/menu";
+import { pluginDisplayName } from "@admin/lib/plugins/plugin-display-name";
 import { cn } from "@admin/lib/utils";
 import type { PluginMenuItemMeta } from "@admin/types/branding";
 
@@ -116,7 +117,19 @@ export function PluginMenuItems({
 
   if (items.length === 0) return null;
 
-  const drawn = (
+  const drawn = <MenuEntries items={items} isActive={isActive} />;
+  return asMenu ? <SidebarMenu>{drawn}</SidebarMenu> : drawn;
+}
+
+/** The items as the sidebar draws them: a leaf, or a branch with its children. */
+function MenuEntries({
+  items,
+  isActive,
+}: {
+  items: readonly PluginMenuItemMeta[];
+  isActive: (href?: string) => boolean;
+}): React.JSX.Element {
+  return (
     <>
       {items.map(item =>
         item.children && item.children.length > 0 ? (
@@ -127,7 +140,44 @@ export function PluginMenuItems({
       )}
     </>
   );
-  return asMenu ? <SidebarMenu>{drawn}</SidebarMenu> : drawn;
+}
+
+/**
+ * The plugin menu items a panel lists, each plugin's under a heading of its
+ * own name ("Page Builder"), apart from the panel's own entries: the Plugins
+ * panel keeps managing plugins and going to a plugin's pages as two things,
+ * however many plugins add pages.
+ */
+export function PluginMenuGroups({
+  isActive,
+  section,
+  search = "",
+  hasPanel,
+}: Omit<PluginMenuItemsProps, "asMenu">): React.JSX.Element | null {
+  const branding = useBranding();
+  const { hasPermission } = useCurrentUserPermissions();
+  const groups = (branding?.plugins ?? []).flatMap(plugin => {
+    const items = menuItemsMatching(
+      resolveVisibleMenuItems([plugin], hasPermission, section, hasPanel),
+      search
+    );
+    return items.length === 0 ? [] : [{ plugin, items }];
+  });
+  if (groups.length === 0) return null;
+  return (
+    <>
+      {groups.map(({ plugin, items }) => (
+        <div key={plugin.name} className="space-y-1">
+          <p className="mb-2 px-3 text-xs font-bold uppercase tracking-wider text-sidebar-foreground">
+            {pluginDisplayName(plugin)}
+          </p>
+          <SidebarMenu>
+            <MenuEntries items={items} isActive={isActive} />
+          </SidebarMenu>
+        </div>
+      ))}
+    </>
+  );
 }
 
 function PluginMenuLeaf({

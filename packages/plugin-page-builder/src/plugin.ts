@@ -4139,7 +4139,10 @@ export const pageBuilder = (
           {
             label: "Bindings to fix",
             to: BINDINGS_TO_FIX_PAGE_HREF,
-            icon: "AlertTriangle",
+            // Neutral: the entry is there whether or not anything needs
+            // fixing; the warning sign is for the dashboard line and the
+            // editor's chip, which show only when something does.
+            icon: "Unlink",
             requiredPermission: EDIT_PAGES_PERMISSION,
           },
         ],

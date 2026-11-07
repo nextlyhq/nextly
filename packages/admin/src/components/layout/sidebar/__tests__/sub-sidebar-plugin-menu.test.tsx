@@ -13,6 +13,7 @@ const branding: AdminBranding = {
   plugins: [
     {
       name: "@nextlyhq/plugin-page-builder",
+      appearance: { label: "Page Builder" },
       collections: [],
       menu: [
         { label: "Patterns", to: "/admin/collections/patterns" },
@@ -81,6 +82,8 @@ describe("the desktop Plugins panel", () => {
       screen.getByRole("link", { name: "Patterns" }).getAttribute("href")
     ).toBe("/admin/collections/patterns");
     expect(screen.getByRole("link", { name: "Components" })).toBeDefined();
+    // Under the plugin's own name, apart from the panel's plugin management.
+    expect(screen.getByText("Page Builder")).toBeDefined();
   });
 
   it("filters them by the panel's search, as its other entries are", () => {
