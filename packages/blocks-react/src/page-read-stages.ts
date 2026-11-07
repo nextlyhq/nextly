@@ -149,6 +149,38 @@ export interface PageReadSources {
   site(): Promise<BlocksSiteSettings | undefined>;
 }
 
+/**
+ * What decides whether a route reads a list's images in batches.
+ *
+ * @experimental
+ */
+export interface RouteMedia {
+  /** The site resolves media itself (`resolveMedia`), one id at a time. */
+  readonly ownResolver?: boolean;
+  /** The collection the route reads media from, by `id in`. */
+  readonly mediaCollection?: string | undefined;
+  /**
+   * Whether the media library offers a read of many ids (`findByIDs`), as
+   * Nextly's does; a reader without it reads each image by its own id.
+   */
+  readonly libraryReadsMany?: boolean;
+}
+
+/**
+ * Whether a route reads a list's images in batches: not where the site
+ * resolves media itself; by `id in` where it names a media collection;
+ * through the media library's `findByIDs` where it has one. The route and
+ * the editor's read count both ask this one question.
+ *
+ * @experimental
+ */
+export function readsMediaInBatches(media: RouteMedia): boolean {
+  if (media.ownResolver === true) return false;
+  return (
+    media.mediaCollection !== undefined || media.libraryReadsMany !== false
+  );
+}
+
 /** No Layout: what a page drawn alone reads for one. */
 const NO_REGIONS: LayoutRead = {
   regions: [],
@@ -459,19 +491,36 @@ function customRowsNeedZone(
   return anyListWhere(
     documents,
     (query, list) => {
-      const name = query.namedQuery?.name;
-      const rows =
-        name === undefined ? undefined : namedQueries.definitionOf(name)?.rows;
-      if (name === undefined || rows === undefined || !("fields" in rows)) {
-        return false;
-      }
-      return ordersADay(
-        conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).orderedFields ??
-          new Set(),
-        queryRowFields(namedQueries, name, () => undefined)
-      );
+      const name = ownSchemaQuery(query.namedQuery?.name, namedQueries);
+      return name !== undefined && rowsOrderADay(list, name, namedQueries);
     },
     run
+  );
+}
+
+/**
+ * The named query a list reads, where its rows are of their own schema
+ * (they declare fields), not a collection's entries.
+ */
+function ownSchemaQuery(
+  name: string | undefined,
+  namedQueries: NamedQueryLookup
+): string | undefined {
+  if (name === undefined) return undefined;
+  const rows = namedQueries.definitionOf(name)?.rows;
+  return rows !== undefined && "fields" in rows ? name : undefined;
+}
+
+/** Whether a list's item conditions order a date its query's rows hold. */
+function rowsOrderADay(
+  list: BlockNode,
+  name: string,
+  namedQueries: NamedQueryLookup
+): boolean {
+  return ordersADay(
+    conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).orderedFields ??
+      new Set(),
+    queryRowFields(namedQueries, name, () => undefined)
   );
 }
 

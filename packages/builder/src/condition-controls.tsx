@@ -36,12 +36,15 @@ import { AlertCircle, FileText, Plus, Repeat } from "lucide-react";
 import * as React from "react";
 
 import { LoopPicker, useLoopCollections } from "./collection-loop-controls";
+import { storedGroups } from "./condition-checks";
+import { gatedAsStored } from "./condition-gate";
 import {
   asListField,
   booleanValueOf,
   choiceKey,
   completedCondition,
   conditionChoices,
+  conditionDraftOf,
   conditionFieldsOf,
   conditionFieldsOfShapes,
   conditionLine,
@@ -50,8 +53,6 @@ import {
   type ConditionField,
   type DraftCondition,
 } from "./condition-model";
-import { storedGroups } from "./condition-checks";
-import { gatedAsStored } from "./condition-gate";
 import { conditionsOp } from "./condition-ops";
 import type {
   ContentServices,
@@ -188,28 +189,6 @@ function problemsOf(
     else rows.set(Number(index), issue.message);
   }
   return { rows, whole };
-}
-
-/**
- * A stored condition as a row reads it, its operator in its canonical
- * spelling; an operator conditions do not have reads as not chosen, and the
- * engine's finding says why.
- */
-function toDraft(condition: Condition): DraftCondition {
-  const op = conditionOp(condition.op);
-  // `equals` Yes and `not_equals` Yes hold exactly where "is Yes" and "is No"
-  // do, so they read and edit as those; written only once the row changes.
-  if (condition.value === true && (op === "equals" || op === "not_equals")) {
-    return {
-      field: condition.field,
-      op: op === "equals" ? "is_true" : "is_false",
-    };
-  }
-  return {
-    field: condition.field,
-    ...(op === undefined ? {} : { op }),
-    ...(condition.value === undefined ? {} : { value: condition.value }),
-  };
 }
 
 /** A condition row as it stands: what is stored, or the draft over it. */
@@ -462,7 +441,7 @@ function StoredGroups({
                 // Related entries by their titles, as an open row names them,
                 // so two groups on different entries read apart.
                 const sentence = conditionSentence(
-                  toDraft(condition),
+                  conditionDraftOf(condition),
                   fields.find(each => each.name === condition.field),
                   entryTitle
                 );
@@ -828,7 +807,11 @@ export function ShowWhen({
     useConditionSource(editor, node, services);
   const groups = node === undefined ? [] : storedGroups(node);
   const stored = groups?.[0] ?? [];
-  const state = useSentenceRows<Condition, DraftCondition>(stored, toDraft, {});
+  const state = useSentenceRows<Condition, DraftCondition>(
+    stored,
+    conditionDraftOf,
+    {}
+  );
   // Every condition shown: the rows being edited, or each API group's.
   const shownConditions =
     groups !== undefined && groups.length > 1

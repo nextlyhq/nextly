@@ -244,6 +244,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   usePluginClientConfig: () => undefined,
   useDocumentIdentity: () => null,
   navigateTo: vi.fn(),
+  // The field's address as the admin gives it outside repeaters: its form
+  // path. No case here draws a field inside a repeater's row.
+  useFieldAddress: (_control: unknown, path: string) => ({ address: path }),
   useDocumentLocale: () => null,
   // Every plugin read answers with nothing: a site with no stored style, no
   // components and no patterns, which none of these cases is about.
@@ -429,6 +432,35 @@ describe("the unsaved-work report", () => {
     expect(reports.length).toBeGreaterThan(0);
     expect(reports.every(report => report.key === "blocks:body")).toBe(true);
     expect(reports.at(-1)?.hasWork).toBe(false);
+  });
+
+  it("reports under a row's address, which stays the same when the row moves", () => {
+    // Inside a repeater's row the form path follows the row to its new
+    // position while the editor stays open; a key taken from the path would
+    // leave the old one reported, with nothing left to retract it.
+    function RowHost({ at }: { at: number }): React.JSX.Element {
+      const { control } = useForm<FieldValues>({
+        defaultValues: { sections: [{ id: "r0" }, { id: "r1" }] },
+      });
+      return (
+        <PageBuilderView
+          control={control}
+          field={BODY_FIELD}
+          readOnly={false}
+          exit={() => undefined}
+          fieldPath={`sections.${at}.body`}
+          fieldAddress="sections.r1.body"
+        />
+      );
+    }
+    const view = render(<RowHost at={1} />);
+    editDocument();
+    view.rerender(<RowHost at={0} />);
+
+    expect(reports.length).toBeGreaterThan(0);
+    expect(new Set(reports.map(report => report.key))).toEqual(
+      new Set(["blocks:sections.r1.body"])
+    );
   });
 
   it("reports work once the document has been edited", () => {

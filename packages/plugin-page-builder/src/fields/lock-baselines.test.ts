@@ -152,6 +152,33 @@ describe("readStoredForms on a translated field", () => {
   });
 });
 
+describe("readStoredForms on a field in a repeater's row", () => {
+  it("is unreadable without asking core, whose stored read names no row", async () => {
+    const asked: unknown[] = [];
+    const write = writeTo(async target => {
+      asked.push(target);
+      throw new Error("refused: not inside named groups alone");
+    });
+    await expect(
+      readStoredForms(write, "sections[1].body", [false, true])
+    ).resolves.toEqual({ forms: [], readable: false });
+    expect(asked).toEqual([]);
+  });
+
+  it("still reads a field inside named groups, which core's stored read names", async () => {
+    const asked: unknown[] = [];
+    const write = writeTo(async target => {
+      asked.push(target);
+      return { kind: "value", value: forest };
+    });
+    await expect(readStoredForms(write, "hero.body", [true])).resolves.toEqual({
+      forms: [forest],
+      readable: true,
+    });
+    expect(asked).toHaveLength(1);
+  });
+});
+
 describe("composedFormsRead", () => {
   it("says a baseline is incomplete when the allowance ran out before a host", async () => {
     const result = await composedFormsRead({

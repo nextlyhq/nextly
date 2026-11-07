@@ -12,6 +12,7 @@
 import {
   CONDITION_KIND_OPS,
   conditionFieldKind,
+  conditionOp,
   type BindingFieldShape,
   type Condition,
   type ConditionFieldKind,
@@ -228,6 +229,28 @@ export interface DraftCondition {
   readonly field?: string;
   readonly op?: ConditionOp;
   readonly value?: unknown;
+}
+
+/**
+ * A stored condition as a row reads it, its operator in its canonical
+ * spelling; an operator conditions do not have reads as not chosen, and the
+ * engine's finding says why.
+ */
+export function conditionDraftOf(condition: Condition): DraftCondition {
+  const op = conditionOp(condition.op);
+  // `equals` Yes and `not_equals` Yes hold exactly where "is Yes" and "is No"
+  // do, so they read and edit as those; written only once the row changes.
+  if (condition.value === true && (op === "equals" || op === "not_equals")) {
+    return {
+      field: condition.field,
+      op: op === "equals" ? "is_true" : "is_false",
+    };
+  }
+  return {
+    field: condition.field,
+    ...(op === undefined ? {} : { op }),
+    ...(condition.value === undefined ? {} : { value: condition.value }),
+  };
 }
 
 /** The value a yes-or-no condition's Yes or No stands for. */

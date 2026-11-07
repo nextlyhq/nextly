@@ -44,8 +44,7 @@ import {
 import { collectionNaming } from "./bindings-report/readable";
 import { labelOf } from "./collection-labels";
 import { readBodyWith } from "./composition-route-kit";
-import { editorReaderAsCaller } from "./entry-reads";
-import { publicReader } from "./unbind-kept";
+import { editorReaderAsCaller, publicSourceReader } from "./entry-reads";
 
 /** A collection's or a Single's slug. */
 const SLUG = z
@@ -318,7 +317,7 @@ function directBindingFieldsReads(
   locale: string | undefined
 ): BindingFieldsReads {
   const editor = editorReaderAsCaller(ctx, locale);
-  const visitor = publicReader(locale);
+  const visitor = publicSourceReader(locale);
   const at = locale === undefined ? {} : { locale };
   return {
     declared: async ref => {

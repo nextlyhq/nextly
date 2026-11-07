@@ -68,7 +68,7 @@ interface PluginContributions {
     pages?: PluginAdminPage[]; // { path, component, requiredPermission? }
     settings?: { component: ComponentPath };
     views?: Record<string, PluginCollectionView>; // list/edit/before*/after*, and @experimental documentViews, documentActions and panelSections, by collection slug
-    documentViews?: PluginFieldTypeDocumentView[]; // @experimental: views on every collection or Single with a field of one of this plugin's field types, at the top level or inside named groups
+    documentViews?: PluginFieldTypeDocumentView[]; // @experimental: views on every collection or Single with a field of one of this plugin's field types, at the top level, inside named groups, or in a repeater's rows
     places?: PluginAdminPlaceDeclaration[]; // @experimental: { name, description? }, places on your own pages; your slug and a dot, or boot fails
     filters?: PluginListFilterDeclaration[]; // @experimental: { name, label, collections?, options: [{ value, label, where }] }, in the entry list's toolbar
   };

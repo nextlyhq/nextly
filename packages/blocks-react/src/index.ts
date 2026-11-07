@@ -139,6 +139,12 @@ export {
   TYPOGRAPHY_DEFAULTS,
   withTypographyDefaults,
 } from "./blocks/typography-defaults";
+/**
+ * Whether an image or embed address may be requested, by the renderer's one
+ * filter: exported so a caller judging what a page draws, such as an unbind
+ * keeping what visitors see, asks the same question the image block does.
+ */
+export { fetchableUrl } from "./blocks/props";
 
 export { BlockBoundary, BlockList } from "./block-boundary";
 // `NODE_ID_ATTRIBUTE` is published deliberately: an editor hit-testing on the
@@ -295,6 +301,18 @@ export { prepareDocumentAsDrawn } from "./prepare-document";
  * renderer and must compose the same tree.
  */
 export { repairingLookup } from "./prepare-document";
+/**
+ * @experimental When a day starts for a visibility condition on a date field,
+ * in the site's zone, for an editor surface judging conditions as the
+ * published page judges them.
+ */
+export { conditionDayStart } from "./blocks/list-read";
+/**
+ * @experimental A stored document made sound to walk, as the renderer makes
+ * it before drawing: for an editor surface that reads the tree the renderer
+ * draws, so a node the renderer drops is one it drops too.
+ */
+export { sanitizeDocument } from "./sanitize";
 /**
  * @experimental The collections a page's lists draw, whose field shapes judge
  * their items' bindings: one walk for the published route and the editor.
@@ -481,7 +499,12 @@ export {
   type CountedRegion,
   type PageReadCountArgs,
 } from "./page-read-count";
-export type { BindingsAsk, EntrySource, PageWhere } from "./page-read-stages";
+export type {
+  BindingsAsk,
+  EntrySource,
+  PageWhere,
+  RouteMedia,
+} from "./page-read-stages";
 
 // How a page and the regions of its Layout share one site sheet and keep
 // their own styles apart: one answer for the published route and the editor's

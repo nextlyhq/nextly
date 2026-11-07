@@ -1229,6 +1229,8 @@ export function EntryForm({
         collectionSlug={collection.name}
         isCreateMode={mode === "create"}
         {...contextDocumentStatus}
+        // The fields, so a field inside a repeater's row has an address.
+        fields={getCollectionFields(collection)}
       >
         <EntryFormProvider
           form={form}
@@ -1396,6 +1398,9 @@ export function EntryForm({
                   collectionSlug={collection.name}
                   isCreateMode={mode === "create"}
                   {...contextDocumentStatus}
+                  // The fields, so a field inside a repeater's row has an
+                  // address the Page Builder and other views open it by.
+                  fields={getCollectionFields(collection)}
                   // Only where a takeover can happen. The embedded branch renders
                   // the whole body in a modal and hides nothing, so a panel there
                   // would offer a second copy of fields already on screen.

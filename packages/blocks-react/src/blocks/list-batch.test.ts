@@ -4,7 +4,7 @@
  * inside a list nested in it.
  */
 import type { BlockNode } from "@nextlyhq/blocks-engine";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { createStandaloneContext, type ListBatchReads } from "../context";
 
@@ -156,5 +156,65 @@ describe("a list's read-ahead", () => {
     // the render or here: the bound link has no entry to read ahead. A
     // routed page, which has the pass, reads it (`next.read-budget.test.ts`).
     expect(reads.entryPaths).not.toHaveBeenCalled();
+  });
+});
+
+describe("a host's own list reads", () => {
+  it("keep the published types: steps that answer nothing", () => {
+    // A host's steps as published, each answering nothing.
+    const entryPaths = async (): Promise<void> => undefined;
+    const media = async (): Promise<void> => undefined;
+    const reads: ListBatchReads = {
+      related: async () => undefined,
+      entryPaths,
+      media,
+    };
+    expectTypeOf(reads.entryPaths).returns.toEqualTypeOf<Promise<void>>();
+    expectTypeOf<
+      ReturnType<NonNullable<ListBatchReads["media"]>>
+    >().toEqualTypeOf<Promise<void>>();
+  });
+
+  it("stop at the images where the host reads none ahead, so each keeps its own read", async () => {
+    const template = [
+      node("logo", "core/image", { mediaId: "logo-1" }),
+      node(
+        "t",
+        "core/heading",
+        { text: "" },
+        { bindings: { text: { $bind: "author.name", source: "item" } } }
+      ),
+    ];
+    const items = [{ id: "p1", author: "a1" }];
+    const ahead = async (reads: ListBatchReads) => {
+      await readListAhead(
+        items,
+        template,
+        createStandaloneContext({ listReads: reads }),
+        {
+          nodeId: "list",
+          collection: "posts",
+          contextOf: item =>
+            createStandaloneContext({ listReads: reads, item }),
+        }
+      );
+    };
+    const without: ListBatchReads = {
+      related: vi.fn(async () => new Map([["a1", { id: "a1", name: "Ada" }]])),
+      entryPaths: vi.fn(async () => undefined),
+    };
+    await ahead(without);
+    // The image comes first and is read as it is drawn: the relation after
+    // it is not read ahead of it.
+    expect(without.related).not.toHaveBeenCalled();
+    // CONTROL: a host that reads images ahead goes on to the relation.
+    const withMedia: ListBatchReads = {
+      ...without,
+      related: vi.fn(async () => new Map([["a1", { id: "a1", name: "Ada" }]])),
+      media: vi.fn(async () => undefined),
+    };
+    await ahead(withMedia);
+    expect(withMedia.media).toHaveBeenCalledOnce();
+    expect(withMedia.related).toHaveBeenCalledOnce();
   });
 });

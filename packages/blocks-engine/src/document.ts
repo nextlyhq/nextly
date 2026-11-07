@@ -1142,6 +1142,16 @@ export const MAX_CLASSES_PER_NODE = 64;
  */
 export const COMPONENT_INSTANCE_TYPE = "nextly/component-instance";
 
+/**
+ * The type an editor draws in place of a block its visibility conditions hide
+ * for the entry being previewed: a marker naming the block and why. Never
+ * stored, and reserved, so no registered block can be drawn as the marker
+ * nor the marker as a registered block.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export const CONDITION_HIDDEN_TYPE = "nextly/condition-hidden";
+
 /** The props a component-instance node stores. */
 export interface ComponentInstanceProps {
   /** The referenced component document's id. */

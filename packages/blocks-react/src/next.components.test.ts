@@ -491,6 +491,31 @@ describe("a component's pending edits in draft mode", () => {
     expect(meta.title).toBe("PENDING EDIT");
   });
 
+  it("names the placement of a draft component read refused for want of reads, as a component", async () => {
+    const r = splitStoreReader(
+      { hero: definition([headingNode("PUBLISHED")]) },
+      { hero: definition([headingNode("PENDING EDIT")]) },
+      page(["hero"])
+    );
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: r.nextly,
+      draft: true,
+      maxQueries: 0,
+    } as Parameters<typeof createBlocksPage>[0]);
+    const element = (await throughBoundary(
+      route.ContentPage({ params: { slug: ["about"] } })
+    )) as ReactElement<{
+      context?: { queries?: { report(): { unread: unknown[] } } };
+    }>;
+    // The placement asking for the definition, classed as the component
+    // read the published path classes it as.
+    expect(element.props.context?.queries?.report().unread).toEqual([
+      { nodeId: "i0", what: "component" },
+    ]);
+  });
+
   it("does NOT cache the draft read", async () => {
     // The rule `resolve-content` states for the draft entry read, which this
     // read sits beside: a working draft changes on every save while cache tags
