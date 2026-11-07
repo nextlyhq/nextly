@@ -36,6 +36,7 @@ import type {
   ExtensionColumn,
   SchemaOwner,
 } from "../domains/schema/extension/types";
+import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
 import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { VersionsService } from "../domains/versions/versions-service";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
@@ -658,6 +659,11 @@ export interface PluginContext {
      * configured read hook or list-query filter, as the system. Never return
      * the result to a person: a site's read hooks may be what keeps one
      * tenant's rows from another.
+     *
+     * The `*InTransaction` reads run on a transaction the plugin holds (the
+     * token `collections.withTransaction` hands its work, or an
+     * in-transaction handler's `transaction`), and `getSingleInTransaction`
+     * reads a Single this plugin declared the same way.
      */
     ownCollections: PluginOwnCollectionReads;
     /**
@@ -1480,6 +1486,9 @@ export const PLUGIN_SERVICE_NAMES = [
   "emailService",
   "versionsService",
   "singleRegistryService",
+  // The Singles read a plugin's own-Single read goes through
+  // (`ownCollections.getSingleInTransaction`), resolved on first use.
+  "singleEntryService",
   "db",
   "relations",
   "dialect",
@@ -2055,25 +2064,27 @@ export function createPluginContext(
             ? VersionsService
             : T extends "singleRegistryService"
               ? SingleRegistryService
-              : T extends "db"
-                ? DatabaseInstance
-                : T extends "relations"
-                  ? AnyRelations
-                  : T extends "dialect"
-                    ? SupportedDialect
-                    : T extends "logger"
-                      ? Logger
-                      : T extends "config"
-                        ? NextlyServiceConfig
-                        : T extends "adapter"
-                          ? AdapterTransactions
-                          : T extends "jobRegistry"
-                            ? JobRegistry
-                            : T extends "jobsDatabase"
-                              ? JobsPassDatabase
-                              : T extends "webhookFastDrainScheduler"
-                                ? WebhookFastDrainScheduler | null
-                                : never,
+              : T extends "singleEntryService"
+                ? SingleEntryService
+                : T extends "db"
+                  ? DatabaseInstance
+                  : T extends "relations"
+                    ? AnyRelations
+                    : T extends "dialect"
+                      ? SupportedDialect
+                      : T extends "logger"
+                        ? Logger
+                        : T extends "config"
+                          ? NextlyServiceConfig
+                          : T extends "adapter"
+                            ? AdapterTransactions
+                            : T extends "jobRegistry"
+                              ? JobRegistry
+                              : T extends "jobsDatabase"
+                                ? JobsPassDatabase
+                                : T extends "webhookFastDrainScheduler"
+                                  ? WebhookFastDrainScheduler | null
+                                  : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -2512,9 +2523,17 @@ export function createPluginContext(
   return {
     services: {
       collections: wrapCollectionsForPlugin(collectionService),
+      // The Singles service is resolved on the first own-Single read, for
+      // the same reason `versions` and `singles` below are resolved on
+      // access: a context built by a caller that never reads one asks
+      // nothing of it.
       ownCollections: ownCollectionReads(
         collectionService,
-        Object.values(self.collections)
+        Object.values(self.collections),
+        {
+          owned: Object.values(self.singles),
+          service: () => getServiceFn("singleEntryService"),
+        }
       ),
       // The plugin view, refusing the writes that decide who administers the
       // site; core's own callers keep the unrestricted instance. Resolved on

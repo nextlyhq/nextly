@@ -135,6 +135,7 @@ import {
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
+import { lockedForRead } from "../../../shared/lib/read-transaction-scope";
 import {
   buildPaginatedResponse,
   clampLimit,
@@ -3702,14 +3703,22 @@ export class CollectionQueryService extends BaseService {
         // Geo filtering: fetch all matching entries (with reasonable limit)
         // We'll filter and paginate in memory
         const maxGeoResults = 10000; // Prevent memory issues on very large collections
-        query = query.limit(maxGeoResults);
+        query = lockedForRead(query.limit(maxGeoResults), this.adapter, schema);
         entries = await query;
 
         // We'll calculate totalDocs after geo filtering below
         totalDocs = 0;
       } else {
-        // Standard pagination: use SQL LIMIT/OFFSET
-        query = query.limit(limit).offset(offset);
+        // Standard pagination: use SQL LIMIT/OFFSET. Inside a read routed to
+        // a plugin's transaction the page's rows are read with a shared lock
+        // (`lockedForRead`); the count beside it is an aggregate and takes
+        // none, so the total is not held and may move before the transaction
+        // ends.
+        query = lockedForRead(
+          query.limit(limit).offset(offset),
+          this.adapter,
+          schema
+        );
 
         // Execute data query and count query in parallel
         // We call countEntries separately to get total (it handles same filters)
@@ -5166,6 +5175,7 @@ export class CollectionQueryService extends BaseService {
               where: whereCondition,
               companionTable: table,
               localeChain: joinedLocaleChain,
+              lockingOn: this.adapter,
             })
         );
         entry = joined.entry;
@@ -5188,11 +5198,11 @@ export class CollectionQueryService extends BaseService {
           });
         }
       } else {
-        [entry] = (await this.db
-          .select()
-          .from(schema)
-          .where(whereCondition)
-          .limit(1)) as Record<string, unknown>[];
+        [entry] = (await lockedForRead(
+          this.db.select().from(schema).where(whereCondition).limit(1),
+          this.adapter,
+          schema
+        )) as Record<string, unknown>[];
       }
 
       if (!entry) {
