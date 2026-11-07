@@ -955,6 +955,16 @@ function refusalMessages(error: NextlyError): string[] {
   return messages.length > 0 ? messages : [error.publicMessage];
 }
 
+/** A template's address as stored, or as asked where the row holds none. */
+function summaryAddress(
+  stored: Record<string, unknown> | null,
+  asked: TemplateSummary
+): string | null | undefined {
+  return stored !== null && TEMPLATE_ADDRESS_FIELD in stored
+    ? storedAddressOf(stored[TEMPLATE_ADDRESS_FIELD])
+    : asked.address;
+}
+
 /**
  * A template as the write stored it, or would have: its row's own values
  * where it has them, after every hook, and what was asked where it has not.
@@ -969,10 +979,7 @@ function summaryOf(row: unknown, asked: TemplateSummary): TemplateSummary {
     stored?.[TEMPLATE_ENTRY_COLLECTION_FIELD];
   const entry = stored?.[TEMPLATE_ENTRY_ID_FIELD];
   const status = stored?.status;
-  const address =
-    stored !== null && TEMPLATE_ADDRESS_FIELD in stored
-      ? storedAddressOf(stored[TEMPLATE_ADDRESS_FIELD])
-      : asked.address;
+  const address = summaryAddress(stored, asked);
   return {
     ...(id === undefined
       ? asked.id === undefined

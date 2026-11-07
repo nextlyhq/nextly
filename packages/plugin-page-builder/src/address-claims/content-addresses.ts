@@ -54,9 +54,11 @@ export interface ContentAddressService {
     id: string
   ): Promise<string | null>;
   /**
-   * Up to `limit` of the addresses held in `locale`, as path segments, from
-   * `page` (1 first), with how many there are in all, once any start-up pass
-   * over the store still running has finished.
+   * Up to `limit` of the addresses collections' entries hold in `locale`,
+   * as path segments, from `page` (1 first), with how many there are in all,
+   * once any start-up pass over the store still running has finished. Pages'
+   * addresses are not among them: the pages route lists its own, with its
+   * lists' later pages, so they never take a share of the entries' limit.
    */
   addresses(
     locale: string | undefined,
@@ -91,6 +93,11 @@ export interface ContentAddressSetup {
    * nothing.
    */
   readonly storesAddress: (collection: string) => Promise<boolean>;
+  /**
+   * The collections served under a template address now, in code or set in
+   * the admin: the holders whose addresses are listed for pre-rendering.
+   */
+  readonly entryHolders: () => Promise<readonly string[]>;
   /**
    * The start-up passes over the store while they run, or null. The listing
    * of addresses joins it, so what is pre-rendered is the store the passes
@@ -149,7 +156,7 @@ export function contentAddressService(
       const { addresses, total } = await committedAddresses(
         setup.claims,
         locale ?? setup.defaultLocale(),
-        { limit, page }
+        { limit, page, holders: await setup.entryHolders() }
       );
       return { paths: addresses.map(at => [...at.segments]), total };
     },

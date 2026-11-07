@@ -2761,6 +2761,14 @@ export const pageBuilder = (
         storesAddress: async collection =>
           ((await claimsDeps.templateOf(collection))?.address ?? null) !==
             null && (await claimsDeps.mayHaveTemplate(collection)),
+        // Listed for pre-rendering: those given an address in code, and
+        // those whose template stores one.
+        entryHolders: async () => [
+          ...new Set([
+            ...templateAddresses.keys(),
+            ...(await readStoredAddresses()).keys(),
+          ]),
+        ],
         startup: () => addressStartup,
       });
       // A page published naming a Layout that is not: it is served inside the

@@ -437,6 +437,29 @@ export async function addressCollectionProblem(
     : null;
 }
 
+/**
+ * Refuse pointing a template at another collection while it stores an
+ * address: it moves live addresses wherever it draws, so it is pointed
+ * elsewhere only once its address is removed, which needs the routing
+ * permission. The address is the write's own where it names one, else the
+ * stored one.
+ */
+function refuseAddressedRetarget(
+  data: Record<string, unknown>,
+  original: Record<string, unknown> | null
+): void {
+  const addressed = storedAddressOf(
+    Object.prototype.hasOwnProperty.call(data, TEMPLATE_ADDRESS_FIELD)
+      ? data[TEMPLATE_ADDRESS_FIELD]
+      : original?.[TEMPLATE_ADDRESS_FIELD]
+  );
+  if (addressed !== null) {
+    throw addressRefusal(
+      `This template serves its collection's entries at ${addressed}. Remove its address before pointing it at another collection.`
+    );
+  }
+}
+
 /** Judge one write to a template's collection, refusing it or letting it through. */
 export async function guardWrite(
   setup: TemplateGuardSetup,
@@ -477,19 +500,7 @@ export async function guardWrite(
     ) {
       return;
     }
-    // An addressed template moves live addresses wherever it draws, so it
-    // is pointed elsewhere only once its address is removed, which needs the
-    // routing permission.
-    const addressed = storedAddressOf(
-      Object.prototype.hasOwnProperty.call(data, TEMPLATE_ADDRESS_FIELD)
-        ? data[TEMPLATE_ADDRESS_FIELD]
-        : original?.[TEMPLATE_ADDRESS_FIELD]
-    );
-    if (addressed !== null) {
-      throw addressRefusal(
-        `This template serves its collection's entries at ${addressed}. Remove its address before pointing it at another collection.`
-      );
-    }
+    refuseAddressedRetarget(data, original);
     if (skipsReads(context)) return;
     // A template keeps the collection it draws. The one exception is a
     // template whose collection no longer exists under its name, renamed or
