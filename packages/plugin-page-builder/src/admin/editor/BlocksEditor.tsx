@@ -10,7 +10,11 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/BlocksEditor
  */
-import type { BlockDocument, DocumentKind } from "@nextlyhq/blocks-engine";
+import {
+  isPlainRecord,
+  type BlockDocument,
+  type DocumentKind,
+} from "@nextlyhq/blocks-engine";
 import {
   prepareDocumentForRead,
   registeredBlocks,
@@ -1413,6 +1417,9 @@ function EditorBody<TFieldValues extends FieldValues>({
   const identity = useCanvasEntryIdentity();
   // The document itself, which the inspector's unbind is planned against.
   const editedDocument = useDocumentIdentity();
+  const isComponentDocument =
+    isPlainRecord(mount.initialDocument) &&
+    mount.initialDocument.kind === "component";
   const entryCollection = listEntryCollectionOf(
     identity,
     mount.initialDocument
@@ -1472,8 +1479,11 @@ function EditorBody<TFieldValues extends FieldValues>({
     // The stored document's kind too: a component's lists relate to the
     // entries of the pages placing it, as its save judges them.
     entryCollection,
-    bindingEntry: identity,
-    editedDocument,
+    // A component has no entry of its own: its bindings read each placing
+    // page's, so the picker lists no entry for it and it plans no unbind of
+    // one, as its lists and its save already judge it.
+    bindingEntry: isComponentDocument ? null : identity,
+    editedDocument: isComponentDocument ? null : editedDocument,
     conditionsUnchecked,
     conditionsApplied: conditions.applied,
     conditionsShownLabel: `Shown for this ${conditions.noun}`,

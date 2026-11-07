@@ -57,12 +57,13 @@ describe("the picker's read of the fields", () => {
     expect(ask).toHaveBeenCalledTimes(2);
   });
 
-  it("lists nothing where the editor names no entry", async () => {
+  it("asks without an entry where the document has none of its own", async () => {
+    // A component's document: the Singles and the site, no entry.
     const ask = vi.fn(async () => SITE);
-    await expect(bindingFieldsReader(null, "en", "u", ask)()).resolves.toEqual(
-      []
-    );
-    expect(ask).not.toHaveBeenCalled();
+    await expect(
+      bindingFieldsReader(null, "en", "u-none", ask)()
+    ).resolves.toBe(SITE);
+    expect(ask).toHaveBeenCalledWith({ locale: "en" });
   });
 });
 

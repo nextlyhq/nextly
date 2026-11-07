@@ -24,9 +24,11 @@ export interface BindingFieldsRequest {
   /**
    * The entry the document's entry bindings read: the page's own, or the
    * entry a template is previewed with. Without an id there is no entry to
-   * read, and the entry's fields are not listed.
+   * read, and the entry's fields are not listed; absent for a component's
+   * document, which has no entry of its own (it reads each placing page's),
+   * and then only the Singles and the site are listed.
    */
-  readonly source: {
+  readonly source?: {
     readonly kind: "collection" | "single";
     readonly slug: string;
     readonly id?: string;

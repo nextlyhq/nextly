@@ -61,7 +61,8 @@ async function askFields(
 }
 
 /**
- * The picker's read of the fields for the entry `identity` names, in
+ * The picker's read of the fields for the entry `identity` names (none for
+ * a document with no entry of its own, such as a component's), in
  * `locale`, as `userId` reads them: an answer kept for
  * {@link BINDING_FIELDS_KEPT_MS}, or asked afresh. A failed read is not
  * kept, so the next opening asks again.
@@ -76,20 +77,24 @@ export function bindingFieldsReader(
   now: () => number = Date.now
 ): () => Promise<readonly BindingFieldSource[]> {
   return () => {
-    if (identity === null) return Promise.resolve([]);
     // Another person's answers are dropped before anything is read.
     if (keptFor !== userId) {
       kept.clear();
       keptFor = userId;
     }
+    // No entry, as for a component's document: the Singles and the site.
     const request: BindingFieldsRequest = {
-      source: {
-        kind: identity.kind,
-        slug: identity.slug,
-        ...(identity.documentId === undefined
-          ? {}
-          : { id: identity.documentId }),
-      },
+      ...(identity === null
+        ? {}
+        : {
+            source: {
+              kind: identity.kind,
+              slug: identity.slug,
+              ...(identity.documentId === undefined
+                ? {}
+                : { id: identity.documentId }),
+            },
+          }),
       ...(locale === undefined ? {} : { locale }),
     };
     const key = JSON.stringify(request);

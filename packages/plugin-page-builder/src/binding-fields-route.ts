@@ -66,7 +66,8 @@ const BindingFieldsBody = z
         slug: SLUG,
         id: z.string().min(1).max(200).optional(),
       })
-      .strict(),
+      .strict()
+      .optional(),
     locale: z.string().min(1).max(35).optional(),
   })
   .strict();
@@ -360,7 +361,7 @@ async function siteSource(reads: BindingFieldsReads): Promise<PickerSource> {
 
 /** The page's own entry as a source: read, named as failed, or none to list. */
 async function entrySource(
-  own: BindingFieldsRequest["source"],
+  own: NonNullable<BindingFieldsRequest["source"]>,
   ref: FieldsRef,
   singles: readonly { readonly slug: string; readonly label: string }[],
   reads: BindingFieldsReads,
@@ -433,12 +434,14 @@ export async function readBindingFields(
   const budget: FollowBudget = { followed: 0 };
   const singles = (await reads.singles()).slice(0, MOST_SINGLES);
   const entryRef: FieldsRef | undefined =
-    own.kind === "single"
-      ? { single: own.slug }
-      : own.id === undefined
-        ? undefined
-        : { collection: own.slug, id: own.id };
-  if (entryRef !== undefined) {
+    own === undefined
+      ? undefined
+      : own.kind === "single"
+        ? { single: own.slug }
+        : own.id === undefined
+          ? undefined
+          : { collection: own.slug, id: own.id };
+  if (own !== undefined && entryRef !== undefined) {
     const entry = await entrySource(own, entryRef, singles, reads, budget);
     if (entry !== undefined) sources.push(entry);
   }
