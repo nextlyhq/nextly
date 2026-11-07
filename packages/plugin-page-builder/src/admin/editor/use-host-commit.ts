@@ -310,6 +310,7 @@ function useCommitOnUnmount(
  */
 export function useHostCommit<TFieldValues extends FieldValues>({
   name,
+  address,
   control,
   editor,
   inline,
@@ -319,6 +320,11 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   removalReach,
 }: {
   name: Path<TFieldValues>;
+  /**
+   * The field's address, which stays the same while `name` follows a
+   * repeater's row to a new position: what unsaved work is reported under.
+   */
+  address: string;
   control: Control<TFieldValues>;
   editor: { document: BlockDocument; undoDepth: number };
   inline: {
@@ -359,9 +365,14 @@ export function useHostCommit<TFieldValues extends FieldValues>({
    *
    * Retracted when this component unmounts, which is the same moment `done`
    * commits the document and makes the form dirty for real.
+   *
+   * Reported under the field's address, not its form path: inside a
+   * repeater's row the path changes when the row moves under the open editor,
+   * and a report under the old path would stay behind with nothing left to
+   * retract it, keeping the document marked unsaved after a save or exit.
    */
   useReportUnsavedWork(
-    `blocks:${name}`,
+    `blocks:${address}`,
     hasUnsavedWork(editor, inline, savePoint.savedAt)
   );
 

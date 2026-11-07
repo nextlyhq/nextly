@@ -48,7 +48,10 @@ import {
   fieldBuilderAddress,
   type BuilderAddress,
 } from "./editor/builder-address";
-import { claimBuilderReturn } from "./editor/builder-return";
+import {
+  centreWhileSettling,
+  claimBuilderReturn,
+} from "./editor/builder-return";
 import { documentFrom, PLUGIN_SOURCE } from "./editor/stored-document";
 import { PageLayoutPicker, usePageLayoutAsk } from "./page-layout";
 import { PageBuilderCard } from "./PageBuilderCard";
@@ -231,6 +234,7 @@ function useBuilderWayIn<TFieldValues extends FieldValues>(
   const address = fieldBuilderAddress(
     identity,
     fieldAddress,
+    name,
     useDocumentLocale()
   );
   const returnedTo = useBuilderReturn(
@@ -276,13 +280,12 @@ function useBuilderReturn(
     }
     const element = box.current;
     if (element === null) return;
-    // Centred, so the row's own header above the card is in view too.
-    if (typeof element.scrollIntoView === "function") {
-      element.scrollIntoView({ block: "center" });
-    }
     element
       .querySelector<HTMLElement>("[data-builder-open]")
       ?.focus({ preventScroll: true });
+    // Centred, so the row's own header above the card is in view too, and
+    // kept centred while the form above it finishes drawing.
+    return centreWhileSettling(element);
   }, [identity, address]);
   return box;
 }

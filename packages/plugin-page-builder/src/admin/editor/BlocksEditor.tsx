@@ -1274,6 +1274,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   });
   const { done, publishOffer, removalHold } = useHostCommit({
     name,
+    address: place.address,
     control,
     editor,
     inline,

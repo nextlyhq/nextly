@@ -68,3 +68,53 @@ export function claimBuilderReturn(
   pending = null;
   return true;
 }
+
+/** How long after landing the returned-to field is kept in view. */
+const SETTLE_MS = 1500;
+
+/** What the author does that ends the keeping: their own scroll or input. */
+const AUTHOR_MOVES = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+
+/**
+ * Centre `element` in view, and keep it centred while the form around it
+ * settles. Content above it that draws after the first scroll (a preview, a
+ * field that resizes once its value arrives) moves it, which left the author
+ * looking past the row they came back to, its header out of view. So each
+ * frame, for {@link SETTLE_MS}, a field that has moved is centred again. The
+ * author's first scroll, key, touch or press ends it, so it never fights
+ * them.
+ *
+ * @returns a stop, for the effect that started it to clean up with
+ */
+export function centreWhileSettling(
+  element: HTMLElement,
+  settleMs: number = SETTLE_MS
+): () => void {
+  if (typeof element.scrollIntoView !== "function") return () => undefined;
+  const centre = () => {
+    element.scrollIntoView({ block: "center" });
+    return element.getBoundingClientRect().top;
+  };
+  let last = centre();
+  let frame = 0;
+  const started = performance.now();
+  const stop = () => {
+    cancelAnimationFrame(frame);
+    for (const type of AUTHOR_MOVES) {
+      window.removeEventListener(type, stop, true);
+    }
+  };
+  const keep = () => {
+    if (performance.now() - started > settleMs) {
+      stop();
+      return;
+    }
+    if (element.getBoundingClientRect().top !== last) last = centre();
+    frame = requestAnimationFrame(keep);
+  };
+  for (const type of AUTHOR_MOVES) {
+    window.addEventListener(type, stop, { capture: true, passive: true });
+  }
+  frame = requestAnimationFrame(keep);
+  return stop;
+}

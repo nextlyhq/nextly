@@ -47,7 +47,46 @@ describe("builderAddress", () => {
     expect(
       fieldBuilderAddress(
         { kind: "collection", slug: "pages", documentId: "p1" },
-        { address: "sections.row-b.body" }
+        { address: "sections.row-b.body" },
+        "sections.1.body"
+      )
+    ).toEqual({
+      href: "/admin/collections/pages/p1/builder?field=sections.row-b.body",
+    });
+  });
+
+  it("withholds a row's way in while another language is on screen", () => {
+    // The builder edits the default language's rows; this language's row id
+    // may name a row the default language does not have, or another one.
+    const another = { documentLocalized: true, isDefaultLocale: false };
+    const address = fieldBuilderAddress(
+      { kind: "collection", slug: "pages", documentId: "p1" },
+      { address: "sections.row-b.body" },
+      "sections.1.body",
+      another
+    );
+    expect(address).toEqual({
+      unavailable:
+        "Switch to the default language to design this row: the Page Builder edits the default language's rows.",
+    });
+    // A field outside any row still opens, saying it opens the default.
+    expect(
+      fieldBuilderAddress(
+        { kind: "collection", slug: "pages", documentId: "p1" },
+        { address: "hero.body" },
+        "hero.body",
+        another
+      )
+    ).toMatchObject({
+      href: "/admin/collections/pages/p1/builder?field=hero.body",
+    });
+    // In the default language the row opens as usual.
+    expect(
+      fieldBuilderAddress(
+        { kind: "collection", slug: "pages", documentId: "p1" },
+        { address: "sections.row-b.body" },
+        "sections.1.body",
+        { documentLocalized: true, isDefaultLocale: true }
       )
     ).toEqual({
       href: "/admin/collections/pages/p1/builder?field=sections.row-b.body",
@@ -60,7 +99,8 @@ describe("builderAddress", () => {
     expect(
       fieldBuilderAddress(
         { kind: "collection", slug: "pages", documentId: "p1" },
-        { unavailable: "unsavedRow" }
+        { unavailable: "unsavedRow" },
+        "sections.1.body"
       )
     ).toEqual({ unavailable: "Save the entry once to design this row." });
   });
@@ -68,7 +108,8 @@ describe("builderAddress", () => {
   it("says why a repeater whose rows set their own id has no way in", () => {
     const address = fieldBuilderAddress(
       { kind: "collection", slug: "pages", documentId: "p1" },
-      { unavailable: "ownIds" }
+      { unavailable: "ownIds" },
+      "sections.1.body"
     );
     expect("unavailable" in address ? address.unavailable : "").toContain(
       "set their own id field"
@@ -81,7 +122,8 @@ describe("builderAddress", () => {
     expect(
       fieldBuilderAddress(
         { kind: "collection", slug: "pages" },
-        { unavailable: "unsavedRow" }
+        { unavailable: "unsavedRow" },
+        "sections.1.body"
       )
     ).toEqual({ unavailable: "Save this page to open the Page Builder." });
   });

@@ -102,20 +102,39 @@ const ROW_UNAVAILABLE: Record<
 };
 
 /**
+ * Why a row's field has no way in while the form shows another language. The
+ * builder edits the default language's document, and a translated repeater
+ * keeps its own rows, with their own ids, in each language: an address read
+ * from this language's rows would name a row the default language may not
+ * have, which the builder refuses as gone, or one it has under another
+ * content. So the way in is withheld rather than offered to fail.
+ */
+const ROW_IN_ANOTHER_LANGUAGE =
+  "Switch to the default language to design this row: the Page Builder edits the default language's rows.";
+
+/**
  * The builder's address for a field, from the address its form gives it
- * (`useFieldAddress`): the same as {@link builderAddress}, or, for a field in a
- * repeater's row that has no address yet, why. A document that cannot open
- * the builder at all is said first, since saving it is the first step either
- * way.
+ * (`useFieldAddress`) at `formPath`: the same as {@link builderAddress}, or,
+ * for a field in a repeater's row that has no address yet, or that the form
+ * shows in another language, why. A document that cannot open the builder at
+ * all is said first, since saving it is the first step either way.
  */
 export function fieldBuilderAddress(
   identity: DocumentIdentity | null,
   field: FieldAddress,
+  formPath: string,
   locale?: Pick<DocumentLocale, "documentLocalized" | "isDefaultLocale"> | null
 ): BuilderAddress {
-  if ("address" in field)
-    return builderAddress(identity, field.address, locale);
   const document = builderAddress(identity, "", locale);
+  if ("address" in field) {
+    // A row's field is the only one whose address is not its form path.
+    const inRow = field.address !== formPath;
+    if (!inRow || !showsAnotherLanguage(locale)) {
+      return builderAddress(identity, field.address, locale);
+    }
+    if ("unavailable" in document) return document;
+    return { unavailable: ROW_IN_ANOTHER_LANGUAGE };
+  }
   if ("unavailable" in document) return document;
   return { unavailable: ROW_UNAVAILABLE[field.unavailable] };
 }

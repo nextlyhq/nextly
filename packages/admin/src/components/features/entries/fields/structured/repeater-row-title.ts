@@ -35,20 +35,22 @@ function asTitle(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
+/** Whether a declared sub-field is a named one marked `admin.useAsTitle`. */
+function marksTitle(field: unknown): field is { name: string } {
+  if (typeof field !== "object" || field === null) return false;
+  const { name, admin } = field as {
+    name?: unknown;
+    admin?: { useAsTitle?: unknown } | null;
+  };
+  // A non-object `admin` reads no `useAsTitle`, so it marks nothing.
+  return typeof name === "string" && name !== "" && admin?.useAsTitle === true;
+}
+
 /** The name of a sub-field marked `admin.useAsTitle`, if the rows have one. */
 function markedTitleField(
   fields: readonly unknown[] | undefined
 ): string | undefined {
-  for (const field of fields ?? []) {
-    if (typeof field !== "object" || field === null) continue;
-    const { name, admin } = field as { name?: unknown; admin?: unknown };
-    const marked =
-      typeof admin === "object" &&
-      admin !== null &&
-      (admin as { useAsTitle?: unknown }).useAsTitle === true;
-    if (marked && typeof name === "string" && name !== "") return name;
-  }
-  return undefined;
+  return (fields ?? []).find(marksTitle)?.name;
 }
 
 /**
