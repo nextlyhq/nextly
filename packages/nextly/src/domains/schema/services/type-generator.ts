@@ -65,6 +65,7 @@ import {
   pluginTsType,
   reserveAppliedGlobals,
 } from "./plugin-codegen";
+import { declaresOwnId } from "../../../collections/fields/repeater-row-identity";
 
 // ============================================================
 // Types
@@ -1205,9 +1206,15 @@ export class TypeGenerator {
       allCollections,
       allComponents
     );
+    // Each row is saved with an id, which a write keeps when it is sent
+    // back; optional, as a create may leave it out. Rows that declare an
+    // `id` field of their own hold the author's value there instead.
+    const rowId = declaresOwnId(arrayField.fields)
+      ? ""
+      : "    /** The row's saved id; send it back to keep the row's identity. */\n    id?: string;\n";
 
     return `Array<{
-${properties}
+${rowId}${properties}
   }>`;
   }
 

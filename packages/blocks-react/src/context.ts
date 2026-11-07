@@ -952,6 +952,13 @@ export interface PageBindings {
    * day, whatever the zone.
    */
   readonly timeZone?: string;
+  /**
+   * The collection whose ids `resolveMedia` reads, so an image is filled only
+   * from an upload field pointing there. `media`, Nextly's media library,
+   * when absent: a host resolving media from a collection of its own names
+   * it here.
+   */
+  readonly mediaCollection?: string;
 }
 
 /**

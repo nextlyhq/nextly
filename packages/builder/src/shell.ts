@@ -139,7 +139,10 @@ export { CanvasFrameProvider, useCanvasFrame } from "./canvas-frame-context";
  * @experimental Where the docs explain the canvas route, for a note saying the
  * canvas is drawn without the site's layout.
  */
-export { CANVAS_ROUTE_DOCS_HREF } from "./docs-links";
+export {
+  CANVAS_ROUTE_DOCS_HREF,
+  SITE_CODE_POLICY_DOCS_HREF,
+} from "./docs-links";
 export { CanvasMarks } from "./canvas-marks";
 
 /**

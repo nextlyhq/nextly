@@ -171,10 +171,15 @@ import {
   type FieldGroupReach,
   hasPasswordField,
   hashPasswordFieldValues,
+  NO_FIELD_GROUPS,
   reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
+import {
+  assignRepeaterRowIds,
+  reachesRepeaterField,
+} from "../../../shared/lib/repeater-row-ids";
 import {
   issuesTheReaderMaySee,
   type IssueReader,
@@ -3513,14 +3518,15 @@ export class CollectionMutationService extends BaseService {
    * rule, and an update with no such rule pays nothing more.
    */
   /**
-   * Put back in an update's `data` the stored hash of each password it leaves
-   * out of a container written whole (`carryStoredPasswords`), and return
-   * those hashes for the hashing pass to keep. `row` is the row as stored,
-   * hashes included; a translated container's stored value is the write
-   * language's companion row, read on the write's connection.
+   * The stored value an update's containers are written over, for the two
+   * steps that pair what it sends with what is stored: the passwords it keeps
+   * (`carryStoredPasswords`) and the repeater row ids it keeps
+   * (`assignRepeaterRowIds`). `row` is the row as stored, hashes included; a
+   * translated container's stored value is the write language's companion
+   * row, read on the write's connection. `undefined` where the fields hold
+   * neither a password nor a repeater, so such an update reads nothing more.
    */
-  private async storedPasswordsCarried(args: {
-    data: Record<string, unknown>;
+  private async storedContainersForWrite(args: {
     row: Record<string, unknown>;
     fields: FieldDefinition[];
     reach: FieldGroupReach;
@@ -3528,8 +3534,13 @@ export class CollectionMutationService extends BaseService {
     entryId: string;
     locale?: string;
     tx?: { getDrizzle<T = unknown>(): T };
-  }): Promise<Set<string>> {
-    if (!reachesPasswordField(args.fields, args.reach)) return new Set();
+  }): Promise<Record<string, unknown> | undefined> {
+    if (
+      !reachesPasswordField(args.fields, args.reach) &&
+      !reachesRepeaterField(args.fields, args.reach)
+    ) {
+      return undefined;
+    }
     // Off a transaction, the companion's readiness is resolved first: its
     // read is skipped where none is known, and a translated container's
     // stored value is on the companion row alone. A transaction's caller
@@ -3545,12 +3556,7 @@ export class CollectionMutationService extends BaseService {
           resolveRequestedLocale(this.localization, args.locale)
         )
       : {};
-    return carryStoredPasswords(
-      args.data,
-      { ...args.row, ...translated },
-      args.fields,
-      args.reach
-    );
+    return { ...args.row, ...translated };
   }
 
   private async storedForCarryForward(args: {
@@ -3769,7 +3775,16 @@ export class CollectionMutationService extends BaseService {
     data: Record<string, unknown>,
     fields: FieldDefinition[],
     manyToManyFields: FieldDefinition[],
-    collection: unknown
+    collection: unknown,
+    /**
+     * What repeater rows are given ids against: the stored value the write
+     * replaces (`undefined` for none, so every row without an id gets a fresh
+     * one), and where the walk follows field groups held inline.
+     */
+    rowIds: {
+      stored: Record<string, unknown> | undefined;
+      reach: FieldGroupReach;
+    }
   ): {
     manyToManyData: Record<string, string[]>;
     componentFieldData: Record<string, unknown>;
@@ -3783,6 +3798,13 @@ export class CollectionMutationService extends BaseService {
 
     // Normalize upload field values (extract IDs from populated media objects)
     normalizeUploadFields(data, fields);
+
+    // Every repeater row gets its saved id: after the field rules and the
+    // password pass have decided the value, and after references are reduced
+    // to ids so an unchanged row compares equal to the stored one; before the
+    // field groups placed on the entry are taken off to their own tables,
+    // whose write gives their rows ids.
+    assignRepeaterRowIds(data, rowIds.stored, fields, rowIds.reach);
 
     const manyToManyData: Record<string, string[]> = {};
 
@@ -4257,11 +4279,13 @@ export class CollectionMutationService extends BaseService {
     const manyToManyFields = fields.filter(
       f => f.type === "relationship" && f.options?.relationType === "manyToMany"
     );
+    // A status alone holds no repeater row, so nothing is paired.
     const { manyToManyData, componentFieldData } = this.shapeWriteParts(
       finalData,
       fields,
       manyToManyFields,
-      collection
+      collection,
+      { stored: undefined, reach: NO_FIELD_GROUPS }
     );
     const versionsConfig = (collection as Record<string, unknown>).versions as
       | ResolvedVersionsConfig
@@ -6528,11 +6552,8 @@ export class CollectionMutationService extends BaseService {
   }> {
     // At every depth, through the field groups held inline in a container:
     // their passwords are stored in that container's value.
-    await hashPasswordFieldValues(
-      finalData,
-      fields,
-      await this.passwordReach(fields, executor)
-    );
+    const reach = await this.passwordReach(fields, executor);
+    await hashPasswordFieldValues(finalData, fields, reach);
 
     // AFTER every mutating hook has run. A field-level
     // beforeValidate/beforeChange hook can (re)introduce an own
@@ -6552,6 +6573,13 @@ export class CollectionMutationService extends BaseService {
       finalData,
       fields as unknown as Parameters<typeof normalizeUploadFields>[1]
     );
+
+    // Every repeater row gets its saved id, as `shapeWriteParts` gives an
+    // update's: a create has nothing stored, so a row sent without one gets a
+    // fresh id, and one sent twice keeps it only the first time. Before the
+    // field groups placed on the entry go to their own tables, whose write
+    // gives their rows ids.
+    assignRepeaterRowIds(finalData, undefined, fields, reach);
 
     // Only a UI-built many-to-many routes through a junction table. Code-first
     // `hasMany: true` is a JSON array on the parent column, and is converted
@@ -11770,11 +11798,18 @@ export class CollectionMutationService extends BaseService {
     // place: the split moves its translated values out, so a later judgement
     // of it, such as relations re-read under the lock, needs this copy.
     const judgedDocument = { ...promotedDocument };
+    // Repeater rows keep their ids against the document as it stands: the
+    // pending change's rows and the caller's already carry theirs, and one
+    // without an id keeps a live row's only where it is that row unchanged.
     const draftParts = this.shapeWriteParts(
       promotedDocument,
       fields,
       manyToManyFields,
-      args.collection
+      args.collection,
+      {
+        stored: args.live,
+        reach: await this.passwordReach(fields, tx.getDrizzle()),
+      }
     );
     // Rebuild the companion payload from the promoted document, and do it
     // BEFORE the main-row payload is taken: the split moves a localized field
@@ -13979,20 +14014,22 @@ export class CollectionMutationService extends BaseService {
       );
 
       // A password the update leaves out of a container keeps its stored hash.
+      // The same stored value is what its repeater rows keep their ids
+      // against, in `shapeWriteParts` below.
       const reach = await this.passwordReach(fields);
+      const storedContainers = await this.storedContainersForWrite({
+        row: storedRow,
+        fields,
+        reach,
+        collectionName: params.collectionName,
+        entryId: String(existingEntry.id),
+        locale: params.locale,
+      });
       await hashPasswordFieldValues(
         finalData,
         fields,
         reach,
-        await this.storedPasswordsCarried({
-          data: finalData,
-          row: storedRow,
-          fields,
-          reach,
-          collectionName: params.collectionName,
-          entryId: String(existingEntry.id),
-          locale: params.locale,
-        })
+        carryStoredPasswords(finalData, storedContainers, fields, reach)
       );
 
       // Strip an explicit `status: undefined` AFTER every mutating hook has run.
@@ -14055,7 +14092,8 @@ export class CollectionMutationService extends BaseService {
         finalData,
         fields,
         manyToManyFields,
-        collection
+        collection,
+        { stored: storedContainers, reach }
       );
 
       // Update main entry
@@ -19493,21 +19531,23 @@ export class CollectionMutationService extends BaseService {
         finalData.status === "published";
 
       // A password the update leaves out of a container keeps its stored hash.
+      // The same stored value is what its repeater rows keep their ids
+      // against, below.
       const reach = await this.passwordReach(fields, tx.getDrizzle());
+      const storedContainers = await this.storedContainersForWrite({
+        row: storedRow ?? existingEntry,
+        fields,
+        reach,
+        collectionName: params.collectionName,
+        entryId,
+        // A transactional update writes the default language.
+        tx,
+      });
       await hashPasswordFieldValues(
         finalData,
         fields,
         reach,
-        await this.storedPasswordsCarried({
-          data: finalData,
-          row: storedRow ?? existingEntry,
-          fields,
-          reach,
-          collectionName: params.collectionName,
-          entryId,
-          // A transactional update writes the default language.
-          tx,
-        })
+        carryStoredPasswords(finalData, storedContainers, fields, reach)
       );
 
       // Strip an explicit `status: undefined` AFTER every mutating hook has run.
@@ -19560,6 +19600,11 @@ export class CollectionMutationService extends BaseService {
 
       // Normalize upload field values (extract IDs from populated media objects)
       normalizeUploadFields(finalData, fields);
+
+      // Every repeater row gets its saved id, as `shapeWriteParts` gives it:
+      // after the field rules and the password pass have decided the value,
+      // and before the field groups placed on the entry go to their tables.
+      assignRepeaterRowIds(finalData, storedContainers, fields, reach);
 
       // Separate regular fields from many-to-many relations
       const manyToManyFields = fields.filter(

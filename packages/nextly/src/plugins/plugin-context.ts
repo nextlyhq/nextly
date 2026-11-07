@@ -25,9 +25,12 @@ import type { PluginAuthApi } from "../auth/plugin-auth-api";
 import { runAsPrincipal } from "../auth/principal-scope";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
+import type { CollectionRegistryService } from "../domains/collections/services/collection-registry-service";
+import { collectionFields } from "../domains/collections/services/collection-utils";
 import type { StoredReads } from "../domains/collections/services/stored-field-read";
 import type { ContentEventSubject } from "../domains/content-events/record";
 import { pluginKeyScope, scopedSender } from "../domains/email/send-claims";
+import type { FieldGroupRegistryService } from "../domains/field-groups/services/field-group-registry-service";
 import type { JobRegistry } from "../domains/jobs/job-registry";
 import type { JobsPassDatabase } from "../domains/jobs/jobs-runner";
 import type { PluginLimiter } from "../domains/limits/plugin-limiter";
@@ -36,6 +39,7 @@ import type {
   ExtensionColumn,
   SchemaOwner,
 } from "../domains/schema/extension/types";
+import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
 import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { VersionsService } from "../domains/versions/versions-service";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
@@ -52,6 +56,8 @@ import { getFilterRegistry } from "../filters";
 import { singleHookNamespace } from "../hooks/register-single-hooks";
 import type {
   BeforeOperationHandler,
+  CollectionDeleteImpactItem,
+  CollectionDeleteRunner,
   HookContextPhase,
   HookHandler,
   HookOwner,
@@ -350,6 +356,58 @@ export interface PluginHookRegistry {
     collection: string,
     handler: InTransactionHandler<T>
   ): void;
+
+  /**
+   * @experimental Take part in deleting a collection: say what the delete
+   * takes with it, and remove that in the delete's own transaction, so
+   * nothing the plugin keeps is left naming a collection that no longer
+   * exists.
+   *
+   * `impact` is asked for each collection the admin's delete dialog is about
+   * to delete, before the confirm, and what it answers is listed under the
+   * plugin's name. It must only read. `inTransaction` runs for each
+   * collection deleted, inside the delete's transaction, before the
+   * collection's field-group values, translations, table and registry row
+   * are removed. Its `transaction` is a token for the `*InTransaction`
+   * methods of `ctx.services.collections` and `ctx.services.ownCollections`,
+   * refused once the handler settles. A handler that throws rolls the delete
+   * back on every dialect: it runs before the delete's first table drop,
+   * which on MySQL commits what ran before it.
+   *
+   * Asked of every collection deleted, the plugin's own among them: a handler
+   * decides for itself which it holds anything for.
+   *
+   * @example
+   * ```typescript
+   * ctx.hooks.onCollectionDelete({
+   *   impact: async slug => (await designsOf(slug)).map(design => ({
+   *     label: design.title, kind: 'design',
+   *   })),
+   *   inTransaction: async ({ slug, transaction }) => {
+   *     for (const design of await designsOf(slug, transaction)) {
+   *       await ctx.services.collections.deleteEntryInTransaction(
+   *         transaction, 'designs', design.id, {}
+   *       );
+   *     }
+   *   },
+   * });
+   * ```
+   */
+  onCollectionDelete(handlers: CollectionDeleteHandlers): void;
+}
+
+/**
+ * @experimental What `ctx.hooks.onCollectionDelete` takes: either part may be
+ * left out.
+ */
+export interface CollectionDeleteHandlers {
+  /** What deleting `slug` takes with it, for the delete dialog. Reads only. */
+  impact?: (slug: string) => Promise<readonly CollectionDeleteImpactItem[]>;
+  /** Remove it, in the delete's transaction, before the collection goes. */
+  inTransaction?: (context: {
+    slug: string;
+    transaction: PluginCollectionTransaction;
+  }) => Promise<void>;
 }
 
 /**
@@ -658,6 +716,11 @@ export interface PluginContext {
      * configured read hook or list-query filter, as the system. Never return
      * the result to a person: a site's read hooks may be what keeps one
      * tenant's rows from another.
+     *
+     * The `*InTransaction` reads run on a transaction the plugin holds (the
+     * token `collections.withTransaction` hands its work, or an
+     * in-transaction handler's `transaction`), and `getSingleInTransaction`
+     * reads a Single this plugin declared the same way.
      */
     ownCollections: PluginOwnCollectionReads;
     /**
@@ -1480,6 +1543,13 @@ export const PLUGIN_SERVICE_NAMES = [
   "emailService",
   "versionsService",
   "singleRegistryService",
+  // The Singles read a plugin's own-Single read goes through
+  // (`ownCollections.getSingleInTransaction`), resolved on first use.
+  "singleEntryService",
+  // The registries a host read judges a collection's, a Single's and a
+  // component's fields from (`ownCollections.*Host*InTransaction`).
+  "collectionRegistryService",
+  "fieldGroupRegistryService",
   "db",
   "relations",
   "dialect",
@@ -2055,25 +2125,31 @@ export function createPluginContext(
             ? VersionsService
             : T extends "singleRegistryService"
               ? SingleRegistryService
-              : T extends "db"
-                ? DatabaseInstance
-                : T extends "relations"
-                  ? AnyRelations
-                  : T extends "dialect"
-                    ? SupportedDialect
-                    : T extends "logger"
-                      ? Logger
-                      : T extends "config"
-                        ? NextlyServiceConfig
-                        : T extends "adapter"
-                          ? AdapterTransactions
-                          : T extends "jobRegistry"
-                            ? JobRegistry
-                            : T extends "jobsDatabase"
-                              ? JobsPassDatabase
-                              : T extends "webhookFastDrainScheduler"
-                                ? WebhookFastDrainScheduler | null
-                                : never,
+              : T extends "singleEntryService"
+                ? SingleEntryService
+                : T extends "collectionRegistryService"
+                  ? CollectionRegistryService
+                  : T extends "fieldGroupRegistryService"
+                    ? FieldGroupRegistryService
+                    : T extends "db"
+                      ? DatabaseInstance
+                      : T extends "relations"
+                        ? AnyRelations
+                        : T extends "dialect"
+                          ? SupportedDialect
+                          : T extends "logger"
+                            ? Logger
+                            : T extends "config"
+                              ? NextlyServiceConfig
+                              : T extends "adapter"
+                                ? AdapterTransactions
+                                : T extends "jobRegistry"
+                                  ? JobRegistry
+                                  : T extends "jobsDatabase"
+                                    ? JobsPassDatabase
+                                    : T extends "webhookFastDrainScheduler"
+                                      ? WebhookFastDrainScheduler | null
+                                      : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -2110,6 +2186,18 @@ export function createPluginContext(
     unregisterInTransaction?: (
       collection: string,
       runner: InTransactionRunner,
+      owner?: HookOwner
+    ) => void;
+    /**
+     * Optional for the same reason: a registry without them refuses
+     * `ctx.hooks.onCollectionDelete` rather than dropping the handlers.
+     */
+    registerCollectionDelete?: (
+      runner: CollectionDeleteRunner,
+      owner?: HookOwner
+    ) => void;
+    unregisterCollectionDelete?: (
+      runner: CollectionDeleteRunner,
       owner?: HookOwner
     ) => void;
   },
@@ -2281,6 +2369,10 @@ export function createPluginContext(
     hookRegistry.registerInTransaction?.bind(hookRegistry);
   const unregisterInTransaction =
     hookRegistry.unregisterInTransaction?.bind(hookRegistry);
+  const registerCollectionDelete =
+    hookRegistry.registerCollectionDelete?.bind(hookRegistry);
+  const unregisterCollectionDelete =
+    hookRegistry.unregisterCollectionDelete?.bind(hookRegistry);
 
   // Create simplified hook registry for plugins
   const pluginHooks: PluginHookRegistry = {
@@ -2347,6 +2439,40 @@ export function createPluginContext(
         inTransactionRunner(handler as InTransactionHandler),
         hookOwner
       );
+    },
+    onCollectionDelete: handlers => {
+      if (!registerCollectionDelete || !unregisterCollectionDelete) {
+        throw NextlyError.internal({
+          logContext: {
+            reason: "hook-registry-without-collection-delete",
+            plugin: pluginName,
+          },
+        });
+      }
+      const { impact, inTransaction } = handlers;
+      const runner: CollectionDeleteRunner = {
+        ...(impact === undefined ? {} : { impact }),
+        // The delete's transaction reaches the plugin as a token of its own,
+        // open while the handler runs and refused once it settles, as an
+        // in-transaction handler's is; a statement it started and did not
+        // await finishes before the delete goes on.
+        ...(inTransaction === undefined
+          ? {}
+          : {
+              inTransaction: (slug: string, tx: TransactionContext) =>
+                withWriteTransactionToken(
+                  tx,
+                  transaction => inTransaction({ slug, transaction }),
+                  "ctx.hooks.onCollectionDelete"
+                ),
+            }),
+      };
+      registerCollectionDelete(runner, hookOwner);
+      if (pluginName) {
+        recordPluginSubscription(pluginName, () =>
+          unregisterCollectionDelete(runner, hookOwner)
+        );
+      }
     },
   };
 
@@ -2512,9 +2638,45 @@ export function createPluginContext(
   return {
     services: {
       collections: wrapCollectionsForPlugin(collectionService),
+      // The Singles service is resolved on the first own-Single read, for
+      // the same reason `versions` and `singles` below are resolved on
+      // access: a context built by a caller that never reads one asks
+      // nothing of it.
       ownCollections: ownCollectionReads(
         collectionService,
-        Object.values(self.collections)
+        Object.values(self.collections),
+        {
+          owned: Object.values(self.singles),
+          service: () => getServiceFn("singleEntryService"),
+        },
+        // What a host read is judged against: this plugin's field types, and
+        // each schema as the registries hold it when the read is made, so a
+        // collection created or changed at runtime is judged as it is now.
+        // The registries are asked inside the read's transaction scope, so
+        // they read on its connection.
+        {
+          fieldTypes: (plugin?.contributes?.fieldTypes ?? []).map(
+            fieldType => fieldType.type
+          ),
+          fieldsOf: async (kind, slug) => {
+            if (kind === "Single") {
+              const record = await getServiceFn(
+                "singleRegistryService"
+              ).getSingleBySlug(slug);
+              return record?.fields ?? null;
+            }
+            const record = await getServiceFn(
+              "collectionRegistryService"
+            ).getCollectionBySlug(slug);
+            return record === null ? null : collectionFields(record);
+          },
+          componentFields: async slug =>
+            (
+              await getServiceFn(
+                "fieldGroupRegistryService"
+              ).getComponentBySlug(slug)
+            )?.fields ?? null,
+        }
       ),
       // The plugin view, refusing the writes that decide who administers the
       // site; core's own callers keep the unrestricted instance. Resolved on

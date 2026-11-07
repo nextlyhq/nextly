@@ -430,6 +430,74 @@ to this claims its published pages' addresses in the background after start-up,
 oldest first; a page that clashes with an older one waits for it and appears in the
 waiting report.
 
+### Serving a collection's entries
+
+A collection defined in code can serve each of its entries at its own address,
+drawn with the collection's template. Declare where in the plugin's options:
+
+```ts
+pageBuilder({ templates: { addresses: { posts: "/blog" } } });
+```
+
+Once the collection's template is published, each published post is served at
+`/blog/<its slug>`. Write the address as a visitor requests it: starting with
+`/`, ending without one, with no empty or `.` segment, and not `/` itself or under
+a path the runtime keeps (`/admin`, `/api`, …). Two collections may not share an
+address, and the collection needs a `slug` text field. Anything else stops the
+site from starting, naming what is wrong.
+
+An entry's address is held like a page's, from the save that publishes it: saving
+an entry at an address another document holds is refused, naming it, and
+unpublishing, deleting or renaming the entry frees it. When a template is first
+published over entries whose addresses a page already holds, those entries wait
+and are served as soon as the page frees the address.
+
+Pages and entries are served by one route, which answers every path from the
+addresses the site holds:
+
+```tsx title="app/(frontend)/[...slug]/page.tsx"
+import { createContentPage } from "@nextlyhq/blocks-react/next";
+import { pageBuilderContent } from "@nextlyhq/plugin-page-builder";
+import { previewDraftGate } from "nextly/runtime";
+
+const { ContentPage, generateMetadata } = createContentPage({
+  ...pageBuilderContent(),
+  pages: {
+    collections: ["pages"],
+    field: "content",
+    draft: previewDraftGate(),
+  },
+});
+
+export { generateMetadata };
+export default ContentPage;
+```
+
+A page is served as `createBlocksPage` serves it. An entry is drawn with its
+collection's published template, reading the entry as a visitor would, and takes
+its title, description and image from the template's SEO settings. A path nobody
+holds is not found, and so is an entry whose collection has no published template.
+`createPublicContentPage` is the cached, pre-rendered form.
+
+#### Collections made in the Schema Builder
+
+A collection made in the Schema Builder has no code to declare its address in, so
+its template stores it. Open **Templates** in the page builder's menu, open the
+collection's template and set its **Address**; once the template is published its
+entries are served there, with no restart. The same rules apply as to an address
+declared in code, and an address declared in code wins over a stored one. When you
+promote such a collection into code with `nextly db:sync --promote`, the line that
+declares its address is printed beside its code; the stored address keeps serving
+until the declaration takes over at the next start.
+
+Setting or changing an address needs the **Manage template routing** permission
+(`manage-template-routing`), apart from updating templates, since it moves every
+entry's live address. Anyone else sees the address read-only, and an address they
+send through the API is left out of their save. Changing a published template's
+address frees every entry's old address and serves it at the new one; an entry
+whose new address another document holds waits for it. API clients use the
+`set-template-address` template action, which has a dry run.
+
 ## Reading content into a page
 
 The **Collection list** block (stored as `core/collection-loop`) queries one of your
@@ -566,7 +634,7 @@ read. It never creates the Single's document. `select` keeps the id and the fiel
 read takes no other option, and refuses `status`, `draft`, `depth`, `populate` and the rest by
 name, as a list's read does.
 
-Two more reads sit beside it in `nextly/runtime`, both `@experimental`:
+Three more reads sit beside it in `nextly/runtime`, each `@experimental`:
 
 - `readPublicSiteSettings()` answers the site's `applicationName`, `siteUrl`, `logoUrl` and
   `timezone` from the General Settings, each `null` until it is set. Nothing else in the settings
@@ -581,6 +649,11 @@ Two more reads sit beside it in `nextly/runtime`, both `@experimental`:
   A field the visitor's field rules hide is left out, and so is one whose rule needs an entry to
   decide. A source the visitor may not read, or one that does not exist, has no shapes
   (`undefined`).
+- `declaredFieldShapes({ collection })` or `declaredFieldShapes({ single })` answers the same
+  shapes for every field the source declares, whoever may read it: what a save checks a
+  binding against (see [Bindings checked when a document is
+  saved](/docs/api-reference/block-document-format#bindings-checked-when-a-document-is-saved)).
+  A source that does not exist has no shapes (`undefined`).
 
 The shapes, and the settings when no instance is given, read the process's running instance,
 as `requireNextly` does.

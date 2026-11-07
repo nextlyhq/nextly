@@ -74,6 +74,21 @@ export function flag(value: unknown, fallback = false): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
+/** A bound image prop's value: what it holds, and its binding's fallback. */
+export type BoundImage = Extract<BoundValue, { readonly kind: "image" }>;
+
+/**
+ * An image prop's bound value, when its binding filled it: whether the prop
+ * now holds a media id or an image address, and the fallback to draw when
+ * the host finds no record for the id. Nothing for a prop showing its own
+ * value, which the block reads as it always has.
+ */
+export function boundImage(
+  bound: BoundValue | undefined
+): BoundImage | undefined {
+  return bound?.kind === "image" ? bound : undefined;
+}
+
 /** A finite number within bounds, or the fallback. */
 export function number(
   value: unknown,

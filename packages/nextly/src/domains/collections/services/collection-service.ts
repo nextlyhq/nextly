@@ -607,6 +607,29 @@ export class CollectionService extends BaseService {
   }
 
   /**
+   * @experimental Hold collection `collectionName`'s registry row for share
+   * inside `tx` until it ends, and answer whether the collection exists.
+   *
+   * For a write that must not outlive the collection it names: a delete of
+   * the collection holds the row for update before it removes anything, so
+   * the write either commits before the delete reads what to remove with it,
+   * or waits for the delete and is told the collection is gone. On SQLite,
+   * with one writer at a time, the row is only read. On MySQL, where a table
+   * drop commits the delete's row locks, the collection's named lock holds
+   * the two apart until the delete has removed the row.
+   *
+   * @param tx - The transaction the write runs in
+   * @param collectionName - The collection the write names
+   * @returns Whether the collection exists
+   */
+  async holdCollectionInTransaction(
+    tx: TransactionContext,
+    collectionName: string
+  ): Promise<boolean> {
+    return this.metadataService.holdCollectionIn(tx, collectionName);
+  }
+
+  /**
    * Delete a collection
    *
    * @param collectionName - Name of the collection to delete
