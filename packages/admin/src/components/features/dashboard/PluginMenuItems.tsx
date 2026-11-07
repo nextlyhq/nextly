@@ -56,6 +56,47 @@ interface PluginMenuItemsProps {
    * an empty list.
    */
   asMenu?: boolean;
+  /**
+   * Which sections draw a panel: given, the Plugins panel also lists the
+   * items placed in a section that draws none, so each is reachable.
+   */
+  hasPanel?: (section: ActiveNavSection) => boolean;
+}
+
+/**
+ * The plugin menu items a panel lists for `section`, as the reader may open
+ * them and as `search` filters them: the one list both the drawn items and a
+ * panel's count of matches come from, so the two never disagree.
+ */
+function useVisiblePluginMenuItems(
+  section: ActiveNavSection,
+  search = "",
+  hasPanel?: (section: ActiveNavSection) => boolean
+): PluginMenuItemMeta[] {
+  const branding = useBranding();
+  const { hasPermission } = useCurrentUserPermissions();
+  return menuItemsMatching(
+    resolveVisibleMenuItems(
+      branding?.plugins,
+      hasPermission,
+      section,
+      hasPanel
+    ),
+    search
+  );
+}
+
+/**
+ * How many plugin menu items the Content panel lists in each of its parts for
+ * `search`, so a search that matches only one of them is no empty part.
+ */
+export function usePluginMatchCounts(search: string): {
+  readonly collections: number;
+  readonly singles: number;
+} {
+  const collections = useVisiblePluginMenuItems("collections", search).length;
+  const singles = useVisiblePluginMenuItems("singles", search).length;
+  return { collections, singles };
 }
 
 /**
@@ -69,13 +110,9 @@ export function PluginMenuItems({
   section,
   search = "",
   asMenu = false,
+  hasPanel,
 }: PluginMenuItemsProps): React.JSX.Element | null {
-  const branding = useBranding();
-  const { hasPermission } = useCurrentUserPermissions();
-  const items = menuItemsMatching(
-    resolveVisibleMenuItems(branding?.plugins, hasPermission, section),
-    search
-  );
+  const items = useVisiblePluginMenuItems(section, search, hasPanel);
 
   if (items.length === 0) return null;
 

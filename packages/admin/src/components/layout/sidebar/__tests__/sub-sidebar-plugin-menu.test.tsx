@@ -68,6 +68,7 @@ function renderPlugins(search: string) {
         canAccessWebhooks
         pluginCollectionsForSection={[]}
         showBuilder
+        isFolderTreeVisible
       />
     </SidebarProvider>
   );

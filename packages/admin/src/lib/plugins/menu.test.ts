@@ -192,3 +192,35 @@ describe("menuItemsMatching", () => {
     expect(menuItemsMatching(items, "layouts")).toEqual([]);
   });
 });
+
+describe("resolveVisibleMenuItems with the panels drawn", () => {
+  const plugins = [
+    {
+      name: "@a/p",
+      collections: [],
+      menu: [
+        { label: "Report", to: "/report", section: "dashboard" },
+        { label: "Library", to: "/library" },
+      ],
+    },
+  ] satisfies PluginMetadata[];
+  const allow = () => true;
+
+  it("lists an item whose section draws no panel under Plugins", () => {
+    const none = (section: string) => section !== "dashboard";
+    expect(
+      resolveVisibleMenuItems(plugins, allow, "plugins", none).map(
+        item => item.label
+      )
+    ).toEqual(["Report", "Library"]);
+  });
+
+  it("keeps it in its own section where that section draws a panel", () => {
+    const all = () => true;
+    expect(
+      resolveVisibleMenuItems(plugins, allow, "plugins", all).map(
+        item => item.label
+      )
+    ).toEqual(["Library"]);
+  });
+});

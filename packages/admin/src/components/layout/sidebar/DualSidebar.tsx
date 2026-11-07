@@ -29,6 +29,7 @@ import {
   filterSingleItems,
 } from "@admin/lib/permissions/authorization";
 import { resolveCollectionPlacement } from "@admin/lib/plugins/collection-placement";
+import { resolveVisibleMenuItems } from "@admin/lib/plugins/menu";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
 import { cn } from "@admin/lib/utils";
@@ -231,6 +232,12 @@ export function DualSidebar({
       permittedCollections,
       getCollectionPlacement
     ),
+    // A plugin's own menu item the reader may open is a destination of the
+    // panel too, a page with no collection beside it included.
+    hasVisibleMenuItem:
+      resolveVisibleMenuItems(branding?.plugins, hasPermission, "plugins", id =>
+        isSubSidebarCategory(id, isFolderTreeVisible)
+      ).length > 0,
   });
 
   // Shown while the grants are still resolving, like the rest of the rail. The
@@ -599,6 +606,7 @@ export function DualSidebar({
           canAccessWebhooks: webhooksReachable,
           pluginCollectionsForSection,
           showBuilder,
+          isFolderTreeVisible,
         }}
       />
     </div>

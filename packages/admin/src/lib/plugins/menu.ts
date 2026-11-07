@@ -40,19 +40,41 @@ function filterAndSort(
 export function resolveVisibleMenuItems(
   plugins: PluginMetadata[] | undefined,
   can: (permission: string) => boolean,
-  section?: ActiveNavSection
+  section?: ActiveNavSection,
+  hasPanel?: (section: ActiveNavSection) => boolean
 ): PluginMenuItemMeta[] {
   if (!plugins || plugins.length === 0) return [];
   const all = plugins.flatMap(plugin => {
     const items = plugin.menu ?? [];
     if (section === undefined) return items;
     const slug = pluginSlug(plugin.name);
-    return items.filter(
-      item =>
-        pluginSurfaceSection(item.section, plugin.placement, slug) === section
+    return items.filter(item =>
+      listedIn(
+        pluginSurfaceSection(item.section, plugin.placement, slug),
+        section,
+        hasPanel
+      )
     );
   });
   return filterAndSort(all, can);
+}
+
+/**
+ * Whether an item attributed to `attributed` is listed in `section`'s panel:
+ * its own section's, or, where that section draws no panel (the dashboard,
+ * or media while its folder tree is hidden), the Plugins panel's, so every
+ * item has somewhere it can be reached. Without `hasPanel`, each item is
+ * listed in its own section alone.
+ */
+function listedIn(
+  attributed: ActiveNavSection,
+  section: ActiveNavSection,
+  hasPanel: ((section: ActiveNavSection) => boolean) | undefined
+): boolean {
+  if (attributed === section) return true;
+  return (
+    section === "plugins" && hasPanel !== undefined && !hasPanel(attributed)
+  );
 }
 
 /**
