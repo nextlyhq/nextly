@@ -18,31 +18,35 @@
  * {@link refuseVariablesInUse} is the one in-use check. The remove route
  * makes it just before its write, and the site-style Single makes it on any
  * other write that drops a variable (`site-style-storage`), so the Variables
- * panel's whole-section save, an undo and an import are refused alike.
+ * panel's whole-section save, an undo and an import are refused alike. These
+ * are the early, friendly refusals, naming the document where they can.
  *
  * ## What serializes it with a first use
  *
- * The same fence a shared style's removal has. A page write that ADDS a
- * reference to a variable the site does not define is refused
- * (`fields/token-reference-judgement`), so once the removal's write of the
- * site style lands, no later save can bring a first use of the variable. A
- * save before it is found: the check reads the usage index and then the
- * stored documents themselves, just before the write. The site-style write is
- * made with the version of the read the check judged, so a change to the
- * shared styles or the variables in between refuses the write rather than
- * being overwritten; the removal then reads again, judges again on what is
- * stored now, and removes only its variables from that ({@link stale-retry}).
+ * The composition graph lock (`composition-graph-lock`). A page write that
+ * ADDS a reference to a variable the site does not define is refused
+ * (`fields/token-reference-judgement`), but that validation runs before the
+ * page's transaction, so it is made again inside it, under the lock, against
+ * the site's variables read then (`composition-rejudge`). Every write of the
+ * site style that drops a variable, this route's included, takes the same
+ * lock inside its own transaction and reads the stored documents once more
+ * under it (`site-style-removal-lock`); a use found refuses the write, which
+ * is rolled back whole. So the two are judged one after the other: a page
+ * that got the lock first has committed when the removal reads, and refuses
+ * it; one that comes after waits for the removal to commit, and is refused
+ * its first use of a variable now gone.
+ *
+ * The site-style write is made with the version of the read the check
+ * judged, so a change to the shared styles or the variables in between
+ * refuses the write rather than being overwritten; the removal then reads
+ * again, judges again on what is stored now, and removes only its variables
+ * from that ({@link stale-retry}).
  *
  * ## What isn't closed
  *
- * Once its write has landed, the removal rescans the stored documents once
- * more, and a page saved during the removal that uses one of the variables
- * puts them back: the removed entries are written back where they were, and
- * the removal is refused as in use. What remains is a page save whose
- * validation ran before the removal's write and whose commit lands after
- * that final rescan read the page. A lock over the whole composition, taken
- * in the transaction of every page write and of the removal's, is what would
- * close it.
+ * A reference held in a blocks value inside a repeater's rows or a
+ * field-group instance: the validation does not judge those, and a page
+ * write changing only them does not take the lock.
  *
  * @module variables-routes
  */
@@ -61,7 +65,6 @@ import { z } from "nextly/zod";
 
 import { documentVersionOf, withVersionFrom } from "./document-version";
 import {
-  SHARED_STYLE_IN_USE_CODE,
   VARIABLE_ID_PARAM,
   VARIABLE_PAGE_PARAM,
   VARIABLE_REMOVE_ROUTE_PATH,
@@ -76,8 +79,9 @@ import {
   type VariableUseItem,
 } from "./library-contract";
 import {
-  stillUsedMessage,
+  refuseStoredUses,
   storedUsesOf,
+  type StillUsed,
   type StoredDocuments,
   type StoredUse,
 } from "./shared-style-rescan";
@@ -127,16 +131,13 @@ const RemoveBody = z.strictObject({
   ids: z.array(IDENTITY).min(1).max(VARIABLE_USAGE_IDS_MAX),
 });
 
-/** The stored documents' own answer to whether some variables are still used. */
-export interface StillUsedVariables {
-  /** Every stored document still using any of the ids, read past access. */
-  uses(ids: readonly string[]): Promise<readonly StoredUse[]>;
-  /**
-   * The title of the first of these the caller may open, when the check is
-   * made for a caller who can be asked; absent, no document is named.
-   */
-  firstReadable?(uses: readonly StoredUse[]): Promise<string | undefined>;
-}
+/**
+ * The stored documents' own answer to whether some variables are still used:
+ * the one shape a shared style's removal asks too. Without `firstReadable`
+ * the check is made for a write whose author cannot be asked, and no
+ * document is named.
+ */
+export type StillUsedVariables = StillUsed;
 
 /** The block types registered now, as the pages are rendered with them. */
 export type RegisteredBlocks = () => readonly BlockTypeDefaults[];
@@ -199,19 +200,6 @@ function blockDefaultReasons(
   });
 }
 
-/** The words for variables the stored documents still use. */
-function stillUsedWords(
-  count: number,
-  first: string | undefined,
-  variables: number,
-  canName: boolean
-): string {
-  if (canName) return stillUsedMessage(count, first, variables);
-  const it = variables === 1 ? "it" : "them";
-  const documents = count === 1 ? "1 document" : `${count} documents`;
-  return `Still used on ${documents}. Remove ${it} from ${count === 1 ? "it" : "them"} first.`;
-}
-
 /**
  * Refuse removing variables any of which is still used: the one in-use check
  * for every path that removes one.
@@ -240,34 +228,9 @@ export async function refuseVariablesInUse(
   if (reasons.length > 0) {
     throw removalRefusalOf(reasons, { variableIds: ids }, pathOf);
   }
-  await refuseStoredVariableUses(ids, sources.stillUsed);
-}
-
-/**
- * Refuse, with the in-use refusal, when a stored document still uses any of
- * the variables: the stored documents' own answer, read past the index, which
- * the removal asks last before its write and once more after it.
- */
-async function refuseStoredVariableUses(
-  ids: readonly string[],
-  stillUsed: StillUsedVariables
-): Promise<void> {
-  const uses = await stillUsed.uses(ids);
-  if (uses.length === 0) return;
-  const canName = stillUsed.firstReadable !== undefined;
-  const message = stillUsedWords(
-    uses.length,
-    await stillUsed.firstReadable?.(uses),
-    ids.length,
-    canName
-  );
-  throw NextlyError.validation({
-    errors: [{ path: "", code: SHARED_STYLE_IN_USE_CODE, message }],
-    logContext: {
-      variableIds: ids,
-      uses: uses.map(use => `${use.kind}:${use.slug}:${use.id}`),
-    },
-  });
+  // The stored documents' own answer, read past the index, last before the
+  // write; the site style's write asks it again under the lock.
+  await refuseStoredUses(ids, sources.stillUsed, "variableIds");
 }
 
 /** The variables a usage read asks about: one or more, at most one page. */
@@ -461,51 +424,6 @@ function withoutVariables(
   };
 }
 
-/**
- * The section as a write left it, with the entries whose identity is among
- * `gone` put back where `original` held them. Each goes back at its index in
- * `original`, in order, so a section the write changed in nothing else comes
- * back exactly as it was read. One the section already holds again, a later
- * save having put it there, is left as that save stored it.
- */
-function withVariablesBack(
-  written: Record<string, unknown>,
-  original: Record<string, unknown>,
-  gone: ReadonlySet<string>
-): Record<string, unknown> {
-  const entries = Array.isArray(written.tokens) ? [...written.tokens] : [];
-  const held = new Set(storedVariables({ tokens: entries }).keys());
-  const was: unknown[] = Array.isArray(original.tokens) ? original.tokens : [];
-  was.forEach((entry, at) => {
-    const id = identityOfEntry(entry);
-    if (id !== undefined && gone.has(id) && !held.has(id)) {
-      entries.splice(Math.min(at, entries.length), 0, entry);
-    }
-  });
-  return { ...written, tokens: entries };
-}
-
-/**
- * Put the removed variables back, a page having been saved using one while
- * the removal ran. Written from the read the removal's write produced, so an
- * unrelated save of the Single since is never overwritten: when the write is
- * refused as made from a replaced version, the Single is read again and the
- * variables are put back into what it holds now, a bounded number of times.
- * Any other failure is reported as it is.
- */
-async function restoreRemoved(
-  store: VariableStore,
-  original: Record<string, unknown>,
-  gone: ReadonlySet<string>,
-  after: VariableRead
-): Promise<void> {
-  await retryOnStale(
-    () => store.read(),
-    from => store.write(withVariablesBack(from.section, original, gone), from),
-    { read: after }
-  );
-}
-
 /** A stored entry's identity, read by the Single's own token rules. */
 function identityOfEntry(entry: unknown): string | undefined {
   const [only] = storedVariables({ tokens: [entry] }).keys();
@@ -548,11 +466,11 @@ function storedRefusals(
  * server reads just before the write, never on what the panel showed. One
  * refusal refuses the whole request, so nothing is half removed.
  *
- * Once the write has landed the stored documents are read once more, by the
- * check's own rescan: a page saved while the removal ran, that uses one of
- * the variables, puts every removed entry back where it was, and the removal
- * is refused as that rescan refuses. A rescan that cannot finish puts them
- * back too, since nothing then says no page uses them.
+ * The write itself reads the stored documents once more, inside its own
+ * transaction and under the composition graph lock
+ * (`site-style-removal-lock`): a page saved while the removal ran, that uses
+ * one of the variables, refuses it there as in use, and the write is rolled
+ * back whole, so nothing is removed and nothing has to be put back.
  *
  * A write refused because the Single was saved meanwhile is made again on
  * what is stored then: the stored section and the in-use check are judged
@@ -563,7 +481,9 @@ export async function removeVariables(
   req: Request,
   store: VariableStore,
   supplied: ReadonlySet<string>,
-  checks: VariableRemovalChecks
+  // The in-use check alone: the stored documents are read again by the
+  // write's own transaction, not by the route after it.
+  checks: Pick<VariableRemovalChecks, "inUse">
 ): Promise<Response> {
   const parsed = RemoveBody.safeParse(await jsonBody(req));
   if (!parsed.success) {
@@ -575,7 +495,7 @@ export async function removeVariables(
     ...new Set(parsed.data.ids),
   ] satisfies VariableRemoveRequest["ids"];
   const gone = new Set(ids);
-  const { read, written } = await retryOnStale(
+  await retryOnStale(
     () => store.read(),
     async read => {
       const { reasons, removable } = storedRefusals(
@@ -591,18 +511,9 @@ export async function removeVariables(
         });
       }
       await checks.inUse(removable, read.classes);
-      return {
-        read,
-        written: await store.write(withoutVariables(read.section, gone), read),
-      };
+      await store.write(withoutVariables(read.section, gone), read);
     }
   );
-  try {
-    await refuseStoredVariableUses(ids, checks.stillUsed);
-  } catch (refusal) {
-    await restoreRemoved(store, read.section, gone, written);
-    throw refusal;
-  }
   return respondMutation(
     ids.length === 1
       ? "The variable was removed."
@@ -793,8 +704,9 @@ export function variableRoutes(setup: VariableRouteSetup): {
 
 /**
  * The remove route's checks: the in-use check it makes before its write, and
- * the stored documents' own answer that check reads last, which the route
- * asks once more after its write.
+ * the stored documents' own answer that check reads last, which the site
+ * style's own write asks again under the composition graph lock
+ * (`site-style-removal-lock`).
  */
 export interface VariableRemovalChecks {
   readonly inUse: VariablesInUseCheck;

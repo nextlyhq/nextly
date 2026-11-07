@@ -20,6 +20,26 @@
  * what is stored now and makes only its own change there ({@link
  * stale-retry}), so a concurrent change to another class is kept.
  *
+ * ## What serializes a removal with a first use
+ *
+ * The composition graph lock (`composition-graph-lock`). The checks here are
+ * the early refusal, naming a document the caller may open; a page saved
+ * between them and the write is not seen by them. So every write of the site
+ * style that drops a shared style, this route's, a whole-list write and an
+ * undo alike, takes the lock inside its own transaction and reads the stored
+ * documents again under it (`site-style-removal-lock`), and a page write
+ * adding a reference judges it again under the same lock against the classes
+ * read then (`composition-rejudge`). Whichever takes the lock first commits
+ * before the other is judged, so a page cannot commit a first use of a style
+ * the removal took out, and a removal cannot take out a style a page just
+ * started applying.
+ *
+ * ## What isn't closed
+ *
+ * A class applied in a blocks value inside a named group, a repeater's rows
+ * or a field-group instance: the validation judges top-level blocks fields
+ * only, and so does the judgement under the lock.
+ *
  * @module shared-styles-routes
  */
 import {
@@ -66,7 +86,7 @@ import {
 } from "./library-contract";
 import {
   RESCAN_PAGE_SIZE,
-  stillUsedMessage,
+  refuseStoredUses,
   storedUsesOf,
   type StoredDocuments,
   type StoredUse,
@@ -630,32 +650,6 @@ export interface StillUsedCheck {
 }
 
 /**
- * Refuse when a stored document still references any of the styles, though
- * the index counted none: an index zero is not proof, since interleaved saves
- * of one document can drop a usage row. The refusal names only a document the
- * caller may open, and counts the rest.
- */
-async function refuseStoredUses(
-  ids: readonly string[],
-  check: StillUsedCheck
-): Promise<void> {
-  const uses = await check.uses(ids);
-  if (uses.length === 0) return;
-  const message = stillUsedMessage(
-    uses.length,
-    await check.firstReadable(uses),
-    ids.length
-  );
-  throw NextlyError.validation({
-    errors: [{ path: "", code: SHARED_STYLE_IN_USE_CODE, message }],
-    logContext: {
-      classIds: ids,
-      uses: uses.map(use => `${use.kind}:${use.slug}:${use.id}`),
-    },
-  });
-}
-
-/**
  * Remove unused shared styles: the one write that may remove one.
  *
  * Every check runs on what the server reads just before the write, never on
@@ -702,8 +696,11 @@ export async function removeSharedStyles(
         throw removalRefusalOf(reasons, { classIds: ids });
       }
       // Only once the index found nothing: its refusals name every reason
-      // cheaply, and this read walks every document the builder opens.
-      await refuseStoredUses(ids, stillUsed);
+      // cheaply, and this read walks every document the builder opens. An
+      // index zero is not proof, since interleaved saves of one document can
+      // drop a usage row; the refusal names only a document the caller may
+      // open, and counts the rest.
+      await refuseStoredUses(ids, stillUsed, "classIds");
       await store.write(
         classes.filter(
           entry => typeof entry.id !== "string" || !gone.has(entry.id)
@@ -920,6 +917,18 @@ export function storedDocumentsOf(
 }
 
 /**
+ * Every stored document still referencing any of the shared styles, walked
+ * as the class index records, so the two agree. The one walk both the remove
+ * route and the site style's own write (`site-style-removal-lock`) ask.
+ */
+export function storedSharedStyleUses(
+  documents: StoredDocuments
+): (ids: readonly string[]) => Promise<StoredUse[]> {
+  return ids =>
+    storedUsesOf(ids, documents, stored => classUsageOf(stored).ids);
+}
+
+/**
  * The title of the first stored use the caller may open: collection rows read
  * as the caller, a batch at a time, then a Single the caller may read, by its
  * label. `undefined` when the caller may open none of them.
@@ -1131,13 +1140,7 @@ export function sharedStyleRoutes(setup: SharedStyleRouteSetup): {
           setup.usage(ctx),
           setup.configClassIds,
           {
-            // Walked as the class index records, so the two agree.
-            uses: ids =>
-              storedUsesOf(
-                ids,
-                storedDocumentsOf(ctx, nextly),
-                stored => classUsageOf(stored).ids
-              ),
+            uses: storedSharedStyleUses(storedDocumentsOf(ctx, nextly)),
             firstReadable: uses =>
               firstReadableTitle(
                 uses,

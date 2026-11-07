@@ -37,6 +37,7 @@
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
+import { SHARED_STYLE_IN_USE_CODE } from "./library-contract";
 import { walkPages } from "./paged-walk";
 import type { BuilderDocumentType } from "./site-style-route";
 import { readStoredJson } from "./stored-json";
@@ -258,4 +259,63 @@ export function stillUsedMessage(
   const more = count > 1 ? ` and ${count - 1} more` : "";
   const those = count === 1 ? "that page" : "those pages";
   return `Still used on ${firstReadable}${more}. Remove ${it} from ${those} first.`;
+}
+
+/**
+ * The refusal's words for references still stored on `count` documents: the
+ * first one the caller may open named where the check can ask a caller
+ * (`canName`), else the documents only counted, as for a write whose author
+ * cannot be asked.
+ */
+function stillUsedWords(
+  count: number,
+  first: string | undefined,
+  removing: number,
+  canName: boolean
+): string {
+  if (canName) return stillUsedMessage(count, first, removing);
+  const it = removing === 1 ? "it" : "them";
+  const documents = count === 1 ? "1 document" : `${count} documents`;
+  return `Still used on ${documents}. Remove ${it} from ${count === 1 ? "it" : "them"} first.`;
+}
+
+/**
+ * The stored documents' own answer to whether some shared styles or
+ * variables are still referenced, and how the first use the caller may open
+ * is named; without `firstReadable`, no document is named.
+ */
+export interface StillUsed {
+  /** Every stored document still referencing any of the ids, read past access. */
+  uses(ids: readonly string[]): Promise<readonly StoredUse[]>;
+  /** The title of the first of these the caller may open, if any. */
+  firstReadable?(uses: readonly StoredUse[]): Promise<string | undefined>;
+}
+
+/**
+ * Refuse, with the in-use refusal, when a stored document still references
+ * any of the ids: the stored documents' own answer, read past the index,
+ * which every removal of a shared style or a variable asks. One
+ * implementation for both, so the two refusals cannot drift. `logKey` names
+ * what the ids are in the server log (`classIds`, `variableIds`).
+ */
+export async function refuseStoredUses(
+  ids: readonly string[],
+  stillUsed: StillUsed,
+  logKey: string
+): Promise<void> {
+  const uses = await stillUsed.uses(ids);
+  if (uses.length === 0) return;
+  const message = stillUsedWords(
+    uses.length,
+    await stillUsed.firstReadable?.(uses),
+    ids.length,
+    stillUsed.firstReadable !== undefined
+  );
+  throw NextlyError.validation({
+    errors: [{ path: "", code: SHARED_STYLE_IN_USE_CODE, message }],
+    logContext: {
+      [logKey]: ids,
+      uses: uses.map(use => `${use.kind}:${use.slug}:${use.id}`),
+    },
+  });
 }

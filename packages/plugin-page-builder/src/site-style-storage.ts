@@ -210,10 +210,11 @@ function lockedEntryChanged(
  * entry as written, absent if removed.
  *
  * An unlocked entry may be removed by a whole-list write: undoing the making
- * of a style writes the section back without it. Checking that nothing uses a
- * style before it goes needs a usage index that has counted every page, which
- * a site holding blocks in Singles does not have yet; the remove route makes
- * that check, and refuses while the index is not whole.
+ * of a style writes the section back without it. The usage index's check is
+ * the remove route's, which refuses while the index is not whole; a style a
+ * stored page still applies is refused on every path all the same, by the
+ * read of the stored documents the write makes under the composition graph
+ * lock (`site-style-removal-lock`).
  */
 function refuseStoredEntryChange(
   id: string,
@@ -249,9 +250,10 @@ function refuseStoredEntryChange(
  * error.
  *
  * An unlocked style may still be removed by a whole-list write, which is how
- * an undo of making one is written. The remove route is the editor's delete:
- * it checks, just before it writes, that the usage index is whole and that
- * nothing uses the style.
+ * an undo of making one is written, unless a stored page applies it: that is
+ * refused inside the write's transaction (`site-style-removal-lock`). The
+ * remove route is the editor's delete: it checks, just before it writes, that
+ * the usage index is whole and that nothing uses the style.
  *
  * Applying a style to a block, detaching it and overriding it on one block are
  * page writes, which never reach this Single, so a lock does not stop them.
@@ -378,10 +380,12 @@ export type VariablesInUseCheck = (
  * an import of a token file) removes a variable as surely as the remove
  * route does, so it is judged by the same check: refused, with the same
  * in-use refusal, when a block, a page's settings or a shared style still
- * uses it. Shared styles are unlike that on purpose: their removal by a
- * whole list is allowed and the remove route is their delete, while a
- * variable removed in use leaves every reference resolving to nothing, so it
- * is refused on every path.
+ * uses it. Shared styles are unlike that before the transaction: their
+ * removal by a whole list is let through here and the remove route is their
+ * delete, while a variable removed in use leaves every reference resolving to
+ * nothing, so it is refused here on every path. Inside the write's
+ * transaction both are judged alike, against the stored documents, under the
+ * composition graph lock (`site-style-removal-lock`).
  *
  * The cost falls only on a write that drops one. The stored identities are
  * compared first, from values in hand, so a write that edits values or labels,
@@ -509,6 +513,24 @@ export function droppedVariables(
   const kept = storedVariables(after);
   return [...storedVariables(before).values()].filter(
     variable => !kept.has(variable.id) && !supplied.has(variable.id)
+  );
+}
+
+/**
+ * The stored shared styles a write drops: an id held before, absent after,
+ * and not one the code supplies, read by the same entry identity the lock
+ * guard reads (the first entry with an id). Dropping a stored override of a
+ * code class resets it, and the class is still defined, so that drops
+ * nothing.
+ */
+export function droppedSharedStyles(
+  before: unknown,
+  after: unknown,
+  supplied: ReadonlySet<string>
+): string[] {
+  const kept = classEntriesById(after);
+  return [...classEntriesById(before).keys()].filter(
+    id => !kept.has(id) && !supplied.has(id)
   );
 }
 

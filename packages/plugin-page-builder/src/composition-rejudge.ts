@@ -24,27 +24,64 @@
  * Blocks values inside a repeater's rows or a field-group instance are not
  * judged here: they are left to validation.
  *
+ * ## The variables and shared styles a write adds
+ *
+ * The same holds for a reference to a variable or a shared style. The
+ * validation refuses a reference the write ADDS to one the site does not
+ * define, but judges it before the transaction, so a removal committing in
+ * between would leave the page holding a first use of something gone. Under
+ * the lock the references the write adds are judged again, against the site's
+ * definitions read fresh. A removal takes the same lock in the site style's
+ * own write (`site-style-removal-lock`), so the two are judged one after the
+ * other: a removal that held the lock first committed before this write got
+ * it, and is seen; one that comes after waits, then finds this page.
+ *
  * @module composition-rejudge
  */
-import { isPlainRecord } from "@nextlyhq/blocks-engine";
+import { isPlainRecord, type BlockDocument } from "@nextlyhq/blocks-engine";
 import {
   NextlyError,
   type InTransactionContext,
   type PluginContext,
+  type PluginFieldIssue,
   type PluginFieldWrite,
 } from "@nextlyhq/plugin-sdk";
 
 import { indexHostFinder } from "./component-hosts";
 import { componentUsageIndex } from "./component-usage";
 import { holdCompositionGraph } from "./composition-graph-lock";
+import type { JudgedField, StoredForms } from "./fields/added-undefined-ids";
 import {
   compositionGraphIssues,
   type CompositionSetup,
   type HostFinder,
+  type SiteDefinitions,
 } from "./fields/blocks-composition";
-import { BLOCKS_TYPE } from "./fields/blocksField";
+import { isForest } from "./fields/blocks-document";
+import { BLOCKS_TYPE, onceAsked } from "./fields/blocksField";
+import { newClassReferenceIssues } from "./fields/class-reference-judgement";
+import { readStoredForms } from "./fields/lock-baselines";
+import { newTokenReferenceIssues } from "./fields/token-reference-judgement";
 import { readStoredJson, sameStoredValue } from "./stored-json";
 import { usageTableOf, usageTableRows } from "./usage-index-tables";
+import { readWithinOrRefuse, type UnreadReason } from "./within-time";
+
+/**
+ * How long a write waits for the site's definitions under the lock before it
+ * is refused. One read of one document: past this, the read is waiting for a
+ * connection rather than for the database.
+ */
+export const SITE_DEFINITIONS_READ_MS = 5_000;
+
+/**
+ * What a write is told when the site's definitions could not be read under
+ * the lock: refused, to save again, rather than let through unjudged.
+ */
+export const SITE_STYLES_CHANGED =
+  "Site styles changed while saving. Try again.";
+
+/** One refusal the judgement makes, as validation reports it. */
+type Issue = { path: string; code: string; message: string };
 
 /** How a Single's writes are named to the in-transaction phase. */
 const SINGLE_PREFIX = "single:";
@@ -71,7 +108,7 @@ async function rejudgedIssues(
   write: InTransactionContext,
   setup: CompositionSetup,
   dialect: PluginContext["dialect"]
-): Promise<{ path: string; code: string; message: string }[]> {
+): Promise<Issue[]> {
   if (write.operation === "delete" || write.data === undefined) return [];
   const data = write.data;
   const original = write.originalData;
@@ -118,7 +155,7 @@ async function rejudgedIssues(
     data._isWorkingDraft === true || typeof data.status !== "string"
       ? undefined
       : data.status;
-  const issues: { path: string; code: string; message: string }[] = [];
+  const issues: Issue[] = [];
   for (const path of changed) {
     issues.push(
       ...(await compositionGraphIssues(
@@ -133,7 +170,152 @@ async function rejudgedIssues(
       ))
     );
   }
+  // Under the lock too, and only now: the site's definitions are never read
+  // in this path before the lock is held.
+  issues.push(
+    ...(await addedReferenceIssues(write, fieldWrite, changed, setup))
+  );
   return issues;
+}
+
+/**
+ * The variables and shared styles the write's blocks values ADD that the site
+ * does not define, judged as the validation judges them (the same checks,
+ * codes and words), against the site's definitions read now, under the lock.
+ * A reference the stored forms already held is kept, so a page holding one
+ * to something the site has since dropped stays savable.
+ *
+ * Costs nothing for a write naming no variable and no class: the definitions
+ * are read only once a value names one, and the stored forms only once one of
+ * those is undefined. One read of each serves every field and both checks.
+ *
+ * A field's label is not part of what this phase is handed, so a refusal
+ * names the field by its path, as the validation does for a field without
+ * one.
+ */
+async function addedReferenceIssues(
+  write: InTransactionContext,
+  fieldWrite: PluginFieldWrite,
+  paths: readonly string[],
+  setup: CompositionSetup
+): Promise<Issue[]> {
+  const read = setup.siteDefinitions;
+  // Where the site's definitions cannot be read at all, the validation judges
+  // no reference either.
+  if (read === undefined) return [];
+  const definitions = onceAsked(() => definitionsUnderLock(read));
+  // As the checks answer them; each names its field and code, normalized below.
+  const issues: PluginFieldIssue[] = [];
+  for (const path of paths) {
+    const value = readStoredJson(valueAt(write.data, path));
+    const field: JudgedField = { path, write: fieldWrite };
+    const storedForms = onceAsked(() =>
+      formsBeforeWrite(write, fieldWrite, path)
+    );
+    const site = { limits: setup.limits, storedForms };
+    issues.push(
+      ...(await newClassReferenceIssues(value, field, path, {
+        ...site,
+        classIds: async () => (await definitions()).classIds,
+      })),
+      ...(await newTokenReferenceIssues(value, field, path, {
+        ...site,
+        tokenIds: async () => (await definitions()).tokenIds,
+      }))
+    );
+  }
+  return issues.map(issue => ({
+    path: issue.path ?? "",
+    code: issue.code ?? "CUSTOM",
+    message: issue.message,
+  }));
+}
+
+/**
+ * The site's definitions, read once the lock is held, bounded in time, and
+ * refused with {@link SITE_STYLES_CHANGED} when they cannot be read: a read
+ * that fails or does not answer never lets the write through and never holds
+ * it open.
+ *
+ * Read fresh through the Direct API (`siteStyleNow` in the plugin, which
+ * caches nothing), and where it runs depends on the dialect:
+ *
+ * - PostgreSQL and MySQL. This write's transaction already holds a connection
+ *   of its own (`TransactionFrame.connected`), and the read's statements do
+ *   not join it: the adapter's `select` runs on the transaction's executor
+ *   only when handed one, and the Single's read hands none, so it runs on
+ *   `getDrizzle()`, the handle on the pool. Each statement runs on a pooled
+ *   connection in a transaction of its own and sees what had committed when
+ *   it ran: a removal that held the lock before this write committed before
+ *   the lock was granted, so what it removed is gone here. The read opens a
+ *   transaction only to create a Single never stored, which the validation's
+ *   same read did already; one opened here would join this transaction as a
+ *   savepoint and read at its isolation, where the lock's compare-and-set
+ *   refuses a snapshot older than the removal, which writes the lock row too.
+ * - SQLite. One connection: only `transaction()` and a session wait their turn
+ *   on it, and a plain statement runs at once, inside this write's open
+ *   transaction. It sees everything committed before the transaction began,
+ *   which `BEGIN IMMEDIATE` lets in only once every other writer has finished,
+ *   and this write's own: so a removal is either committed and seen, or still
+ *   waiting behind this write.
+ *
+ * Bounded because, on the pooled dialects, a pool whose every connection is
+ * held by writers waiting at the lock gives the read none until the lock
+ * holder finishes, which may be this write.
+ */
+function definitionsUnderLock(
+  read: () => Promise<SiteDefinitions>
+): Promise<SiteDefinitions> {
+  return readWithinOrRefuse(read, SITE_DEFINITIONS_READ_MS, siteStylesChanged);
+}
+
+/** The retryable refusal of a write whose definitions could not be read. */
+function siteStylesChanged(why: UnreadReason, error?: unknown): NextlyError {
+  return NextlyError.conflict({
+    reason: "state",
+    message: SITE_STYLES_CHANGED,
+    ...(error instanceof Error ? { cause: error } : {}),
+    logContext: { cause: `site-definitions-read-${why}` },
+  });
+}
+
+/**
+ * The field's stored forms as they stood before this write: what a reference
+ * the write keeps is judged against, as the validation judged it against both
+ * stored forms before the transaction opened.
+ *
+ * Inside the transaction `readStored` answers this write's own stored value
+ * for every form the write wrote, and judged against that every reference
+ * would read as held. So a form the write wrote is taken from `originalData`,
+ * the document the write replaced: the prior working draft where the edit
+ * accumulated onto one, else the stored document. Only a form the write did
+ * not write is read on the transaction, which for a held working draft is the
+ * live one: such a write stores the draft alone. Any other write wrote the
+ * live row, a publish consuming the draft into it, so `originalData` is the
+ * one form before it; a reference only the live form held while a pending
+ * draft had dropped it then reads as added, which refuses more, never less.
+ * A create replaced nothing.
+ *
+ * The live form is read in the default language, since a write's language is
+ * not part of this phase: for a field kept per language that can only hold
+ * more, and no reference to something a removal just took out is held there,
+ * since the removal finds a use in any language and is then refused.
+ */
+async function formsBeforeWrite(
+  write: InTransactionContext,
+  fieldWrite: PluginFieldWrite,
+  path: string
+): Promise<StoredForms> {
+  if (write.operation === "create" || write.originalData === undefined) {
+    return { forms: [], readable: true };
+  }
+  const replaced = readStoredJson(valueAt(write.originalData, path));
+  const forms: BlockDocument[] = isForest(replaced)
+    ? [replaced as BlockDocument]
+    : [];
+  if (write.data?._isWorkingDraft !== true) return { forms, readable: true };
+  const live = await readStoredForms(fieldWrite, path, [false]);
+  return { forms: [...forms, ...live.forms], readable: live.readable };
 }
 
 /** The value at a dotted path, or undefined where the path holds none. */

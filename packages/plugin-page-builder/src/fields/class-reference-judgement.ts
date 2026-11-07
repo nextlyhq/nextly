@@ -11,19 +11,23 @@
  *
  * That is also what fences a shared style's removal: the remove route counts
  * the style's uses just before it writes, and a page saved after that count
- * cannot add a reference to the style once it is gone.
+ * cannot add a reference to the style once it is gone. This judgement runs
+ * before the page's transaction, so it is made again inside it, under the
+ * composition graph lock the removal's write takes too
+ * (`composition-rejudge`).
  *
  * @module fields/class-reference-judgement
  */
 import { DEFAULT_LIMITS, type DocumentLimits } from "@nextlyhq/blocks-engine";
-import type {
-  PluginFieldIssue,
-  PluginFieldValidateArgs,
-} from "@nextlyhq/plugin-sdk";
+import type { PluginFieldIssue } from "@nextlyhq/plugin-sdk";
 
 import { classUsageOf } from "../class-usage";
 
-import { addedUndefinedIds, type StoredForms } from "./added-undefined-ids";
+import {
+  addedUndefinedIds,
+  type JudgedField,
+  type StoredForms,
+} from "./added-undefined-ids";
 import { isTopLevel } from "./layers-lock-judgement";
 
 /** The engine's code for a reference to a class the site does not define. */
@@ -44,7 +48,9 @@ const NAMED_AT_MOST = 5;
  */
 export async function newClassReferenceIssues(
   value: unknown,
-  args: PluginFieldValidateArgs,
+  // The field's write as a reference check reads it: the validation's whole
+  // arguments, or the in-transaction judgement's narrower view.
+  args: JudgedField,
   label: string,
   site: {
     readonly classIds: () => Promise<ReadonlySet<string>>;

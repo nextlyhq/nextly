@@ -212,6 +212,7 @@ import {
   firstReadableTitle,
   sharedStyleRoutes,
   storedDocumentsOf,
+  storedSharedStyleUses,
   type SharedStyleUsageSource,
 } from "./shared-styles-routes";
 import {
@@ -238,12 +239,14 @@ import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
 import { siteStyleExpiry } from "./site-style-expiry";
 import { referableClassIds } from "./site-style-record";
+import { registerSiteStyleRemovalLock } from "./site-style-removal-lock";
 import { blocksSurvey, siteStyleRoute } from "./site-style-route";
 import {
   loadSiteStyle,
   readStoredSiteStyleVersioned,
   SITE_STYLE_SLUG,
   siteStyleSingle,
+  suppliedVariableIds,
   type VariablesInUseCheck,
 } from "./site-style-storage";
 import {
@@ -1960,6 +1963,32 @@ export const pageBuilder = (
       // transaction under the graph lock, so two saves made at once cannot
       // each pass against the graph as it stood before the other.
       registerCompositionRejudge(ctx, () => composition);
+      // What a variable's in-use check reads: the variable index, the block
+      // types the pages are rendered with (read per check), and the stored
+      // documents. It names no document, since the write's author is not a
+      // caller this can ask.
+      const variableCheckSetup = {
+        usage: usageSourceOf(ctx.self.collections, tokenUsageIndex),
+        blocks: allBlocks,
+        documents: async () => storedDocumentsOf(ctx, await bootedNextly()),
+        limits: opts.limits ?? DEFAULT_LIMITS,
+        pathOf: () => "tokens",
+      };
+      // And every write of the site style dropping a variable or a shared
+      // style takes the same lock and reads the stored documents again under
+      // it, so a page cannot commit a first use of what it removes. Read
+      // through the Direct API, by the walks the remove routes' rescans make.
+      registerSiteStyleRemovalLock(ctx, {
+        suppliedVariables: () => suppliedVariableIds(configStyle),
+        // The set the code tier refresh keeps current.
+        suppliedClasses: () => configClassIds,
+        variableUses: ids =>
+          variableRemovalChecks(variableCheckSetup).stillUsed.uses(ids),
+        sharedStyleUses: async ids =>
+          storedSharedStyleUses(storedDocumentsOf(ctx, await bootedNextly()))(
+            ids
+          ),
+      });
       seedGraphLock = () =>
         seedCompositionGraphLock(ctx.db, ctx.dialect).catch((error: unknown) =>
           ctx.logger.warn(
@@ -1995,16 +2024,8 @@ export const pageBuilder = (
         markDirty: () => usageBookkeeping(ctx.db, ctx.dialect).markDirty(),
       });
       // A write of the site style dropping a variable still in use is
-      // refused, by the check the remove route makes. It names no document,
-      // since the write's author is not a caller this can ask.
-      variablesInUse = variablesInUseCheck({
-        usage: usageSourceOf(ctx.self.collections, tokenUsageIndex),
-        // The block types the pages are rendered with, read per check.
-        blocks: allBlocks,
-        documents: async () => storedDocumentsOf(ctx, await bootedNextly()),
-        limits: opts.limits ?? DEFAULT_LIMITS,
-        pathOf: () => "tokens",
-      });
+      // refused before its transaction, by the check the remove route makes.
+      variablesInUse = variablesInUseCheck(variableCheckSetup);
       registerReadinessNotice(ctx, opts);
       // A page published naming a Layout that is not: it is served inside the
       // site's default until its own is published, and the author is told.
