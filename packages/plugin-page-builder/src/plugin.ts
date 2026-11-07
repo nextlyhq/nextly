@@ -39,8 +39,10 @@ import {
   contentAddressService,
   type ContentAddressService,
 } from "./address-claims/content-addresses";
+import type { Tx } from "./address-claims/claim-store";
 import {
   registerEntryAddressClaims,
+  releaseUndeclared,
   settleEntryClaimsAtStart,
   type EntryClaimsDeps,
 } from "./address-claims/entry-claims-hook";
@@ -1340,6 +1342,8 @@ export const pageBuilder = (
   let checkTemplateAddresses: (() => Promise<void>) | null = null;
   // Brings the entries' claims to the declared addresses, after the pages'.
   let entryClaimsPass: (() => Promise<void>) | null = null;
+  // Releases the claims of collections no longer given an address.
+  let undeclaredSweep: (() => Promise<void>) | null = null;
 
   /**
    * The templates guard's lookups over the installed plugin: the RESOLVED
@@ -2181,7 +2185,10 @@ export const pageBuilder = (
             // Published only, and a no-op on a collection without a
             // Draft/Published lifecycle, whose entries are all live.
             status: "published",
-            sort: "createdAt",
+            // `id` is unique and on every collection; `createdAt` is absent
+            // where timestamps are off, and ties would let a paged walk skip
+            // an entry at a batch's edge.
+            sort: "id",
             limit: size,
             page,
             overrideAccess: true,
@@ -2193,13 +2200,15 @@ export const pageBuilder = (
       if (templateAddresses.size > 0) {
         registerEntryAddressClaims(ctx.hooks, claimsDeps);
       }
-      entryClaimsPass = () =>
-        settleEntryClaimsAtStart({
-          ...claimsDeps,
-          withTransaction: work =>
-            ctx.services.collections.withTransaction(work),
-          warn: (message, meta) => ctx.logger.warn(message, meta),
-        });
+      const passDeps = {
+        ...claimsDeps,
+        withTransaction: <T>(work: (tx: Tx) => Promise<T>) =>
+          ctx.services.collections.withTransaction(work),
+        warn: (message: string, meta: Record<string, unknown>) =>
+          ctx.logger.warn(message, meta),
+      };
+      entryClaimsPass = () => settleEntryClaimsAtStart(passDeps);
+      undeclaredSweep = () => releaseUndeclared(passDeps);
       checkTemplateAddresses = async () => {
         const own = new Set(Object.values(ctx.self.collections));
         const problems: string[] = [];
@@ -2233,7 +2242,13 @@ export const pageBuilder = (
         // The site's default language, where a localized site names one.
         defaultLocale: () =>
           ctx.config.localization?.defaultLocale || siteLocales()[0] || "en",
-        collections: [pagesSlug, templatesSlug, ...templateAddresses.keys()],
+        // The claims collection too: the start-up passes write it alone.
+        collections: [
+          pagesSlug,
+          templatesSlug,
+          claimsStore.slug,
+          ...templateAddresses.keys(),
+        ],
         holders: [pagesSlug, ...templateAddresses.keys()],
       });
       // A page published naming a Layout that is not: it is served inside the
@@ -2384,11 +2399,17 @@ export const pageBuilder = (
       // passes never throw, and a boot is not held for them.
       const backfill = pageClaimsBackfill;
       const entryPass = entryClaimsPass;
+      const sweep = undeclaredSweep;
       if (backfill !== null) {
         // The entries' pass only after every page holds its address: until
-        // then an entry could take a path a page is still owed.
+        // then an entry could take a path a page is still owed. Releasing a
+        // removed collection's claims takes nothing a page is owed, so it
+        // runs whether or not the pages' pass completed.
         void backfill()
-          .then(complete => (complete ? entryPass?.() : undefined))
+          .then(async complete => {
+            await sweep?.();
+            if (complete) await entryPass?.();
+          })
           .catch(() => undefined);
       }
       void seedGraphLock?.();

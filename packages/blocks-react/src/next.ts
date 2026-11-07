@@ -3776,9 +3776,11 @@ function buildContentRoute(
   // A page is served by the pages route itself, so it is drawn exactly as
   // `createBlocksPage` draws it: its draft gate, its list's later pages, its
   // tags and metadata.
-  const pagesRoute: ContentRoute<ReactElement> = isPublic
-    ? createPublicContentRoute<ReactElement>(blocksRouteConfig(pages, true))
-    : createContentRoute<ReactElement>(blocksRouteConfig(pages, false));
+  const pagesRoute: ContentRoute<ReactElement> &
+    Partial<Pick<StaticContentRoute<ReactElement>, "generateStaticParams">> =
+    isPublic
+      ? createPublicContentRoute<ReactElement>(blocksRouteConfig(pages, true))
+      : createContentRoute<ReactElement>(blocksRouteConfig(pages, false));
   const pageCollections = new Set(pages.collections);
   const mountPath = pages.mountPath ?? "";
   const mountSegments = mountPath.split("/").filter(part => part !== "");
@@ -3953,15 +3955,25 @@ function buildContentRoute(
   }
 
   async function generateStaticParams(): Promise<Array<{ slug: string[] }>> {
+    // The pages' own params, as the pages route builds them: its pages and
+    // their lists' later pages, which the store holds as one space each and
+    // cannot enumerate.
+    const own = (await pagesRoute.generateStaticParams?.()) ?? [];
     const limit = pages.staticParamsLimit ?? 1000;
-    if (config.addresses === undefined || limit <= 0) return [];
+    if (config.addresses === undefined || limit <= 0) return own;
     const held = await config.addresses(pages.locale, limit, mountSegments);
-    // Only the addresses under this route's mount, as the route serves them.
-    return held.flatMap(segments =>
-      mountSegments.every((part, at) => segments[at] === part)
-        ? [{ slug: segments.slice(mountSegments.length) }]
-        : []
-    );
+    // Then every other address under this route's mount, as the route
+    // serves it: the entries'. A page's own address is listed once.
+    const listed = new Set(own.map(param => param.slug.join("/")));
+    const entries = held.flatMap(segments => {
+      if (!mountSegments.every((part, at) => segments[at] === part)) return [];
+      const slug = segments.slice(mountSegments.length);
+      const key = slug.join("/");
+      if (listed.has(key)) return [];
+      listed.add(key);
+      return [{ slug }];
+    });
+    return [...own, ...entries];
   }
 
   return { ContentPage, generateMetadata, generateStaticParams };

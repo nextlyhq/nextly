@@ -373,14 +373,17 @@ describe("the content route", () => {
         pages: { ...config().pages, mountPath: "/site" },
         addresses: async (_locale, _limit, under) => {
           asked.push(under);
+          // The page's own params come from the pages route, as its lists'
+          // later pages do, which the store holds as one space each.
           return [
-            ["site", "about"],
             ["site", "blog", "hello"],
+            ["site", "about"],
             ["elsewhere", "x"],
           ];
         },
       })
     );
+    // The page first, from the pages route, then the entry, each once.
     expect(await route.generateStaticParams()).toEqual([
       { slug: ["about"] },
       { slug: ["blog", "hello"] },

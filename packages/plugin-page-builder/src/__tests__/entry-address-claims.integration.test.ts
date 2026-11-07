@@ -80,10 +80,12 @@ describe.each(getConfiguredTestDialects())(
             ],
           }),
           // No Draft/Published lifecycle, and an ordinary field named
-          // `status`: every entry is live, whatever that field holds.
+          // `status`: every entry is live, whatever that field holds. No
+          // timestamps either, so a walk of its entries cannot sort by them.
           defineCollection({
             slug: "events",
             labels: { singular: "Event", plural: "Events" },
+            timestamps: false,
             fields: [
               text({ name: "title" }),
               text({ name: "slug", unique: true }),
@@ -264,8 +266,16 @@ describe.each(getConfiguredTestDialects())(
       expect(await content.resolveAddress(undefined, "/admin")).toBeNull();
     });
 
-    it("holds the address of every entry of a collection without a lifecycle, whatever its status field holds", async () => {
+    it("holds the address of every entry of a collection without a lifecycle or timestamps, whatever its status field holds", async () => {
       const t = await boot();
+      // Saved before the template, so its publish walks the collection.
+      const before = idOf(
+        await t.nextly.create({
+          collection: "events",
+          data: { title: "First", slug: "first", status: "archived" },
+          overrideAccess: true,
+        })
+      );
       await t.nextly.create({
         collection: TEMPLATES_SLUG,
         data: {
@@ -283,7 +293,10 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
         })
       );
-      expect(await held(t)).toEqual([`address /events/old events:${archived}`]);
+      expect(await held(t)).toEqual([
+        `address /events/first events:${before}`,
+        `address /events/old events:${archived}`,
+      ]);
     });
 
     it("refuses to start when a localized collection is given an address, naming it", async () => {

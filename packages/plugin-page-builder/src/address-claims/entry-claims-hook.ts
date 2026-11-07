@@ -343,7 +343,6 @@ export interface EntryClaimsPassDeps extends EntryClaimsDeps {
 export async function settleEntryClaimsAtStart(
   deps: EntryClaimsPassDeps
 ): Promise<void> {
-  await releaseUndeclared(deps);
   for (const collection of deps.addresses.keys()) {
     try {
       await deps.withTransaction(async tx => {
@@ -379,7 +378,9 @@ const SWEEP_PAGE = 500;
  * throws: what it cannot release is warned about and left for the next
  * start.
  */
-async function releaseUndeclared(deps: EntryClaimsPassDeps): Promise<void> {
+export async function releaseUndeclared(
+  deps: EntryClaimsPassDeps
+): Promise<void> {
   const known = new Set([deps.pages, ...deps.addresses.keys()]);
   const stale = new Map<string, Holder>();
   try {
