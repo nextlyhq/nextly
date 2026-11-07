@@ -849,10 +849,18 @@ describe.each(getConfiguredTestDialects())(
       const real = t.nextly as unknown as SiteFontsDirectApi;
       const { api, writes } = writingAt(real, meetingPoint());
       const [lora, merriweather] = [processAdd(api), processAdd(api)];
+      // A folder records who made it, a reference to a stored user, so the
+      // adds run as a real person, as every add the route admits does. With
+      // no user the folder cannot be made and the files go to the root.
+      const maker = await t.nextly.users.create({
+        email: "folder-maker@example.com",
+        password: "Password123!",
+        data: { name: "Folder Maker", isActive: true },
+      });
 
       const answers = await Promise.all([
-        lora("lora"),
-        merriweather("merriweather"),
+        lora("lora", { id: maker.item.id }),
+        merriweather("merriweather", { id: maker.item.id }),
       ]);
       expect(answers.map(answer => answer.status)).toEqual([200, 200]);
       // CONTROL: one of the two writes was refused and made again, so the

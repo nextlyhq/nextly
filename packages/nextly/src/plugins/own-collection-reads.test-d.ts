@@ -18,6 +18,7 @@ import type { SingleDocument } from "../domains/singles/types";
 import type { PluginContext } from "./plugin-context";
 import type {
   OwnCollectionReadOpts,
+  OwnTransactionReadOpts,
   PluginCollectionTransaction,
   ServiceOpts,
 } from "./service-opts";
@@ -35,15 +36,37 @@ expectTypeOf<keyof OwnCollectionReadOpts>().toEqualTypeOf<
 expectTypeOf<{ [K in PoolReads]: Parameters<Own[K]>[2] }>().toEqualTypeOf<{
   [K in PoolReads]: OwnCollectionReadOpts | undefined;
 }>();
-expectTypeOf<Parameters<Own["listEntriesInTransaction"]>[3]>().toEqualTypeOf<
-  OwnCollectionReadOpts | undefined
+// A collection read on a transaction may also name the lock its rows take.
+expectTypeOf<keyof OwnTransactionReadOpts>().toEqualTypeOf<
+  keyof OwnCollectionReadOpts | "lock"
 >();
-expectTypeOf<Parameters<Own["findEntryByIdInTransaction"]>[3]>().toEqualTypeOf<
-  OwnCollectionReadOpts | undefined
->();
-expectTypeOf<Parameters<Own["getSingleInTransaction"]>[2]>().toEqualTypeOf<
-  OwnCollectionReadOpts | undefined
->();
+expectTypeOf<{
+  [K in
+    | "listEntriesInTransaction"
+    | "listHostEntriesInTransaction"]: Parameters<Own[K]>[3];
+}>().toEqualTypeOf<{
+  [K in "listEntriesInTransaction" | "listHostEntriesInTransaction"]:
+    | OwnTransactionReadOpts
+    | undefined;
+}>();
+expectTypeOf<{
+  [K in
+    | "findEntryByIdInTransaction"
+    | "findHostEntryByIdInTransaction"]: Parameters<Own[K]>[3];
+}>().toEqualTypeOf<{
+  [K in "findEntryByIdInTransaction" | "findHostEntryByIdInTransaction"]:
+    | OwnTransactionReadOpts
+    | undefined;
+}>();
+expectTypeOf<{
+  [K in "getSingleInTransaction" | "getHostSingleInTransaction"]: Parameters<
+    Own[K]
+  >[2];
+}>().toEqualTypeOf<{
+  [K in "getSingleInTransaction" | "getHostSingleInTransaction"]:
+    | OwnCollectionReadOpts
+    | undefined;
+}>();
 // A transaction read takes the plugin's transaction token first, never the
 // adapter's transaction.
 expectTypeOf<{
@@ -61,6 +84,9 @@ expectTypeOf<keyof Own>().toEqualTypeOf<
   | "listEntriesInTransaction"
   | "findEntryByIdInTransaction"
   | "getSingleInTransaction"
+  | "listHostEntriesInTransaction"
+  | "findHostEntryByIdInTransaction"
+  | "getHostSingleInTransaction"
 >();
 
 // No ordinary read, and no Direct API read, can name the grant.
@@ -98,5 +124,15 @@ expectTypeOf<ReturnType<Own["findEntryByIdInTransaction"]>>().toEqualTypeOf<
   ReturnType<Own["findEntryById"]>
 >();
 expectTypeOf<ReturnType<Own["getSingleInTransaction"]>>().toEqualTypeOf<
+  Promise<SingleDocument>
+>();
+// A host read answers what the own read of the same method answers.
+expectTypeOf<ReturnType<Own["listHostEntriesInTransaction"]>>().toEqualTypeOf<
+  ReturnType<Own["listEntries"]>
+>();
+expectTypeOf<ReturnType<Own["findHostEntryByIdInTransaction"]>>().toEqualTypeOf<
+  ReturnType<Own["findEntryById"]>
+>();
+expectTypeOf<ReturnType<Own["getHostSingleInTransaction"]>>().toEqualTypeOf<
   Promise<SingleDocument>
 >();
