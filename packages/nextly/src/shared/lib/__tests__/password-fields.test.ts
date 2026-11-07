@@ -262,6 +262,59 @@ describe("carryStoredPasswords", () => {
     expect(lines[1]?.pw).toBe(HASH_B);
   });
 
+  describe("repeater rows, now stored with ids", () => {
+    const LINES = [
+      {
+        name: "lines",
+        type: "repeater",
+        fields: [
+          { name: "label", type: "text" },
+          { name: "pw", type: "password" },
+          { name: "pin", type: "password" },
+        ],
+      },
+    ];
+    const STORED = {
+      lines: [
+        { id: "a", label: "a", pw: HASH_A },
+        { id: "b", label: "b", pw: HASH_B },
+      ],
+    };
+    /** Carry the stored passwords onto `lines`, as sent; the rows after. */
+    const carried = (lines: Array<Record<string, unknown>>) => {
+      const data: Record<string, unknown> = { lines };
+      const kept = carryStoredPasswords(data, STORED, LINES, NO_FIELD_GROUPS);
+      return { rows: data.lines as Array<Record<string, unknown>>, kept };
+    };
+
+    it("keeps each password on its own row through a reorder by id", () => {
+      const { rows } = carried([{ id: "b" }, { id: "a" }]);
+      expect(rows.map(row => row.pw)).toEqual([HASH_B, HASH_A]);
+    });
+
+    it("drops a removed row's password", () => {
+      const { rows, kept } = carried([{ id: "b" }]);
+      expect(rows.map(row => row.pw)).toEqual([HASH_B]);
+      expect([...kept]).toEqual([HASH_B]);
+    });
+
+    it("never carries a row's password to a row at another place that names none, or to a copy", () => {
+      // Row b moved first; the new id-less row now at b's old place takes
+      // nothing of b's or a's.
+      const moved = carried([{ id: "b" }, { label: "new" }]);
+      expect(moved.rows.map(row => row.pw)).toEqual([HASH_B, undefined]);
+      // A second row naming a's id is a copy, and gets no password.
+      const copied = carried([{ id: "a" }, { id: "a" }]);
+      expect(copied.rows.map(row => row.pw)).toEqual([HASH_A, undefined]);
+    });
+
+    it("never carries a password into a different field", () => {
+      const { rows } = carried([{ id: "a" }]);
+      expect(rows[0]?.pw).toBe(HASH_A);
+      expect(rows[0]?.pin).toBeUndefined();
+    });
+  });
+
   it("keeps each password of a repeater sent without any ids, though its stored rows carry them", () => {
     // Every write stores repeater rows with ids, so a writer that never sends
     // them would otherwise lose every password it leaves out: a list sent
