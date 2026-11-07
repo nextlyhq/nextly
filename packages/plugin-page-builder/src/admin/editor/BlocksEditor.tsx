@@ -1592,9 +1592,11 @@ function editorStrip(
 
 /**
  * The page whose own conditions read it, on a page that is not a template:
- * the saved one being edited, read as a visitor reads it. None on a template,
- * whose conditions read the entry it is previewed with, nor on a component or
- * a Layout, which has no entry.
+ * the entry of a collection being edited, read as a visitor reads it. None on
+ * a template, whose conditions read the entry it is previewed with, on a
+ * component or a Layout, which has no entry, or on a Single, which is not an
+ * entry of a collection. The editor opens only a saved entry, so one with no
+ * id is never asked about.
  */
 function pageConditionsSourceOf(
   preview: ReturnType<typeof useTemplatePreviewState>,
@@ -1603,8 +1605,10 @@ function pageConditionsSourceOf(
   locale: string | undefined
 ): PageConditionsSource | undefined {
   if (preview !== undefined || kind !== "page") return undefined;
-  const saved = identity?.kind === "collection" ? identity : undefined;
-  return { collection: saved?.slug, id: saved?.documentId, locale };
+  if (identity?.kind !== "collection" || identity.documentId === undefined) {
+    return undefined;
+  }
+  return { collection: identity.slug, id: identity.documentId, locale };
 }
 
 /** The switch that applies a document's conditions, and what it did. */
@@ -1634,7 +1638,13 @@ function useAppliedConditionsSwitch(
   options: Omit<AppliedConditionsOptions, "noun">
 ): AppliedConditionsSwitch {
   const [on, setOn] = useState(false);
-  const toggle = useCallback(() => setOn(was => !was), []);
+  // Each time the conditions are applied, counted, so a failed read of the
+  // page is asked again rather than kept.
+  const [attempt, setAttempt] = useState(0);
+  const toggle = useCallback(() => {
+    if (!on) setAttempt(count => count + 1);
+    setOn(!on);
+  }, [on]);
   const { limits } = options;
   const held = useMemo(
     () => conditionedBlocksIn(document, limits),
@@ -1644,7 +1654,8 @@ function useAppliedConditionsSwitch(
   // its conditions.
   const pageRead = usePageConditionsRead(
     pageSource,
-    on && held.readingEntry && pageSource !== undefined
+    on && held.readingEntry && pageSource !== undefined,
+    attempt
   );
   const noun =
     preview !== undefined
@@ -1678,16 +1689,16 @@ function useAppliedConditionsSwitch(
     () =>
       pageSource === undefined || !held.readingEntry
         ? undefined
-        : { on, toggle, available: pageRead.available, applied, noun },
-    [
-      pageSource,
-      held.readingEntry,
-      on,
-      toggle,
-      pageRead.available,
-      applied,
-      noun,
-    ]
+        : // The editor opens only a saved page, so there is always one to read.
+          {
+            on,
+            toggle,
+            available: true,
+            applied,
+            noun,
+            failed: pageRead.failed,
+          },
+    [pageSource, held.readingEntry, on, toggle, applied, noun, pageRead.failed]
   );
   return { template, page, applied, held: held.any, noun };
 }

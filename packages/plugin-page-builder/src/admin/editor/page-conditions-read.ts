@@ -13,10 +13,10 @@ import { useEffect, useState } from "react";
 
 import { readConditionsPreview } from "../conditions-preview-client";
 
-/** The page being edited: its collection and its saved id, if it has one. */
+/** The page being edited: its collection and its id. */
 export interface PageConditionsSource {
-  readonly collection: string | undefined;
-  readonly id: string | undefined;
+  readonly collection: string;
+  readonly id: string;
   readonly locale: string | undefined;
 }
 
@@ -29,8 +29,12 @@ export interface PageConditionsRead {
   readonly previewed: PreviewedEntry | undefined;
   /** What one of the page's collection's entries is called, lower case. */
   readonly noun: string;
-  /** Whether there is a saved page to read at all. */
-  readonly available: boolean;
+  /**
+   * Whether this attempt's read failed (a dropped connection, an expired
+   * session): the switch says so, and applying the conditions again asks
+   * again, since a failure is never kept as an answer.
+   */
+  readonly failed: boolean;
 }
 
 /** The read's answer for one page in one language. */
@@ -42,22 +46,29 @@ interface Answer {
 
 /**
  * What a visitor reads of the page, once `wanted` (the author applies the
- * conditions). A page never saved has nothing to read, and says so through
- * `available`. Only a visitor's values are ever read: the route answers the
+ * conditions). Only a visitor's values are ever read: the route answers the
  * page's published values and public fields, nothing the editor alone reads.
  */
 export function usePageConditionsRead(
   source: PageConditionsSource | undefined,
-  wanted: boolean
+  wanted: boolean,
+  /** How many times the author has applied the conditions, so each asks anew after a failure. */
+  attempt: number
 ): PageConditionsRead {
   const collection = source?.collection;
   const id = source?.id;
   const locale = source?.locale;
-  const available = collection !== undefined && id !== undefined;
-  const key = available ? `${collection}\0${id}\0${locale ?? ""}` : "";
+  const key =
+    source === undefined
+      ? ""
+      : `${source.collection}\0${source.id}\0${locale ?? ""}`;
   const [answer, setAnswer] = useState<Answer | undefined>(undefined);
+  // The attempt that failed, for this page and language; never an answer.
+  const [failure, setFailure] = useState<string | undefined>(undefined);
+  const tried = `${key}#${String(attempt)}`;
   useEffect(() => {
-    if (!wanted || !available || answer?.key === key) return;
+    if (!wanted || collection === undefined || id === undefined) return;
+    if (answer?.key === key || failure === tried) return;
     let live = true;
     readConditionsPreview({
       collection,
@@ -82,22 +93,17 @@ export function usePageConditionsRead(
         });
       },
       () => {
-        if (!live) return;
-        setAnswer({
-          key,
-          noun: "page",
-          previewed: { kind: "none", reason: "unavailable" },
-        });
+        if (live) setFailure(tried);
       }
     );
     return () => {
       live = false;
     };
-  }, [wanted, available, key, answer?.key, collection, id, locale]);
+  }, [wanted, key, tried, answer?.key, failure, collection, id, locale]);
   const current = answer?.key === key ? answer : undefined;
   return {
     previewed: current?.previewed,
     noun: current?.noun ?? "page",
-    available,
+    failed: wanted && current === undefined && failure === tried,
   };
 }

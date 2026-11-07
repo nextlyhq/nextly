@@ -13,8 +13,8 @@
  *
  * Only one the editor may open: an entry of a collection that stores a blocks
  * field at its top level (the page builder's pages, and any collection whose
- * entries are built with blocks), which the caller can read through the
- * editor reader, as the editor itself reads it. Anything else (a collection
+ * entries are built with blocks), which the caller can read as the editor
+ * reads it, every status, judged by core as the caller, by its id alone. Anything else (a collection
  * without a blocks field, one that does not exist, an entry the caller may
  * not read or that does not exist) gets the same forbidden answer, so the
  * answer never says which.
@@ -42,6 +42,7 @@ import {
   type ConditionsPreviewResponse,
 } from "./conditions-preview-contract";
 import { ENTRIES_LOCALE_MAX } from "./entries-contract";
+import { findAsCaller } from "./entry-reads";
 import type {
   CollectionRecordRead,
   TemplateGuardSetup,
@@ -69,12 +70,14 @@ const Body = z
 
 /** What the read reads with, injected so it is tested without a server. */
 export interface ConditionsPreviewReads
-  extends Pick<
-    PreviewEntryReads,
-    "editorEntry" | "publicEntry" | "publicFields"
-  > {
+  extends Pick<PreviewEntryReads, "publicEntry" | "publicFields"> {
   /** The collection's registry record, or `null` for none. */
   readonly readCollection: CollectionRecordRead;
+  /**
+   * Whether the caller reads the entry, as the editor reads it: every status,
+   * judged by core as the caller, reading its id and nothing else.
+   */
+  mayOpen(request: ConditionsPreviewRequest): Promise<boolean>;
 }
 
 /** The route's name in the log, beside the collection a refusal names. */
@@ -85,8 +88,8 @@ const ROUTE = "conditions preview entry";
  * one forbidden answer.
  *
  * The page must be one the editor opens, checked first: its collection holds
- * a top-level blocks field, and the caller reads the entry through the editor
- * reader. Only then is anything read as a visitor.
+ * a top-level blocks field, and the caller reads the entry. Only then is
+ * anything read as a visitor.
  */
 export async function readConditionsPreview(
   request: ConditionsPreviewRequest,
@@ -101,14 +104,14 @@ export async function readConditionsPreview(
   ) {
     throw previewRefusal(ROUTE, collection);
   }
-  let opened: Record<string, unknown> | null;
+  let opened: boolean;
   try {
-    opened = await reads.editorEntry(request);
+    opened = await reads.mayOpen(request);
   } catch (error) {
     if (missedOrRefused(error)) throw previewRefusal(ROUTE, collection);
     throw error;
   }
-  if (opened === null) throw previewRefusal(ROUTE, collection);
+  if (!opened) throw previewRefusal(ROUTE, collection);
   // Only now, with the page shown to be the caller's to open: read as a
   // visitor reads it.
   const { publicValues, fields } = await visitorView(request, reads);
@@ -144,7 +147,20 @@ export function conditionsPreviewEntryRoute(setup: {
       return respondDoc(
         await readConditionsPreview(body, {
           readCollection: slug => bound.collections.readCollection(slug),
-          editorEntry: request => bound.editorEntry(request),
+          // The id alone, as the caller: whether they may open the page is
+          // all this asks, so no row, draft or blocks document is loaded.
+          mayOpen: async request =>
+            (
+              await findAsCaller(ctx, {
+                collection: request.collection,
+                where: { id: { equals: request.id } },
+                select: { id: true },
+                limit: 1,
+                ...(request.locale === undefined
+                  ? {}
+                  : { locale: request.locale }),
+              })
+            ).items.length > 0,
           publicEntry: request => bound.publicEntry(request),
           publicFields: (collection, locale) =>
             bound.publicFields(collection, locale),

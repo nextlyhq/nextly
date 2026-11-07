@@ -55,10 +55,7 @@ function reads(
 ): ConditionsPreviewReads {
   return {
     readCollection: async slug => RECORDS[slug] ?? null,
-    editorEntry: async request =>
-      request.id === "p1"
-        ? { ...PUBLISHED, audience: "members", _isWorkingDraft: true }
-        : null,
+    mayOpen: async request => request.id === "p1",
     publicEntry: async request => (request.id === "p1" ? PUBLISHED : null),
     publicFields: async () => [{ name: "audience", type: "text" }],
     ...overrides,
@@ -82,7 +79,7 @@ async function refusalOf(promise: Promise<unknown>): Promise<string> {
 }
 
 describe("what a visitor reads of a page being edited", () => {
-  it("answers the page's published values and public fields, never the editor's draft", async () => {
+  it("answers the page's published values and public fields", async () => {
     const answer = await readConditionsPreview(
       { collection: "pages", id: "p1" },
       reads()
@@ -93,8 +90,6 @@ describe("what a visitor reads of a page being edited", () => {
       publicValues: PUBLISHED,
       fields: [{ name: "audience", type: "text" }],
     });
-    // The working draft's value is the editor's, and stays on the server.
-    expect(JSON.stringify(answer)).not.toContain("members");
   });
 
   it("answers no values for a page a visitor reads none of", async () => {
@@ -119,7 +114,7 @@ describe("what a visitor reads of a page being edited", () => {
       readConditionsPreview(
         { collection: "pages", id: "p1" },
         reads({
-          editorEntry: async () => {
+          mayOpen: async () => {
             throw NextlyError.forbidden({ logContext: { why: "test" } });
           },
         })
@@ -157,9 +152,9 @@ describe("the route as bound", () => {
       audience: "members",
       status: "draft",
     };
-    // The editor reads the draft by id; a visitor's read, published only,
-    // finds no row, as core answers it for a page never published.
-    nextly.findByID.mockResolvedValue(draft);
+    // The caller reads the draft (every status, as the editor reads); a
+    // visitor's read, published only, finds no row, as core answers it for a
+    // page never published.
     nextly.find.mockImplementation(async (args: Record<string, unknown>) =>
       args.status === "published"
         ? { items: [], meta: { total: 0 } }
@@ -199,5 +194,18 @@ describe("the route as bound", () => {
     for (const [args] of visitorReads) {
       expect(args).toMatchObject({ overrideAccess: false, user: undefined });
     }
+    // Whether the caller may open it is asked of the id alone: no row,
+    // draft or blocks document is loaded for it.
+    const openChecks = nextly.find.mock.calls.filter(
+      ([args]) => (args as Record<string, unknown>).status === "all"
+    );
+    expect(openChecks).toHaveLength(1);
+    expect(openChecks[0]?.[0]).toMatchObject({
+      collection: "pages",
+      select: { id: true },
+      limit: 1,
+      overrideAccess: false,
+    });
+    expect(nextly.findByID).not.toHaveBeenCalled();
   });
 });

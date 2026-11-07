@@ -31,6 +31,8 @@ export interface TemplateConditions {
   readonly applied: AppliedConditions | undefined;
   /** What the entry is called in words, lower case: "post". */
   readonly noun: string;
+  /** Whether what is checked could not be read, so nothing is applied. */
+  readonly failed?: boolean;
 }
 
 /** The switch itself: a button announced as a switch, pressed or not. */
@@ -101,27 +103,30 @@ export function TemplateConditionsPart({
   );
 }
 
+/** What the switch says when what it checks against could not be read. */
+const FAILED_WORDS =
+  "Couldn’t check this page. Turn the switch off and on to try again.";
+
 /**
  * The switch and what the conditions did, as both strips hold them: a
  * template's after its entry, a page's alone.
  */
 function ConditionsControls({
   conditions,
-  describedBy,
 }: {
   readonly conditions: TemplateConditions;
-  readonly describedBy?: string;
 }): React.JSX.Element {
-  const said = conditions.on
-    ? conditionsCountWords(conditions.applied, conditions.noun)
-    : "";
+  const said = !conditions.on
+    ? ""
+    : conditions.failed === true
+      ? FAILED_WORDS
+      : conditionsCountWords(conditions.applied, conditions.noun);
   return (
     <>
       <ConditionsSwitch
         on={conditions.on && conditions.available}
         disabled={!conditions.available}
         onToggle={conditions.toggle}
-        {...(describedBy === undefined ? {} : { describedBy })}
       />
       <span className="nx-preview-strip__count" role="status" title={said}>
         {said}
@@ -130,32 +135,19 @@ function ConditionsControls({
   );
 }
 
-/** Why the switch can't apply a page's conditions before it is saved. */
-const UNSAVED_WHY =
-  "Save the page first. Its conditions are checked against what visitors read of it.";
-
 /**
  * The strip a page gets while it holds a block whose conditions read the
  * page: the switch and what the conditions did, and no entry to name, since
- * the page is its own. Disabled, with why, until the page is saved.
+ * the page is its own.
  */
 export function PageConditionsStrip({
   conditions,
 }: {
   readonly conditions: TemplateConditions;
 }): React.JSX.Element {
-  const why = useId();
   return (
     <div className="nx-preview-strip">
-      <ConditionsControls
-        conditions={conditions}
-        {...(conditions.available ? {} : { describedBy: why })}
-      />
-      {conditions.available ? null : (
-        <span className="nx-preview-strip__why" id={why} title={UNSAVED_WHY}>
-          {UNSAVED_WHY}
-        </span>
-      )}
+      <ConditionsControls conditions={conditions} />
     </div>
   );
 }

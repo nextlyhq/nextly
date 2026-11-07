@@ -130,6 +130,17 @@ describe("the strip a component or a Layout gets", () => {
 });
 
 describe("the strip a page gets", () => {
+  it("says when the page couldn't be read, and how to try again", () => {
+    render(
+      <PageConditionsStrip
+        conditions={conditions({ on: true, failed: true, noun: "page" })}
+      />
+    );
+    expect(screen.getByRole("status").textContent).toBe(
+      "Couldn’t check this page. Turn the switch off and on to try again."
+    );
+  });
+
   it("holds the switch and its count, and no entry to name", () => {
     render(
       <PageConditionsStrip
@@ -148,21 +159,5 @@ describe("the strip a page gets", () => {
     // The page is its own: no chip naming an entry, nothing to choose.
     expect(screen.queryByText("Previewing")).toBeNull();
     expect(screen.queryByRole("button", { name: /Previewing/ })).toBeNull();
-  });
-
-  it("is disabled until the page is saved, described by why", () => {
-    render(
-      <PageConditionsStrip
-        conditions={conditions({ available: false, noun: "page" })}
-      />
-    );
-    const button = screen.getByRole("switch", { name: "Apply conditions" });
-    expect(button.hasAttribute("disabled")).toBe(true);
-    const why = document.getElementById(
-      button.getAttribute("aria-describedby") ?? ""
-    );
-    expect(why?.textContent).toBe(
-      "Save the page first. Its conditions are checked against what visitors read of it."
-    );
   });
 });
