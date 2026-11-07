@@ -107,4 +107,21 @@ describe("a draft over a stored row", () => {
       drafted: false,
     });
   });
+
+  it("goes with a change made elsewhere after a write that changed nothing", () => {
+    const { result, rerender } = rowsOver(["first", "second"]);
+    act(() => {
+      result.current.change(result.current.rows[1]!, "second, edited", false);
+    });
+    // Row 1 written back to what it held: the stored list doesn't change.
+    act(() => {
+      result.current.change(result.current.rows[0]!, "first", true);
+    });
+    rerender({ stored: ["first", "second"] });
+    // CONTROL: the other draft is still there.
+    expect(result.current.rows[1]?.drafted).toBe(true);
+    // An undo elsewhere is not read as that spent write.
+    rerender({ stored: ["first, undone", "second"] });
+    expect(result.current.rows[1]?.drafted).toBe(false);
+  });
 });

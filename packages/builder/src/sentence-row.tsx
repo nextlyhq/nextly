@@ -276,12 +276,16 @@ export function useSentenceRows<Stored, Draft>(
     ReadonlyArray<{ key: string; draft: Draft }>
   >([]);
   const [openKey, setOpenKey] = React.useState<string | null>(null);
-  const lastEdit = React.useRef<RowEdit | undefined>(undefined);
+  // The edit these rows last asked for, with the stored list it was asked
+  // over, so it is read only for the change it makes.
+  const lastEdit = React.useRef<
+    { readonly edit: RowEdit; readonly over: string } | undefined
+  >(undefined);
   const storedText = JSON.stringify(stored);
   const current =
     overStored.basis === storedText
       ? overStored.drafts
-      : draftsAfter(overStored.drafts, lastEdit.current);
+      : draftsAfter(overStored.drafts, lastEdit.current?.edit);
   // Settled once the change is drawn, so the edit is read for it alone.
   React.useEffect(() => {
     setOverStored(state =>
@@ -289,11 +293,16 @@ export function useSentenceRows<Stored, Draft>(
         ? state
         : {
             basis: storedText,
-            drafts: draftsAfter(state.drafts, lastEdit.current),
+            drafts: draftsAfter(state.drafts, lastEdit.current?.edit),
           }
     );
     lastEdit.current = undefined;
   }, [storedText]);
+  // An edit that changed nothing, a row written back to what it held, is
+  // spent once drawn, so a later change made elsewhere isn't read as it.
+  React.useEffect(() => {
+    if (lastEdit.current?.over === storedText) lastEdit.current = undefined;
+  });
   const setDraft = (index: number, draft: Draft | undefined): void => {
     setOverStored(() => {
       const drafts = new Map(current);
@@ -335,7 +344,7 @@ export function useSentenceRows<Stored, Draft>(
       const index = row.index ?? stored.length;
       if (completed) {
         // The caller writes this row next; every other draft stays put.
-        lastEdit.current = { kind: "write", index };
+        lastEdit.current = { edit: { kind: "write", index }, over: storedText };
         if (row.index !== undefined) setDraft(row.index, undefined);
         if (row.index === undefined) {
           setAdded(current => current.filter(each => each.key !== row.key));
@@ -360,7 +369,10 @@ export function useSentenceRows<Stored, Draft>(
         setAdded(current => current.filter(each => each.key !== row.key));
       } else {
         // The caller removes this row next; the rows after it move up.
-        lastEdit.current = { kind: "remove", index: row.index };
+        lastEdit.current = {
+          edit: { kind: "remove", index: row.index },
+          over: storedText,
+        };
         setDraft(row.index, undefined);
       }
       return row.index;
