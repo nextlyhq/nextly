@@ -99,6 +99,35 @@ describe("a canvas list's read", () => {
     }
   });
 
+  it("refuses a named run whose node id carries a line break or control character", async () => {
+    const ctx = { caller: null } as unknown as PluginRouteContext;
+    const request = (node: string) =>
+      new Request(`http://nextly.test/x${LIST_ENTRIES_ROUTE_PATH}`, {
+        method: "POST",
+        body: JSON.stringify({
+          named: { name: "events.upcoming", limit: 6, offset: 0, node },
+        }),
+      });
+    // The id is written into the server log when the run fails, so a forged
+    // second log line or a terminal escape never reaches it.
+    for (const node of ["list\nforged line", "list\u001b[31m", "list\u2028"]) {
+      await expect(
+        listEntriesRoute(() => undefined).handler(request(node), ctx)
+      ).rejects.toSatisfy(error =>
+        NextlyError.isCode(error, "VALIDATION_ERROR")
+      );
+    }
+    // An ordinary id passes the boundary: whatever happens past it (there is
+    // no runtime here), the body is not what is refused.
+    const ordinary = await listEntriesRoute(() => undefined)
+      .handler(request("list-1"), ctx)
+      .then(
+        () => undefined,
+        (error: unknown) => error
+      );
+    expect(NextlyError.isCode(ordinary, "VALIDATION_ERROR")).toBe(false);
+  });
+
   it("takes any sort a list may store, and nothing past its bounds", async () => {
     const ctx = { caller: null } as unknown as PluginRouteContext;
     const request = (sort: unknown) =>

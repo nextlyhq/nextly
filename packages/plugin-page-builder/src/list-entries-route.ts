@@ -195,7 +195,15 @@ const ListEntriesNamedBody = z
         limit: z.number().int().min(LIST_LIMIT_MIN).max(LIST_LIMIT_MAX),
         offset: z.number().int().min(0),
         locale: z.string().max(64).optional(),
-        node: z.string().max(200).optional(),
+        // The node's id is written into the server log when a run fails, so
+        // it may not carry a line break or a terminal control character.
+        node: z
+          .string()
+          .max(200)
+          .regex(/^[^\p{Cc}\p{Zl}\p{Zp}]*$/u, {
+            message: "A node's id has no control characters.",
+          })
+          .optional(),
         allowance: z.number().int().min(0).max(DEFAULT_MAX_QUERIES).optional(),
       })
       .strict(),

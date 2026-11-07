@@ -19,6 +19,7 @@ import {
 import {
   createQueryBudget,
   createStandaloneContext,
+  DEFAULT_MAX_QUERIES,
 } from "@nextlyhq/blocks-react";
 import { readNamedList } from "@nextlyhq/blocks-react/blocks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -149,6 +150,8 @@ describe("the canvas's runs of a named query", () => {
         offset: 0,
         locale: "en",
         node: "list",
+        // A fresh budget's room, so the server caps the run to it.
+        allowance: DEFAULT_MAX_QUERIES,
       },
     });
     expect(outcome.items).toEqual([{ id: "e1" }]);
