@@ -46,6 +46,7 @@ import { quote } from "./quote";
 import { richText } from "./rich-text";
 import { section } from "./section";
 import { spacer } from "./spacer";
+import { tableOfContents } from "./table-of-contents";
 
 // `ACCORDION_BLOCK` / `ACCORDION_ITEM_BLOCK` are deliberately NOT re-exported,
 // for the reason recorded below for the columns pair: they exist so the two
@@ -104,6 +105,12 @@ export { richText, type RichTextBlockProps } from "./rich-text";
 export type { RichTextValue } from "@nextlyhq/blocks-engine";
 export { section } from "./section";
 export { spacer, type SpacerProps } from "./spacer";
+export {
+  tableOfContents,
+  TABLE_OF_CONTENTS_DEPTHS,
+  type TableOfContentsDepth,
+  type TableOfContentsProps,
+} from "./table-of-contents";
 export {
   CONTAINER_TAGS,
   CONTENT_WIDTH_CLASS,
@@ -174,6 +181,7 @@ type CoreBlockList = [
   typeof heading,
   typeof paragraph,
   typeof richText,
+  typeof tableOfContents,
   typeof list,
   typeof image,
   typeof button,
@@ -209,6 +217,7 @@ export const coreBlocks: CoreBlockList[number][] = [
   heading,
   paragraph,
   richText,
+  tableOfContents,
   list,
   image,
   button,
