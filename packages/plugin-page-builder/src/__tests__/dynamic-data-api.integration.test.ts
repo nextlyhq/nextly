@@ -449,6 +449,12 @@ describe.each(getConfiguredTestDialects())(
       expect(findIn(stored, node => node.id === ids.item)?.bindings).toEqual({
         text: { $bind: "blurb", source: "item" },
       });
+      // Stored as a binding with its fallback, not as the fallback's text:
+      // a visitor drawn "Ask at the desk" proves nothing on its own, since a
+      // prop written as that literal would draw the same words.
+      expect(findIn(stored, node => node.id === ids.note)?.bindings).toEqual({
+        text: { $bind: "secret", fallback: NOTE_FALLBACK },
+      });
       expect(
         findIn(stored, node => node.id === ids.banner)?.visibility
       ).toEqual({
