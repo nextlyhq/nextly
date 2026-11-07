@@ -114,13 +114,54 @@ function useRoutingAnswer(): RoutingAnswer {
     // nothing about this route.
     staleTime: 0,
   });
-  if (read.data !== undefined && read.data !== null) {
-    return {
-      state: "answered",
-      mayManageRouting: read.data.mayManageRouting === true,
-    };
+  return routingAnswerOf(read);
+}
+
+/**
+ * The routing answer from the read: only a FRESH one. A read refreshing on
+ * mount keeps the cached answer while it runs, and after it fails, so a
+ * permission taken away since would otherwise keep the address editable
+ * until the refresh came back, or for good if it never did.
+ */
+export function routingAnswerOf(read: {
+  readonly data: TemplateRoutingAccess | null | undefined;
+  readonly error: Error | null;
+  readonly fetching: boolean;
+}): RoutingAnswer {
+  if (read.error !== null) return { state: "failed" };
+  if (read.fetching || read.data === undefined || read.data === null) {
+    return { state: "pending" };
   }
-  return read.error === null ? { state: "pending" } : { state: "failed" };
+  return {
+    state: "answered",
+    mayManageRouting: read.data.mayManageRouting === true,
+  };
+}
+
+/** The field's label and placeholder, as its declaration gives them. */
+function declaredText(declaration: TemplateAddressFieldProps["field"]): {
+  label: string;
+  placeholder: string | undefined;
+} {
+  const placeholder = declaration?.admin?.placeholder;
+  return {
+    label:
+      typeof declaration?.label === "string" ? declaration.label : "Address",
+    placeholder: typeof placeholder === "string" ? placeholder : undefined,
+  };
+}
+
+/**
+ * What the input shows when empty: the example where it may be typed in,
+ * that there is none where it may not.
+ */
+function emptyText(
+  editable: boolean,
+  value: string,
+  placeholder: string | undefined
+): string | undefined {
+  if (editable) return placeholder;
+  return value === "" ? "No address set" : undefined;
 }
 
 export function TemplateAddressField<
@@ -137,12 +178,7 @@ export function TemplateAddressField<
   const view = addressFieldView({ readOnly, disabled }, answer);
   const answerPending = answer.state === "pending";
   const noteId = useId();
-  const label =
-    typeof declaration?.label === "string" ? declaration.label : "Address";
-  const placeholder =
-    typeof declaration?.admin?.placeholder === "string"
-      ? declaration.admin.placeholder
-      : undefined;
+  const { label, placeholder } = declaredText(declaration);
   const value = typeof field.value === "string" ? field.value : "";
   return (
     <div className="flex flex-col gap-1.5">
@@ -160,13 +196,7 @@ export function TemplateAddressField<
         onBlur={field.onBlur}
         readOnly={!view.editable}
         disabled={disabled}
-        placeholder={
-          view.editable
-            ? placeholder
-            : value === ""
-              ? "No address set"
-              : undefined
-        }
+        placeholder={emptyText(view.editable, value, placeholder)}
         spellCheck={false}
         autoComplete="off"
         // A value nobody here may change reads as settled, not as an

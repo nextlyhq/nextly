@@ -32,7 +32,11 @@ function setup(
   return {
     templatesCollection: "templates",
     ownCollections: () => new Set(["pages", "templates"]),
-    readCollection: async () => null,
+    // Every collection named here may have a template.
+    readCollection: async slug => ({
+      slug,
+      fields: [{ name: "slug", type: "text" }],
+    }),
     holderOf: async () => null,
     declaredAddresses: new Map([["posts", "/blog"]]),
     lockEntry: async () => undefined,
@@ -104,6 +108,12 @@ describe("a stored address", () => {
 
   it("is no clash with the collection's own declared address", () => {
     expect(storedAddressProblem("/blog", "posts", judge)).toBeNull();
+  });
+
+  it("refuses a different address for a collection given its own in code", () => {
+    expect(storedAddressProblem("/posts", "posts", judge)).toBe(
+      'The collection "posts" is given its address in code (/blog): change it there.'
+    );
   });
 
   it("accepts an address of its own", () => {
@@ -241,6 +251,19 @@ describe("the address guard", () => {
       context: { [JUDGEMENT_CONTEXT]: true },
     });
     expect(addressHolderOf).not.toHaveBeenCalled();
+  });
+});
+
+describe("an address for a collection that may not have a template", () => {
+  it("is refused, in the words a new template's collection is refused in", async () => {
+    const words = await refusalOf(() =>
+      guardAddress(setup({ readCollection: async () => null }), {
+        operation: "update",
+        data: { address: "/events" },
+        originalData: { id: "t1", collection: "events", address: null },
+      })
+    );
+    expect(words).toBe('There is no collection "events" to give a template.');
   });
 });
 

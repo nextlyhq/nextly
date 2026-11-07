@@ -747,62 +747,13 @@ async function setTemplateAddress(
   );
   // An emptied address is none, as the guard reads one.
   const address = action.address === "" ? null : action.address;
-  // With its working draft, which a caller who may update templates is
-  // shown: the read says whether the template holds unpublished changes,
-  // which the write below would otherwise put live.
-  const stored = await readOrNull(async () =>
-    (await getCachedNextly()).findByID({
-      collection: templates,
-      id: action.id,
-      ...(await readingAsUser(ctx)),
-      status: "all",
-      draft: true,
-      depth: 0,
-    })
-  );
-  const row = recordOf(stored);
-  if (row === null) {
-    throw NextlyError.notFound({
-      logContext: { reason: "template-action-missing-template" },
-    });
-  }
+  const row = await templateWithDraft(ctx, templates, action.id);
   const collection = row[TEMPLATE_COLLECTION_FIELD];
   const asked: TemplateSummary = {
     ...summaryOf(row, { title: "", collection: "", status: "draft" }),
     address,
   };
-
-  // The guard's own questions, in its words, asked up front so an apply
-  // refuses before writing and a dry run answers them as refusals.
-  const refusals: string[] = [];
-  if (address !== null) {
-    const notHere = addressHolderProblem(row);
-    const problem =
-      notHere ??
-      storedAddressProblem(address, collection, {
-        declared: guard.declaredAddresses,
-      });
-    const unserved =
-      problem === null
-        ? await addressCollectionProblem(guard, collection)
-        : null;
-    if (problem !== null || unserved !== null) {
-      refusals.push(problem ?? unserved ?? "");
-    } else {
-      const holder = await guard.addressHolderOf(address);
-      if (holder !== null && holder.id !== idOf(row)) {
-        refusals.push(heldAddressMessage(address, holder));
-      }
-    }
-  }
-  const published = row.status === "published";
-  // A published template's address goes live by publishing the template,
-  // which would also put its unpublished design changes live unseen.
-  if (published && row._isWorkingDraft === true) {
-    refusals.push(
-      "This template has unpublished changes. Publish or discard them first, so changing its address puts nothing else live."
-    );
-  }
+  const refusals = await addressRefusals(guard, row, address);
   if (refusals.length > 0) {
     if (!dryRun) throw addressRefusal(refusals[0] ?? "");
     return dryRunAnswer("set-template-address", asked, refusals, by);
@@ -815,54 +766,14 @@ async function setTemplateAddress(
   const data = withVersionFrom(
     {
       [TEMPLATE_ADDRESS_FIELD]: address,
-      ...(published ? { status: "published" } : {}),
+      ...(row.status === "published" ? { status: "published" } : {}),
     },
     documentVersionOf(row)
   );
-  const collections = ctx.services.collections;
   if (dryRun) {
-    const judged = await judgeInTransaction(
-      run => collections.withTransaction(run),
-      (tx: PluginCollectionTransaction) =>
-        collections.updateEntryInTransaction(tx, templates, action.id, data, {
-          ...asCaller(ctx),
-          context: { [JUDGEMENT_CONTEXT]: true },
-        })
-    );
-    return judged.refusal === null
-      ? dryRunAnswer(
-          "set-template-address",
-          summaryOf(judged.written.item, asked),
-          [],
-          by
-        )
-      : dryRunAnswer(
-          "set-template-address",
-          asked,
-          judged.refusal.messages,
-          by
-        );
+    return dryRunAddress(ctx, templates, action.id, data, asked, by);
   }
-  let written: { item: unknown };
-  try {
-    written = await collections.updateEntry(
-      templates,
-      action.id,
-      data,
-      asCaller(ctx)
-    );
-  } catch (error) {
-    // Two templates given one address at once both pass the read above and
-    // meet at the unique index, which names nobody. The winner has
-    // committed by then, so it is read and named.
-    if (address === null || !NextlyError.isCode(error, "DUPLICATE")) {
-      throw error;
-    }
-    const winner = await guard.addressHolderOf(address);
-    if (winner === null) throw error;
-    throw addressRefusal(heldAddressMessage(address, winner));
-  }
-  const template = summaryOf(written.item, asked);
+  const written = await writeAddress(ctx, guard, action.id, data, address);
   return {
     message:
       address === null
@@ -871,7 +782,7 @@ async function setTemplateAddress(
     item: {
       dryRun: false,
       kind: "set-template-address",
-      template,
+      template: summaryOf(written, asked),
       refusals: [],
       by,
       waiting:
@@ -880,6 +791,141 @@ async function setTemplateAddress(
           : 0,
     },
   };
+}
+
+/**
+ * Template `id` as the caller reads it, with its working draft, which a
+ * caller who may update templates is shown: the read says whether the
+ * template holds unpublished changes, which writing its address would
+ * otherwise put live.
+ */
+async function templateWithDraft(
+  ctx: TemplateActionsContext,
+  templates: string,
+  id: string
+): Promise<Record<string, unknown>> {
+  const stored = await readOrNull(async () =>
+    (await getCachedNextly()).findByID({
+      collection: templates,
+      id,
+      ...(await readingAsUser(ctx)),
+      status: "all",
+      draft: true,
+      depth: 0,
+    })
+  );
+  const row = recordOf(stored);
+  if (row === null) {
+    throw NextlyError.notFound({
+      logContext: { reason: "template-action-missing-template" },
+    });
+  }
+  return row;
+}
+
+/**
+ * Why `row` cannot be given `address`, in the guard's own words, asked up
+ * front so an apply refuses before writing and a dry run answers them as
+ * refusals; empty when nothing refuses it.
+ */
+async function addressRefusals(
+  guard: TemplateGuardSetup,
+  row: Record<string, unknown>,
+  address: string | null
+): Promise<string[]> {
+  const refusals: string[] = [];
+  if (address !== null) {
+    const problem = await addressProblem(guard, row, address);
+    if (problem !== null) refusals.push(problem);
+  }
+  // A published template's address goes live by publishing the template,
+  // which would also put its unpublished design changes live unseen.
+  if (row.status === "published" && row._isWorkingDraft === true) {
+    refusals.push(
+      "This template has unpublished changes. Publish or discard them first, so changing its address puts nothing else live."
+    );
+  }
+  return refusals;
+}
+
+/** The first of the guard's refusals of `address` on `row`, or null. */
+async function addressProblem(
+  guard: TemplateGuardSetup,
+  row: Record<string, unknown>,
+  address: string
+): Promise<string | null> {
+  const collection = row[TEMPLATE_COLLECTION_FIELD];
+  const problem =
+    addressHolderProblem(row) ??
+    storedAddressProblem(address, collection, {
+      declared: guard.declaredAddresses,
+    }) ??
+    (await addressCollectionProblem(guard, collection));
+  if (problem !== null) return problem;
+  const holder = await guard.addressHolderOf(address);
+  return holder !== null && holder.id !== idOf(row)
+    ? heldAddressMessage(address, holder)
+    : null;
+}
+
+/** A dry run of the address's write: made as the caller, then rolled back. */
+async function dryRunAddress(
+  ctx: TemplateActionsContext,
+  templates: string,
+  id: string,
+  data: Record<string, unknown>,
+  asked: TemplateSummary,
+  by: TemplateActionResult["by"]
+): Promise<ActionAnswer<TemplateActionResult>> {
+  const collections = ctx.services.collections;
+  const judged = await judgeInTransaction(
+    run => collections.withTransaction(run),
+    (tx: PluginCollectionTransaction) =>
+      collections.updateEntryInTransaction(tx, templates, id, data, {
+        ...asCaller(ctx),
+        context: { [JUDGEMENT_CONTEXT]: true },
+      })
+  );
+  return judged.refusal === null
+    ? dryRunAnswer(
+        "set-template-address",
+        summaryOf(judged.written.item, asked),
+        [],
+        by
+      )
+    : dryRunAnswer("set-template-address", asked, judged.refusal.messages, by);
+}
+
+/**
+ * Write the address as the caller, answering the template as stored. Two
+ * templates given one address at once both pass the reads before it and meet
+ * at the unique index, which names nobody; the winner has committed by then,
+ * so it is read and named.
+ */
+async function writeAddress(
+  ctx: TemplateActionsContext,
+  guard: TemplateGuardSetup,
+  id: string,
+  data: Record<string, unknown>,
+  address: string | null
+): Promise<unknown> {
+  try {
+    return (
+      await ctx.services.collections.updateEntry(
+        guard.templatesCollection,
+        id,
+        data,
+        asCaller(ctx)
+      )
+    ).item;
+  } catch (error) {
+    if (address === null || !NextlyError.isCode(error, "DUPLICATE")) {
+      throw error;
+    }
+    const winner = await guard.addressHolderOf(address);
+    if (winner === null) throw error;
+    throw addressRefusal(heldAddressMessage(address, winner));
+  }
 }
 
 /** A dry run's answer: the template as it would be stored, or why not. */

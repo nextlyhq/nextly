@@ -120,6 +120,14 @@ export function storedAddressProblem(
 ): string | null {
   const problem = templateAddressProblem(address);
   if (problem !== null) return problem;
+  // A collection given its address in code is served there whatever its
+  // template stores, so a different stored one would be shown and never
+  // used, until the day the declaration goes and it silently takes over.
+  const own =
+    typeof collection === "string" ? judge.declared.get(collection) : undefined;
+  if (own !== undefined && own !== address) {
+    return `The collection "${String(collection)}" is given its address in code (${own}): change it there.`;
+  }
   for (const [declaredFor, declared] of judge.declared) {
     // A collection promoted into code that keeps its own stored address is
     // served at the declared one; its stored one is no rival to it.

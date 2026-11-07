@@ -86,7 +86,10 @@ function setupWith(guard: Partial<TemplateGuardSetup> = {}) {
     guard: () => ({
       templatesCollection: "templates",
       ownCollections: () => new Set(["templates"]),
-      readCollection: async () => null,
+      readCollection: async slug => ({
+        slug,
+        fields: [{ name: "slug", type: "text" }],
+      }),
       holderOf: async () => null,
       declaredAddresses: new Map([["posts", "/blog"]]),
       lockEntry: async () => undefined,

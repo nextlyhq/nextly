@@ -2622,6 +2622,14 @@ export const pageBuilder = (
             {
               where: { collection: { equals: collection } },
               pagination: { limit: 1 },
+              // Asked on every save of a templated collection: the routing
+              // columns alone, never the template's design.
+              select: {
+                id: true,
+                collection: true,
+                status: true,
+                [TEMPLATE_ADDRESS_FIELD]: true,
+              },
               depth: 0,
             }
           );

@@ -414,15 +414,23 @@ export async function guardAddress(
 
 /**
  * Why `collection`'s entries cannot be served under an address, or null
- * when they can: a localized collection's entries have a slug and a state in
- * each language, which one address per collection cannot follow yet, as a
- * collection given an address in code is refused at start.
+ * when they can: one that may not have a template at all (no `slug` text
+ * field, kept out of the admin, gone, or the page builder's own), judged as a
+ * new template's collection is, and a localized one, whose entries have a
+ * slug and a state in each language, which one address per collection cannot
+ * follow yet, as a collection given an address in code is refused at start.
  */
 export async function addressCollectionProblem(
-  setup: Pick<TemplateGuardSetup, "readCollection">,
+  setup: Pick<TemplateGuardSetup, "readCollection" | "ownCollections">,
   collection: unknown
 ): Promise<string | null> {
   if (typeof collection !== "string") return null;
+  const problem = await templateCollectionProblem(
+    collection,
+    setup.readCollection,
+    setup.ownCollections()
+  );
+  if (problem !== null) return problem;
   const record = await setup.readCollection(collection);
   return record?.localized === true
     ? `The collection "${collection}" is localized, and a localized collection's entries cannot be served under a template address yet.`

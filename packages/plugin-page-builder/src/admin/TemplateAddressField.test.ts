@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { addressFieldView } from "./TemplateAddressField";
+import { addressFieldView, routingAnswerOf } from "./TemplateAddressField";
 
 describe("the template address control", () => {
   it("is editable for a caller holding the routing permission", () => {
@@ -50,5 +50,37 @@ describe("the template address control", () => {
         { state: "answered", mayManageRouting: true }
       ).editable
     ).toBe(false);
+  });
+});
+
+describe("the routing answer the control acts on", () => {
+  it("is only a fresh one: a cached yes being refreshed is pending", () => {
+    expect(
+      routingAnswerOf({
+        data: { mayManageRouting: true },
+        error: null,
+        fetching: true,
+      })
+    ).toEqual({ state: "pending" });
+  });
+
+  it("is a failure when the refresh failed, whatever was cached", () => {
+    expect(
+      routingAnswerOf({
+        data: { mayManageRouting: true },
+        error: new Error("offline"),
+        fetching: false,
+      })
+    ).toEqual({ state: "failed" });
+  });
+
+  it("is the server's answer once it has come back", () => {
+    expect(
+      routingAnswerOf({
+        data: { mayManageRouting: false },
+        error: null,
+        fetching: false,
+      })
+    ).toEqual({ state: "answered", mayManageRouting: false });
   });
 });
