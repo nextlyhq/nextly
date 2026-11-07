@@ -8,7 +8,9 @@
  * read as the caller, and a part they may not read is answered unreadable
  * rather than refusing the rest; and that another plugin's route reaching the
  * service runs the route's own checks as its caller, against this plugin's
- * collections rather than its own.
+ * collections rather than its own. Beside them, that every kind the manifest
+ * lists is answered by its handler for a valid dry run, and that a templates
+ * collection a host renamed is advertised, and addressed, by its new name.
  *
  * @module __tests__/composition-manifest-api.integration.test
  */
@@ -18,14 +20,23 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { type BlockNode } from "@nextlyhq/blocks-engine";
-import { definePlugin, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  ENTRY_CONTENT_TYPE,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
+import {
+  definePlugin,
+  type PluginDefinition,
+  type PluginRouteContext,
+} from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
+import { defineCollection, text } from "nextly/config";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
@@ -45,12 +56,14 @@ import {
   type CompositionService,
 } from "../composition-service";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
+import { BLOCKS_TYPE } from "../fields/blocksField";
 import {
   readLayoutSettings,
   writeLayoutSettings,
 } from "../default-layout/store";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
+import type { TemplateActionResult } from "../templates/template-actions-contract";
 
 import { call, created, holding, unique, person } from "./transfer-harness";
 
@@ -64,9 +77,23 @@ const AUTHOR = [
 ];
 
 /**
- * May reach every action route the manifest lists past its declared right:
- * the definition route asks `update-components` before it reads the body,
- * so a caller without it would never have the action's kind judged.
+ * Collections a template draws: the stories have one and an entry with its
+ * own design, the notices a draft one with no Entry content block yet, and
+ * the events none, so each template action has something it may act on.
+ */
+const STORIES = "cm_stories";
+const NOTICES = "cm_notices";
+const EVENTS = "cm_events";
+
+/** The templates collection under the name a host gives it. */
+const RENAMED_TEMPLATES = "site-templates";
+
+/**
+ * May reach every action route the manifest lists past its declared right,
+ * and take every action on the fixtures the probe sets up: the definition
+ * route asks `update-components` before it reads the body, and the address
+ * action the routing permission, so a caller without them would never have
+ * the action judged.
  */
 const EVERY_ROUTE = [
   ...AUTHOR,
@@ -76,7 +103,26 @@ const EVERY_ROUTE = [
   "update-templates",
   "publish-templates",
   "delete-templates",
+  "manage-template-routing",
+  `read-${STORIES}`,
+  `read-${NOTICES}`,
+  `read-${EVENTS}`,
 ];
+
+/** A collection whose entries a template may draw: a `slug` and blocks. */
+function drawnCollection(slug: string, blocks: readonly string[]) {
+  return defineCollection({
+    slug,
+    status: true,
+    access: { read: () => true },
+    fields: [
+      text({ name: "title" }),
+      text({ name: "slug", unique: true }),
+      text({ name: "blurb" }),
+      ...blocks.map(name => ({ name, type: BLOCKS_TYPE }) as never),
+    ],
+  });
+}
 
 /** The path of each problem a schema refusal names; none for any other answer. */
 function refusedPaths(answer: {
@@ -173,10 +219,18 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
     });
 
-    async function boot(): Promise<TestNextly> {
+    /** An instance with `plugin` as its page builder, the default one unless given. */
+    async function boot(
+      plugin: PluginDefinition = pageBuilder()
+    ): Promise<TestNextly> {
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder(), composer],
+        plugins: [plugin, composer],
+        collections: [
+          drawnCollection(STORIES, ["body", "sidebar"]),
+          drawnCollection(NOTICES, ["body"]),
+          drawnCollection(EVENTS, ["body"]),
+        ],
         seedPublic: true,
       });
       // The instance's first user is its super admin, so it is made here and
@@ -390,59 +444,469 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    it("takes every kind it lists: a dry run of each is never refused as an unknown kind", async () => {
-      const t = await boot();
-      const { page, card } = await site(t);
-      const { cookie } = await holding(t, EVERY_ROUTE);
-      const manifest = await manifestOf(cookie);
-
-      // Each kind alone, with none of the fields it needs: what is judged is
-      // whether the route knows the kind, which its schema answers before
-      // anything else about the action, as a refusal at `action.kind`.
-      const dryRun = (
-        action: CompositionManifest["actions"][number],
-        kind: string
-      ) =>
-        call(
-          "POST",
-          cookie,
-          action.path.replace(":id", card).split("/").filter(Boolean),
-          {
-            body: {
-              ...(action.name === "pageAction"
-                ? { page: { collection: manifest.collections.pages, id: page } }
-                : {}),
-              action: { kind },
-              dryRun: true,
+    /**
+     * What the probe acts on, beside the site: a page placing the card and
+     * listing the stories; the stories' published template, with a bound
+     * heading and an Entry content block, and one story's own design; the
+     * notices' draft template, with no Entry content block; and a panel
+     * component exposing a field and a slot.
+     */
+    async function probed(t: TestNextly, card: string, cookie: string) {
+      const page = await created(t, "pages", {
+        title: "Probe",
+        slug: unique("probe"),
+        content: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            heading("lead", "Lead"),
+            {
+              id: "inst",
+              type: COMPONENT_INSTANCE_TYPE,
+              version: 1,
+              props: { componentId: card },
             },
-          }
-        );
+            {
+              id: "list",
+              type: "core/collection-loop",
+              version: 1,
+              props: { collection: STORIES, limit: 3 },
+              slots: { children: [heading("item", "Item")] },
+            },
+          ],
+        },
+      });
+      const story = (slug: string) =>
+        created(t, STORIES, {
+          title: slug,
+          slug,
+          blurb: `${slug} blurb`,
+          status: "published",
+        });
+      const first = await story("first");
+      const second = await story("second");
+      const stories = await created(t, TEMPLATES_SLUG, {
+        title: "Story page",
+        collection: STORIES,
+        status: "published",
+        content: {
+          formatVersion: 1,
+          kind: "template",
+          nodes: [
+            {
+              ...heading("bound", "Title"),
+              bindings: { text: { $bind: "title" } },
+            },
+            heading("free", "Free"),
+            {
+              id: "ec",
+              type: ENTRY_CONTENT_TYPE,
+              version: 1,
+              props: { field: "body" },
+            },
+          ],
+        },
+      });
+      const notices = await created(t, TEMPLATES_SLUG, {
+        title: "Notice page",
+        collection: NOTICES,
+        content: { formatVersion: 1, kind: "template", nodes: [] },
+      });
+      // The second story's own design, given the way a client gives one, so
+      // there is one to remove.
+      const given = await call("POST", cookie, ["templates", "actions"], {
+        body: {
+          action: {
+            kind: "give-entry-design",
+            collection: STORIES,
+            entry: second,
+          },
+        },
+      });
+      expect(given.status, JSON.stringify(given.body)).toBe(200);
+      const panel = await created(t, COMPONENTS_SLUG, {
+        title: "Panel",
+        slug: unique("panel"),
+        status: "published",
+        content: {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [
+            heading("p1", "Panel label"),
+            heading("p2", "Panel note"),
+            {
+              id: "b",
+              type: "core/box",
+              version: 1,
+              props: {},
+              slots: { children: [] },
+            },
+          ],
+          exposed: [
+            {
+              id: "label",
+              label: "Label",
+              nodeId: "p1",
+              propPath: "text",
+              type: "text",
+            },
+          ],
+          slots: { body: { label: "Body", nodeId: "b", slot: "children" } },
+        },
+      });
+      return { page, first, second, stories, notices, panel };
+    }
 
-      // The control, on every route: a kind it does not have is refused at
-      // `action.kind`, so a route that did not know a listed kind would be
-      // seen below rather than pass as some other refusal.
+    it("answers every kind it lists: a valid dry run of each is judged by its handler", async () => {
+      const t = await boot();
+      const { pattern, card, main } = await site(t);
+      const { cookie } = await holding(t, EVERY_ROUTE);
+      const { page, first, second, stories, notices, panel } = await probed(
+        t,
+        card,
+        cookie
+      );
+      const manifest = await manifestOf(cookie);
+      const templates = manifest.collections.templates ?? TEMPLATES_SLUG;
+      const onPage = { collection: manifest.collections.pages, id: page };
+      const onStories = { collection: templates, id: stories };
+      const onNotices = { collection: templates, id: notices };
+
+      /**
+       * One minimal valid dry run of each kind, against what the fixtures
+       * hold. Every one is expected to preview cleanly (a `200` dry run with
+       * no refusals): each names a target that exists and an action the site
+       * accepts, so anything else is the handler failing a kind a client was
+       * told it may send.
+       */
+      type Probe = {
+        readonly route: CompositionManifest["actions"][number]["name"];
+        readonly action: { readonly kind: string } & Record<string, unknown>;
+        /** The page a page action edits. */
+        readonly page?: { collection: string; id: string };
+        /** The component a definition action edits, the card unless named. */
+        readonly component?: string;
+      };
+      const probes: readonly Probe[] = [
+        {
+          route: "pageAction",
+          page: onPage,
+          action: { kind: "insert-pattern", patternId: pattern },
+        },
+        {
+          route: "pageAction",
+          page: onPage,
+          action: { kind: "place-component", componentId: card },
+        },
+        {
+          route: "pageAction",
+          page: onPage,
+          action: {
+            kind: "set-placement-values",
+            instanceId: "inst",
+            values: { title: "Mine" },
+          },
+        },
+        {
+          route: "pageAction",
+          page: onPage,
+          action: {
+            kind: "choose-variant",
+            instanceId: "inst",
+            variant: "v-dark",
+          },
+        },
+        {
+          route: "pageAction",
+          page: onPage,
+          action: {
+            kind: "set-list-query",
+            listId: "list",
+            query: { limit: 5 },
+          },
+        },
+        {
+          route: "pageAction",
+          page: onPage,
+          action: { kind: "set-conditions", nodeId: "lead", conditions: null },
+        },
+        {
+          route: "pageAction",
+          page: onStories,
+          action: {
+            kind: "bind-prop",
+            nodeId: "free",
+            prop: "text",
+            binding: { $bind: "blurb" },
+          },
+        },
+        {
+          route: "pageAction",
+          page: onStories,
+          action: {
+            kind: "unbind-prop",
+            nodeId: "bound",
+            prop: "text",
+            keep: { value: "Kept title" },
+          },
+        },
+        {
+          route: "pageAction",
+          page: onPage,
+          action: { kind: "set-layout", layout: main },
+        },
+        {
+          route: "pageAction",
+          page: onNotices,
+          action: { kind: "place-entry-content", field: "body" },
+        },
+        {
+          route: "pageAction",
+          page: onStories,
+          action: {
+            kind: "set-entry-content-field",
+            nodeId: "ec",
+            field: "sidebar",
+          },
+        },
+        {
+          route: "definitionAction",
+          component: panel,
+          action: {
+            kind: "expose",
+            label: "Note",
+            nodeId: "p2",
+            propPath: "text",
+          },
+        },
+        {
+          route: "definitionAction",
+          action: {
+            kind: "rename-exposure",
+            exposureId: "title",
+            label: "Heading",
+          },
+        },
+        {
+          route: "definitionAction",
+          component: panel,
+          action: {
+            kind: "retarget-exposure",
+            exposureId: "label",
+            nodeId: "p2",
+            propPath: "text",
+          },
+        },
+        {
+          route: "definitionAction",
+          action: { kind: "remove-exposure", exposureId: "title" },
+        },
+        {
+          route: "definitionAction",
+          component: panel,
+          action: { kind: "remove-exposed-slot", slotId: "body" },
+        },
+        {
+          route: "definitionAction",
+          action: { kind: "add-variant", label: "Night" },
+        },
+        {
+          route: "definitionAction",
+          action: {
+            kind: "rename-variant",
+            variantId: "v-dark",
+            label: "Night",
+          },
+        },
+        {
+          route: "definitionAction",
+          action: { kind: "delete-variant", variantId: "v-light" },
+        },
+        {
+          route: "definitionAction",
+          action: {
+            kind: "set-variant-value",
+            variantId: "v-dark",
+            exposureId: "title",
+            value: "Night title",
+          },
+        },
+        {
+          route: "definitionAction",
+          action: {
+            kind: "reset-variant-value",
+            variantId: "v-dark",
+            exposureId: "title",
+          },
+        },
+        {
+          route: "templateAction",
+          action: { kind: "create-template", collection: EVENTS },
+        },
+        {
+          route: "templateAction",
+          action: { kind: "publish-template", id: notices },
+        },
+        {
+          route: "templateAction",
+          action: {
+            kind: "give-entry-design",
+            collection: STORIES,
+            entry: first,
+          },
+        },
+        {
+          route: "templateAction",
+          action: {
+            kind: "remove-entry-design",
+            collection: STORIES,
+            entry: second,
+          },
+        },
+        {
+          route: "templateAction",
+          action: { kind: "delete-template", id: notices },
+        },
+        {
+          route: "templateAction",
+          action: {
+            kind: "set-template-address",
+            id: stories,
+            address: "/probe-stories",
+          },
+        },
+      ];
+
+      // The table covers exactly what the live manifest advertises: a kind
+      // added to a route with no entry here fails, rather than going
+      // unprobed, and so does an entry for a kind no route lists any more.
+      const named = (route: string, kind: string) => `${route} ${kind}`;
       expect(manifest.actions).toHaveLength(3);
+      expect(
+        probes.map(probe => named(probe.route, probe.action.kind)).sort()
+      ).toEqual(
+        manifest.actions
+          .flatMap(action => action.kinds.map(kind => named(action.name, kind)))
+          .sort()
+      );
+
+      const routeOf = (name: Probe["route"], component: string) => {
+        const action = manifest.actions.find(listed => listed.name === name);
+        if (action === undefined) {
+          throw new Error(`the manifest lists no ${name} route`);
+        }
+        return action.path.replace(":id", component).split("/").filter(Boolean);
+      };
+      const dryRun = (probe: Probe) =>
+        call("POST", cookie, routeOf(probe.route, probe.component ?? card), {
+          body: {
+            ...(probe.page === undefined ? {} : { page: probe.page }),
+            action: probe.action,
+            dryRun: true,
+          },
+        });
+
+      // The control, on every route: a kind it does not have is refused by
+      // its schema at `action.kind`, before any handler runs, so a listed
+      // kind the schema did not know would be seen below.
       for (const action of manifest.actions) {
-        const unknown = await dryRun(action, "no-such-kind");
+        const unknown = await dryRun({
+          route: action.name,
+          action: { kind: "no-such-kind" },
+          ...(action.name === "pageAction" ? { page: onPage } : {}),
+        });
         expect(unknown.status, JSON.stringify(unknown.body)).toBe(400);
         expect(refusedPaths(unknown)).toContain("action.kind");
       }
 
-      for (const action of manifest.actions) {
-        expect(action.kinds.length, action.name).toBeGreaterThan(0);
-        for (const kind of action.kinds) {
-          const answer = await dryRun(action, kind);
-          const said = `${action.name} ${kind}: ${String(answer.status)} ${JSON.stringify(answer.body)}`;
-          // Reached as a caller the route admits, so its body was read, and
-          // answered rather than failing: a kind whose handler throws is not
-          // one a client can use, whatever the manifest says.
-          expect([401, 403], said).not.toContain(answer.status);
-          expect(answer.status, said).toBeLessThan(500);
-          // Refused for a missing id or field, or judged by a dry run: any
-          // answer but the route not knowing the kind.
-          expect(refusedPaths(answer), said).not.toContain("action.kind");
-        }
+      for (const probe of probes) {
+        const answer = await dryRun(probe);
+        const said = `${named(probe.route, probe.action.kind)}: ${String(answer.status)} ${JSON.stringify(answer.body)}`;
+        // Reached as a caller the route admits, and answered rather than
+        // failing: a kind whose handler throws is not one a client can use.
+        expect([401, 403], said).not.toContain(answer.status);
+        expect(answer.status, said).toBeLessThan(500);
+        // Past the schema: no part of the action refused as missing or
+        // malformed, so the answer below is the handler's.
+        expect(
+          refusedPaths(answer).filter(
+            path => path === "action" || path.startsWith("action.")
+          ),
+          said
+        ).toEqual([]);
+        // Judged by the handler as a dry run, and judged acceptable.
+        expect(answer.status, said).toBe(200);
+        const item = answer.body.item as {
+          dryRun?: unknown;
+          refusals?: unknown;
+        };
+        expect(item.dryRun, said).toBe(true);
+        expect(item.refusals, said).toEqual([]);
       }
+    }, 60_000);
+
+    it("names a renamed templates collection, and reaches a template under that name only", async () => {
+      const plugin = pageBuilder();
+      if (plugin.rename === undefined) {
+        throw new Error("the page builder offers no rename");
+      }
+      const t = await boot(
+        plugin.rename({ [TEMPLATES_SLUG]: RENAMED_TEMPLATES })
+      );
+      const { cookie } = await holding(t, [
+        ...AUTHOR,
+        `read-${RENAMED_TEMPLATES}`,
+        `create-${RENAMED_TEMPLATES}`,
+        `update-${RENAMED_TEMPLATES}`,
+        `read-${NOTICES}`,
+      ]);
+
+      const manifest = await manifestOf(cookie);
+      expect(manifest.collections.templates).toBe(RENAMED_TEMPLATES);
+
+      const made = await call("POST", cookie, ["templates", "actions"], {
+        body: { action: { kind: "create-template", collection: NOTICES } },
+      });
+      expect(made.status, JSON.stringify(made.body)).toBe(200);
+      const id = (made.body.item as TemplateActionResult).template?.id ?? "";
+      expect(id).not.toBe("");
+      const before = await stored(t, RENAMED_TEMPLATES, id);
+      expect(before.collection).toBe(NOTICES);
+
+      const action = { kind: "place-entry-content", field: "body" };
+      // The default slug names no collection here, so it addresses nothing:
+      // a client that ignored the manifest is refused, and nothing is written.
+      const unnamed = await call("POST", cookie, ["pages", "actions"], {
+        body: { page: { collection: TEMPLATES_SLUG, id }, action },
+      });
+      expect([403, 404], JSON.stringify(unnamed.body)).toContain(
+        unnamed.status
+      );
+      expect(await stored(t, RENAMED_TEMPLATES, id)).toEqual(before);
+
+      // The slug the manifest names reaches the template, and the write
+      // lands on it.
+      const placed = await call("POST", cookie, ["pages", "actions"], {
+        body: {
+          page: { collection: manifest.collections.templates, id },
+          action,
+        },
+      });
+      expect(placed.status, JSON.stringify(placed.body)).toBe(200);
+      const result = placed.body.item as PageActionResult;
+      expect(result.page).toEqual({ collection: RENAMED_TEMPLATES, id });
+      const nodes = (
+        (await stored(t, RENAMED_TEMPLATES, id)).content as {
+          nodes: BlockNode[];
+        }
+      ).nodes;
+      expect(nodes).toEqual([
+        expect.objectContaining({
+          id: result.insertedId,
+          type: ENTRY_CONTENT_TYPE,
+          props: { field: "body" },
+        }),
+      ]);
     });
 
     it("answers a part the caller may not read as unreadable, and the rest as read", async () => {
