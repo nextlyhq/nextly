@@ -65,6 +65,7 @@ import {
   type NodeLock,
   type PlacementValueProblem,
   type WorkAllowance,
+  type NamedQuerySource,
 } from "@nextlyhq/blocks-engine";
 import type {
   PluginFieldValidateArgs,
@@ -252,6 +253,11 @@ export interface CompositionSetup {
    * schema cannot be read, and then lists are judged by their shape alone.
    */
   readonly listFields?: ListFieldsReader;
+  /**
+   * This site's named queries, for a list whose source is one; absent, such
+   * a list is judged by its shape alone.
+   */
+  readonly namedQueries?: NamedQuerySource;
 }
 
 /** What the site defines that a page refers to by id. */
@@ -934,6 +940,9 @@ async function judgeComposedLists(args: {
   };
   const site = {
     ...(fieldsOf === undefined ? {} : { fieldsOf }),
+    ...(args.setup.namedQueries === undefined
+      ? {}
+      : { namedQueries: args.setup.namedQueries }),
     maxNodes: args.setup.limits.maxNodes,
     storedForms: () => (storedForms ??= composeStored()),
     // A placement's value or variant made each such problem, so it is logged
@@ -1676,6 +1685,9 @@ async function reportListsBroken(args: {
     host.slug === setup.store.collection ? {} : { entryCollection: host.slug };
   const site = {
     ...(listFields === undefined ? {} : { fieldsOf: listFields }),
+    ...(setup.namedQueries === undefined
+      ? {}
+      : { namedQueries: setup.namedQueries }),
     maxNodes: setup.limits.maxNodes,
     // What the host composed to before this save stands for its stored
     // form: a problem it held there is kept.

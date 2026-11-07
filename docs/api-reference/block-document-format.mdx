@@ -177,7 +177,8 @@ its children. A binding to a source nobody read renders its fallback.
 - **Sources.** `entry` is the entry the page shows, `item` the entry a
   collection list is drawing, `single` the Single named by `sourceKey`, and
   `site` the public site settings (`applicationName`, `siteUrl`, `logoUrl`,
-  `timezone`).
+  `timezone`), read from the instance the route is given as `nextly`, or the
+  process's registered one when it is given none.
 - **Public access.** Every source is read as an anonymous visitor reads it:
   published content only, and only fields the public may read. The route reads
   the entry again for this, rather than using the row it resolved, so a field

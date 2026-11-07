@@ -92,11 +92,40 @@ describe("a canvas list's read", () => {
       { query: { collection: "posts", where: { a: 1 } } },
     ]) {
       await expect(
-        listEntriesRoute().handler(request(body), ctx)
+        listEntriesRoute(() => undefined).handler(request(body), ctx)
       ).rejects.toSatisfy(error =>
         NextlyError.isCode(error, "VALIDATION_ERROR")
       );
     }
+  });
+
+  it("refuses a named run whose node id carries a line break or control character", async () => {
+    const ctx = { caller: null } as unknown as PluginRouteContext;
+    const request = (node: string) =>
+      new Request(`http://nextly.test/x${LIST_ENTRIES_ROUTE_PATH}`, {
+        method: "POST",
+        body: JSON.stringify({
+          named: { name: "events.upcoming", limit: 6, offset: 0, node },
+        }),
+      });
+    // The id is written into the server log when the run fails, so a forged
+    // second log line or a terminal escape never reaches it.
+    for (const node of ["list\nforged line", "list\u001b[31m", "list\u2028"]) {
+      await expect(
+        listEntriesRoute(() => undefined).handler(request(node), ctx)
+      ).rejects.toSatisfy(error =>
+        NextlyError.isCode(error, "VALIDATION_ERROR")
+      );
+    }
+    // An ordinary id passes the boundary: whatever happens past it (there is
+    // no runtime here), the body is not what is refused.
+    const ordinary = await listEntriesRoute(() => undefined)
+      .handler(request("list-1"), ctx)
+      .then(
+        () => undefined,
+        (error: unknown) => error
+      );
+    expect(NextlyError.isCode(ordinary, "VALIDATION_ERROR")).toBe(false);
   });
 
   it("takes any sort a list may store, and nothing past its bounds", async () => {
@@ -116,7 +145,7 @@ describe("a canvas list's read", () => {
     expect(keys.join(",").length).toBeGreaterThan(1000);
     for (const sort of [keys.join(","), keys]) {
       await expect(
-        listEntriesRoute().handler(request(sort), ctx)
+        listEntriesRoute(() => undefined).handler(request(sort), ctx)
       ).rejects.toSatisfy(
         error => !NextlyError.isCode(error, "VALIDATION_ERROR")
       );
@@ -133,7 +162,7 @@ describe("a canvas list's read", () => {
     ];
     for (const sort of pastBounds) {
       await expect(
-        listEntriesRoute().handler(request(sort), ctx)
+        listEntriesRoute(() => undefined).handler(request(sort), ctx)
       ).rejects.toSatisfy(error =>
         NextlyError.isCode(error, "VALIDATION_ERROR")
       );
@@ -145,7 +174,7 @@ describe("a canvas list's read", () => {
     join.mockRestore();
     for (const sort of ["-a.b", ["title", "x y"]]) {
       await expect(
-        listEntriesRoute().handler(request(sort), ctx)
+        listEntriesRoute(() => undefined).handler(request(sort), ctx)
       ).rejects.toSatisfy(error =>
         NextlyError.isCode(error, "VALIDATION_ERROR")
       );

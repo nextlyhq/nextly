@@ -172,4 +172,29 @@ describe("the bound props a visitor will not see", () => {
       ).size
     ).toBe(0);
   });
+
+  it("marks a path into a related collection the public reads none of", () => {
+    // `author` is a public relation, but `users` has no public field, so the
+    // published page cannot read the author at all.
+    const marked = visitorUnreadableBindings(
+      page(
+        heading("email", { text: { $bind: "author.email" } }),
+        heading("title", { text: { $bind: "title" } })
+      ),
+      {
+        schema: {
+          fieldsOf: ref =>
+            "collection" in ref && ref.collection === "posts"
+              ? PUBLIC["collection:posts"]
+              : undefined,
+        },
+        entryRef,
+        unreadableSource: ref =>
+          "collection" in ref && ref.collection === "users",
+      }
+    );
+    // The control, `title`, reads no relation.
+    expect([...marked.keys()]).toEqual(["email"]);
+    expect(marked.get("email")?.[0]?.path).toBe("author.email");
+  });
 });

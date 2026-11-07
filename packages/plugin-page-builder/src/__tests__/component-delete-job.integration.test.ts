@@ -67,6 +67,8 @@ const NOTES = "notes";
 const BRIEFS = "briefs";
 /** The same, translated, with its status kept per language. */
 const LOCAL_BRIEFS = "local-briefs";
+/** A translated Single with drafts, whose blocks are translated. */
+const LOCAL_BAND = "local-band";
 /** The plugin's run table, as its adapter names it. */
 const RUNS = "page_builder__component_deletions";
 /** The slug of a field group made in the admin, after start. */
@@ -117,6 +119,11 @@ interface Switches {
   deleteHookRanFor?: string[];
   /** Run once, on the next read of a component that a read hook sees. */
   onComponentRead?: () => Promise<void>;
+  /**
+   * What each localized brief save's `beforeChange` hook was told it moves
+   * from: the main row's status and core's `storedStatus`.
+   */
+  briefMovesFrom?: { main: unknown; stored: unknown }[];
 }
 
 /** A plugin whose hooks time an author's save against the delete. */
@@ -135,6 +142,16 @@ function harness(switches: Switches): PluginDefinition {
         switches.holdAfterValidation = undefined;
         hold.reached();
         await hold.release;
+      });
+      ctx.hooks.on("beforeChange", LOCAL_BRIEFS, context => {
+        const hook = context as {
+          originalData?: { status?: unknown };
+          storedStatus?: unknown;
+        };
+        switches.briefMovesFrom?.push({
+          main: hook.originalData?.status,
+          stored: "storedStatus" in hook ? hook.storedStatus : "(none)",
+        });
       });
       ctx.hooks.on("beforeDelete", COMPONENTS_SLUG, context => {
         const id = (context as { data?: { id?: unknown } }).data?.id;
@@ -196,6 +213,7 @@ function siteShapes(site: {
   settings?: boolean;
   blocksInGroup?: boolean;
   adminGroup?: "plain" | "blocks";
+  localBand?: boolean;
 }) {
   const groups = [
     ...(site.settings === true
@@ -247,6 +265,19 @@ function siteShapes(site: {
           }),
         ]
       : []),
+    ...(site.localBand === true
+      ? [
+          defineSingle({
+            slug: LOCAL_BAND,
+            status: true,
+            versions: { drafts: true },
+            localized: true,
+            fields: [
+              { name: "content", type: BLOCKS_TYPE, localized: true } as never,
+            ],
+          }),
+        ]
+      : []),
     ...(site.adminGroup === undefined
       ? []
       : [
@@ -262,7 +293,7 @@ function siteShapes(site: {
   return {
     ...(groups.length === 0 ? {} : { fieldGroups: groups }),
     ...(singles.length === 0 ? {} : { singles }),
-    ...(site.settings === true
+    ...(site.settings === true || site.localBand === true
       ? { localization: { locales: ["en", "de"], defaultLocale: "en" } }
       : {}),
   };
@@ -360,6 +391,8 @@ describe.each(getConfiguredTestDialects())(
         briefs?: boolean;
         /** The same, translated, with a lifecycle per language. */
         localBriefs?: boolean;
+        /** A translated Single with drafts, whose blocks are translated. */
+        localBand?: boolean;
         /** Components may be created under an id the caller names. */
         reuseIds?: boolean;
         /**
@@ -1520,6 +1553,78 @@ describe.each(getConfiguredTestDialects())(
         "A component with this id was deleted; choose a new id."
       );
       expect(await exists(t, cardId)).toBe(false);
+    });
+
+    it("lets a person who may update but not publish convert a Single translation already published under a draft", async () => {
+      const { t, anAuthor } = await boot({}, { localBand: true });
+      const cardId = await card(t);
+      await t.nextly.updateSingle({
+        slug: LOCAL_BAND,
+        locale: "en",
+        data: { content: pageDoc([]), status: "draft", _overwrite: true },
+        overrideAccess: true,
+      });
+      // The German translation is live, while the default row stays a draft.
+      await t.nextly.updateSingle({
+        slug: LOCAL_BAND,
+        locale: "de",
+        data: {
+          content: pageDoc([copyOf("b1", cardId)]),
+          status: "published",
+          _overwrite: true,
+        },
+        overrideAccess: true,
+      });
+      const editor = await anAuthor("band-editor", [
+        "read-components",
+        "delete-components",
+        `read-${LOCAL_BAND}`,
+        `update-${LOCAL_BAND}`,
+      ]);
+
+      const done = await deleteToTheEnd(editor, cardId);
+
+      expect(done.item.status, JSON.stringify(done.body)).toBe("done");
+      const row = (await t.nextly.findSingle({
+        slug: LOCAL_BAND,
+        locale: "de",
+        fallbackLocale: false,
+        status: "all",
+        depth: 0,
+        overrideAccess: true,
+      })) as unknown as Record<string, unknown>;
+      const nodes = (asDocument(row.content)?.nodes ?? []) as Node[];
+      expect(copies(nodes, cardId)).toBe(0);
+    });
+
+    it("tells a save's hooks the status stored in the language it names, not the main row's", async () => {
+      const switches: Switches = {};
+      const { t } = await boot(switches, { localBriefs: true });
+      const created = await t.nextly.create({
+        collection: LOCAL_BRIEFS,
+        data: { title: "Brief", content: pageDoc([]), status: "draft" },
+        locale: "en",
+        overrideAccess: true,
+      });
+      const id = String(created.item.id);
+      const save = (status: string) =>
+        t.nextly.update({
+          collection: LOCAL_BRIEFS,
+          id,
+          locale: "de",
+          data: { title: "Kurz", status, _overwrite: true },
+          overrideAccess: true,
+        });
+      await save("published");
+      switches.briefMovesFrom = [];
+
+      // The German translation is live while the main row stays a draft, so
+      // a guard judging this save must see it leave published.
+      await save("draft");
+
+      expect(switches.briefMovesFrom).toEqual([
+        { main: "draft", stored: "published" },
+      ]);
     });
 
     it("lets a person who may update but not publish convert a translation already published under a draft", async () => {

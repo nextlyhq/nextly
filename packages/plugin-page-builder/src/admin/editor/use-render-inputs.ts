@@ -21,6 +21,7 @@ import {
   type StyleCompileContext,
   type RemotePattern,
   type BreakpointSet,
+  type BindingSchemaRef,
   type DefinitionsById,
   type VisitorUnreadableBinding,
 } from "@nextlyhq/blocks-engine";
@@ -28,6 +29,8 @@ import {
   noPublicFields,
   prepareDocumentForRead,
   registeredBlocks,
+  type BlocksFieldShapes,
+  type PageBindings,
   type PageStyleCascade,
 } from "@nextlyhq/blocks-react";
 import {
@@ -371,7 +374,8 @@ function useCanvasRender({
     editor.listsShowingEmpty,
     locale,
     initialDocument,
-    pagedList
+    pagedList,
+    editor.listsStillShowing
   );
   const pageInputs = useMemo(
     () =>
@@ -905,6 +909,32 @@ export function useCanvasInputs(
   };
 }
 
+/**
+ * Whether a source is one of which the public may read no field, so the
+ * published page reads none of it. The page's entry and a Single count only
+ * when the person editing read them (no such source is not a private one); a
+ * collection a path's relation leads into counts when its lookup found none.
+ */
+function sourceHiddenFromVisitors(
+  bindings: PageBindings,
+  shapes: BlocksFieldShapes,
+  ref: BindingSchemaRef
+): boolean {
+  // A custom source's rows are read as visitors read them and cut to the
+  // fields its query declares, so they are never a source visitors can't see.
+  if ("query" in ref) return false;
+  if ("site" in ref || !noPublicFields(shapes, ref)) return false;
+  if ("single" in ref) {
+    return (bindings.singles?.get(ref.single) ?? null) !== null;
+  }
+  const entryRef = bindings.entryRef;
+  const isEntry =
+    entryRef !== undefined &&
+    "collection" in entryRef &&
+    entryRef.collection === ref.collection;
+  return isEntry ? (bindings.entry ?? null) !== null : true;
+}
+
 /** No region: what a page with no Layout draws around it. */
 const NO_DEFINITIONS: DefinitionsById = new Map();
 
@@ -995,14 +1025,7 @@ export function useBoundCanvasRender(
         ? {}
         : { entryRef: bindings.entryRef }),
       props: { get: getBlock },
-      // A source the person editing read, of which the public may read no
-      // field: the published page reads none of it.
-      unreadableSource: ref => {
-        if ("site" in ref) return false;
-        const read =
-          "single" in ref ? bindings.singles?.get(ref.single) : bindings.entry;
-        return (read ?? null) !== null && noPublicFields(shapes, ref);
-      },
+      unreadableSource: ref => sourceHiddenFromVisitors(bindings, shapes, ref),
     });
   }, [pageTree, bindings]);
   return { canvasRender: bound, visitorUnreadable };

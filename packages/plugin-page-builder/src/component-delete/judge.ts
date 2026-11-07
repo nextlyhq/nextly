@@ -196,7 +196,7 @@ async function mayMake(
       ? { single: address.slug }
       : { collection: address.slug, id: address.id ?? "" };
   try {
-    return await deps.mayWrite({
+    return await mayWriteEveryField(deps.mayWrite, {
       ...target,
       ...(planned.status === undefined ? {} : { status: planned.status }),
       fields: [...planned.fields],
@@ -205,6 +205,29 @@ async function mayMake(
   } catch {
     return false;
   }
+}
+
+/** How many fields one write check names at most: core takes up to 64. */
+export const FIELDS_PER_CHECK = 32;
+
+/**
+ * Whether the person may make `check`, its fields asked {@link
+ * FIELDS_PER_CHECK} at a time: a document with more top-level fields than one
+ * check names is asked in several, each with the same document, language and
+ * status, and is allowed only where every one is.
+ */
+export async function mayWriteEveryField(
+  mayWrite: (check: PluginWriteCheck) => Promise<boolean>,
+  check: PluginWriteCheck
+): Promise<boolean> {
+  const fields = [...(check.fields ?? [])];
+  let at = 0;
+  do {
+    const part = fields.slice(at, at + FIELDS_PER_CHECK);
+    if (!(await mayWrite({ ...check, fields: part }))) return false;
+    at += FIELDS_PER_CHECK;
+  } while (at < fields.length);
+  return true;
 }
 
 /** A document in one language, as one write makes it. */

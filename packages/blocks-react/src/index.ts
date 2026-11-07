@@ -29,6 +29,12 @@ export type {
   BlocksQuery,
   BlocksResult,
   DefaultDataProviderOptions,
+  ListBaseReader,
+  NamedQueryFailure,
+  NamedQueryFailureCode,
+  NamedQueryHost,
+  NamedQueryLookup,
+  NamedQueryRunData,
   ListPageContext,
   PageBindings,
   PageContext,
@@ -135,11 +141,13 @@ export { BlockBoundary, BlockList } from "./block-boundary";
 // `SLOTS_ATTRIBUTE` is public for the same reason: an editor looking for a
 // container to draw an affordance on asks this attribute rather than keeping
 // its own copy of the string the renderer emits. `LIST_ACTION_ATTRIBUTE` too:
-// the editor's canvas acts on the action a list's note offers by it.
+// the editor's canvas acts on the action a list's note offers by it, and
+// `LIST_REF_ATTRIBUTE` is the reference its copy action copies.
 export {
   EDITOR_NAMESPACE,
   INSTANCE_ATTRIBUTE,
   LIST_ACTION_ATTRIBUTE,
+  LIST_REF_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PROP_ATTRIBUTE,
   SLOTS_ATTRIBUTE,
@@ -158,6 +166,26 @@ export type {
 export type {
   BindablePropKind,
   BindingFieldShape,
+  BooleanParam,
+  ChoiceParam,
+  DayParam,
+  EntryParam,
+  ListNamedQuery,
+  NamedQueryChoice,
+  NamedQueryDeclaration,
+  NamedQueryDefinition,
+  NamedQueryParam,
+  NamedQueryParamValue,
+  NamedQueryParamValues,
+  NamedQueryParams,
+  NamedQueryReader,
+  NamedQueryResult,
+  NamedQueryRows,
+  NamedQueryRunArgs,
+  NamedReadFilter,
+  NamedReadQuery,
+  NumberParam,
+  TextParam,
   BindingFormatter,
   BindingIssue,
   BindingIssueCode,

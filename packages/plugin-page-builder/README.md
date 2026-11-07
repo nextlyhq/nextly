@@ -65,7 +65,10 @@ import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { getNextly } from "nextly";
-import type { NextlyContentReader } from "nextly/runtime";
+import type {
+  NextlyContentReader,
+  PublicSiteSettingsSource,
+} from "nextly/runtime";
 
 import nextlyConfig from "../../../nextly.config";
 
@@ -75,11 +78,16 @@ type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
 // handles. `getNextly` caches, so later calls are a lookup.
 const instance = () => getNextly({ config: nextlyConfig });
 
-const reader: NextlyContentReader & {
-  media: Pick<NextlyInstance["media"], "findByID">;
-} = {
+const reader: NextlyContentReader &
+  PublicSiteSettingsSource & {
+    media: Pick<NextlyInstance["media"], "findByID">;
+  } = {
   find: async args => (await instance()).find(args),
   findByID: async args => (await instance()).findByID(args),
+  // The site's name, logo and time zone a page shows, read from this instance.
+  // Omit it and pages show the process's registered instance's settings, and
+  // the route warns once.
+  publicSiteSettings: async () => (await instance()).publicSiteSettings(),
   // Images storing a media id resolve through this; omit it and they draw nothing
   // while images with a literal URL keep working.
   media: {

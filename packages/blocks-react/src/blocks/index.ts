@@ -110,7 +110,20 @@ export {
 export type { CollectionLoopProps } from "./collection-loop";
 // The editor's count of a list's matching entries, taken from the list's own
 // read, so the count and the list cannot disagree.
-export { listEntryCount, type ListEntryCount } from "./list-read";
+export {
+  listEntryCount,
+  namedListBase,
+  type ListEntryCount,
+} from "./list-read";
+// A list's named query run where it is asked for, the editor's canvas route
+// among them, with the outcome the renderer draws: one run for every host.
+export {
+  carriedFailureOf,
+  namedQueryFailureLine,
+  readNamedList,
+  type CarriedNamedQueryFailure,
+  type NamedListOutcome,
+} from "./named-read";
 // The engine types a list's props name, so a consumer of the props type can
 // spell its filters and relation source without importing the engine.
 export type { ListFilter, ListRelation } from "@nextlyhq/blocks-engine";

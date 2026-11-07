@@ -30,23 +30,27 @@ import {
   CHILD_GAP_CLASS,
   COLLECTION_LIST_TYPE,
   defineBlock,
+  NAMED_QUERY_TEXT,
   type ListFilter,
+  type ListNamedQuery,
   type ListRelation,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
-import { LIST_ACTION_ATTRIBUTE } from "../editor-markers";
+import { LIST_ACTION_ATTRIBUTE, LIST_REF_ATTRIBUTE } from "../editor-markers";
 
 import { CONTENT } from "./categories";
 import { CONTAINER_CHILD_GAP } from "./container";
 import { ListPages } from "./list-pages";
 import {
   listPagesOf,
+  namedListBase,
   readList,
   wholeCount,
   type ListOutcome,
 } from "./list-read";
+import { readNamedList } from "./named-read";
 
 export interface CollectionLoopProps {
   /** The collection queried, or the collection a related source's entries are in. */
@@ -70,19 +74,32 @@ export interface CollectionLoopProps {
    * (`/news/page/2`), with links between them. One list on a page may be.
    */
   paginate?: boolean;
+  /**
+   * A custom source: a named query a developer registered, and a literal for
+   * each of its inputs. The list's whole source, so `collection`,
+   * `relation`, `filters` and `sort` are absent beside it.
+   *
+   * @experimental
+   */
+  namedQuery?: ListNamedQuery;
 }
 
 /**
  * The key for one iteration.
  *
- * An entry's own id when it has one, of either type a database hands back, and
- * its position otherwise. Falling back for a numeric id would give every row in
- * a numerically-keyed collection a positional key, which is exactly the case
- * where reordering silently reuses the wrong DOM node.
+ * The row's own key when it has one, of either type a database hands back,
+ * and its position otherwise: an entry's id, or the field a named query
+ * declares its rows keyed by. Falling back for a numeric key would give every
+ * row in a numerically-keyed collection a positional key, which is exactly
+ * the case where reordering silently reuses the wrong DOM node.
  */
-function keyFor(item: Record<string, unknown>, index: number): string | number {
-  const id = item.id;
-  return typeof id === "string" || typeof id === "number" ? id : index;
+export function listItemKey(
+  item: Readonly<Record<string, unknown>>,
+  index: number,
+  keyField = "id"
+): string | number {
+  const key = item[keyField];
+  return typeof key === "string" || typeof key === "number" ? key : index;
 }
 
 /**
@@ -116,14 +133,19 @@ function diagnosticNote(
   ctx: PageContext
 ): ReactElement | null {
   if (ctx.diagnostics !== true || outcome.diagnostic === undefined) return null;
+  const { kind, message, ref } = outcome.diagnostic;
   // One action, on the editor's canvas only: a sort that fell back is fixed
   // by choosing another field, which the canvas takes the author to. A failed
-  // read has no one fix, so its note stays words alone.
-  const offersChoice =
-    ctx.listNoteActions === true && outcome.diagnostic.kind === "sort-fallback";
+  // read has no one fix, so its note stays words alone, except that the log
+  // reference a failed run names can be copied, to quote to a developer.
+  const offersChoice = ctx.listNoteActions === true && kind === "sort-fallback";
+  const offersCopy = ctx.listNoteActions === true && ref !== undefined;
   return (
-    <div role="status" data-nx-list-diagnostic={outcome.diagnostic.kind}>
-      <span>{outcome.diagnostic.message} Only you see this message.</span>
+    <div role="status" data-nx-list-diagnostic={kind}>
+      <span>
+        <NoteWords message={message} reference={ref} /> Only you see this
+        message.
+      </span>
       {offersChoice ? (
         <button
           type="button"
@@ -132,8 +154,55 @@ function diagnosticNote(
           Choose a field
         </button>
       ) : null}
+      {offersCopy ? (
+        <button
+          type="button"
+          aria-label={`${NAMED_QUERY_TEXT.copyRef} ${ref}`}
+          {...{
+            [LIST_ACTION_ATTRIBUTE]: "copy-ref",
+            [LIST_REF_ATTRIBUTE]: ref,
+          }}
+        >
+          {/* Both words drawn, one shown: the canvas marks the button copied
+              for a moment, and its sheet shows the second word then. */}
+          <span data-nx-list-copy="ready">{NAMED_QUERY_TEXT.copyRef}</span>
+          <span data-nx-list-copy="done">{NAMED_QUERY_TEXT.copiedRef}</span>
+        </button>
+      ) : null}
     </div>
   );
+}
+
+/**
+ * A note's words, the log reference among them set apart as code, so it
+ * reads as the exact text to quote and selects as one word.
+ */
+function NoteWords({
+  message,
+  reference,
+}: {
+  message: string;
+  reference: string | undefined;
+}): ReactElement {
+  const at = reference === undefined ? -1 : message.indexOf(reference);
+  if (reference === undefined || at < 0) return <>{message}</>;
+  return (
+    <>
+      {message.slice(0, at)}
+      <code data-nx-list-ref="">{reference}</code>
+      {message.slice(at + reference.length)}
+    </>
+  );
+}
+
+/**
+ * The mark on a list's root saying its author chose a new source that waits
+ * for an input, with the tag's words, while an author is looking.
+ */
+function stillMarks(ctx: PageContext, nodeId: string): Record<string, string> {
+  const words =
+    ctx.diagnostics === true ? ctx.listsStillShowing?.get(nodeId) : undefined;
+  return words === undefined ? {} : { "data-nx-list-still": words };
 }
 
 /**
@@ -154,6 +223,65 @@ function emptyMarks(
     : {};
 }
 
+/**
+ * The entries a list draws, and the context each is drawn with: the list's
+ * read for a collection or a relation, or its named query's run.
+ */
+interface ListRead {
+  readonly outcome: ListOutcome;
+  readonly itemContext: (item: Record<string, unknown>) => PageContext;
+  /** The field each row is keyed by; an entry's id when absent. */
+  readonly rowKey?: string;
+}
+
+/**
+ * A list whose source is a named query, read; `undefined` for any other
+ * list. Claims nothing up front: each read the query makes claims its own.
+ */
+async function readNamedSource(
+  props: CollectionLoopProps,
+  ctx: PageContext,
+  nodeId: string
+): Promise<ListRead | "template" | undefined> {
+  const base = namedListBase(props);
+  if (base === undefined) return undefined;
+  if (ctx.namedQueries === undefined) return "template";
+  const itemOf =
+    (rowsCollection: string | undefined, query: string) =>
+    (item: Record<string, unknown>): PageContext => ({
+      ...ctx,
+      item,
+      itemQuery: query,
+      // A collection's entries bind as that collection's; rows of a declared
+      // schema bind as the query's, never as the outer list's collection.
+      itemSource: rowsCollection,
+    });
+  if ("blocking" in base) {
+    return {
+      outcome: {
+        items: [],
+        failed: true,
+        diagnostic: {
+          kind: "query-failed",
+          message: `This list couldn't load its entries, so visitors see its empty state. ${base.blocking}`,
+        },
+      },
+      itemContext: item => ({ ...ctx, item }),
+    };
+  }
+  const outcome = await readNamedList(
+    base.named,
+    { limit: base.limit, offset: base.offset },
+    { ...ctx, namedQueries: ctx.namedQueries },
+    nodeId
+  );
+  return {
+    outcome,
+    itemContext: itemOf(outcome.rowsCollection, base.named.name),
+    ...(outcome.rowKey === undefined ? {} : { rowKey: outcome.rowKey }),
+  };
+}
+
 export async function renderCollectionLoop({
   props,
   node,
@@ -170,10 +298,35 @@ export async function renderCollectionLoop({
     ctx.listsShowingEmpty?.has(node.id) === true
   ) {
     return (
-      <div className={className} {...emptyMarks(ctx, "chosen")}>
+      <div
+        className={className}
+        {...emptyMarks(ctx, "chosen")}
+        {...stillMarks(ctx, node.id)}
+      >
         {renderSlot("empty")}
       </div>
     );
+  }
+  // A custom source runs the developer's named query, as the page builder
+  // registered it, with a reader limited to what it declares.
+  const named = await readNamedSource(props, ctx, node.id);
+  if (named === "template") {
+    // No host runs named queries here, as no data source answers a
+    // collection: the template, once, so an author still sees it.
+    return (
+      <div className={className} {...stillMarks(ctx, node.id)}>
+        {renderSlot("children")}
+      </div>
+    );
+  }
+  if (named !== undefined) {
+    return drawList(named, {
+      className,
+      renderSlot,
+      spacingMode,
+      ctx,
+      nodeId: node.id,
+    });
   }
   // A cleared text field persists as an empty string, which is a collection
   // nobody named rather than a collection called "". Querying for it fails, the
@@ -190,9 +343,16 @@ export async function renderCollectionLoop({
     // still sees what they are building. Drawn with NO item, not the item of
     // a list around this one: what this list's item decides inside it would
     // otherwise be judged by an unrelated entry, and fails closed instead.
-    const { item: _outerItem, itemSource: _outerSource, ...withoutItem } = ctx;
+    const {
+      item: _outerItem,
+      itemSource: _outerSource,
+      itemQuery: _outerQuery,
+      ...withoutItem
+    } = ctx;
     return (
-      <div className={className}>{renderSlot("children", withoutItem)}</div>
+      <div className={className} {...stillMarks(ctx, node.id)}>
+        {renderSlot("children", withoutItem)}
+      </div>
     );
   }
   // The page this render draws, when the route pages this list: the one
@@ -231,30 +391,6 @@ export async function renderCollectionLoop({
     },
     paging?.page
   );
-  const note = diagnosticNote(outcome, ctx);
-  const marks = emptyMarks(
-    ctx,
-    outcome.items.length > 0 ? undefined : outcome.failed ? "failed" : "none"
-  );
-  // Nothing matched, or the read failed: the designable empty state, as a
-  // visitor sees it. Otherwise each entry, drawn with the template.
-  const content =
-    outcome.items.length === 0
-      ? renderSlot("empty")
-      : outcome.items.map((item, index) => (
-          <div
-            key={keyFor(item, index)}
-            // Under the classic model no gap is written, so an entry wears
-            // nothing: its blocks space themselves with their own margins.
-            {...(spacingMode === "classic" ? {} : { className: ENTRY_CLASS })}
-          >
-            {/* Drawn again per entry, with this entry on the context, so
-                anything inside the template reads its own values rather than
-                the first entry's. The collection goes with it, so an item
-                binding is checked against that collection's fields. */}
-            {renderSlot("children", { ...ctx, item, itemSource: collection })}
-          </div>
-        ));
   // The links between pages, under the entries, when the route pages this
   // list and its read said how many entries it matches.
   const pages =
@@ -276,6 +412,64 @@ export async function renderCollectionLoop({
         }}
       />
     );
+  return drawList(
+    {
+      outcome,
+      // An ordinary entry: the item is no named query's row, whatever the
+      // list around this one shows.
+      itemContext: item => ({
+        ...ctx,
+        item,
+        itemSource: collection,
+        itemQuery: undefined,
+      }),
+    },
+    { className, renderSlot, spacingMode, ctx, nodeId: node.id },
+    pages
+  );
+}
+
+/**
+ * A list drawn from its read: each entry with the template, or the empty
+ * state, then the links between its pages when it has them.
+ */
+function drawList(
+  read: ListRead,
+  args: Pick<
+    BlockRenderArgs<CollectionLoopProps>,
+    "className" | "renderSlot" | "spacingMode" | "ctx"
+  > & { readonly nodeId: string },
+  pages: ReactElement | null = null
+): ReactElement {
+  const { outcome, itemContext } = read;
+  const { className, renderSlot, spacingMode, ctx } = args;
+  const note = diagnosticNote(outcome, ctx);
+  const marks = {
+    ...emptyMarks(
+      ctx,
+      outcome.items.length > 0 ? undefined : outcome.failed ? "failed" : "none"
+    ),
+    ...stillMarks(ctx, args.nodeId),
+  };
+  // Nothing matched, or the read failed: the designable empty state, as a
+  // visitor sees it. Otherwise each entry, drawn with the template.
+  const content =
+    outcome.items.length === 0
+      ? renderSlot("empty")
+      : outcome.items.map((item, index) => (
+          <div
+            key={listItemKey(item, index, read.rowKey)}
+            // Under the classic model no gap is written, so an entry wears
+            // nothing: its blocks space themselves with their own margins.
+            {...(spacingMode === "classic" ? {} : { className: ENTRY_CLASS })}
+          >
+            {/* Drawn again per entry, with this entry on the context, so
+                anything inside the template reads its own values rather than
+                the first entry's. Its source goes with it, so an item
+                binding is checked against that source's fields. */}
+            {renderSlot("children", itemContext(item))}
+          </div>
+        ));
   // The note, when an author is looking, goes above what visitors see.
   return (
     <div className={className} {...marks}>
@@ -427,6 +621,14 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
       },
       limit: { label: "Number of items", type: "number", min: 1, max: 100 },
       offset: { label: "Skip the first", type: "number", min: 0 },
+      // A custom source: a named query a developer registered, and a value
+      // for each of its inputs, `{ name, params }`. Drawn by the same group
+      // as the rest of the query, in its Source menu and Inputs.
+      namedQuery: {
+        label: "Custom source",
+        type: "object",
+        display: "listNamedQuery",
+      },
       paginate: { label: "Split into pages", type: "checkbox" },
     },
     defaultProps: { limit: 10 },

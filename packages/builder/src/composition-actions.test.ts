@@ -355,3 +355,38 @@ describe("planDefinitionAction", () => {
     ).toMatchObject({ problem: "unknown-variant" });
   });
 });
+
+describe("a list's custom source in set-list-query", () => {
+  const action = (namedQuery: unknown) => ({
+    kind: "set-list-query",
+    listId: "l",
+    query: { namedQuery },
+  });
+
+  it("takes a query's name and its inputs as literals, or null to remove it", () => {
+    for (const namedQuery of [
+      {
+        name: "events.upcoming",
+        params: { city: "lahore", within: 3, free: true },
+      },
+      { name: "events.all" },
+      null,
+    ]) {
+      expect(pageActionSchema.safeParse(action(namedQuery)).success).toBe(true);
+    }
+  });
+
+  it("refuses anything but a name and literal inputs, leaving their meaning to the save", () => {
+    for (const namedQuery of [
+      { name: "events.upcoming", run: "x" },
+      { name: "events.upcoming", params: { city: ["lahore"] } },
+      { name: "events.upcoming", params: { city: "x".repeat(201) } },
+      { name: "x".repeat(65) },
+      { params: {} },
+    ]) {
+      expect(pageActionSchema.safeParse(action(namedQuery)).success).toBe(
+        false
+      );
+    }
+  });
+});

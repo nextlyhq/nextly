@@ -9105,11 +9105,18 @@ export class CollectionMutationService extends BaseService {
       operation: "update",
       user: params.user,
     });
+    const storedStatus = await this.hookStoredStatus(
+      params.collectionName,
+      params.entryId,
+      existingEntry,
+      EVERY_LOCALE
+    );
     await this.hookService.runBeforeChange({
       collection: params.collectionName,
       operation: "update",
       data,
       originalData: existingEntry,
+      ...(storedStatus === undefined ? {} : { storedStatus }),
       storedHooks,
       queryDatabase: this.queryDatabaseFn,
       user: params.user,
@@ -11282,6 +11289,54 @@ export class CollectionMutationService extends BaseService {
       cachedCompanionReadiness(this.adapter, companion.companionTableName)
     );
     return inLocale ?? main;
+  }
+
+  /**
+   * What an update's `beforeChange` hooks are told it moves from
+   * (`HookContext.storedStatus`): the status stored in the language the
+   * write names, read as {@link storedStatusInLocale} reads it, and for a
+   * write to every language `"published"` when any language is. Undefined
+   * where the collection keeps one status, on the main row the hooks already
+   * hold.
+   */
+  private async hookStoredStatus(
+    collectionName: string,
+    entryId: string,
+    row: Record<string, unknown>,
+    locale: string | undefined
+  ): Promise<string | null | undefined> {
+    if (locale === undefined || !this.localization) return undefined;
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    if (
+      !companion?.hasStatus ||
+      (await this.companionLacksStatus(collectionName))
+    ) {
+      return undefined;
+    }
+    const main = typeof row.status === "string" ? row.status : null;
+    const readiness = cachedCompanionReadiness(
+      this.adapter,
+      companion.companionTableName
+    );
+    if (locale !== EVERY_LOCALE) {
+      const inLocale = await readCompanionLocaleStatus(
+        this.db as Parameters<typeof readCompanionLocaleStatus>[0],
+        companion.table,
+        entryId,
+        locale,
+        readiness
+      );
+      return inLocale ?? main;
+    }
+    if (main === "published") return main;
+    const statuses = await readCompanionLocaleStatusAll(
+      this.db as Parameters<typeof readCompanionLocaleStatusAll>[0],
+      companion.table,
+      entryId,
+      readiness
+    );
+    return [...statuses.values()].includes("published") ? "published" : main;
   }
 
   /**
@@ -13882,11 +13937,18 @@ export class CollectionMutationService extends BaseService {
       // Collection-level beforeChange hooks, on data the validation gate has
       // just passed. Paired with the field-level phase below so the two
       // declarations of that name mean the same moment.
+      const storedStatus = await this.hookStoredStatus(
+        params.collectionName,
+        params.entryId,
+        existingEntry as Record<string, unknown>,
+        params.locale
+      );
       await this.hookService.runBeforeChange({
         collection: params.collectionName,
         operation: "update",
         data: finalData,
         originalData: existingEntry,
+        ...(storedStatus === undefined ? {} : { storedStatus }),
         storedHooks,
         queryDatabase: this.queryDatabaseFn,
         user: params.user,

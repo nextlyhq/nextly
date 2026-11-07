@@ -15,6 +15,7 @@ import {
   carryDocumentDeviceVisibility,
   deviceVisibility,
   hiddenOnDevice,
+  revealConditioned,
   revealDeviceHidden,
   setDeviceVisibility,
 } from "./device-visibility";
@@ -416,5 +417,45 @@ describe("carryDeviceVisibility on the container axis", () => {
       after
     );
     expect(shown(next, after)).toEqual({ base: true, wide: true, card: false });
+  });
+});
+
+describe("revealConditioned", () => {
+  const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+  const node = (id: string, visibility?: unknown, slots?: unknown) =>
+    ({
+      id,
+      type: "core/text",
+      version: 1,
+      props: {},
+      ...(visibility === undefined ? {} : { visibility }),
+      ...(slots === undefined ? {} : { slots }),
+    }) as BlockNode;
+  const docOf = (...nodes: BlockNode[]): BlockDocument =>
+    ({ formatVersion: 1, kind: "page", nodes }) as BlockDocument;
+
+  it("lifts every block's conditions, nested ones included, and keeps its devices", () => {
+    const page = docOf(
+      node("a", { conditions: vip, devices: { mobile: false } }),
+      node("box", undefined, { children: [node("b", { conditions: vip })] })
+    );
+    const drawn = revealConditioned(page);
+    expect(drawn.nodes[0]?.visibility).toEqual({ devices: { mobile: false } });
+    expect(drawn.nodes[1]?.slots?.children?.[0]?.visibility).toBeUndefined();
+    // The stored document is untouched.
+    expect(page.nodes[0]?.visibility).toEqual({
+      conditions: vip,
+      devices: { mobile: false },
+    });
+  });
+
+  it("drops a visibility nothing can read, so the block draws", () => {
+    const drawn = revealConditioned(docOf(node("a", "hidden")));
+    expect(drawn.nodes[0]?.visibility).toBeUndefined();
+  });
+
+  it("answers the same document when no block holds conditions", () => {
+    const page = docOf(node("a", { devices: { mobile: false } }), node("b"));
+    expect(revealConditioned(page)).toBe(page);
   });
 });

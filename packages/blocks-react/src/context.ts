@@ -4,6 +4,8 @@ import type {
   BlockRenderArgs as EngineBlockRenderArgs,
   BlockDefinition as EngineBlockDefinition,
   ConditionIssue,
+  NamedQueryDeclaration,
+  NamedQueryDefinition,
   RemotePatternInput,
   SpacingMode,
 } from "@nextlyhq/blocks-engine";
@@ -135,6 +137,139 @@ export interface BlocksPublicReader {
 }
 
 /**
+ * The reader a named query's own reader wraps: the shape both a published
+ * page and an editor's canvas supply. A published page passes the route's
+ * public reader; a canvas passes one reading with the editing person's
+ * access. Either way the strict key set holds (no status, no trusted read,
+ * no raw `where`), hidden fields are stripped by this reader, and what a
+ * query may read of it, and how many times, is decided by the wrapper.
+ *
+ * @experimental
+ */
+export interface ListBaseReader extends BlocksPublicReader {
+  /** The site settings the reader's caller may read, when it can read them. */
+  siteSettings?(): Promise<Readonly<Record<string, unknown>>>;
+}
+
+/** What one run of a named query gave, as a page's cache keeps it. */
+export interface NamedQueryRunData {
+  /** Projected to what the query declares, the key checked. */
+  readonly rows: readonly Record<string, unknown>[];
+  readonly total?: number;
+  /** How many reads it made, claimed again from a page that reuses it. */
+  readonly reads: number;
+}
+
+/** Why a named query's list drew its empty state. */
+export type NamedQueryFailureCode =
+  | "unknown"
+  | "params"
+  | "undeclared-read"
+  | "trusted-read"
+  | "budget"
+  | "timeout"
+  | "bad-rows"
+  | "rows-hidden"
+  | "threw";
+
+/** A named query's failure, as the host logs it. */
+export interface NamedQueryFailure {
+  readonly code: NamedQueryFailureCode;
+  readonly query: string;
+  /** The list block that drew its empty state. */
+  readonly nodeId: string;
+  /** The reference the editor shows in place of the error, `NQ-` and 6 hex. */
+  readonly ref: string;
+  /** What failed, for the log only; never shown to an author. */
+  readonly error?: unknown;
+}
+
+/**
+ * Where a site's named queries are looked up by name, run function included:
+ * the page builder that registered them hands one out per site.
+ *
+ * @experimental
+ */
+export interface NamedQueryLookup {
+  definitionOf(name: string): NamedQueryDefinition | undefined;
+}
+
+/**
+ * What a page renders a collection list's named query with: where queries
+ * are looked up, the reader each run wraps, and the host's cache, frame and
+ * log. Absent, a list whose source is a named query draws its template once,
+ * as a list with no data source does.
+ *
+ * @experimental
+ */
+export interface NamedQueryHost {
+  /**
+   * The query registered under a name by the site this page belongs to:
+   * each site keeps its own, so two sites served from one process never
+   * resolve each other's.
+   */
+  readonly definitionOf: (name: string) => NamedQueryDefinition | undefined;
+  readonly reader: ListBaseReader;
+  /** Today in the site's time zone, `YYYY-MM-DD`, one answer per render. */
+  readonly today: () => Promise<string>;
+  /**
+   * The public field shapes of a collection, which rows that are its
+   * entries are projected to. A collection it cannot answer for keeps only
+   * each row's id and timestamps.
+   */
+  readonly fieldsOf?: (
+    collection: string
+  ) => Promise<readonly BindingFieldShape[] | undefined>;
+  /**
+   * The host's frame for one run of the query `name`: `run` executes the
+   * query inside it, where the host refuses every read but the reader's, and
+   * `read` is the door the reader handed to the query reads through.
+   */
+  readonly frame?: (name: string) => {
+    run<T>(operation: () => Promise<T>): Promise<T>;
+    read<T>(operation: () => Promise<T>): Promise<T>;
+  };
+  /**
+   * What an author is told about a run that succeeded, where a visitor's
+   * page would go without part of it: a query reading a collection visitors
+   * can't read. Shown only where an author is looking; an editor's canvas
+   * gives it, a published page does not.
+   */
+  readonly caution?: (declaration: NamedQueryDeclaration) => string | undefined;
+  /** Keep a run's result across renders, tagged by everything it declares. */
+  readonly cache?: (request: {
+    readonly declaration: NamedQueryDeclaration;
+    readonly key: readonly string[];
+    readonly read: () => Promise<NamedQueryRunData>;
+    /**
+     * The run as the list stores it: its inputs before they are judged, and
+     * its window. What a host that runs the query elsewhere (an editor's
+     * canvas, on its server) asks for, so the run is judged there as on a
+     * published page. Optional, so a host written before it was handed one
+     * is still a host; the renderer always hands it.
+     */
+    readonly asked?: {
+      readonly params: Readonly<Record<string, unknown>>;
+      readonly window: { readonly limit: number; readonly offset: number };
+      /**
+       * The reads the render has left, when its allowance can say: a run
+       * made elsewhere may spend no more, and none is started at 0.
+       */
+      readonly allowance?: number;
+      /** The list block the run is for, so a failure is logged under it. */
+      readonly node?: string;
+    };
+  }) => Promise<NamedQueryRunData>;
+  /**
+   * Told about each failed run, for the server log. The failure carries the
+   * error as thrown, which may hold whatever the query's code put in it:
+   * log it through `namedQueryFailureLine`, which leaves the error's
+   * message and values out.
+   */
+  readonly report?: (failure: NamedQueryFailure) => void;
+}
+
+/**
  * How a route builds its data provider: from the public reader it binds to
  * each render.
  *
@@ -224,6 +359,19 @@ export const emptyDataProvider: BlocksDataProvider = {
 export interface QueryBudget {
   /** Claim one read. False when the page has spent its allowance. */
   take(): boolean;
+  /**
+   * How many reads are left, claiming none: what a host that makes a run
+   * elsewhere hands that place, so it never spends more than the page has.
+   * Absent on a budget that cannot say.
+   */
+  remaining?(): number;
+  /**
+   * What this render's named query runs are kept with: a new object for
+   * each render. Absent, the budget itself, which a page makes per render;
+   * a budget kept across renders and renewed for each (an editor's canvas)
+   * answers the current render's, so no run outlives its render.
+   */
+  generation?(): object;
 }
 
 /**
@@ -437,6 +585,22 @@ export interface PageContext {
    */
   itemSource?: string;
   /**
+   * The named query {@link item} is a row of, set by a list whose source is
+   * one, so a binding to an item of a query with its own field schema is
+   * checked against the fields it declares, and a related list inside it is
+   * told it has no entry to read a relation of.
+   *
+   * @experimental
+   */
+  itemQuery?: string;
+  /**
+   * How a list whose source is a named query runs it. Absent, such a list
+   * draws its template once.
+   *
+   * @experimental
+   */
+  namedQueries?: NamedQueryHost;
+  /**
    * What is left of this render's query allowance.
    *
    * Absent means nothing is counting, which is the editor drawing one block in
@@ -481,6 +645,16 @@ export interface PageContext {
    * @experimental
    */
   listsShowingEmpty?: ReadonlySet<string>;
+  /**
+   * The collection lists, by node id, whose author chose a new source that
+   * is not written yet, since it waits for an input: the editor's tag for
+   * each, which the list wears while it keeps drawing what it stores
+   * ("Still showing Events"). Honoured only where {@link diagnostics} says
+   * an author is looking.
+   *
+   * @experimental
+   */
+  listsStillShowing?: ReadonlyMap<string, string>;
   /**
    * The editor's canvas, which can act on a list note's action: a list whose
    * sort fell back offers "Choose a field" there, which the canvas answers by
@@ -705,6 +879,7 @@ export function createQueryBudget(
   // mistake rather than by a document.
   let remaining = Number.isNaN(max) ? DEFAULT_MAX_QUERIES : max;
   return {
+    remaining: () => Math.max(0, remaining),
     take: () => {
       if (remaining <= 0) return false;
       remaining -= 1;
