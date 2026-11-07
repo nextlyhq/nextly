@@ -65,6 +65,50 @@ const TEMPLATE: BlockNode[] = [
 ];
 
 describe("a list's read-ahead", () => {
+  it("reads ahead for a block the route kept for the page entry's conditions, as the renderer draws it", async () => {
+    const reads: ListBatchReads = {
+      related: vi.fn(async () => new Map([["a1", { id: "a1", name: "Ada" }]])),
+      entryPaths: vi.fn(async () => undefined),
+    };
+    // A condition the item does not meet: kept only because the route held
+    // it for the page's entry.
+    const kept = node(
+      "kept",
+      "core/heading",
+      { text: "" },
+      {
+        bindings: { text: { $bind: "author.name", source: "item" } },
+        visibility: {
+          conditions: [[{ field: "title", op: "equals", value: "Page" }]],
+        },
+      }
+    );
+    const items = [{ id: "p1", title: "Post", author: "a1" }];
+    const ahead = (held?: ReadonlySet<string>) =>
+      readListAhead(
+        items,
+        [kept],
+        createStandaloneContext({
+          listReads: reads,
+          ...(held === undefined ? {} : { heldConditions: held }),
+        }),
+        {
+          nodeId: "list",
+          collection: "posts",
+          contextOf: item =>
+            createStandaloneContext({ listReads: reads, item }),
+        }
+      );
+    // CONTROL: not held, the item's conditions leave it out, so nothing is read.
+    expect((await ahead()).size).toBe(0);
+    expect(reads.related).not.toHaveBeenCalled();
+    const followed = await ahead(new Set(["kept"]));
+    expect(reads.related).toHaveBeenCalledOnce();
+    expect(followed.get(items[0] as Record<string, unknown>)).toEqual({
+      author: { id: "a1", name: "Ada" },
+    });
+  });
+
   it("reads what the template asks: its item relations and its links, not a nested list's", () => {
     const demand = itemReadDemand(TEMPLATE);
     expect([...demand.follows]).toEqual([["author", new Set(["name"])]]);
@@ -83,7 +127,7 @@ describe("a list's read-ahead", () => {
       { id: "p2", author: "a1", cover: "c2" },
       { id: "p3", author: "gone", cover: "c3" },
     ];
-    const drawn = await readListAhead(
+    const followed = await readListAhead(
       items,
       TEMPLATE,
       createStandaloneContext({ listReads: reads }),
@@ -101,11 +145,13 @@ describe("a list's read-ahead", () => {
       ["name"],
       { nodeId: "list" }
     );
-    expect(drawn.map(item => item.author)).toEqual([
-      { id: "a1", name: "Ada" },
-      { id: "a1", name: "Ada" },
-      "gone",
+    // Read beside each item it was read for; the items keep their ids.
+    expect(items.map(item => followed.get(item))).toEqual([
+      { author: { id: "a1", name: "Ada" } },
+      { author: { id: "a1", name: "Ada" } },
+      undefined,
     ]);
+    expect(items.map(item => item.author)).toEqual(["a1", "a1", "gone"]);
     expect(reads.entryPaths).toHaveBeenCalledOnce();
     expect(reads.entryPaths).toHaveBeenCalledWith(
       [

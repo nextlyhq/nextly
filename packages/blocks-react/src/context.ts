@@ -698,6 +698,24 @@ export interface PageContext {
    */
   listReads?: ListBatchReads;
   /**
+   * The related entries a list read ahead for the item being drawn, by the
+   * relation field it followed: what an item binding through that relation
+   * (`author.name`) reads, while the item keeps the id it stores, which a
+   * binding to the field itself (`author`) reads. Absent, both read the
+   * item's own values.
+   *
+   * @experimental
+   */
+  itemFollowed?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+  /**
+   * The blocks the route kept because their conditions held for the page's
+   * entry, by id: what a list asks the renderer's own condition gate with,
+   * so it reads ahead for exactly the blocks each entry draws.
+   *
+   * @experimental
+   */
+  heldConditions?: ReadonlySet<string>;
+  /**
    * The entry the surrounding repeater is currently on.
    *
    * Distinct from `entry`, which is the record the PAGE renders: a loop over

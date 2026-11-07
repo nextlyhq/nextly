@@ -8,8 +8,10 @@
  * empty state, and the server log names the page, the cap and the blocks.
  */
 import {
+  defineNamedQuery,
   DOCUMENT_FORMAT_VERSION,
   type BlockDocument,
+  type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import type { BindingSourceRef } from "nextly/runtime";
 import { createElement, type ReactElement } from "react";
@@ -43,14 +45,30 @@ import { throughBoundary } from "./__tests__/through-boundary";
 import { coreBlocks } from "./blocks";
 import {
   createDefaultDataProvider,
+  defineBlock,
   type BlocksDataProviderFactory,
+  type NamedQueryLookup,
 } from "./context";
 import { createPublicBlocksPage } from "./next";
 import type { PageRendererProps } from "./page-renderer";
 import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
 
-const blocks = createBlockResolver(coreBlocks);
+/**
+ * A block holding a relation itself, as a contributed block may: what a
+ * binding to the field (`author`) fills, the id the item stores.
+ */
+const writerBlock = defineBlock<{ writer?: string }>({
+  name: "test/writer",
+  version: 1,
+  description: "Shows the writer it holds, by id.",
+  example: { props: {} },
+  props: { writer: { type: "relationship", relationTo: "authors" } },
+  render: ({ props }) =>
+    createElement("output", null, `writer:${String(props.writer)}`),
+});
+
+const blocks = createBlockResolver([...coreBlocks, writerBlock]);
 
 type Row = Record<string, unknown>;
 type Where = Record<string, unknown>;
@@ -95,6 +113,7 @@ function site(count: number, document: BlockDocument) {
     })),
     authors: Array.from({ length: 7 }, (_, index) => ({
       id: `author-${String(index)}`,
+      slug: `writer-${String(index)}`,
       name: `Writer ${String(index)}`,
     })),
     images: ids.map(index => ({
@@ -108,9 +127,16 @@ function site(count: number, document: BlockDocument) {
       matches(row, args.where)
     );
     const limit = typeof args.limit === "number" ? args.limit : all.length;
+    // The window asked for, by an offset or a page of `limit` rows.
+    const start =
+      typeof args.offset === "number"
+        ? args.offset
+        : typeof args.page === "number"
+          ? (args.page - 1) * limit
+          : 0;
     const select = args.select as Record<string, boolean> | undefined;
     const items = all
-      .slice(0, limit)
+      .slice(start, start + limit)
       .map(row =>
         select === undefined
           ? row
@@ -148,8 +174,14 @@ function readsSoFar(nextly: Site): number {
 /** A page of one list of posts: a title, an author's name, an image, a link. */
 function listing(
   limit: number,
-  /** Leave each entry's link out by a condition no entry meets. */
-  options: { readonly linkHidden?: boolean } = {}
+  options: {
+    /** Leave each entry's link out by a condition no entry meets. */
+    readonly linkHidden?: boolean;
+    /** The list's props in place of a plain list of posts. */
+    readonly list?: Record<string, unknown>;
+    /** More blocks for each entry's template. */
+    readonly more?: readonly BlockNode[];
+  } = {}
 ): BlockDocument {
   const itemText = (id: string, path: string) => ({
     id,
@@ -167,7 +199,7 @@ function listing(
           id: "posts",
           type: "core/collection-loop",
           version: 1,
-          props: { collection: "posts", limit },
+          props: options.list ?? { collection: "posts", limit },
           slots: {
             children: [
               itemText("title", "title"),
@@ -197,6 +229,7 @@ function listing(
                   : {}),
                 bindings: { entryId: { $bind: "id", source: "item" } },
               },
+              ...(options.more ?? []),
             ],
             empty: [
               {
@@ -232,6 +265,12 @@ async function journal(
   config: {
     maxQueries?: number;
     data?: BlocksDataProviderFactory;
+    collections?: string[];
+    locale?: string;
+    namedQueries?: NamedQueryLookup;
+    timeZone?: string;
+    /** The address visited, `/journal` by default. */
+    path?: string[];
   } = {}
 ): Promise<{ html: string; reads: Row[]; total: number }> {
   return await rendered(nextly, {
@@ -255,11 +294,15 @@ async function rendered(
     slug: string;
     maxQueries?: number;
     data?: BlocksDataProviderFactory;
+    locale?: string;
+    namedQueries?: NamedQueryLookup;
+    timeZone?: string;
+    path?: string[];
     /** Draw without the lists' read-ahead, as each entry read one by one. */
     oneByOne?: boolean;
   }
 ): Promise<{ html: string; reads: Row[]; total: number }> {
-  const { slug, oneByOne, ...route } = config;
+  const { slug, oneByOne, path, ...route } = config;
   const page = createPublicBlocksPage({
     blocks,
     mediaCollection: "images",
@@ -271,7 +314,7 @@ async function rendered(
   const resolved = readsSoFar(nextly);
   const before = nextly.find.mock.calls.length;
   const element = await throughBoundary<PageRendererProps>(
-    page.ContentPage({ params: { slug: [slug] } })
+    page.ContentPage({ params: { slug: path ?? [slug] } })
   );
   const props =
     oneByOne === true ? withoutReadAhead(element.props) : element.props;
@@ -551,6 +594,73 @@ describe("what a list reads ahead, and through what", () => {
   });
 });
 
+describe("a list's relations and links, read ahead", () => {
+  it("keeps the id an item stores for a binding to the relation itself, and reads the related entry for one through it", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const nextly = site(
+      5,
+      listing(5, {
+        more: [
+          {
+            id: "writer",
+            type: "test/writer",
+            version: 1,
+            props: {},
+            bindings: { writer: { $bind: "author", source: "item" } },
+          },
+        ],
+      })
+    );
+    const { html } = await journal(nextly);
+    // Through it, for the author heading: the related entry's field.
+    expect(html).toContain("Writer 1");
+    // To it: the id the item stores, on the same item.
+    expect(html).toContain("<output>writer:author-1</output>");
+  });
+
+  it("reads ahead for a custom source whose rows are a collection's entries, as for that collection's list", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const ahead = defineNamedQuery({
+      name: "posts.picked",
+      label: "Picked posts",
+      reads: { collections: ["posts"] },
+      rows: { collection: "posts" },
+      run: () =>
+        Promise.resolve({
+          rows: [1, 2, 3].map(index => ({
+            id: `post-${String(index)}`,
+            title: `Post number ${String(index)}`,
+            author: `author-${String(index)}`,
+          })),
+        }),
+    });
+    const nextly = site(
+      5,
+      listing(3, {
+        list: { namedQuery: { name: "posts.picked", params: {} }, limit: 3 },
+      })
+    );
+    const { html, reads } = await journal(nextly, {
+      timeZone: "Asia/Karachi",
+      namedQueries: {
+        definitionOf: name => (name === ahead.name ? ahead : undefined),
+      },
+    });
+    expect(html).toContain("Writer 2");
+    expect(html).toContain('href="/post-3"');
+    // One read of the authors and one of the links' rows, for all three.
+    expect(described(reads)).toEqual(
+      expect.arrayContaining(["authors: by ids", "posts: by ids"])
+    );
+    expect(
+      described(reads).filter(read => read === "authors: by ids")
+    ).toHaveLength(1);
+    expect(
+      described(reads).filter(read => read === "posts: by ids")
+    ).toHaveLength(1);
+  });
+});
+
 describe("the overrun line", () => {
   it("is said once per page in ten minutes, however often the page renders over its cap", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -569,6 +679,40 @@ describe("the overrun line", () => {
     await quiet();
     expect(warn).toHaveBeenCalledTimes(2);
     expect(String(warn.mock.calls[1]?.[0])).toContain('"pages" page "journal"');
+  });
+
+  it("says each language of a page apart", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const nextly = site(5, listing(5));
+    await journal(nextly, { maxQueries: 0, locale: "en" });
+    await quiet();
+    await journal(nextly, { maxQueries: 0, locale: "fr" });
+    await quiet();
+    await journal(nextly, { maxQueries: 0, locale: "fr" });
+    await quiet();
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it("says each page of a page's list apart", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    // Ten posts a page, so the list has five; room for each page's entries
+    // and their authors, and none for their links.
+    const nextly = site(
+      50,
+      listing(10, {
+        list: { collection: "posts", limit: 10, paginate: true },
+      })
+    );
+    const first = await journal(nextly, { maxQueries: 2 });
+    expect(first.html).toContain("Post number 1<");
+    await quiet();
+    const second = await journal(nextly, {
+      maxQueries: 2,
+      path: ["journal", "page", "2"],
+    });
+    expect(second.html).toContain("Post number 11<");
+    await quiet();
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 });
 

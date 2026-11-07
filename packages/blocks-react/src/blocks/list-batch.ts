@@ -143,19 +143,38 @@ function childrenOf(node: BlockNode): BlockNode[] {
   );
 }
 
-/** A value as a source gives it for one item: text, or nothing. */
+/**
+ * A value as a source gives it for one item: text, or nothing. A path of one
+ * field reads the item as stored; a path through a relation reads the entry
+ * read for it, where there is one.
+ */
 function valueFor(
   source: ValueSource,
-  item: Readonly<Record<string, unknown>>
+  item: Readonly<Record<string, unknown>>,
+  followed?: FollowedRows
 ): string | undefined {
   if ("value" in source) return source.value;
-  let value: unknown = item;
-  for (const segment of source.path) {
+  const from =
+    source.path.length > 1 && followed !== undefined
+      ? { ...item, ...followed }
+      : item;
+  return textOf(pathIn(from, source.path));
+}
+
+/** What a path reads in a record, through nested records only. */
+function pathIn(record: unknown, path: readonly string[]): unknown {
+  let value = record;
+  for (const segment of path) {
     value =
       isPlainRecord(value) && Object.hasOwn(value, segment)
         ? value[segment]
         : undefined;
   }
+  return value;
+}
+
+/** A value as text an id or a collection can be: a number, or a non-blank string. */
+function textOf(value: unknown): string | undefined {
   if (typeof value === "number") return String(value);
   return typeof value === "string" && value.trim() !== "" ? value : undefined;
 }
@@ -166,41 +185,53 @@ function valueFor(
  * entries with their relations read in place of their ids.
  */
 export async function withReadAhead<
-  O extends { readonly items: readonly Record<string, unknown>[] },
+  R extends {
+    readonly outcome: { readonly items: readonly Record<string, unknown>[] };
+    readonly itemContext: (item: Record<string, unknown>) => PageContext;
+  },
 >(
-  outcome: O,
+  read: R,
   list: BlockNode,
   ctx: PageContext,
-  entries: {
-    readonly collection: string | undefined;
-    readonly contextOf: (item: Record<string, unknown>) => PageContext;
-  }
-): Promise<O> {
-  const items = await readListAhead(
-    outcome.items,
+  collection: string | undefined
+): Promise<R> {
+  const followed = await readListAhead(
+    read.outcome.items,
     list.slots?.[LIST_ENTRY_SLOT] ?? [],
     ctx,
-    { nodeId: list.id, ...entries }
+    { nodeId: list.id, collection, contextOf: read.itemContext }
   );
-  return items === outcome.items ? outcome : { ...outcome, items };
+  if (followed.size === 0) return read;
+  return {
+    ...read,
+    // Each entry drawn with what was read for it beside it, its own values
+    // untouched.
+    itemContext: item => {
+      const drawn = read.itemContext(item);
+      const rows = followed.get(item);
+      return rows === undefined ? drawn : { ...drawn, itemFollowed: rows };
+    },
+  };
 }
 
+/** The related entries read for one item, by the relation field followed. */
+type FollowedRows = Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+
 /**
- * The list's entries with what their template asks read ahead: each relation
- * the items' bindings follow read in place of its id, and the links the
- * template draws settled for the per-entry reads to answer from.
+ * What a list's template asks of its entries, read ahead: each relation the
+ * items' bindings follow, read for all of them at once and returned beside
+ * each item it was read for (the item keeps the id it stores), and the links
+ * the template draws, settled for the per-entry reads to answer from.
  *
  * Each entry asks only for what it draws: its template walked with the
- * render's own gate (`conditionAllows`, against the context the entry is
- * drawn with, `contextOf`), so a block an entry's conditions leave out spends
- * nothing. The route's set of blocks its entry's conditions kept is not
- * handed to a list, so a block inside one that an entry condition kept is
- * judged against the item here; if that leaves it out, it reads as it is
- * drawn, one entry at a time, still counted, and draws the same.
+ * render's own gate, `conditionAllows`, against the context the entry is
+ * drawn with (`contextOf`) and the blocks the route kept for its entry's
+ * conditions (`heldConditions`), as the renderer asks it, so a block an
+ * entry's conditions leave out spends nothing.
  *
  * Every read is claimed for the list (`nodeId`), so a page past its
  * allowance names the list as the block that went unread. A host without
- * batch reads gets the entries back as they were.
+ * batch reads reads nothing ahead.
  */
 export async function readListAhead(
   items: readonly Record<string, unknown>[],
@@ -211,26 +242,31 @@ export async function readListAhead(
     readonly collection: string | undefined;
     readonly contextOf: (item: Record<string, unknown>) => PageContext;
   }
-): Promise<readonly Record<string, unknown>[]> {
+): Promise<ReadonlyMap<Record<string, unknown>, FollowedRows>> {
   const reads = ctx.listReads;
-  if (reads === undefined || items.length === 0) return items;
+  if (reads === undefined || items.length === 0) return new Map();
+  const held = ctx.heldConditions;
   const demands = items.map(item =>
     itemReadDemand(template, node =>
-      conditionAllows(node, list.contextOf(item))
+      conditionAllows(
+        node,
+        list.contextOf(item),
+        held === undefined ? {} : { held }
+      )
     )
   );
   const claim = { nodeId: list.nodeId };
-  const drawn =
+  const followed =
     list.collection === undefined
-      ? items
-      : await withRelations(items, demands, {
+      ? new Map<Record<string, unknown>, FollowedRows>()
+      : await relatedRows(items, demands, {
           reads,
           collection: list.collection,
           claim,
         });
-  const refs = linkRefs(drawn, demands);
+  const refs = linkRefs(items, demands, followed);
   if (refs.length > 0) await reads.entryPaths(refs, claim);
-  return drawn;
+  return followed;
 }
 
 /** An item's stored relation id, when it holds one. */
@@ -260,12 +296,11 @@ function followsOf(
 }
 
 /**
- * The items with each followed relation read, one read per relation for all
- * the entries that follow it, in place of the id each stores. An item whose
- * related entry was not read keeps its id, and its binding shows its
- * fallback.
+ * The related entries each item's followed relations lead to, one read per
+ * relation for all the entries that follow it, by item. An item whose
+ * related entry was not read has none, and its binding shows its fallback.
  */
-async function withRelations(
+async function relatedRows(
   items: readonly Record<string, unknown>[],
   demands: readonly ItemReadDemand[],
   how: {
@@ -273,10 +308,13 @@ async function withRelations(
     readonly collection: string;
     readonly claim: { readonly nodeId: string };
   }
-): Promise<readonly Record<string, unknown>[]> {
-  let drawn = items;
+): Promise<Map<Record<string, unknown>, FollowedRows>> {
+  const rows = new Map<Record<string, unknown>, FollowedRows>();
   for (const [field, { fields, entries }] of followsOf(demands)) {
-    const ids = entries.flatMap(index => storedId(drawn[index]?.[field]) ?? []);
+    const following = entries
+      .map(index => items[index])
+      .filter((item): item is Record<string, unknown> => item !== undefined);
+    const ids = following.flatMap(item => storedId(item[field]) ?? []);
     if (ids.length === 0) continue;
     const related = await how.reads.related(
       how.collection,
@@ -285,27 +323,84 @@ async function withRelations(
       [...fields],
       how.claim
     );
-    if (related === undefined) continue;
-    const following = new Set(entries);
-    drawn = drawn.map((item, index) => {
-      const id = following.has(index) ? storedId(item[field]) : undefined;
-      const row = id === undefined ? undefined : related.get(id);
-      return row === undefined ? item : { ...item, [field]: row };
-    });
+    if (related !== undefined) placeRows(rows, following, field, related);
   }
-  return drawn;
+  return rows;
 }
 
-/** Every entry the items' drawn links point at, each once. */
+/** Each item's related entry, set beside it under the field it follows. */
+function placeRows(
+  rows: Map<Record<string, unknown>, FollowedRows>,
+  items: readonly Record<string, unknown>[],
+  field: string,
+  related: ReadonlyMap<string, Readonly<Record<string, unknown>>>
+): void {
+  for (const item of items) {
+    const id = storedId(item[field]);
+    const row = id === undefined ? undefined : related.get(id);
+    if (row !== undefined) rows.set(item, { ...rows.get(item), [field]: row });
+  }
+}
+
+/**
+ * Which of a node's item bindings read through a relation the list read
+ * ahead (`author.name`, with `author` among `followed`), and which read the
+ * item itself. One test, `itemPath`'s, for the read-ahead and the render.
+ */
+function readsThrough(binding: unknown, followed: FollowedRows): boolean {
+  const [field, inner] = itemPath(binding) ?? [];
+  return (
+    field !== undefined && inner !== undefined && Object.hasOwn(followed, field)
+  );
+}
+
+/**
+ * The passes a node's item bindings are filled in when its list read
+ * relations ahead: the bindings to the item itself against the item as it
+ * is stored, then those through a relation against the item with each read
+ * entry in place of its id. One pass, the stored item, otherwise.
+ */
+export function itemBindingPasses<N extends BlockNode>(
+  node: N,
+  item: Readonly<Record<string, unknown>> | undefined,
+  followed: FollowedRows | undefined
+): readonly { readonly node: N; readonly item: typeof item }[] {
+  const bindings = isPlainRecord(node.bindings) ? node.bindings : undefined;
+  if (item === undefined || followed === undefined || bindings === undefined) {
+    return [{ node, item }];
+  }
+  const through = Object.entries(bindings).filter(([, binding]) =>
+    readsThrough(binding, followed)
+  );
+  if (through.length === 0) return [{ node, item }];
+  const own = Object.entries(bindings).filter(
+    ([, binding]) => !readsThrough(binding, followed)
+  );
+  return [
+    { node: { ...node, bindings: Object.fromEntries(own) }, item },
+    {
+      node: { ...node, bindings: Object.fromEntries(through) },
+      item: { ...item, ...followed },
+    },
+  ];
+}
+
+/**
+ * Every entry the items' drawn links point at, each once: read from each
+ * item as its link's binding reads it, a path through a relation from the
+ * entry read for it.
+ */
 function linkRefs(
   items: readonly Record<string, unknown>[],
-  demands: readonly ItemReadDemand[]
+  demands: readonly ItemReadDemand[],
+  followed: ReadonlyMap<Record<string, unknown>, FollowedRows>
 ): { collection: string; id: string }[] {
   const refs = new Map<string, { collection: string; id: string }>();
   for (const [index, item] of items.entries()) {
+    const rows = followed.get(item);
     for (const link of demands[index]?.links ?? []) {
-      const collection = valueFor(link.collection, item);
-      const id = valueFor(link.id, item);
+      const collection = valueFor(link.collection, item, rows);
+      const id = valueFor(link.id, item, rows);
       if (collection === undefined || id === undefined) continue;
       refs.set(`${collection}\u0000${id}`, { collection, id });
     }
