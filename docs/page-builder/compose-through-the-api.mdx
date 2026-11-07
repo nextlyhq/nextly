@@ -289,9 +289,14 @@ template and `422` for one that cannot have one; a dry run answers either as `re
 The answer holds the `template` as the write stored it.
 
 `set-template-address` sets the address a collection's entries are served at, stored on
-its template, for a collection made in the Schema Builder, whose address no code declares
-([Collections made in the Schema Builder](/docs/page-builder#collections-made-in-the-schema-builder)).
-`address` is a path such as `/blog`, or `null` (or `""`) for none. It needs the
+its template ([Collections made in the Schema Builder](/docs/page-builder#collections-made-in-the-schema-builder)
+describes stored addresses). Any collection that may have a template qualifies, whether it
+is defined in code or made in the Schema Builder, with two exceptions. A collection whose
+address is declared in code (`templates.addresses`) is served there, so a different stored
+address is refused, naming the declared one: change it in code. A localized collection is
+refused, since its entries cannot be served under a template address yet. Only a
+collection's template has an address; an entry's own design is drawn at its entry's
+address. `address` is a path such as `/blog`, or `null` (or `""`) for none. It needs the
 **Manage template routing** permission (`manage-template-routing`), asked before anything
 else, so a caller without it is answered `403` and learns nothing of the template. An
 address another collection holds, in code or on its template, and the site's root are
