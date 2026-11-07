@@ -77,6 +77,7 @@ describe("core block registration", () => {
       "core/rich-text",
       "core/section",
       "core/spacer",
+      "core/table-of-contents",
       "core/text",
     ]);
   });

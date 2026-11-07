@@ -199,6 +199,15 @@ const VARIANTS: readonly Variant[] = [
     is: [],
     without: [],
   },
+  // A navigation landmark of links in a disclosure: interactive whether or
+  // not its passage has headings yet, so it is never offered inside a link.
+  {
+    name: "Table of contents",
+    type: "core/table-of-contents",
+    props: {},
+    is: ["flow", "interactive"],
+    without: [],
+  },
   { name: "List", type: "core/list", props: { items: ["a"] }, ...FLOW },
   {
     name: "Image",

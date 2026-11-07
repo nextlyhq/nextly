@@ -156,13 +156,18 @@ const SOURCE_MODULES: ReadonlyArray<{
     // second one here. These are exported only so their own test can drive
     // them at a depth React's renderer could not reach, and at the
     // partition's bound from both sides. `drawsInteractive` is shared with the
-    // rich-text block's content model in this package, not offered outside it.
+    // rich-text block's content model in this package, not offered outside it,
+    // and so is `passageHeadings`, the walk the table-of-contents block lists
+    // a passage's headings by. `VIEWS_DRAWING_CHILDREN` is exported for the
+    // test that holds every view to what it declares it draws.
     internal: [
       "drawsInteractive",
       "holdsBlockContent",
       "holdsInteractive",
       "MAX_PARTITION_DEPTH",
       "partitionPhrasing",
+      "passageHeadings",
+      "VIEWS_DRAWING_CHILDREN",
     ],
   },
   { name: "page-style-trace", module: pageStyleTraceModule, internal: [] },
@@ -649,6 +654,7 @@ describe("the blocks entry", () => {
       "HEADING_LEVELS",
       "IMAGE_LOADING",
       "LIST_KINDS",
+      "TABLE_OF_CONTENTS_DEPTHS",
       "accordion",
       "accordionItem",
       "box",
@@ -678,6 +684,7 @@ describe("the blocks entry", () => {
       "richText",
       "section",
       "spacer",
+      "tableOfContents",
     ]);
   });
 
