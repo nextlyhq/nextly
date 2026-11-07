@@ -92,6 +92,7 @@ import {
   type DeleteCall,
   type DeleteTally,
 } from "./component-delete-client";
+import { DESTRUCTIVE_CONFIRM_CLASS } from "./destructive-confirm";
 
 /** Which component the dialog deletes, and what follows. */
 export interface DeleteComponentDialogProps {
@@ -512,7 +513,12 @@ function checkedFaceOf(
         footer: (
           <>
             <SafeButton label="Cancel" cancelRef={cancelRef} />
-            <Button type="button" variant="destructive" onClick={args.onDelete}>
+            <Button
+              type="button"
+              variant="destructive"
+              className={DESTRUCTIVE_CONFIRM_CLASS}
+              onClick={args.onDelete}
+            >
               Resume delete
             </Button>
           </>
@@ -549,7 +555,12 @@ function checkedFaceOf(
         footer: (
           <>
             <SafeButton label="Cancel" cancelRef={cancelRef} />
-            <Button type="button" variant="destructive" onClick={args.onDelete}>
+            <Button
+              type="button"
+              variant="destructive"
+              className={DESTRUCTIVE_CONFIRM_CLASS}
+              onClick={args.onDelete}
+            >
               Delete component
             </Button>
           </>
@@ -579,7 +590,7 @@ function checkedFaceOf(
               variant="destructive"
               // The words are long: on a phone they wrap rather than push
               // the dialog past the screen's edge.
-              className="h-auto min-h-9 whitespace-normal py-2 text-center"
+              className={`h-auto min-h-9 whitespace-normal py-2 text-center ${DESTRUCTIVE_CONFIRM_CLASS}`}
               onClick={args.onDelete}
             >
               Turn each copy into plain blocks, then delete
@@ -708,7 +719,12 @@ function faceOf(view: View, args: FaceArgs): Face {
         footer: (
           <>
             <SafeButton label="Pause" cancelRef={cancelRef} />
-            <Button type="button" variant="destructive" disabled>
+            <Button
+              type="button"
+              variant="destructive"
+              className={DESTRUCTIVE_CONFIRM_CLASS}
+              disabled
+            >
               Deleting…
             </Button>
           </>
@@ -741,7 +757,12 @@ function faceOf(view: View, args: FaceArgs): Face {
         footer: (
           <>
             <SafeButton label="Close" cancelRef={cancelRef} />
-            <Button type="button" variant="destructive" onClick={args.onDelete}>
+            <Button
+              type="button"
+              variant="destructive"
+              className={DESTRUCTIVE_CONFIRM_CLASS}
+              onClick={args.onDelete}
+            >
               Try again
             </Button>
           </>

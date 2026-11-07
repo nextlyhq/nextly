@@ -228,12 +228,8 @@ test.describe("Delete component", () => {
       await expect(dialog.getByRole("button", { name: CONVERT })).toBeVisible();
       await settleTransitions(page);
 
-      // The design system's destructive button is an accepted contrast
-      // pairing in light mode (`packages/ui/src/styles/contrast/accepted.ts`,
-      // white on the palette's red): it is judged there, not here.
       const results = await new AxeBuilder({ page })
         .include('[role="alertdialog"]')
-        .exclude('[role="alertdialog"] .bg-destructive-solid')
         .withTags(AA_TAGS)
         .analyze();
       expect(results.violations).toEqual([]);
