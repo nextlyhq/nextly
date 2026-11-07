@@ -41,6 +41,7 @@ import { formsChangedBy } from "../component-cycle-guard";
 import { siteBreakpoints } from "../site-style";
 
 import { storedFormsFor } from "./added-undefined-ids";
+import { newBindingIssues } from "./binding-judgement";
 import {
   compositionIssues,
   documentOf,
@@ -300,20 +301,27 @@ export function blocksFieldType(
       // And the fields each collection list names, against the schema and
       // what visitors may read, on any write the server can read them for.
       const listFields = composition?.()?.listFields;
+      // And what its bindings read, against each source's declared fields.
+      const bindingShapes = composition?.()?.bindingShapes;
       const lists = async (): Promise<readonly PluginFieldIssue[]> => {
-        if (emptied || listFields === undefined || args.write === undefined) {
-          return [];
-        }
-        const site = {
-          fieldsOf: listFields,
-          storedForms,
-          maxNodes: composition?.()?.limits.maxNodes,
-        };
+        if (emptied || args.write === undefined) return [];
+        const maxNodes = composition?.()?.limits.maxNodes;
+        const bound =
+          bindingShapes === undefined
+            ? []
+            : await newBindingIssues(value, args, label, {
+                shapesOf: bindingShapes,
+                storedForms,
+                ...(maxNodes === undefined ? {} : { maxNodes }),
+              });
+        if (listFields === undefined) return bound;
+        const site = { fieldsOf: listFields, storedForms, maxNodes };
         // And the fields its blocks' visibility conditions check, judged the
         // same way, since a condition the page could not check hides its block.
         return [
           ...(await newListQueryIssues(value, args, label, site)),
           ...(await newConditionIssues(value, args, label, site)),
+          ...bound,
         ];
       };
       const classes = async (): Promise<readonly PluginFieldIssue[]> => {
@@ -347,7 +355,9 @@ export function blocksFieldType(
         if (
           args.write === undefined ||
           emptied ||
-          (definitions === undefined && listFields === undefined)
+          (definitions === undefined &&
+            listFields === undefined &&
+            bindingShapes === undefined)
         ) {
           return verdict;
         }

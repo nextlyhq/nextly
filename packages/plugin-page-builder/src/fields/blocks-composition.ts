@@ -93,6 +93,7 @@ import {
 import { fenceIssues, type FencedComponents } from "../host-rewrite/fence";
 
 import type { StoredForms } from "./added-undefined-ids";
+import type { DeclaredShapesReader } from "./binding-judgement";
 import { isForest } from "./blocks-document";
 import {
   LAYERS_LOCK_CHANGED,
@@ -250,6 +251,12 @@ export interface CompositionSetup {
    * schema cannot be read, and then lists are judged by their shape alone.
    */
   readonly listFields?: ListFieldsReader;
+  /**
+   * The fields a collection or a Single declares, whoever may read them, for
+   * judging a page's bindings at save. Absent where the schema cannot be
+   * read, and then bindings are judged by their shape alone.
+   */
+  readonly bindingShapes?: DeclaredShapesReader;
 }
 
 /** What the site defines that a page refers to by id. */

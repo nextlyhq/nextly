@@ -1816,6 +1816,15 @@ export const pageBuilder = (
             );
           },
         }),
+        // What a page's bindings may read: each source's declared fields,
+        // whoever may read them, since binding a field the public may not read
+        // is allowed. Read per write, so a field renamed a moment ago is judged
+        // at the next save.
+        bindingShapes: async ref => {
+          // Imported at call time, for the reason the readers above give.
+          const { declaredFieldShapes } = await import("nextly/runtime");
+          return declaredFieldShapes(ref);
+        },
         siteDefinitions: async () => {
           const style = await siteStyleNow();
           return {
