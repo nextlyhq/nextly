@@ -15,7 +15,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
-  foreignMediaOf,
+  outOfReachOf,
   listOf,
   unboundAsWritten,
   unbindPlan,
@@ -104,8 +104,10 @@ describe("unbindPlan", () => {
       }),
       IMAGE
     );
+    // The typed address is emptied: unbound, the block would fall to it
+    // where its library image is missing, which the bound image never did.
     expect(plan).toMatchObject({
-      kept: { set: { mediaId: "m1" } },
+      kept: { set: { mediaId: "m1" }, empty: ["src"] },
       answer: { kept: "visitor", value: "m1" },
     });
   });
@@ -162,6 +164,25 @@ describe("unbindPlan", () => {
   });
 });
 
+describe("an image bound to nothing", () => {
+  it("keeps the block's own image and empties the typed address it never drew", () => {
+    // Bound, the block drew its own library image or nothing, never `src`;
+    // left in place, `src` would appear after the unbind.
+    for (const shown of [
+      view({
+        filled: { mediaId: "" },
+        bound: { kind: "image", holds: "media", from: "own" },
+      }),
+      view({ filled: { mediaId: "" }, unreadable: {} }),
+    ]) {
+      expect(unbindPlan("mediaId", "cover", shown, IMAGE)).toMatchObject({
+        kept: { set: {}, empty: ["src"] },
+        answer: { kept: "own" },
+      });
+    }
+  });
+});
+
 describe("the list a list child is drawn in", () => {
   const list = (id: string, collection: string, entries: BlockNode[]) =>
     ({
@@ -211,17 +232,86 @@ describe("an image bound into a collection other than the media library", () => 
 
   it("asks for the value: the site's pages may draw images from it", () => {
     expect(
-      foreignMediaOf(node, "mediaId", runWith("photos"), { phase: "page" })
+      outOfReachOf(node, "mediaId", runWith("photos"), { phase: "page" })
     ).toEqual({ needs: expect.stringContaining("“photos”") });
+  });
+
+  it("asks for the value of a date and time shown as text, a day or an hour apart by zone", () => {
+    const heading: BlockNode = {
+      id: "h",
+      type: "core/heading",
+      version: 1,
+      props: {},
+      bindings: { text: { $bind: "startsAt" } },
+    };
+    const runOf = (shape: Record<string, unknown>) =>
+      createBindingRun({
+        sources: { entry: { startsAt: "2026-03-01T23:30:00.000Z" } },
+        entryRef: { collection: "events" },
+        schema: {
+          fieldsOf: () => [{ name: "startsAt", type: "date", ...shape }],
+        },
+        props: { get: () => ({ props: { text: { type: "text" } } }) },
+      });
+    expect(outOfReachOf(heading, "text", runOf({}), { phase: "page" })).toEqual(
+      { needs: expect.stringContaining("time zone") }
+    );
+    // A day alone is the same day in every zone.
+    expect(
+      outOfReachOf(heading, "text", runOf({ dateOnly: true }), {
+        phase: "page",
+      })
+    ).toBeUndefined();
+  });
+
+  it("asks for the value of a list item's binding through a relation", () => {
+    const name: BlockNode = {
+      id: "n",
+      type: "core/heading",
+      version: 1,
+      props: {},
+      bindings: { text: { $bind: "author.name", source: "item" } },
+    };
+    const run = createBindingRun({
+      sources: {},
+      schema: {
+        fieldsOf: ref =>
+          "collection" in ref && ref.collection === "posts"
+            ? [
+                { name: "author", type: "relationship", relationTo: "users" },
+                {
+                  name: "meta",
+                  type: "group",
+                  fields: [{ name: "lede", type: "text" }],
+                },
+              ]
+            : [{ name: "name", type: "text" }],
+      },
+      props: { get: () => ({ props: { text: { type: "text" } } }) },
+    });
+    const scope = {
+      phase: "item" as const,
+      item: { author: "u1" },
+      itemRef: { collection: "posts" },
+    };
+    expect(outOfReachOf(name, "text", run, scope)).toEqual({
+      needs: expect.stringContaining("relation"),
+    });
+    // A group of the item's own is read with the item.
+    const lede = {
+      ...name,
+      bindings: { text: { $bind: "meta.lede", source: "item" } },
+    };
+    expect(outOfReachOf(lede, "text", run, scope)).toBeUndefined();
   });
 
   it("reads the media library's own images as a visitor does", () => {
     expect(
-      foreignMediaOf(node, "mediaId", runWith("media"), { phase: "page" })
+      outOfReachOf(node, "mediaId", runWith("media"), { phase: "page" })
     ).toBeUndefined();
     // A run that draws from the collection asks nothing either.
     expect(
-      foreignMediaOf(node, "mediaId", runWith("photos", "photos"), {
+      outOfReachOf(node, "mediaId", runWith("photos", "photos"), {
         phase: "page",
       })
     ).toBeUndefined();

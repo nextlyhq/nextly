@@ -21,6 +21,7 @@ import {
   DEFAULT_BINDING_SOURCE,
   DOCUMENT_FORMAT_VERSION,
   findNode,
+  getBlock,
   isPlainRecord,
   LIST_ENTRY_SLOT,
   readListQuery,
@@ -30,6 +31,7 @@ import {
   visitorUnreadableBindings,
   walkNodes,
   type BindingRun,
+  type BindingSchemaRef,
   type BindingScope,
   type BlockDocument,
   type BlockNode,
@@ -73,6 +75,9 @@ export function unbindPlan(
     const fallback = view.unreadable.fallback;
     const unread = `Visitors can't read “${path}”, so its value wasn't copied in.`;
     if (fallback === undefined) {
+      // A private image shows the block's own image, as any image bound to
+      // nothing does.
+      if (isMediaProp(declared, prop)) return ownImagePlan(prop, declared);
       return {
         kept: { set: {} },
         answer: {
@@ -128,7 +133,15 @@ export function unbindPlan(
   };
 }
 
-/** An image's plan: a library id stays; an address goes to the address prop. */
+/**
+ * An image's plan: a library id stays; an address goes to the address prop.
+ *
+ * A bound image draws only what its binding filled and the binding's
+ * fallback, never the block's typed address; unbound, the block falls to that
+ * address when its library image is missing. So the address prop is emptied
+ * wherever the plan does not write the address into it, and the block shows
+ * after the unbind what visitors saw before it.
+ */
 function imagePlan(
   prop: string,
   value: unknown,
@@ -136,19 +149,10 @@ function imagePlan(
   declared: DeclaredProps
 ): UnbindPlan {
   const kept = bound.from === "fallback" ? "fallback" : "visitor";
-  if (bound.from === "own") {
-    return {
-      kept: { set: {} },
-      answer: {
-        kept: "own",
-        reason:
-          "Visitors see the block's own image here, so the block keeps it.",
-      },
-    };
-  }
+  if (bound.from === "own") return ownImagePlan(prop, declared);
   if (bound.holds === "media") {
     return {
-      kept: { set: { [prop]: value } },
+      kept: { set: { [prop]: value }, ...typedAddressEmptied(prop, declared) },
       answer: { kept, value, reason: "The image keeps what visitors saw." },
     };
   }
@@ -159,6 +163,26 @@ function imagePlan(
     declared,
     "Visitors saw an image address, not a library image, so it's kept in the image's address."
   );
+}
+
+/** The block's own image kept, the typed address a bound image never drew emptied. */
+function ownImagePlan(prop: string, declared: DeclaredProps): UnbindPlan {
+  return {
+    kept: { set: {}, ...typedAddressEmptied(prop, declared) },
+    answer: {
+      kept: "own",
+      reason: "Visitors see the block's own image here, so the block keeps it.",
+    },
+  };
+}
+
+/** The address prop emptied, where the block declares one for `prop`. */
+function typedAddressEmptied(
+  prop: string,
+  declared: DeclaredProps
+): { readonly empty?: readonly string[] } {
+  const into = addressPropOf(declared, prop);
+  return into === undefined ? {} : { empty: [into] };
 }
 
 /** Whether the block declares `prop` as an image from the media library. */
@@ -294,7 +318,7 @@ function unreadableOf(
  * names the entry, or the list item, a value varies by; a page's own entry is
  * the page itself, and a template's has to be named.
  */
-export async function visitorViewOf(
+async function visitorViewOf(
   source: UnbindSource,
   document: BlockDocument,
   nodeId: string,
@@ -335,8 +359,8 @@ export async function visitorViewOf(
   );
   const scope = await scopeOf(reader, reads.item);
   if ("needs" in scope) return scope;
-  const foreign = foreignMediaOf(node, prop, run, scope);
-  if (foreign !== undefined) return foreign;
+  const unreachable = outOfReachOf(node, prop, run, scope);
+  if (unreachable !== undefined) return unreachable;
   const result = resolveNodeBindings(node, run, scope);
   const unreadable = unreadableOf(alone, run, nodeId, prop);
   return {
@@ -347,37 +371,81 @@ export async function visitorViewOf(
 }
 
 /**
- * An image bound to an upload field of a collection other than the media
- * library. The renderer may be set to draw images from such a collection
- * (`mediaCollection`), and that setting lives in the site's page code, out of
- * this route's reach: what a visitor sees can't be told here, so the value to
- * keep has to be given.
+ * Why what a visitor sees of `prop` can't be told here, where it depends on
+ * what this route can't reach; `undefined` when it can be. The value to keep
+ * then has to be given. Three cases:
+ *
+ * - An image bound to an upload field of a collection other than the media
+ *   library: the site's pages may be set to draw images from it
+ *   (`mediaCollection`), a setting in their own code.
+ * - A date and time shown as text: the pages may be set to show it in a time
+ *   zone of their own (`timeZone`), likewise out of reach, and a day or an
+ *   hour apart is a different text.
+ * - A list item's binding that follows a relation: the list reads where it
+ *   leads ahead for each item, which a read of the one item does not.
  */
-export function foreignMediaOf(
+export function outOfReachOf(
   node: BlockNode,
   prop: string,
   run: BindingRun,
   scope: BindingScope
 ): UnbindNeeds | undefined {
   const props = run.props.get(node.type)?.props;
+  const refs = bindingRefsFor(run, scope);
   const check = checkBinding({
     nodeId: node.id,
     prop,
     binding: node.bindings?.[prop],
     ...(props === undefined ? {} : { props }),
     ...(run.schema === undefined ? {} : { schema: run.schema }),
-    refs: bindingRefsFor(run, scope),
+    refs,
   });
-  if (check.outcome !== "resolve" || check.binding.kind !== "image") {
-    return undefined;
+  if (check.outcome !== "resolve") return undefined;
+  const binding = check.binding;
+  const field = binding.field;
+  if (
+    binding.kind === "image" &&
+    field?.relationTo !== undefined &&
+    !runDrawsImageField(run, field)
+  ) {
+    return {
+      needs: `This image is read from “${[field.relationTo].flat().join(", ")}”, which the site's pages may be set to draw images from: give the value to keep.`,
+    };
   }
-  const field = check.binding.field;
-  if (field?.relationTo === undefined || runDrawsImageField(run, field)) {
-    return undefined;
+  if (
+    field?.type === "date" &&
+    field.dateOnly !== true &&
+    field.monthOnly !== true &&
+    binding.kind !== "date"
+  ) {
+    return {
+      needs:
+        "This date and time is shown in the time zone the site's pages are set to, which can't be read here: give the value to keep.",
+    };
   }
-  return {
-    needs: `This image is read from “${[field.relationTo].flat().join(", ")}”, which the site's pages may be set to draw images from: give the value to keep.`,
-  };
+  if (binding.source === "item" && followsRelation(binding, run, refs.item)) {
+    return {
+      needs:
+        "This binding reads through a relation of the list's items, which the list reads ahead: give the value to keep.",
+    };
+  }
+  return undefined;
+}
+
+/** Whether a binding's path leaves its source through a relation. */
+function followsRelation(
+  binding: { readonly segments: readonly string[] },
+  run: BindingRun,
+  ref: BindingSchemaRef | undefined
+): boolean {
+  if (binding.segments.length < 2 || ref === undefined) return false;
+  const first = run.schema
+    ?.fieldsOf(ref)
+    ?.find(shape => shape.name === binding.segments[0]);
+  // A source whose fields aren't known can't say: as a relation, so the value
+  // is asked for rather than guessed.
+  if (first === undefined) return true;
+  return first.type === "relationship" || first.type === "upload";
 }
 
 /** The pass the node is filled in: the page's, or its list item's, read as a visitor. */
@@ -488,4 +556,46 @@ export function unboundAsWritten(
   if (answer.kept === "own") return { unbound: answer };
   const at = answer.into ?? prop;
   return sameJsonValue(node.props[at], answer.value) ? { unbound: answer } : {};
+}
+
+/**
+ * The plan for unbinding `prop` of block `nodeId` in `document`: the one
+ * decision the page actions API and the editor's inspector both take, so an
+ * author and an API client are kept to the same value and told the same
+ * reason. A given value is kept as given; otherwise what a visitor sees is
+ * read, by `keep`'s entry or item where one is named.
+ */
+export async function planUnbind(
+  source: UnbindSource,
+  document: BlockDocument,
+  nodeId: string,
+  prop: string,
+  keep: UnbindKeep
+): Promise<UnbindPlan> {
+  const node = findNode(document.nodes, nodeId);
+  if (node === undefined) {
+    return { refusal: `There is no block "${nodeId}" on this page.` };
+  }
+  const binding = node.bindings?.[prop];
+  if (binding === undefined) {
+    return { refusal: `"${prop}" of block "${nodeId}" is not bound.` };
+  }
+  if (typeof keep === "object" && "value" in keep) {
+    return {
+      kept: { set: { [prop]: keep.value } },
+      answer: {
+        kept: "value",
+        value: keep.value,
+        reason: "The value given is kept.",
+      },
+    };
+  }
+  const view = await visitorViewOf(source, document, nodeId, prop, keep);
+  if ("needs" in view) return { refusal: view.needs };
+  return unbindPlan(
+    prop,
+    binding.$bind ?? prop,
+    view,
+    getBlock(node.type)?.props
+  );
 }

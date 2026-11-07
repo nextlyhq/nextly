@@ -41,7 +41,6 @@ import {
   namesListSource,
   COMPONENT_INSTANCE_TYPE,
   findNode,
-  getBlock,
   isComponentInstance,
   newId,
   OpError,
@@ -59,7 +58,6 @@ import {
   pageActionJsonSchema,
   pageActionSchema,
   unbindOp,
-  type UnbindKeep,
 } from "@nextlyhq/builder/ops";
 import {
   getCachedNextly,
@@ -106,13 +104,7 @@ import {
   templateTargetOf,
   type TemplateTarget,
 } from "./templates/template-target";
-import {
-  unboundAsWritten,
-  unbindPlan,
-  visitorViewOf,
-  type UnbindPlan,
-  type UnbindSource,
-} from "./unbind-kept";
+import { planUnbind, unboundAsWritten, type UnbindSource } from "./unbind-kept";
 
 /** The blocks field a page action edits when the address names none. */
 const DEFAULT_FIELD = "content";
@@ -743,48 +735,19 @@ async function unbindOps(
   action: Extract<PageAction, { kind: "unbind-prop" }>,
   source: UnbindSource
 ): Promise<{ ops: readonly BuilderOp[]; unbound: UnbindAnswer }> {
-  const node = findNode(document.nodes, action.nodeId);
-  if (node === undefined) {
-    throw refusedAction([`There is no block "${action.nodeId}" on this page.`]);
-  }
-  const binding = node.bindings?.[action.prop];
-  if (binding === undefined) {
-    throw refusedAction([
-      `"${action.prop}" of block "${action.nodeId}" is not bound.`,
-    ]);
-  }
-  const keep = action.keep ?? "visitor";
-  const plan =
-    typeof keep === "object" && "value" in keep
-      ? ({
-          kept: { set: { [action.prop]: keep.value } },
-          answer: {
-            kept: "value",
-            value: keep.value,
-            reason: "The value given is kept.",
-          },
-        } satisfies UnbindPlan)
-      : await visitorPlan(source, document, node, action.prop, keep);
+  const plan = await planUnbind(
+    source,
+    document,
+    action.nodeId,
+    action.prop,
+    action.keep ?? "visitor"
+  );
   if ("refusal" in plan) throw refusedAction([plan.refusal]);
   const op = unbindOp(document, action.nodeId, action.prop, plan.kept);
   if (op === null) {
     throw refusedAction([`There is no block "${action.nodeId}" on this page.`]);
   }
   return { ops: [op], unbound: plan.answer };
-}
-
-/** The plan from what a visitor sees, or why it can't be read here. */
-async function visitorPlan(
-  source: UnbindSource,
-  document: BlockDocument,
-  node: BlockNode,
-  prop: string,
-  keep: Exclude<UnbindKeep, { value: unknown }>
-): Promise<UnbindPlan> {
-  const view = await visitorViewOf(source, document, node.id, prop, keep);
-  if ("needs" in view) return { refusal: view.needs };
-  const path = node.bindings?.[prop]?.$bind ?? prop;
-  return unbindPlan(prop, path, view, getBlock(node.type)?.props);
 }
 
 /** A placement's props with values set and some fields reset to what they inherit. */

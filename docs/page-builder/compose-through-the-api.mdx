@@ -186,9 +186,13 @@ names the entry of a Collection list's collection, which a block inside the list
 the nearest list's. An image a visitor saw by its address, not a library image, is kept
 in the block's address prop (`src` on the Image block), the media prop emptied, and so is
 an image fallback kept in place of a private field; a block declaring none refuses the
-unbind. An image bound to an upload field of a collection other than the media library
-needs `{ "value": … }`, since the site's pages may be set to draw images from it
-(`mediaCollection`) and the server can't tell. The answer's `unbound` says what was kept
+unbind; and an image's typed address, which a bound image never draws, is emptied
+wherever the address isn't what's kept. Three bindings need `{ "value": … }`, since what
+visitors see rests on what the server can't read: an image bound to an upload field of a
+collection other than the media library (the site's pages may draw images from it,
+`mediaCollection`); a date and time shown as text (the pages may show it in a time zone of
+their own, `timeZone`); and a list item's binding through a relation (the list reads where
+it leads ahead for each item). The answer's `unbound` says what was kept
 (`visitor`, `fallback`, `own` or `value`), the value, where an address went (`into`), and
 why, in words an author reads; it is left out when a collection hook stored something
 other than that.
