@@ -880,6 +880,18 @@ export type OwnCollectionReadOpts = Pick<
 >;
 
 /**
+ * @experimental What a read of the plugin's own collection on a transaction
+ * may also say: the lock its rows are read with on PostgreSQL and MySQL.
+ * `share` (the default) holds them against writes from elsewhere; `update`
+ * also holds them against other transactions' locking reads, for a read
+ * that goes on to write the rows it read, so two such transactions take
+ * turns rather than each holding a shared lock the other's write waits on.
+ */
+export type OwnTransactionReadOpts = OwnCollectionReadOpts & {
+  readonly lock?: "share" | "update";
+};
+
+/**
  * @experimental Reads of the collections this plugin declared, shaped by no
  * configured hook. Never return the result to a person: a site's read hooks
  * may be what keeps one tenant's rows from another.
@@ -920,13 +932,14 @@ export interface PluginOwnCollectionReads {
    * added beside the page before the transaction ends. Page with `limit` and
    * stop on a short page rather than on the total. A settled token, or a
    * collection this plugin did not declare, is refused before anything is
-   * read.
+   * read. `opts.lock: "update"` reads the rows for update instead, for a
+   * read that goes on to write them (see {@link OwnTransactionReadOpts}).
    */
   listEntriesInTransaction(
     tx: PluginCollectionTransaction,
     slug: string,
     options?: Parameters<CollectionService["listEntries"]>[1],
-    opts?: OwnCollectionReadOpts
+    opts?: OwnTransactionReadOpts
   ): ReturnType<CollectionService["listEntries"]>;
   /**
    * @experimental {@link findEntryById}, read on the transaction `tx` stands
@@ -938,7 +951,7 @@ export interface PluginOwnCollectionReads {
     tx: PluginCollectionTransaction,
     slug: string,
     id: string,
-    opts?: OwnCollectionReadOpts
+    opts?: OwnTransactionReadOpts
   ): ReturnType<CollectionService["findEntryById"]>;
   /**
    * @experimental A Single this plugin declared, as stored, read on the
@@ -1040,11 +1053,12 @@ export function ownCollectionReads(
    */
   const onTransaction = async <T>(
     token: PluginCollectionTransaction,
-    readOwned: () => Promise<T>
+    readOwned: () => Promise<T>,
+    lock: "share" | "update" = "share"
   ): Promise<T> => {
     const { tx, scope } = transactionOf(token);
     scope.assertOpen();
-    return scope.track(runReadsInTransaction(tx, readOwned), "read");
+    return scope.track(runReadsInTransaction(tx, readOwned, lock), "read");
   };
 
   /** The Single's stored document, as the Singles read answers it. */
@@ -1109,9 +1123,9 @@ export function ownCollectionReads(
       ),
     // The reads above, on the transaction: the same read, so the same answer.
     listEntriesInTransaction: (tx, slug, options, opts) =>
-      onTransaction(tx, () => listEntries(slug, options, opts)),
+      onTransaction(tx, () => listEntries(slug, options, opts), opts?.lock),
     findEntryByIdInTransaction: (tx, slug, id, opts) =>
-      onTransaction(tx, () => findEntryById(slug, id, opts)),
+      onTransaction(tx, () => findEntryById(slug, id, opts), opts?.lock),
     getSingleInTransaction: (tx, slug, opts) =>
       onTransaction(tx, () =>
         read(single, slug, opts, context => readSingle(slug, context))

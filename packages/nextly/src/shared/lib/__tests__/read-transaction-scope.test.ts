@@ -193,6 +193,23 @@ describe("the shared lock a routed read takes", () => {
     expect(calls).toEqual([["share", { of: table }]]);
   });
 
+  it("takes the lock for update when the scope asks for it, on both dialects", async () => {
+    for (const dialect of ["postgresql", "mysql"] as const) {
+      const { adapter } = standInAdapter(dialect);
+      const { query, calls } = lockable();
+      await runReadsInTransaction(
+        standInTransaction(),
+        async () => {
+          lockedForRead(query, adapter, table);
+        },
+        "update"
+      );
+      expect(calls).toEqual([
+        dialect === "postgresql" ? ["update", { of: table }] : ["update"],
+      ]);
+    }
+  });
+
   it("takes MySQL's clause, which names no table", async () => {
     const { adapter } = standInAdapter("mysql");
     const { query, calls } = lockable();

@@ -465,6 +465,12 @@ no lock, so rows can still be added beside your page: page with `limit`, and sto
 page shorter than the limit rather than on the total. SQLite has one connection and one
 writer, so there is nothing to lock.
 
+When the read goes on to write the rows it read, pass `{ lock: "update" }` as the last
+argument of `listEntriesInTransaction` or `findEntryByIdInTransaction`. The rows are then
+locked `FOR UPDATE`, so a second transaction doing the same waits for yours, rather than
+both holding a shared lock that the other's write then waits on, which the database ends by
+refusing one of them.
+
 ## When to drop to `ctx.db`
 
 `ctx.db` is the **`@experimental`** database surface — unmanaged: it bypasses

@@ -48,17 +48,30 @@ import type { AnyRelations, SQL } from "drizzle-orm";
  */
 interface ReadScope {
   readonly tx: TransactionContext;
+  /** The lock a row read takes on PostgreSQL and MySQL. */
+  readonly strength: ReadLockStrength;
   live: boolean;
 }
+
+/**
+ * The lock a routed row read takes on PostgreSQL and MySQL. `share` lets
+ * other transactions read the rows and makes their writes wait; `update`
+ * makes their locking reads wait too, for a read that goes on to write the
+ * rows it read: two transactions that each held a shared lock on a row and
+ * then wrote it would wait on each other, and the database would refuse one
+ * of them.
+ */
+export type ReadLockStrength = "share" | "update";
 
 const readTransaction = new AsyncLocalStorage<ReadScope>();
 
 /** Run `work` with every read its services make routed to `tx`. */
 export async function runReadsInTransaction<T>(
   tx: TransactionContext,
-  work: () => Promise<T>
+  work: () => Promise<T>,
+  strength: ReadLockStrength = "share"
 ): Promise<T> {
-  const scope: ReadScope = { tx, live: true };
+  const scope: ReadScope = { tx, strength, live: true };
   try {
     return await readTransaction.run(scope, work);
   } finally {
@@ -255,11 +268,12 @@ export function readLocksRows(adapter: ReadingAdapter): boolean {
 
 /** The select builder's locking clause, as PostgreSQL's and MySQL's take it. */
 interface LockableSelect {
-  for(strength: "share", config?: { of: unknown }): unknown;
+  for(strength: ReadLockStrength, config?: { of: unknown }): unknown;
 }
 
 /**
- * `query` with a shared lock on the rows it reads from `table` when
+ * `query` with the scope's lock (shared, or for update) on the rows it reads
+ * from `table` when
  * {@link readLocksRows} says so, otherwise `query` unchanged. Applied last,
  * after the limit and offset, as the locking clause ends the statement.
  *
@@ -274,10 +288,11 @@ export function lockedForRead<Q>(
   table: unknown
 ): Q {
   if (!readLocksRows(adapter)) return query;
+  const strength = readTransaction.getStore()?.strength ?? "share";
   const lockable = query as unknown as LockableSelect;
   return (
     adapter.getCapabilities().dialect === "postgresql"
-      ? lockable.for("share", { of: table })
-      : lockable.for("share")
+      ? lockable.for(strength, { of: table })
+      : lockable.for(strength)
   ) as Q;
 }
