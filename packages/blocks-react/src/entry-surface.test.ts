@@ -23,6 +23,7 @@ import { describe, expect, it } from "vitest";
 
 import * as boundaryModule from "./block-boundary";
 import * as blocksEntry from "./blocks/index";
+import * as listReadModule from "./blocks/list-read";
 import * as typographyDefaultsModule from "./blocks/typography-defaults";
 import * as componentSourceModule from "./component-source";
 import * as contextModule from "./context";
@@ -113,6 +114,24 @@ const SOURCE_MODULES: ReadonlyArray<{
       "COMPONENT_TAG_COLLECTION",
       "EMPTY_DEFINITIONS",
       "MAX_DISCOVERED_COMPONENTS",
+    ],
+  },
+  {
+    name: "blocks/list-read",
+    module: listReadModule,
+    // `conditionDayStart` is public, for the editor's canvas to judge a
+    // condition's day as the published page does. The rest is how a list
+    // reads its entries and counts its pages, which the list block and the
+    // route drive; a consumer draws a list through the block.
+    internal: [
+      "dayStartIn",
+      "listEntryCount",
+      "listPageWindow",
+      "listPagesOf",
+      "listWillRead",
+      "namedListBase",
+      "readList",
+      "wholeCount",
     ],
   },
   { name: "context", module: contextModule, internal: [] },

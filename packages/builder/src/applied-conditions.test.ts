@@ -76,6 +76,7 @@ describe("the page with its conditions applied", () => {
     );
     expect([...applied.shown]).toEqual(["worksheet"]);
     expect(applied.hidden).toEqual([]);
+    expect(applied.unjudged).toBe(false);
     expect(applied.document.nodes[0]).toMatchObject({
       id: "worksheet",
       type: "core/text",
@@ -169,9 +170,11 @@ describe("the page with its conditions applied", () => {
       previewFor({ category: "News" }),
       nameOf
     );
-    // It reads each drawn item, not the previewed entry.
+    // It reads each drawn item, not the previewed entry, and is said to be
+    // unjudged, so nothing claims every conditioned block shows.
     expect(applied.shown.size).toBe(0);
     expect(applied.hidden).toEqual([]);
+    expect(applied.unjudged).toBe(true);
     const drawn = applied.document.nodes[0]?.slots?.[LIST_ENTRY_SLOT]?.[0];
     expect(drawn).toMatchObject({ id: "featured", type: "core/text" });
     expect(drawn?.visibility).toBeUndefined();

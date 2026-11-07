@@ -93,6 +93,11 @@ export interface AppliedConditions {
   readonly shown: ReadonlySet<string>;
   /** The judged blocks a visitor would not, outermost first, in page order. */
   readonly hidden: readonly HiddenBlock[];
+  /**
+   * Whether the page holds a conditioned block left unjudged, one a list's
+   * item decides, so what is said of the judged blocks is not said of all.
+   */
+  readonly unjudged: boolean;
 }
 
 /** Where the page's own blocks read: the entry it is drawn for. */
@@ -112,7 +117,12 @@ export function appliedConditionsOf(
   /** The limits the canvas draws under, so every block it draws is judged. */
   limits?: Pick<DocumentLimits, "maxNodes">
 ): AppliedConditions {
-  const { shown, hidden } = judgedBlocks(document, preview, nameOf, limits);
+  const { shown, hidden, unjudged } = judgedBlocks(
+    document,
+    preview,
+    nameOf,
+    limits
+  );
   const byId = new Map(hidden.map(block => [block.id, block]));
   // Every conditioned block is drawn, as the canvas draws them while
   // conditions are not applied; a hidden one then becomes its marker.
@@ -128,6 +138,7 @@ export function appliedConditionsOf(
     document: nodes === revealed.nodes ? revealed : { ...revealed, nodes },
     shown,
     hidden,
+    unjudged,
   };
 }
 
@@ -168,11 +179,16 @@ function judgedBlocks(
   preview: ConditionsPreview,
   nameOf: (node: BlockNode) => string,
   limits: Pick<DocumentLimits, "maxNodes"> | undefined
-): { shown: Set<string>; hidden: HiddenBlock[] } {
+): { shown: Set<string>; hidden: HiddenBlock[]; unjudged: boolean } {
   const shown = new Set<string>();
   const hidden: HiddenBlock[] = [];
+  let unjudged = false;
   walkScoped(document, limits, (block, scope) => {
-    if (scope.source !== "entry" || !gatedAsStored(block)) return true;
+    if (!gatedAsStored(block)) return true;
+    if (scope.source !== "entry") {
+      unjudged = true;
+      return true;
+    }
     const verdict = evaluateConditions(storedGate(block), inputOf(preview));
     if (verdict.shown) {
       shown.add(block.id);
@@ -185,7 +201,7 @@ function judgedBlocks(
     });
     return false;
   });
-  return { shown, hidden };
+  return { shown, hidden, unjudged };
 }
 
 /**
@@ -295,16 +311,18 @@ function reasonOf(
   verdict: ConditionEvaluation,
   preview: ConditionsPreview
 ): { reason: string; unchecked: boolean } {
-  if (verdict.issues.length > 0) {
-    return {
-      reason: "can’t be checked, so visitors never see it",
-      unchecked: true,
-    };
-  }
+  // First: with no entry a visitor reads, the engine reports its source as
+  // unavailable, which is no fault of the conditions themselves.
   if (preview.subject === undefined) {
     return {
       reason: `hidden: this ${preview.noun} isn’t published yet`,
       unchecked: false,
+    };
+  }
+  if (verdict.issues.length > 0) {
+    return {
+      reason: "can’t be checked, so visitors never see it",
+      unchecked: true,
     };
   }
   const groups = storedGroups(block);

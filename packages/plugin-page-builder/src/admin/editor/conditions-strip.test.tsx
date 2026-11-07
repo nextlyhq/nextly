@@ -24,6 +24,7 @@ afterEach(cleanup);
 function appliedHiding(...names: string[]): AppliedConditions {
   return {
     document: { formatVersion: 1, kind: "template", nodes: [] },
+    unjudged: false,
     shown: new Set(),
     hidden: names.map(name => ({
       id: name,
@@ -60,6 +61,12 @@ describe("what the conditions did, in words", () => {
     );
     // Nothing applied, nothing said.
     expect(conditionsCountWords(undefined, "post")).toBe("");
+  });
+
+  it("says only the blocks checked show while a list's blocks go unchecked", () => {
+    expect(
+      conditionsCountWords({ ...appliedHiding(), unjudged: true }, "post")
+    ).toBe("Every block checked shows for this post");
   });
 });
 
@@ -116,7 +123,7 @@ describe("the strip a component or a Layout gets", () => {
       button.getAttribute("aria-describedby") ?? ""
     );
     expect(why?.textContent).toBe(
-      "No entry to check here. They’re checked where it’s placed."
+      "No entry to check here. The published page checks them where it’s placed."
     );
   });
 });

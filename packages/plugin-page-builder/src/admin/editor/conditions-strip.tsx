@@ -74,7 +74,12 @@ export function conditionsCountWords(
 ): string {
   if (applied === undefined) return "";
   const hidden = applied.hidden.length;
-  if (hidden === 0) return `Every conditioned block shows for this ${noun}`;
+  // Said only of the blocks checked: one a list's item decides is not.
+  if (hidden === 0) {
+    return applied.unjudged
+      ? `Every block checked shows for this ${noun}`
+      : `Every conditioned block shows for this ${noun}`;
+  }
   return `${String(hidden)} block${hidden === 1 ? "" : "s"} hidden for this ${noun}`;
 }
 
@@ -88,6 +93,9 @@ export function TemplateConditionsPart({
 }: {
   readonly conditions: TemplateConditions;
 }): React.JSX.Element {
+  const said = conditions.on
+    ? conditionsCountWords(conditions.applied, conditions.noun)
+    : "";
   return (
     <>
       <span className="nx-preview-strip__sep" aria-hidden="true" />
@@ -96,10 +104,8 @@ export function TemplateConditionsPart({
         disabled={!conditions.available}
         onToggle={conditions.toggle}
       />
-      <span className="nx-preview-strip__count" role="status">
-        {conditions.on
-          ? conditionsCountWords(conditions.applied, conditions.noun)
-          : ""}
+      <span className="nx-preview-strip__count" role="status" title={said}>
+        {said}
       </span>
     </>
   );
@@ -108,7 +114,7 @@ export function TemplateConditionsPart({
 /**
  * The strip a component or a Layout gets while it holds a conditioned block:
  * what is being edited, and the switch, disabled, since there is no entry to
- * check against until the block is placed somewhere that has one.
+ * check against here: the published page checks them where it is placed.
  */
 export function PlacedConditionsStrip({
   kind,
@@ -126,7 +132,8 @@ export function PlacedConditionsStrip({
       <span className="nx-preview-strip__sep" aria-hidden="true" />
       <ConditionsSwitch on={false} disabled describedBy={why} />
       <span className="nx-preview-strip__why" id={why}>
-        No entry to check here. They’re checked where it’s placed.
+        No entry to check here. The published page checks them where it’s
+        placed.
       </span>
     </div>
   );

@@ -10491,8 +10491,14 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   background: var(--nx-border);
 }
 
-/* What the conditions do for the entry, at the strip's far end. */
-.nx-preview-strip__count {
+/* What the conditions do for the entry, at the strip's far end. The one part
+   besides the chip that gives way on a narrow canvas: cut short, with the
+   whole sentence in its title and announced whole. */
+.nx-preview-strip > .nx-preview-strip__count {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   margin-inline-start: auto;
   color: var(--nx-foreground);
 }
