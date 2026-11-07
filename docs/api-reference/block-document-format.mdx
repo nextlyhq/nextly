@@ -230,12 +230,14 @@ value.
 #### Bindings checked when a document is saved
 
 With the Page Builder plugin, saving a document checks its bindings by the
-same rules, through the API as in the editor, and refuses one that breaks
-them, naming the binding and the code. The fields are read as the source
-declares them, not as a visitor may read them: a binding to a field visitors
-may not read is saved, and the published page renders its fallback. Only the
-sources the document binds are read: the page's own entry, each Single it
-names, and the collection a path's one relation leads into.
+same rules, on its blocks and in its own metadata (`settings.seo`), through
+the API as in the editor, and refuses one that breaks them, naming the
+binding and the code. The fields are read as the source declares them, not as
+a visitor may read them: a binding to a field visitors may not read is saved,
+and the published page renders its fallback. `createdAt` and `updatedAt` are
+dates where the source's entries carry them. Only the sources the document
+binds are read: the page's own entry, each Single it names, and the
+collection a path's one relation leads into, through any group on the way.
 
 A binding a schema change broke after the document was saved is kept: a field
 renamed or removed, a Single's field renamed, a bound prop's type changed, or a
