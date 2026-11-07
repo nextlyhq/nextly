@@ -31,6 +31,8 @@ export interface TemplateConditions {
   readonly applied: AppliedConditions | undefined;
   /** What the entry is called in words, lower case: "post". */
   readonly noun: string;
+  /** Whether what is checked could not be read, so nothing is applied. */
+  readonly failed?: boolean;
 }
 
 /** The switch itself: a button announced as a switch, pressed or not. */
@@ -93,12 +95,34 @@ export function TemplateConditionsPart({
 }: {
   readonly conditions: TemplateConditions;
 }): React.JSX.Element {
-  const said = conditions.on
-    ? conditionsCountWords(conditions.applied, conditions.noun)
-    : "";
   return (
     <>
       <span className="nx-preview-strip__sep" aria-hidden="true" />
+      <ConditionsControls conditions={conditions} />
+    </>
+  );
+}
+
+/** What the switch says when what it checks against could not be read. */
+const FAILED_WORDS =
+  "Couldn’t check this page. Turn the switch off and on to try again.";
+
+/**
+ * The switch and what the conditions did, as both strips hold them: a
+ * template's after its entry, a page's alone.
+ */
+function ConditionsControls({
+  conditions,
+}: {
+  readonly conditions: TemplateConditions;
+}): React.JSX.Element {
+  const said = !conditions.on
+    ? ""
+    : conditions.failed === true
+      ? FAILED_WORDS
+      : conditionsCountWords(conditions.applied, conditions.noun);
+  return (
+    <>
       <ConditionsSwitch
         on={conditions.on && conditions.available}
         disabled={!conditions.available}
@@ -108,6 +132,23 @@ export function TemplateConditionsPart({
         {said}
       </span>
     </>
+  );
+}
+
+/**
+ * The strip a page gets while it holds a block whose conditions read the
+ * page: the switch and what the conditions did, and no entry to name, since
+ * the page is its own.
+ */
+export function PageConditionsStrip({
+  conditions,
+}: {
+  readonly conditions: TemplateConditions;
+}): React.JSX.Element {
+  return (
+    <div className="nx-preview-strip">
+      <ConditionsControls conditions={conditions} />
+    </div>
   );
 }
 

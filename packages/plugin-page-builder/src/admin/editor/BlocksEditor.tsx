@@ -97,6 +97,7 @@ import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
 import { previewedCanvas } from "./canvas-preview-mode";
 import {
+  PageConditionsStrip,
   PlacedConditionsStrip,
   type TemplateConditions,
 } from "./conditions-strip";
@@ -111,6 +112,10 @@ import {
   useMediaSummaryReader,
   type ReadMediaSummary,
 } from "./media-summary-reader";
+import {
+  usePageConditionsRead,
+  type PageConditionsSource,
+} from "./page-conditions-read";
 import { PageReadMeter } from "./page-read-meter";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
@@ -1404,6 +1409,12 @@ function EditorBody<TFieldValues extends FieldValues>({
   const conditions = useAppliedConditionsSwitch(
     reveal.document,
     templatePreview,
+    pageConditionsSourceOf(
+      templatePreview,
+      mount.initialDocument.kind,
+      identity,
+      mount.locale
+    ),
     {
       services: conditionServices,
       componentTitle: mount.componentLibrary.titleOf,
@@ -1664,8 +1675,10 @@ function useConditionServices(
 /**
  * The strip above the canvas: a template's Previewing strip, with the switch
  * that applies its conditions while it holds a block whose conditions read
- * the entry; a component's or a Layout's own strip, with the switch disabled,
- * while it holds a conditioned block; none otherwise.
+ * the entry; a page's own strip, with the switch and no entry to name, while
+ * it holds a block whose conditions read the page; a component's or a
+ * Layout's own strip, with the switch disabled, while it holds a conditioned
+ * block; none otherwise.
  */
 function editorStrip(
   preview: ReturnType<typeof useTemplatePreviewState>,
@@ -1673,6 +1686,9 @@ function editorStrip(
   kind: DocumentKind,
   title: string | undefined
 ): React.JSX.Element | undefined {
+  if (conditions.page !== undefined) {
+    return <PageConditionsStrip conditions={conditions.page} />;
+  }
   if (preview !== undefined) {
     return conditions.template === undefined ? (
       <TemplatePreviewStrip preview={preview} />
@@ -1694,10 +1710,33 @@ function editorStrip(
   );
 }
 
+/**
+ * The page whose own conditions read it, on a page that is not a template:
+ * the entry of a collection being edited, read as a visitor reads it. None on
+ * a template, whose conditions read the entry it is previewed with, on a
+ * component or a Layout, which has no entry, or on a Single, which is not an
+ * entry of a collection. The editor opens only a saved entry, so one with no
+ * id is never asked about.
+ */
+function pageConditionsSourceOf(
+  preview: ReturnType<typeof useTemplatePreviewState>,
+  kind: DocumentKind,
+  identity: ReturnType<typeof useCanvasEntryIdentity>,
+  locale: string | undefined
+): PageConditionsSource | undefined {
+  if (preview !== undefined || kind !== "page") return undefined;
+  if (identity?.kind !== "collection" || identity.documentId === undefined) {
+    return undefined;
+  }
+  return { collection: identity.slug, id: identity.documentId, locale };
+}
+
 /** The switch that applies a document's conditions, and what it did. */
 interface AppliedConditionsSwitch {
   /** The switch's state in a template's strip; absent outside a template. */
   readonly template: TemplateConditions | undefined;
+  /** The switch's state in a page's strip; absent outside a page. */
+  readonly page: TemplateConditions | undefined;
   /** The page with its conditions applied, while they are. */
   readonly applied: AppliedConditions | undefined;
   /** Whether the document holds a conditioned block at all. */
@@ -1715,18 +1754,37 @@ interface AppliedConditionsSwitch {
 function useAppliedConditionsSwitch(
   document: BlockDocument,
   preview: ReturnType<typeof useTemplatePreviewState>,
+  pageSource: PageConditionsSource | undefined,
   options: Omit<AppliedConditionsOptions, "noun">
 ): AppliedConditionsSwitch {
   const [on, setOn] = useState(false);
-  const toggle = useCallback(() => setOn(was => !was), []);
+  // Each time the conditions are applied, counted, so a failed read of the
+  // page is asked again rather than kept.
+  const [attempt, setAttempt] = useState(0);
+  const toggle = useCallback(() => {
+    if (!on) setAttempt(count => count + 1);
+    setOn(!on);
+  }, [on]);
   const { limits } = options;
   const held = useMemo(
     () => conditionedBlocksIn(document, limits),
     [document, limits]
   );
+  // A page is read as a visitor reads it, and only once the author applies
+  // its conditions.
+  const pageRead = usePageConditionsRead(
+    pageSource,
+    on && held.readingEntry && pageSource !== undefined,
+    attempt
+  );
   const noun =
-    preview === undefined ? "entry" : preview.labels.singular.toLowerCase();
-  const previewed = preview?.previewed;
+    preview !== undefined
+      ? preview.labels.singular.toLowerCase()
+      : pageSource !== undefined
+        ? pageRead.noun
+        : "entry";
+  const previewed =
+    preview !== undefined ? preview.previewed : pageRead.previewed;
   // The entry is handed over only while the switch is on: the canvas then
   // draws the page as a visitor reading that entry would get it.
   const applied = useAppliedConditions(
@@ -1747,7 +1805,22 @@ function useAppliedConditionsSwitch(
           },
     [preview, held.readingEntry, on, toggle, previewed, applied, noun]
   );
-  return { template, applied, held: held.any, noun };
+  const page = useMemo<TemplateConditions | undefined>(
+    () =>
+      pageSource === undefined || !held.readingEntry
+        ? undefined
+        : // The editor opens only a saved page, so there is always one to read.
+          {
+            on,
+            toggle,
+            available: true,
+            applied,
+            noun,
+            failed: pageRead.failed,
+          },
+    [pageSource, held.readingEntry, on, toggle, applied, noun, pageRead.failed]
+  );
+  return { template, page, applied, held: held.any, noun };
 }
 
 /**

@@ -177,6 +177,7 @@ import { seedCompositionGraphLock } from "./composition-graph-lock";
 import { manifestRoute } from "./composition-manifest";
 import { registerCompositionRejudge } from "./composition-rejudge";
 import { COMPOSITION_SERVICE, compositionService } from "./composition-service";
+import { conditionsPreviewEntryRoute } from "./conditions-preview-route";
 import { withBlockLooks, withCoreLooks } from "./core-looks";
 import { declaredSingleSlugs, isOrphanedSingle } from "./declared-singles";
 import {
@@ -3902,6 +3903,10 @@ export const pageBuilder = (
         // author asking. Reads only: which entry is previewed is not stored.
         templatePreviewEntriesRoute({ guard: requireTemplateGuard }),
         templatePreviewEntryRoute({ guard: requireTemplateGuard }),
+        // What a visitor reads of the page being edited, for applying its
+        // visibility conditions: published values and public fields only,
+        // for a page the caller may open in the editor.
+        conditionsPreviewEntryRoute({ guard: requireTemplateGuard }),
         // Whether this caller may set or change a template address: what the
         // template form asks before it offers the address for editing. Not a
         // security boundary: the field's rules and the action decide.
