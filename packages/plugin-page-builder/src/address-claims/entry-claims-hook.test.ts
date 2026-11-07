@@ -1,0 +1,171 @@
+/**
+ * The order the entries' claims take their steps in, with the store and the
+ * instance stubbed, for what a real instance cannot show without racing two
+ * transactions: a save in a collection not declared in code takes the
+ * collection's lock BEFORE it reads whether the collection has a template, so
+ * a template being published at the same time either is seen by the save or
+ * sees the entry in its own walk. A collection that may not have a template
+ * takes no lock at all.
+ *
+ * What the claims do once taken is proved against a real instance on every
+ * dialect by `__tests__/template-addresses-runtime.integration.test.ts`.
+ */
+import { describe, expect, it } from "vitest";
+
+import { collectionLockKey } from "./claim-key";
+import { storedKey, type Claims } from "./claim-store";
+import {
+  registerEntryAddressClaims,
+  type EntryClaimsDeps,
+} from "./entry-claims-hook";
+
+type Handler = (write: Record<string, unknown>) => Promise<void>;
+
+/** A claim the store holds for an entry of a collection since renamed away. */
+const GONE_CLAIM = {
+  id: "c1",
+  claimKey: "k1",
+  kind: "address",
+  locale: "en",
+  path: "/gone/launch",
+  holderCollection: "gone",
+  holderId: "e9",
+};
+
+/**
+ * Every step taken, in order: a lock row written, a template read, a claim
+ * deleted.
+ */
+function harness(options: {
+  mayHaveTemplate: boolean;
+  template?: { published: boolean; address: readonly string[] | null };
+}) {
+  const steps: string[] = [];
+  const lockKey = storedKey(collectionLockKey("events"));
+  const claims = {
+    slug: "address-claims",
+    // A dialect that holds locks, so taking one is a write the stub sees.
+    dialect: "postgresql",
+    services: {
+      ownCollections: {
+        listEntries: async (
+          _slug: string,
+          read: { where?: Record<string, { equals?: unknown }> }
+        ) =>
+          read.where?.holderCollection?.equals === "gone"
+            ? { data: [GONE_CLAIM], pagination: { total: 1 } }
+            : { data: [], pagination: { total: 0 } },
+      },
+      collections: {
+        createEntryInTransaction: async (
+          _tx: unknown,
+          _slug: string,
+          data: Record<string, unknown>
+        ) => {
+          if (data.claimKey === lockKey) steps.push("lock events");
+          return { id: "lock-1", ...data };
+        },
+        updateEntryInTransaction: async () => ({ item: {} }),
+        deleteEntryInTransaction: async (
+          _tx: unknown,
+          _slug: string,
+          id: string
+        ) => {
+          steps.push(`delete ${id}`);
+          return {};
+        },
+      },
+    },
+  } as unknown as Claims;
+  const deps: EntryClaimsDeps = {
+    claims,
+    addresses: new Map(),
+    templates: "templates",
+    locales: () => ["en"],
+    templateOf: async collection => {
+      steps.push(`read template of ${collection}`);
+      return options.template ?? null;
+    },
+    storedAddresses: async () => new Map(),
+    neverServed: collection => collection === "pages",
+    mayHaveTemplate: async () => options.mayHaveTemplate,
+    storedAddressProblem: () => null,
+    lifecycle: async () => true,
+    pages: "pages",
+    pagesBackfilled: () => true,
+    pagesWithSlugs: async () => [],
+    publishedEntries: async () => [],
+    describe: () => async holder => holder.id,
+  };
+  const handlers = new Map<string, Handler>();
+  registerEntryAddressClaims(
+    {
+      onInTransaction: (collection, handler) => {
+        handlers.set(collection, handler as unknown as Handler);
+      },
+    },
+    deps
+  );
+  const save = (collection: string) =>
+    handlers.get("*")?.({
+      collection,
+      operation: "update",
+      id: "e1",
+      data: { id: "e1", slug: "launch", status: "published" },
+      transaction: {},
+    });
+  const writeTemplate = (write: Record<string, unknown>) =>
+    handlers.get("templates")?.({ transaction: {}, ...write });
+  return { steps, save, writeTemplate };
+}
+
+describe("an entry's save in a collection not given an address in code", () => {
+  it("takes the collection's lock before it reads whether there is a template", async () => {
+    const { steps, save } = harness({ mayHaveTemplate: true });
+    await save("events");
+    expect(steps).toEqual(["lock events", "read template of events"]);
+  });
+
+  it("takes no lock, and reads nothing, in a collection that may not have a template", async () => {
+    const { steps, save } = harness({ mayHaveTemplate: false });
+    await save("events");
+    expect(steps).toEqual([]);
+  });
+
+  it("locks and gives addresses up in a collection that lost the means to have a template but still has one", async () => {
+    const { steps, save } = harness({
+      mayHaveTemplate: false,
+      template: { published: true, address: ["events"] },
+    });
+    await save("events");
+    expect(steps).toEqual([
+      "read template of events",
+      "lock events",
+      "read template of events",
+    ]);
+  });
+
+  it("leaves the page builder's own collections alone", async () => {
+    const { steps, save } = harness({ mayHaveTemplate: true });
+    await save("pages");
+    expect(steps).toEqual([]);
+  });
+});
+
+describe("a template pointed at another collection", () => {
+  it("gives up every address the old collection's entries hold", async () => {
+    const { steps, writeTemplate } = harness({ mayHaveTemplate: true });
+    await writeTemplate({
+      operation: "update",
+      id: "t1",
+      originalData: {
+        id: "t1",
+        collection: "gone",
+        status: "published",
+        address: "/gone",
+      },
+      data: { id: "t1", collection: "events", status: "draft", address: null },
+    });
+    expect(steps).toContain("delete c1");
+  });
+});

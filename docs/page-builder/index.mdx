@@ -479,6 +479,25 @@ its title, description and image from the template's SEO settings. A path nobody
 holds is not found, and so is an entry whose collection has no published template.
 `createPublicContentPage` is the cached, pre-rendered form.
 
+#### Collections made in the Schema Builder
+
+A collection made in the Schema Builder has no code to declare its address in, so
+its template stores it. Open **Templates** in the page builder's menu, open the
+collection's template and set its **Address**; once the template is published its
+entries are served there, with no restart. The same rules apply as to an address
+declared in code, and an address declared in code wins over a stored one. When you
+promote such a collection into code with `nextly db:sync --promote`, the line that
+declares its address is printed beside its code; the stored address keeps serving
+until the declaration takes over at the next start.
+
+Setting or changing an address needs the **Manage template routing** permission
+(`manage-template-routing`), apart from updating templates, since it moves every
+entry's live address. Anyone else sees the address read-only, and an address they
+send through the API is left out of their save. Changing a published template's
+address frees every entry's old address and serves it at the new one; an entry
+whose new address another document holds waits for it. API clients use the
+`set-template-address` template action, which has a dry run.
+
 ## Reading content into a page
 
 The **Collection list** block (stored as `core/collection-loop`) queries one of your

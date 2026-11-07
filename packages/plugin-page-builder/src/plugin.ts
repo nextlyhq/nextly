@@ -46,6 +46,7 @@ import {
   type PagesReader,
 } from "./address-claims/backfill";
 import {
+  committedClaims,
   lockHolder,
   releaseHolderLock,
   type Tx,
@@ -319,17 +320,29 @@ import {
   designUnderWhere,
   registerEntryDesignCascade,
 } from "./templates/entry-design-cascade";
-import { templateActionsRoute } from "./templates/template-actions-route";
 import {
+  templateActionsRoute,
+  templateRoutingRoute,
+} from "./templates/template-actions-route";
+import {
+  addressSegments,
   checkedTemplateAddresses,
   type PageBuilderTemplateOptions,
 } from "./templates/template-addresses";
 import {
+  addressHolderReader,
   registerTemplateGuard,
+  storedAddressesReader,
   templateCollectionProblem,
   templateHolderReader,
   type TemplateGuardSetup,
 } from "./templates/template-guard";
+import {
+  MANAGE_TEMPLATE_ROUTING_DECLARATION,
+  storedAddressOf,
+  storedAddressProblem,
+  TEMPLATE_ADDRESS_FIELD,
+} from "./templates/template-routing";
 import { tokenUsageIndex } from "./token-usage";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
@@ -1548,6 +1561,13 @@ export const pageBuilder = (
   // Each collection's code-declared template address, checked when the
   // plugin is defined, so a malformed or shared one refuses to start.
   const templateAddresses = checkedTemplateAddresses(opts.templates);
+  // The same addresses as written, each in its one spelling once checked:
+  // what a stored address is compared with.
+  const declaredPaths: ReadonlyMap<string, string> = new Map(
+    Object.entries(opts.templates?.addresses ?? {}).filter(([collection]) =>
+      templateAddresses.has(collection)
+    )
+  );
   // Who holds a path, for the site's content route, set by `init`.
   let contentAddresses: ContentAddressService | null = null;
   const requireContentAddresses = (): ContentAddressService => {
@@ -1569,6 +1589,20 @@ export const pageBuilder = (
   // sweep, then entries. The addresses listed for pre-rendering wait for it,
   // so a build never lists a store the passes are still filling or moving.
   let addressStartup: Promise<void> | null = null;
+  // How many of a collection's entries wait for an address, set by `init`.
+  let waitingEntriesOf: ((collection: string) => Promise<number>) | null = null;
+  // What the template actions run with, for the route and the service.
+  const templateActions = {
+    guard: (): TemplateGuardSetup => requireTemplateGuard(),
+    waitingEntries: (collection: string): Promise<number> => {
+      if (waitingEntriesOf === null) {
+        throw new Error(
+          "[page-builder] a template action ran before the plugin was installed"
+        );
+      }
+      return waitingEntriesOf(collection);
+    },
+  };
 
   /**
    * The templates guard's lookups over the installed plugin: the RESOLVED
@@ -2080,6 +2114,11 @@ export const pageBuilder = (
             throw error;
           }
         },
+        declaredAddresses: declaredPaths,
+        addressHolderOf: addressHolderReader(
+          ctx.services.ownCollections,
+          templates
+        ),
       };
       registerTemplateGuard(ctx, templateGuard);
       // An entry's own design is deleted with its entry, in the delete's
@@ -2529,6 +2568,34 @@ export const pageBuilder = (
           throw error;
         }
       };
+      const readStoredAddresses = storedAddressesReader(
+        ctx.services.ownCollections,
+        templatesSlug
+      );
+      // The entries of `collection` waiting for an address another document
+      // holds, as last committed, for the template action's answer.
+      waitingEntriesOf = async collection => {
+        const waiting = new Set<string>();
+        for (let page = 1; ; page += 1) {
+          const { rows, total } = await committedClaims(
+            claimsStore,
+            {
+              kind: { equals: "waiting" },
+              holderCollection: { equals: collection },
+            },
+            { limit: 500, page }
+          );
+          for (const row of rows) {
+            if (
+              row.kind === "waiting" &&
+              row.holder?.collection === collection
+            ) {
+              waiting.add(row.holder.id);
+            }
+          }
+          if (rows.length === 0 || page * 500 >= total) return waiting.size;
+        }
+      };
       const claimsDeps: EntryClaimsDeps = {
         claims: claimsStore,
         addresses: templateAddresses,
@@ -2568,22 +2635,58 @@ export const pageBuilder = (
         },
         // Hook-free and as the system, as the template guard reads it, so a
         // read hook cannot hide a template that serves entries.
-        templatePublished: async collection => {
+        templateOf: async collection => {
           const found = await ctx.services.ownCollections.listEntries(
             templatesSlug,
             {
               where: { collection: { equals: collection } },
               pagination: { limit: 1 },
+              // Asked on every save of a templated collection: the routing
+              // columns alone, never the template's design.
+              select: {
+                id: true,
+                collection: true,
+                status: true,
+                [TEMPLATE_ADDRESS_FIELD]: true,
+              },
               depth: 0,
             }
           );
           const row = found.data[0] as Record<string, unknown> | undefined;
+          if (row === undefined || row.collection !== collection) return null;
+          const address = storedAddressOf(row[TEMPLATE_ADDRESS_FIELD]);
+          return {
+            published: row.status === "published",
+            address: address === null ? null : addressSegments(address),
+          };
+        },
+        storedAddresses: async () =>
+          new Map(
+            [...(await readStoredAddresses()).entries()].map(
+              ([collection, address]) => [collection, addressSegments(address)]
+            )
+          ),
+        // The page builder's own documents are pages, stores and
+        // bookkeeping, never entries served under a template address.
+        neverServed: collection =>
+          Object.values(ctx.self.collections).includes(collection),
+        // The template guard's own judgement of which collections may have
+        // one; a localized collection is refused an address.
+        mayHaveTemplate: async collection => {
+          const problem = await templateCollectionProblem(
+            collection,
+            collectionRecord,
+            new Set(Object.values(ctx.self.collections))
+          );
           return (
-            row !== undefined &&
-            row.collection === collection &&
-            row.status === "published"
+            problem === null &&
+            (await collectionRecord(collection))?.localized !== true
           );
         },
+        storedAddressProblem: (address, collection) =>
+          storedAddressProblem(address, collection, {
+            declared: declaredPaths,
+          }),
         publishedEntries: async (collection, page, size) => {
           const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
           const nextly = (await getCachedNextly()) as unknown as PagesReader;
@@ -2604,9 +2707,9 @@ export const pageBuilder = (
           return found.items as readonly Readonly<Record<string, unknown>>[];
         },
       };
-      if (templateAddresses.size > 0) {
-        registerEntryAddressClaims(ctx.hooks, claimsDeps);
-      }
+      // Whatever is declared in code: a collection created at runtime is
+      // given its address on its template, at any time after start.
+      registerEntryAddressClaims(ctx.hooks, claimsDeps);
       const passDeps = {
         ...claimsDeps,
         withTransaction: <T>(work: (tx: Tx) => Promise<T>) =>
@@ -2619,6 +2722,20 @@ export const pageBuilder = (
       checkTemplateAddresses = async () => {
         const own = new Set(Object.values(ctx.self.collections));
         const problems: string[] = [];
+        // An address declared in code is compared with every other
+        // collection's stored one: two collections may not share one. A
+        // collection promoted into code taking over its own stored address
+        // is no clash.
+        const stored = await readStoredAddresses();
+        for (const [collection, address] of declaredPaths) {
+          for (const [other, held] of stored) {
+            if (held === address && other !== collection) {
+              problems.push(
+                `"${collection}" is given the address "${address}" in code, which the collection "${other}" is already served at, set on its template in the admin. Each collection needs an address of its own: change one of them.`
+              );
+            }
+          }
+        }
         for (const collection of templateAddresses.keys()) {
           const problem = await templateCollectionProblem(
             collection,
@@ -2657,7 +2774,20 @@ export const pageBuilder = (
           ...templateAddresses.keys(),
         ],
         holders: [pagesSlug, ...templateAddresses.keys()],
-        entryHolders: [...templateAddresses.keys()],
+        // Served while its template stores an address and it may still have
+        // a template: one that lost its `slug` field or became localized
+        // is served nowhere, whatever claims its entries still hold.
+        storesAddress: async collection =>
+          ((await claimsDeps.templateOf(collection))?.address ?? null) !==
+            null && (await claimsDeps.mayHaveTemplate(collection)),
+        // Listed for pre-rendering: those given an address in code, and
+        // those whose template stores one.
+        entryHolders: async () => [
+          ...new Set([
+            ...templateAddresses.keys(),
+            ...(await readStoredAddresses()).keys(),
+          ]),
+        ],
         startup: () => addressStartup,
       });
       // A page published naming a Layout that is not: it is served inside the
@@ -2940,7 +3070,7 @@ export const pageBuilder = (
             store: componentStoreOf(opts),
             limits: () => opts.limits ?? DEFAULT_LIMITS,
             readRetired: readRetiredFor,
-            templates: { guard: requireTemplateGuard },
+            templates: templateActions,
             namedQueries: namedQueryDeclarations,
           }),
         // Who holds a path, for the site's one content route: a page, or a
@@ -3211,7 +3341,11 @@ export const pageBuilder = (
           readRetired: readRetiredFor,
         }),
         // Give a collection its template and publish it, each with a dry run.
-        templateActionsRoute({ guard: requireTemplateGuard }),
+        templateActionsRoute(templateActions),
+        // Whether this caller may set or change a template address: what the
+        // template form asks before it offers the address for editing. Not a
+        // security boundary: the field's rules and the action decide.
+        templateRoutingRoute(),
         // What an API client or an agent reads before composing: the
         // patterns, components (fields, slots, variants) and Layouts it may
         // read, and the actions above with their request schemas.
@@ -3406,6 +3540,11 @@ export const pageBuilder = (
         // Design (`update-site-style`), so a lock protects a style from every
         // Design manager who does not hold it. Asked by the lock route alone.
         LOCK_SHARED_STYLES_DECLARATION,
+        // Setting or changing where a collection's entries are served moves
+        // live addresses, so it is a grant of its own, apart from updating
+        // templates. Asked by the address field's rules and the template
+        // action.
+        MANAGE_TEMPLATE_ROUTING_DECLARATION,
       ],
 
       // No `publish` permission. One was declared here and nothing ever read
@@ -3504,6 +3643,14 @@ export const pageBuilder = (
             collection: LAYOUTS_SLUG,
             to: `/admin/collections/${LAYOUTS_SLUG}`,
             icon: "PanelsTopLeft",
+          },
+          // The designs collections' entries are drawn with, and where each
+          // collection's entries are served.
+          {
+            label: "Templates",
+            collection: TEMPLATES_SLUG,
+            to: `/admin/collections/${TEMPLATES_SLUG}`,
+            icon: "LayoutDashboard",
           },
         ],
         // No `schemaBuilderSlot`. It named a component this package no longer
