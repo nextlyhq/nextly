@@ -565,10 +565,19 @@ export const DEFINITION_ACTION_KINDS: readonly DefinitionAction["kind"][] =
  * The JSON Schema form of a page action, as a client that does not run zod
  * reads it: the input the schema accepts, before the parse normalises it.
  *
+ * A binding's `format` and an unbind's kept `value` are judged by a function,
+ * which JSON Schema cannot state, so each is written as any value (`{}`):
+ * still required where the action requires it, and judged by the route. The
+ * converter refuses such a schema outright otherwise, and the manifest that
+ * carries this form with it.
+ *
  * @experimental Settles when the composition API ships.
  */
 export function pageActionJsonSchema(): Record<string, unknown> {
-  return z.toJSONSchema(pageActionSchema, { io: "input" });
+  return z.toJSONSchema(pageActionSchema, {
+    io: "input",
+    unrepresentable: "any",
+  });
 }
 
 /**
