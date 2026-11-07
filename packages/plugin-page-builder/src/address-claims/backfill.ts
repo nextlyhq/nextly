@@ -21,7 +21,7 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 import {
   claimOrWait,
   claimSpaceOrWait,
-  dropStaleWaits,
+  dropStaleClaims,
   lockHolder,
   reconcileHolder,
   type Claims,
@@ -253,7 +253,7 @@ async function waitForAddresses(
     await deps.withTransaction(async tx => {
       const wanted = await wantedNow(deps, tx, holder);
       if (wanted === null) return;
-      await dropStaleWaits(deps.claims, tx, holder, wanted);
+      await dropStaleClaims(deps.claims, tx, holder, wanted);
       for (const address of wanted.addresses) {
         await claimOrWait(deps.claims, tx, { address, holder });
       }

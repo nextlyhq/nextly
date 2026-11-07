@@ -11,7 +11,7 @@ import { backfillPageClaims, type BackfillDeps } from "./backfill";
 import {
   claimOrWait,
   claimSpaceOrWait,
-  dropStaleWaits,
+  dropStaleClaims,
   lockHolder,
   reconcileHolder,
   type Claims,
@@ -21,7 +21,7 @@ import {
 vi.mock("./claim-store", () => ({
   claimOrWait: vi.fn(async () => "claimed"),
   claimSpaceOrWait: vi.fn(async () => "waiting"),
-  dropStaleWaits: vi.fn(async () => undefined),
+  dropStaleClaims: vi.fn(async () => undefined),
   lockHolder: vi.fn(async () => undefined),
   reconcileHolder: vi.fn(async () => true),
 }));
@@ -191,13 +191,13 @@ describe("backfillPageClaims", () => {
     expect(reconciledPaths()).toEqual([["/about"], ["/contact"]]);
   });
 
-  it("drops a clashing page's stale waits before it records its current ones", async () => {
+  it("gives up a clashing page's stale claims and waits before it records its current ones", async () => {
     vi.mocked(reconcileHolder).mockRejectedValueOnce(
       NextlyError.conflict({ reason: "state" })
     );
     const page = { id: "p", slug: "about", status: "published" };
     expect(await backfillPageClaims(depsOver([page], { p: page }))).toBe(true);
-    const dropped = vi.mocked(dropStaleWaits).mock;
+    const dropped = vi.mocked(dropStaleClaims).mock;
     expect(dropped.calls[0]?.[3].addresses.map(at => at.segments)).toEqual([
       ["about"],
     ]);

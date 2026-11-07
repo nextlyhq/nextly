@@ -39,6 +39,7 @@ import {
   claimSpace,
   claimSpaceOrWait,
   committedClaims,
+  dropStaleClaims,
   reconcileHolder,
   releaseClaims,
   storedKey,
@@ -395,6 +396,36 @@ describe.each(getConfiguredTestDialects())(
       await release(claims, page("p2"));
       expect(await stored(claims, "space")).toEqual([]);
       expect(await stored(claims, "address")).toEqual([["/news", "list"]]);
+    });
+
+    it("gives up the waits and claims a holder has left, handing a released one on", async () => {
+      const claims = claimsOf(await boot());
+      // p1 holds /old, which a stale hand-over could have given it; it also
+      // waits for /gone, held by p2; e1 waits for /old.
+      await claim(claims, "/old", page("p1"));
+      await claim(claims, "/gone", page("p2"));
+      await saving(claims, tx =>
+        claimOrWait(claims, tx, { address: at("/gone"), holder: page("p1") })
+      );
+      await saving(claims, tx =>
+        claimOrWait(claims, tx, { address: at("/old"), holder: post("e1") })
+      );
+
+      await saving(claims, tx =>
+        dropStaleClaims(claims, tx, page("p1"), {
+          addresses: [at("/new")],
+          spaces: [],
+        })
+      );
+      expect(await stored(claims, "address")).toEqual([
+        ["/gone", "p2"],
+        ["/old", "e1"],
+      ]);
+      expect(await stored(claims, "waiting")).toEqual([]);
+
+      // Releasing what it waited for no longer hands it anything.
+      await release(claims, page("p2"));
+      expect(await stored(claims, "address")).toEqual([["/old", "e1"]]);
     });
 
     it("keeps a document waiting when it moves to another address the same claim blocks", async () => {

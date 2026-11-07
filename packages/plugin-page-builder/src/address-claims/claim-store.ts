@@ -810,36 +810,80 @@ function staleWaitsOf(
 }
 
 /**
- * Drop `holder`'s waits for what `desired` no longer holds, in `tx`, under
- * the locks a wait is taken under. For a holder that waits rather than
- * reconciles (one refused at start-up), before its current waits are
- * recorded, so a wait left by an earlier boot for an address or space it
- * has since left is never handed to it.
+ * What among `held` (a holder's claims and waits) `desired` no longer holds:
+ * the claims to release, and the waits to drop. The one reading reconciling
+ * and the start-up fallback share.
  */
-export async function dropStaleWaits(
+function staleClaimsOf(
+  held: readonly ClaimRow[],
+  desired: DesiredClaims
+): { readonly release: ClaimRow[]; readonly waits: ClaimRow[] } {
+  const wanted = new Set([
+    ...desired.addresses.map(at => storedKey(claimKey("address", at))),
+    ...desired.spaces.map(at => storedKey(claimKey("space", at))),
+  ]);
+  return {
+    release: held.filter(row => row.kind !== "waiting" && !wanted.has(row.key)),
+    waits: staleWaitsOf(
+      held.filter(row => row.kind === "waiting"),
+      desired
+    ),
+  };
+}
+
+/** Every address, space and wait `holder` has, as `tx` sees them. */
+function heldBy(claims: Claims, tx: Tx, holder: Holder): Promise<ClaimRow[]> {
+  return claimsIn(
+    claims,
+    tx,
+    {
+      holderCollection: { equals: holder.collection },
+      holderId: { equals: holder.id },
+    },
+    row =>
+      sameHolder(row.holder, holder) &&
+      (row.kind === "address" || row.kind === "space" || row.kind === "waiting")
+  );
+}
+
+/**
+ * Give up what `holder` has and `desired` no longer holds, in `tx`: drop its
+ * stale waits and release its stale claims, handing each released one on.
+ * For a holder that waits rather than reconciles (one refused at start-up),
+ * before its current waits are recorded.
+ *
+ * Read twice: once to find the locks to take, and again under them. A
+ * release that hands a stale wait over takes the same locks, so by the
+ * second read it has either committed, and the address or space it handed
+ * the holder is read as a claim and released here, or it waits for this
+ * transaction and finds the wait gone. Either way the holder keeps nothing
+ * it has left.
+ */
+export async function dropStaleClaims(
   claims: Claims,
   tx: Tx,
   holder: Holder,
   desired: DesiredClaims
 ): Promise<void> {
-  const waits = await claimsIn(
-    claims,
-    tx,
-    {
-      kind: { equals: "waiting" },
-      holderCollection: { equals: holder.collection },
-      holderId: { equals: holder.id },
-    },
-    row => row.kind === "waiting" && sameHolder(row.holder, holder)
-  );
-  const stale = staleWaitsOf(waits, desired);
-  if (stale.length === 0) return;
-  await lockInOrder(
-    claims,
-    tx,
-    stale.flatMap(row => (row.address === null ? [] : locksFor(row.address)))
-  );
-  for (const row of stale) await remove(claims, tx, row);
+  const first = staleClaimsOf(await heldBy(claims, tx, holder), desired);
+  if (first.release.length === 0 && first.waits.length === 0) return;
+  await lockInOrder(claims, tx, [
+    ...first.release.flatMap(locksOf),
+    // A wait's locks are those of what it waits for, which is what a
+    // hand-over of it claims.
+    ...first.waits.flatMap(row =>
+      row.address === null ? [] : locksFor(row.address)
+    ),
+  ]);
+  const now = staleClaimsOf(await heldBy(claims, tx, holder), desired);
+  for (const row of now.waits) await remove(claims, tx, row);
+  for (const row of now.release) {
+    if (row.address === null) continue;
+    await releaseClaims(claims, tx, holder, {
+      address: row.address,
+      kind: row.kind === "space" ? "space" : "address",
+    });
+  }
 }
 
 /** What a holder should hold: its addresses, and the spaces of its lists. */
@@ -868,32 +912,16 @@ export async function reconcileHolder(
   desired: DesiredClaims,
   describe: DescribeHolder
 ): Promise<boolean> {
-  const held = await claimsIn(
-    claims,
-    tx,
-    {
-      holderCollection: { equals: holder.collection },
-      holderId: { equals: holder.id },
-    },
-    row =>
-      sameHolder(row.holder, holder) &&
-      (row.kind === "address" || row.kind === "space" || row.kind === "waiting")
-  );
-  const waits = held.filter(row => row.kind === "waiting");
+  const held = await heldBy(claims, tx, holder);
   const owned = held.filter(row => row.kind !== "waiting");
   const heldKeys = new Set(owned.map(row => row.key));
-  const wanted = new Set([
-    ...desired.addresses.map(at => storedKey(claimKey("address", at))),
-    ...desired.spaces.map(at => storedKey(claimKey("space", at))),
-  ]);
   const claimAddresses = desired.addresses.filter(
     at => !heldKeys.has(storedKey(claimKey("address", at)))
   );
   const claimSpaces = desired.spaces.filter(
     at => !heldKeys.has(storedKey(claimKey("space", at)))
   );
-  const release = owned.filter(row => !wanted.has(row.key));
-  const staleWaits = staleWaitsOf(waits, desired);
+  const { release, waits: staleWaits } = staleClaimsOf(held, desired);
   if (
     claimAddresses.length === 0 &&
     claimSpaces.length === 0 &&
