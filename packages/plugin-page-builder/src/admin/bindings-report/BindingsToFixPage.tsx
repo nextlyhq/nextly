@@ -379,8 +379,9 @@ export function BindingsToFixPage(): JSX.Element {
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
             A field, a Single or a block changed after these were bound, so each
-            one shows its fallback on the published page. Open one to bind it to
-            another field or unbind it.
+            one shows its fallback wherever it’s drawn: the published page, or a
+            draft not yet published. Open one to bind it to another field or
+            unbind it.
           </p>
         </div>
         {meta === undefined ? null : (

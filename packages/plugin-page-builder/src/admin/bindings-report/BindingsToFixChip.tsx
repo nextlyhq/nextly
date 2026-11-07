@@ -62,8 +62,9 @@ function sentence(words: string): string {
 }
 
 /**
- * How many bindings to fix are on other documents: unknown while the whole
- * report is still being read or could not be, never a guess of none.
+ * How many bindings to fix are elsewhere, on any other document (a page, a
+ * component, a pattern, a Layout, an entry or a Single): unknown while the
+ * whole report is still being read or could not be, never a guess of none.
  */
 function elsewhereWords(
   everything: ReturnType<typeof useBindingsToFix>,
@@ -72,13 +73,13 @@ function elsewhereWords(
   const total = everything.data?.meta.bindings;
   if (total === undefined) {
     return everything.error === null || everything.error === undefined
-      ? "Counting other pages…"
-      : "Other pages couldn’t be counted";
+      ? "Counting the rest…"
+      : "The rest couldn’t be counted";
   }
   const elsewhere = Math.max(0, total - here);
   return elsewhere > 0
-    ? `${String(elsewhere)} more on other pages`
-    : "None on other pages";
+    ? `${String(elsewhere)} more elsewhere`
+    : "None elsewhere";
 }
 
 /** The chip, and the list it opens; nothing when the document has none. */
