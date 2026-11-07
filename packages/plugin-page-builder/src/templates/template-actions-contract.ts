@@ -29,6 +29,40 @@ export interface TemplateRoutingAccess {
   readonly mayManageRouting: boolean;
 }
 
+/**
+ * Where the template form asks whether a saved template may be pointed at
+ * another collection: `GET /templates/collection-retarget?template=<id>`.
+ */
+export const TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH =
+  "/templates/collection-retarget";
+
+/**
+ * What the template guard's rule says of pointing a saved template at
+ * another collection: allowed; refused while the collection it draws still
+ * exists; or refused until the address it stores is removed.
+ */
+export type TemplateRetargetVerdict =
+  | "allowed"
+  | "collection-exists"
+  | "address-blocks";
+
+/** What the retarget question answers, from the template as stored. */
+export type TemplateCollectionRetarget =
+  | { readonly retarget: "allowed" | "collection-exists" }
+  | {
+      readonly retarget: "address-blocks";
+      /**
+       * Whether the caller may clear that address, which needs
+       * `manage-template-routing`, as the address field's own rule says.
+       */
+      readonly mayClearAddress: boolean;
+    };
+
+/** The retarget question's path for one template, by its id. */
+export function templateCollectionRetargetPath(template: string): string {
+  return `${TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH}?template=${encodeURIComponent(template)}`;
+}
+
 /** One template action request. */
 export interface TemplateActionRequest {
   readonly action: TemplateAction;

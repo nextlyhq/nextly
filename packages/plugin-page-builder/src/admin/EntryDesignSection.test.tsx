@@ -305,6 +305,16 @@ describe("the entry's Design section", () => {
     expect(classes).not.toContain("text-destructive");
   });
 
+  it("confirms the removal in the page builder's confirming red", async () => {
+    read = { data: answer({ items: [design("published")] }), error: null };
+    section();
+    fireEvent.click(screen.getByRole("button", { name: "Remove own design…" }));
+    const classes = (await confirmButton()).className.split(/\s+/);
+    // The deeper shade under the white label in light; the solid red in dark.
+    expect(classes).toContain("bg-destructive-700");
+    expect(classes).toContain("dark:bg-destructive-solid");
+  });
+
   it("confirms before removing the own design, and keeps it on Keep it", async () => {
     read = { data: answer({ items: [design("published")] }), error: null };
     section();

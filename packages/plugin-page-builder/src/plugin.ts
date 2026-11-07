@@ -112,6 +112,7 @@ import {
   ENTRY_DESIGN_SECTION_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
   TEMPLATE_DELETE_COMPONENT,
+  TEMPLATE_DESIGN_DETAILS_COMPONENT,
   TEMPLATE_OWN_DESIGNS_COMPONENT,
 } from "./builder-view";
 import { canvasBindingsRoute } from "./canvas-bindings-route";
@@ -369,6 +370,7 @@ import { judgeTemplateInTransaction } from "./templates/entry-design-write";
 import { entryDesignsRoute } from "./templates/entry-designs-route";
 import {
   templateActionsRoute,
+  templateCollectionRetargetRoute,
   templateRoutingRoute,
 } from "./templates/template-actions-route";
 import {
@@ -3904,6 +3906,11 @@ export const pageBuilder = (
         // template form asks before it offers the address for editing. Not a
         // security boundary: the field's rules and the action decide.
         templateRoutingRoute(),
+        // Whether a saved template may be pointed at another collection, by
+        // the guard's own rule, for a caller who may change that template:
+        // what the template form asks before it offers the change, since the
+        // collection list leaves out what the author may not read.
+        templateCollectionRetargetRoute({ guard: requireTemplateGuard }),
         // A collection's own designs, its template and its names, read as
         // the caller: what the admin's Design section, Design column and the
         // template's own designs list draw from.
@@ -4267,6 +4274,12 @@ export const pageBuilder = (
               {
                 title: "Own designs",
                 component: TEMPLATE_OWN_DESIGNS_COMPONENT,
+              },
+              // On an own design instead: the entry it serves and the
+              // template it was copied from, which the form does not draw.
+              {
+                title: "Own design",
+                component: TEMPLATE_DESIGN_DETAILS_COMPONENT,
               },
             ],
           },
