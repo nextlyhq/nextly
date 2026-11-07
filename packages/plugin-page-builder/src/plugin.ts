@@ -328,10 +328,9 @@ import {
   registerTemplateGuard,
   templateCollectionProblem,
   templateHolderReader,
-  templateTargetsReader,
+  templateTargets,
   type TemplateGuardSetup,
 } from "./templates/template-guard";
-import { TEMPLATE_TARGET_FIELDS } from "./templates/template-preview-contract";
 import {
   templatePreviewEntriesRoute,
   templatePreviewEntryRoute,
@@ -2271,14 +2270,7 @@ export const pageBuilder = (
         // Where templates live, under the host's name for them, so a
         // template's lists and conditions are judged against the collection
         // it draws, read from the template itself.
-        templates: {
-          collection: templates,
-          fields: TEMPLATE_TARGET_FIELDS,
-          storedTargetsOf: templateTargetsReader(
-            ctx.services.ownCollections,
-            templates
-          ),
-        },
+        templates: templateTargets(ctx.services.ownCollections, templates),
         listFields: listFieldsFrom({
           record: collection =>
             ctx.services.collections.getCollection(collection, {}),

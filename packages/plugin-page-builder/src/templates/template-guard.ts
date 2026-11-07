@@ -29,6 +29,7 @@ import {
   TEMPLATE_ENTRY_COLLECTION_FIELD,
   TEMPLATE_ENTRY_ID_FIELD,
 } from "../collections/templates";
+import type { TemplateTargets } from "../fields/list-query-judgement";
 import { JUDGEMENT_CONTEXT } from "../judged-writes";
 
 import {
@@ -36,6 +37,7 @@ import {
   designShapeRefusal,
   isEntryDesign,
 } from "./entry-designs";
+import { TEMPLATE_TARGET_FIELDS } from "./template-preview-contract";
 import { templateTargetOf } from "./template-target";
 
 /** The template drawing a collection, as a refusal names it. */
@@ -89,7 +91,7 @@ export function templateHolderReader(
  * none. What template lists are judged against when a save does not carry
  * the collection, and when a component save judges the templates placing it.
  */
-export function templateTargetsReader(
+function templateTargetsReader(
   own: OwnTemplateReads,
   templatesCollection: string
 ): (ids: readonly string[]) => Promise<ReadonlyMap<string, string>> {
@@ -111,6 +113,23 @@ export function templateTargetsReader(
       }
     }
     return targets;
+  };
+}
+
+/**
+ * Where templates live and what each stored one draws, as a save's
+ * judgement reads them (`TemplateTargets`): the templates collection under
+ * the host's name for it, the fields a template names its collection in,
+ * and the reader of those collections from the stored templates.
+ */
+export function templateTargets(
+  own: OwnTemplateReads,
+  templatesCollection: string
+): TemplateTargets {
+  return {
+    collection: templatesCollection,
+    fields: TEMPLATE_TARGET_FIELDS,
+    storedTargetsOf: templateTargetsReader(own, templatesCollection),
   };
 }
 
