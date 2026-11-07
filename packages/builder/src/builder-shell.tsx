@@ -1435,15 +1435,9 @@ function useScrollsItsContent(element: HTMLElement | null): boolean {
 
 function CanvasRegion({
   regionRef,
-  underStrip = false,
   children,
 }: {
   regionRef: (element: HTMLElement | null) => void;
-  /**
-   * Whether a strip is pinned above the region, which the page then meets
-   * with no gap of its own: the strip and the page read as one surface.
-   */
-  underStrip?: boolean;
   children?: React.ReactNode;
 }): React.JSX.Element {
   // The frame the canvas is drawn in, which focus arriving on the region is
@@ -1502,14 +1496,7 @@ function CanvasRegion({
        * would let the two drift and put the floor back inside the
        * editing surface.
        */
-      style={{
-        // Each side on its own, so the top's gap can give way to a strip
-        // without a shorthand and a side set over it.
-        paddingTop: underStrip ? 0 : CANVAS_GUTTER,
-        paddingRight: CANVAS_GUTTER,
-        paddingBottom: CANVAS_GUTTER,
-        paddingLeft: CANVAS_GUTTER,
-      }}
+      style={{ padding: CANVAS_GUTTER }}
       className="nx-canvas-scroller h-full overflow-auto"
     >
       {children}
@@ -1550,12 +1537,11 @@ function CanvasPanelBody({
       )}
       {/* The canvas's region: see `CanvasRegion`. */}
       <div className="relative min-h-0 flex-1">
-        <CanvasRegion
-          regionRef={regionRef}
-          underStrip={canvasStrip !== undefined}
-        >
-          {children}
-        </CanvasRegion>
+        {/*
+          The same gutter on every side, a strip above or not: a block's badge
+          drawn just above the first block has the room it has without one.
+        */}
+        <CanvasRegion regionRef={regionRef}>{children}</CanvasRegion>
         {checklist === undefined ? null : (
           // The positioner takes no pointer events, so it cannot swallow a
           // click aimed at the page underneath it; the card itself takes them

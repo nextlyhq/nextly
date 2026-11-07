@@ -10422,25 +10422,27 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
- * Said under the strip while there is no entry to preview: bound text draws
- * its fallback meanwhile. The amber of the editor's other notes about what a
- * page shows, so it reads as information about the canvas, not a fault.
+ * The strip's second row, while there is no entry to preview or the one
+ * chosen could not be read: editor chrome, so drawn on the strip's own
+ * surface below its hairline, in its muted words, never as a band of colour
+ * over the page. Pinned with the strip.
  */
 .nx-preview-notice {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid
-    color-mix(in oklch, var(--nx-warning) 45%, var(--nx-builder-border));
-  background: var(--nx-builder-warning-ground);
-  color: var(--nx-builder-warning-text);
+  min-height: 2.25rem;
+  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid var(--nx-builder-border);
+  background: var(--nx-builder-surface);
+  color: var(--nx-muted-foreground);
   font-size: var(--text-xs, 0.75rem);
   line-height: 1.45;
 }
 
 .nx-preview-notice > svg {
   flex: none;
+  color: var(--nx-muted-foreground);
 }
 
 .nx-preview-notice > p {
@@ -10449,25 +10451,38 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   margin: 0;
 }
 
-.nx-preview-notice__new {
+/* Its action, a small outline button: New, or Try again. */
+.nx-preview-notice__action {
   display: inline-flex;
   flex: none;
   align-items: center;
   gap: 0.25rem;
   height: 1.5rem;
   padding: 0 0.5rem;
-  border: 1px solid currentColor;
+  border: 1px solid var(--nx-input);
   border-radius: var(--radius-sm);
-  background: transparent;
-  color: inherit;
+  background: var(--nx-background);
+  color: var(--nx-foreground);
   font: inherit;
   font-weight: 500;
   cursor: pointer;
 }
 
-.nx-preview-notice__new:focus-visible {
+.nx-preview-notice__action:hover {
+  background: var(--nx-muted);
+}
+
+.nx-preview-notice__action:focus-visible {
   outline: 2px solid var(--nx-ring);
   outline-offset: 1px;
+}
+
+/* The chip's mark for an entry that could not be read: words, not colour. */
+.nx-preview-strip__unavailable {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--nx-muted-foreground);
 }
 
 /*
