@@ -10,7 +10,12 @@
  *
  * @module __tests__/bindings-report.integration.test
  */
-import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+import {
+  DOCUMENT_FORMAT_VERSION,
+  defineNamedQuery,
+  hasBlock,
+  registerBlocks,
+} from "@nextlyhq/blocks-engine";
 import type { PluginDefinition } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
@@ -18,7 +23,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, text } from "nextly/config";
+import { defineCollection, defineSingle, text } from "nextly/config";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { BINDINGS_REPORT_JOB } from "../bindings-report/job";
@@ -30,7 +35,76 @@ import { pageBuilder } from "../plugin";
 type Node = Record<string, unknown>;
 
 const ARTICLES = "bri_articles";
+const BRAND = "bri_brand";
+const STAT = "bri/stat";
 const TABLE = "page_builder__binding_issues";
+
+/** Rows of their own, declaring a price and nothing else. */
+const deals = defineNamedQuery({
+  name: "bri.deals",
+  label: "Deals",
+  reads: { collections: [ARTICLES] },
+  rows: {
+    key: "id",
+    fields: [
+      { name: "id", type: "text" },
+      { name: "price", type: "number" },
+    ],
+  },
+  async run() {
+    return { rows: [] };
+  },
+});
+
+/** A block whose `value` is a number and which has no `subtitle`. */
+function registerStat(): void {
+  if (hasBlock(STAT)) return;
+  registerBlocks(
+    [
+      {
+        name: STAT,
+        version: 1,
+        description: "A number with a caption.",
+        example: { props: {} },
+        render: () => null,
+        props: {
+          value: { type: "number" },
+          caption: { type: "text", role: "content" },
+        },
+        defaultProps: { value: 0, caption: "" },
+      },
+    ] as never,
+    { source: "test" } as never
+  );
+}
+
+/** A page of these nodes. */
+const pageWith = (nodes: Node[]) => ({
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "page",
+  nodes,
+});
+
+/** A list of `props`' source, its entries drawn with one item-bound heading. */
+const listOf = (props: Node, path: string): Node => ({
+  id: "list",
+  type: "core/collection-loop",
+  version: 1,
+  props: { limit: 3, ...props },
+  slots: {
+    children: [
+      {
+        id: "entry",
+        type: "core/heading",
+        version: 1,
+        props: { text: "Own", level: 2 },
+        bindings: {
+          text: { $bind: path, source: "item", fallback: "Untitled" },
+        },
+      },
+    ],
+  },
+});
 
 const pageOf = (binding: Node) => ({
   formatVersion: DOCUMENT_FORMAT_VERSION,
@@ -71,7 +145,7 @@ describe.each(getConfiguredTestDialects())(
     let pass: () => Promise<unknown>;
 
     beforeAll(async () => {
-      const plugin = pageBuilder();
+      const plugin = pageBuilder({ namedQueries: [deals] });
       pass = reportPass(plugin);
       t = await createTestNextly({
         dialect,
@@ -85,7 +159,11 @@ describe.each(getConfiguredTestDialects())(
             ],
           }),
         ],
+        singles: [
+          defineSingle({ slug: BRAND, fields: [text({ name: "motto" })] }),
+        ],
       });
+      registerStat();
     });
 
     afterAll(async () => {
@@ -179,5 +257,104 @@ describe.each(getConfiguredTestDialects())(
       await pass();
       expect(codesOf(await rowOf(id))).toEqual([]);
     });
+    /**
+     * The codes reported for a page planted past every check, as a save before
+     * a schema change left it, then saved again with an edit beside it: the
+     * save keeps it, and the report lists the document.
+     */
+    async function reportedAfterChange(nodes: Node[]): Promise<string[]> {
+      const created = await t.nextly.create({
+        collection: ARTICLES,
+        data: { title: "Launch", content: pageWith([]) },
+        overrideAccess: true,
+      });
+      const id = String(created.item.id);
+      const registry = t.getService("collectionRegistryService") as unknown as {
+        getCollectionBySlug(
+          slug: string
+        ): Promise<{ tableName: string } | null>;
+      };
+      const table = (await registry.getCollectionBySlug(ARTICLES))!.tableName;
+      const planted = pageWith(nodes);
+      await t.adapter.update(
+        table,
+        { content: dialect === "sqlite" ? JSON.stringify(planted) : planted },
+        { and: [{ column: "id", op: "=", value: id }] }
+      );
+      await t.nextly.update({
+        collection: ARTICLES,
+        id,
+        data: asOverwrite({ title: "Launch day", content: planted }),
+        overrideAccess: true,
+      });
+      await pass();
+      return codesOf(await rowOf(id)).sort();
+    }
+
+    it.each([
+      [
+        "a Single's field renamed",
+        [
+          {
+            id: "h",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Own", level: 2 },
+            bindings: {
+              text: {
+                $bind: "slogan",
+                source: "single",
+                sourceKey: BRAND,
+                fallback: "Made with care",
+              },
+            },
+          },
+        ],
+        ["binding-field-missing"],
+      ],
+      [
+        "a bound prop that became a number, its text fallback no longer fitting",
+        [
+          {
+            id: "s",
+            type: STAT,
+            version: 1,
+            props: { value: 3, caption: "Visits" },
+            bindings: { value: { $bind: "title", fallback: "n/a" } },
+          },
+        ],
+        ["binding-fallback-invalid", "binding-type-misfit"],
+      ],
+      [
+        "a bound prop removed from the block",
+        [
+          {
+            id: "s",
+            type: STAT,
+            version: 1,
+            props: { value: 3, caption: "Visits" },
+            bindings: { subtitle: { $bind: "title" } },
+          },
+        ],
+        ["binding-prop-missing"],
+      ],
+      [
+        "a field renamed in the collection a list shows",
+        [listOf({ collection: ARTICLES }, "headline")],
+        ["binding-field-missing"],
+      ],
+      [
+        "a named query's rows no longer declaring a field",
+        [listOf({ namedQuery: { name: "bri.deals", params: {} } }, "title")],
+        ["binding-field-missing"],
+      ],
+    ] as const)(
+      "lists the document after %s",
+      async (_change, nodes, codes) => {
+        expect(await reportedAfterChange([...nodes] as Node[])).toEqual([
+          ...codes,
+        ]);
+      }
+    );
   }
 );

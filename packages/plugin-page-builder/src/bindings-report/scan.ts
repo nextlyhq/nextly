@@ -36,6 +36,7 @@ import {
   type BlockDocument,
   type DocumentLimits,
   type ResolvedBlockNode,
+  type NamedQuerySource,
 } from "@nextlyhq/blocks-engine";
 
 import { asDocument } from "../component-store-source";
@@ -93,6 +94,8 @@ export interface BindingReportDeps {
   readonly placeOf: (at: Pick<HostAddress, "kind" | "slug">) => string;
   /** Start the sweep, without waiting for it; nothing where none can run. */
   readonly kick?: () => void;
+  /** The site's named queries, whose rows a list's item bindings read. */
+  readonly namedQueries?: NamedQuerySource;
 }
 
 /** A document's entry, as its bindings read it; none for a component's own. */
@@ -159,7 +162,7 @@ async function composedWith(
 async function valueRows(
   entryOf: Pick<HostAddress, "kind" | "slug">,
   value: unknown,
-  deps: Pick<BindingReportDeps, "shapesOf" | "limits">,
+  deps: Pick<BindingReportDeps, "shapesOf" | "limits" | "namedQueries">,
   components: ComponentSource | undefined
 ): Promise<{
   readonly rows: BindingReportRow[];
@@ -172,7 +175,13 @@ async function valueRows(
   const report = await documentBindingReport(
     { nodes: document.nodes, settings: stored.settings },
     entryRef(entryOf, stored),
-    { shapesOf: deps.shapesOf, maxNodes: deps.limits().maxNodes }
+    {
+      shapesOf: deps.shapesOf,
+      maxNodes: deps.limits().maxNodes,
+      ...(deps.namedQueries === undefined
+        ? {}
+        : { namedQueries: deps.namedQueries }),
+    }
   );
   const componentOf = placedComponents(stored, deps.limits().maxNodes);
   const rows = report.rows.map(row => {
@@ -206,7 +215,7 @@ function valueOf(read: ReadValue | null): unknown {
 async function documentRows(
   at: Pick<HostAddress, "kind" | "slug" | "id">,
   hosts: readonly HostCandidate[],
-  deps: Pick<BindingReportDeps, "shapesOf" | "limits">,
+  deps: Pick<BindingReportDeps, "shapesOf" | "limits" | "namedQueries">,
   reading: DocumentReading
 ): Promise<{
   readonly rows: BindingReportRow[];
@@ -239,7 +248,7 @@ async function documentRows(
 async function hostRows(
   { host, access, maybeShared }: HostCandidate,
   shared: Set<string>,
-  deps: Pick<BindingReportDeps, "shapesOf" | "limits">,
+  deps: Pick<BindingReportDeps, "shapesOf" | "limits" | "namedQueries">,
   reading: DocumentReading
 ): Promise<{
   readonly rows: BindingReportRow[];

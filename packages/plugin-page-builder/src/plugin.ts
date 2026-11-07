@@ -1823,6 +1823,8 @@ export const pageBuilder = (
       const { declaredFieldShapes } = await import("nextly/runtime");
       return declaredFieldShapes(ref);
     },
+    // And a list's item bindings, against the rows its named query declares.
+    namedQueries: namedQuerySource,
     // Documents read as the walk reads them, and the components they place as
     // visitors are served them.
     reading: () => {
@@ -1956,6 +1958,7 @@ export const pageBuilder = (
             collections: () => collectionRegistryRows(ctx),
             singles: () => singleRegistryRows(ctx),
             fieldGroups: () => fieldGroupRows(),
+            namedQueries: () => namedQueryDeclarations(),
             blocks: () => allBlocks(),
             designs: async () => {
               const saves = await latestSave([
