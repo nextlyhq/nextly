@@ -218,6 +218,9 @@ export default defineConfig({
     pageBuilder({
       siteStyle: SITE_STYLE_DEFAULTS,
       pagePreviewPath: "/{slug}",
+      // Each post is served at `/blog/<its slug>` by the same route as the
+      // pages, drawn with the Posts template once one is published.
+      templates: { addresses: { posts: "/blog" } },
       // The route that draws the editor's canvas inside this site's layout.
       canvasPath: "/page-builder-canvas",
       // The browser suite's stand-in Google Fonts catalogue, so adding a font

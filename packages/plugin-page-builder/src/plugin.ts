@@ -34,8 +34,19 @@ import {
   backfillPageClaims,
   type PagesReader,
 } from "./address-claims/backfill";
+import {
+  CONTENT_ADDRESS_SERVICE,
+  contentAddressService,
+  type ContentAddressService,
+} from "./address-claims/content-addresses";
+import {
+  registerEntryAddressClaims,
+  settleEntryClaimsAtStart,
+  type EntryClaimsDeps,
+} from "./address-claims/entry-claims-hook";
 import { claimLocales } from "./address-claims/page-claims";
 import {
+  describeFor,
   registerPageAddressClaims,
   type ReadsById,
 } from "./address-claims/page-claims-hook";
@@ -266,7 +277,12 @@ import { spacingModeRoute } from "./spacing-mode-route";
 import { spacingModeStore, type SpacingModeStore } from "./spacing-mode-store";
 import { templateActionsRoute } from "./templates/template-actions-route";
 import {
+  checkedTemplateAddresses,
+  type PageBuilderTemplateOptions,
+} from "./templates/template-addresses";
+import {
   registerTemplateGuard,
+  templateCollectionProblem,
   templateHolderReader,
   type TemplateGuardSetup,
 } from "./templates/template-guard";
@@ -689,6 +705,26 @@ export interface PageBuilderOptions {
    * false }` turns the catalogue off; uploading a font file still works.
    */
   fonts?: PageBuilderFontOptions;
+
+  /**
+   * Collection templates: where each collection defined in code serves its
+   * entries, drawn with the collection's published template.
+   *
+   * ```ts
+   * pageBuilder({ templates: { addresses: { posts: "/blog" } } });
+   * ```
+   *
+   * serves each published post at `/blog/<its slug>` from the site's content
+   * route (`createContentPage` with `pageBuilderContent()`), once the
+   * collection's template is published. An address not in its one spelling,
+   * or under a path the runtime keeps, refuses to start; so do two
+   * collections given one address, and a collection that cannot have a
+   * template.
+   *
+   * @experimental New public surface: its name and shape may change before
+   * it is marked stable.
+   */
+  templates?: PageBuilderTemplateOptions;
 }
 
 /**
@@ -1285,6 +1321,24 @@ export const pageBuilder = (
   // Set once that pass has finished, after which a page save need not claim
   // the existing pages its list's later pages would fall on.
   let pageClaimsBackfilled = false;
+  // Each collection's code-declared template address, checked when the
+  // plugin is defined, so a malformed or shared one refuses to start.
+  const templateAddresses = checkedTemplateAddresses(opts.templates);
+  // Who holds a path, for the site's content route, set by `init`.
+  let contentAddresses: ContentAddressService | null = null;
+  const requireContentAddresses = (): ContentAddressService => {
+    if (contentAddresses === null) {
+      throw new Error(
+        "[page-builder] the content route asked for an address before the plugin was installed"
+      );
+    }
+    return contentAddresses;
+  };
+  // Refuses to start when a collection given a template address cannot have
+  // a template: run once every plugin's collections are registered.
+  let checkTemplateAddresses: (() => Promise<void>) | null = null;
+  // Brings the entries' claims to the declared addresses, after the pages'.
+  let entryClaimsPass: (() => Promise<void>) | null = null;
 
   /**
    * The templates guard's lookups over the installed plugin: the RESOLVED
@@ -2028,6 +2082,104 @@ export const pageBuilder = (
         });
         pageClaimsBackfilled = true;
       };
+      // Each collection's entries hold `<its address>/<slug>` while it and
+      // the collection's template are published, in the save's transaction,
+      // beside the pages, so an entry and a page never share an address.
+      const templatesSlug =
+        ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG;
+      const describeHolder = describeFor({
+        nextly: async () => {
+          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+          return (await getCachedNextly()) as unknown as ReadsById;
+        },
+        collection: slug =>
+          ctx.services.collections.getCollection(slug, undefined as never),
+      });
+      const claimsDeps: EntryClaimsDeps = {
+        claims: claimsStore,
+        addresses: templateAddresses,
+        templates: templatesSlug,
+        locales: siteLocales,
+        describe: describeHolder,
+        // Hook-free and as the system, as the template guard reads it, so a
+        // read hook cannot hide a template that serves entries.
+        templatePublished: async collection => {
+          const found = await ctx.services.ownCollections.listEntries(
+            templatesSlug,
+            {
+              where: { collection: { equals: collection } },
+              pagination: { limit: 1 },
+              depth: 0,
+            }
+          );
+          const row = found.data[0] as Record<string, unknown> | undefined;
+          return (
+            row !== undefined &&
+            row.collection === collection &&
+            row.status === "published"
+          );
+        },
+        publishedEntries: async (collection, page, size) => {
+          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+          const nextly = (await getCachedNextly()) as unknown as PagesReader;
+          const found = await nextly.find({
+            collection,
+            // Published only, and a no-op on a collection without a
+            // Draft/Published lifecycle, whose entries are all live.
+            status: "published",
+            sort: "createdAt",
+            limit: size,
+            page,
+            overrideAccess: true,
+            depth: 0,
+          });
+          return found.items as readonly Readonly<Record<string, unknown>>[];
+        },
+      };
+      if (templateAddresses.size > 0) {
+        registerEntryAddressClaims(ctx.hooks, claimsDeps);
+      }
+      entryClaimsPass = () =>
+        settleEntryClaimsAtStart({
+          ...claimsDeps,
+          withTransaction: work =>
+            ctx.services.collections.withTransaction(work),
+          warn: (message, meta) => ctx.logger.warn(message, meta),
+        });
+      checkTemplateAddresses = async () => {
+        const own = new Set(Object.values(ctx.self.collections));
+        const problems: string[] = [];
+        for (const collection of templateAddresses.keys()) {
+          const problem = await templateCollectionProblem(
+            collection,
+            async slug => {
+              try {
+                return (await ctx.services.collections.getCollection(
+                  slug,
+                  undefined as never
+                )) as unknown as Record<string, unknown>;
+              } catch (error) {
+                if (NextlyError.isNotFound(error)) return null;
+                throw error;
+              }
+            },
+            own
+          );
+          if (problem !== null) problems.push(problem);
+        }
+        if (problems.length > 0) {
+          throw new Error(
+            `[page-builder] templates.addresses cannot be used: ${problems.join(" ")}`
+          );
+        }
+      };
+      contentAddresses = contentAddressService({
+        claims: claimsStore,
+        // The site's default language, where a localized site names one.
+        defaultLocale: () =>
+          ctx.config.localization?.defaultLocale || siteLocales()[0] || "en",
+        collections: [pagesSlug, templatesSlug, ...templateAddresses.keys()],
+      });
       // A page published naming a Layout that is not: it is served inside the
       // site's default until its own is published, and the author is told.
       registerLayoutReadinessNotice({
@@ -2166,11 +2318,21 @@ export const pageBuilder = (
     //
     // Then record the site's spacing model, once: AFTER the seed, so the seed
     // is recorded and not taken for content. Neither step throws.
-    onReady: () => {
-      // Existing pages' addresses, claimed in the background: the backfill
-      // never throws, and a boot is not held for it.
+    onReady: async () => {
+      // A collection given a template address that cannot have a template
+      // refuses to start, naming it: checked once every plugin's
+      // collections are registered.
+      await checkTemplateAddresses?.();
+      // Existing pages' addresses, claimed in the background, then the
+      // entries' under their collections' addresses, pages first: the
+      // passes never throw, and a boot is not held for them.
       const backfill = pageClaimsBackfill;
-      if (backfill !== null) void backfill().catch(() => undefined);
+      const entryPass = entryClaimsPass;
+      if (backfill !== null) {
+        void backfill()
+          .then(() => entryPass?.())
+          .catch(() => undefined);
+      }
       void seedGraphLock?.();
       const setup = defaultLayoutSetup;
       const spacing = spacingSetup;
@@ -2253,6 +2415,10 @@ export const pageBuilder = (
             readRetired: readRetiredFor,
             templates: { guard: requireTemplateGuard },
           }),
+        // Who holds a path, for the site's one content route: a page, or a
+        // collection's entry under its template address. Read as committed,
+        // through the store every save's collision check writes.
+        [CONTENT_ADDRESS_SERVICE]: () => requireContentAddresses(),
         [SPACING_MODE_SERVICE]: (): SpacingModeReader => ({
           read: () =>
             readJoiningDecision(

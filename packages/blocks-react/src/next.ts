@@ -70,6 +70,7 @@ import {
 import type {
   ContentEntry,
   ContentRoute,
+  ContentRouteArgs,
   StaticContentRoute,
   ContentRouteConfig,
   NextlyContentReader,
@@ -3591,6 +3592,362 @@ export function createPublicBlocksPage(
   return contentWithinBoundary(
     createPublicContentRoute<ReactElement>(blocksRouteConfig(config, true))
   );
+}
+
+/**
+ * The document a path is served from, as the site's address store answers:
+ * a page, or a collection's entry served under its template address.
+ *
+ * @experimental Settles with collection templates.
+ */
+export interface ContentAddressHolder {
+  /** The collection holding the address. */
+  readonly collection: string;
+  /** The holding document's id. */
+  readonly id: string;
+  /**
+   * `"space"` when the path is a later page of the holder's paginated list
+   * rather than its own address. Absent means its own address.
+   */
+  readonly kind?: "address" | "space";
+}
+
+/**
+ * A collection's published template, the document an entry's page is drawn
+ * with.
+ *
+ * @experimental Settles with collection templates.
+ */
+export interface ContentTemplate {
+  readonly id: string;
+  /** The template's block document. */
+  readonly document: unknown;
+}
+
+/**
+ * Config for {@link createContentPage} and {@link createPublicContentPage}.
+ *
+ * The page builder supplies every option but `pages`:
+ *
+ * ```ts
+ * import { pageBuilderContent } from "@nextlyhq/plugin-page-builder";
+ *
+ * createContentPage({
+ *   pages: { collections: ["pages"], field: "content", draft: previewDraftGate() },
+ *   ...pageBuilderContent(),
+ * });
+ * ```
+ *
+ * @experimental Settles with collection templates.
+ */
+export interface ContentPageConfig {
+  /**
+   * How a page is drawn, as {@link createBlocksPage} takes it. An entry's
+   * page is drawn with the same options (blocks, styles, Layouts, limits,
+   * metadata), with its collection's template as the document. A stored
+   * page stylesheet (`styles`) is a page's own and is not used for an entry,
+   * whose sheet is compiled from `styleContext`.
+   */
+  readonly pages: BlocksPageConfig;
+  /**
+   * Who holds `path` in `locale`: the path as served (the route's
+   * `mountPath` included, each segment percent-encoded), and the route's
+   * `locale`, absent for the site's default. Null when nothing does, which
+   * answers not found.
+   */
+  readonly resolveAddress: (
+    locale: string | undefined,
+    path: string
+  ) => Promise<ContentAddressHolder | null>;
+  /** Each collection's published template, and where templates are kept. */
+  readonly templates: {
+    /** The templates collection, whose writes refresh the pages they draw. */
+    readonly collection: string;
+    /**
+     * `collection`'s published template, as the public reads it, or null
+     * when it has none.
+     */
+    readonly read: (
+      collection: string,
+      locale: string | undefined
+    ) => Promise<ContentTemplate | null>;
+  };
+  /**
+   * The addresses held in `locale`, as path segments, at most `limit`: what
+   * {@link createPublicContentPage} pre-renders. Absent, it pre-renders
+   * nothing and renders each path on its first request.
+   */
+  readonly addresses?: (
+    locale: string | undefined,
+    limit: number
+  ) => Promise<readonly (readonly string[])[]>;
+  /**
+   * The collections whose writes change who holds an address, so the public
+   * route's cached lookup of a path is refreshed by a write to any of them.
+   * The pages and the templates are always among them.
+   */
+  readonly addressCollections?: () => Promise<readonly string[]>;
+}
+
+/**
+ * The key an entry's template document is handed to the shared render under:
+ * a name no collection's field can take, so an entry's own field of the
+ * same name is never drawn in its place.
+ */
+const TEMPLATE_DOCUMENT_KEY = "__nextlyTemplateDocument";
+
+/** What a request path is served as. */
+type ContentAnswer =
+  | { readonly kind: "page" }
+  | {
+      readonly kind: "entry";
+      readonly entry: ContentEntry;
+      readonly context: RenderContext;
+      readonly route: ContentRouteConfig<ReactElement>;
+    };
+
+/** Answer not found, through the App Router's own boundary. */
+async function contentNotFound(): Promise<never> {
+  const { notFound } = await import("next/navigation");
+  return notFound();
+}
+
+function buildContentRoute(
+  config: ContentPageConfig,
+  isPublic: boolean
+): StaticContentRoute<ReactElement> {
+  const { pages, templates } = config;
+  // A page is served by the pages route itself, so it is drawn exactly as
+  // `createBlocksPage` draws it: its draft gate, its list's later pages, its
+  // tags and metadata.
+  const pagesRoute: ContentRoute<ReactElement> = isPublic
+    ? createPublicContentRoute<ReactElement>(blocksRouteConfig(pages, true))
+    : createContentRoute<ReactElement>(blocksRouteConfig(pages, false));
+  const pageCollections = new Set(pages.collections);
+  const mountPath = pages.mountPath ?? "";
+  const window = pages.revalidate;
+  // An entry is drawn by the same render as a page, over its collection, with
+  // the template as the document. A page's stored sheet is not an entry's.
+  const { styles: _styles, ...entryOptions } = pages;
+  const entryRoutes = new Map<string, ContentRouteConfig<ReactElement>>();
+  const entryRouteOf = (
+    collection: string
+  ): ContentRouteConfig<ReactElement> => {
+    let route = entryRoutes.get(collection);
+    if (route === undefined) {
+      route = blocksRouteConfig(
+        {
+          ...entryOptions,
+          collections: [collection],
+          field: TEMPLATE_DOCUMENT_KEY,
+        },
+        isPublic
+      );
+      entryRoutes.set(collection, route);
+    }
+    return route;
+  };
+
+  /** Who holds `path`: read per request, or cached on a public route. */
+  async function holderOf(path: string): Promise<ContentAddressHolder | null> {
+    const read = () => config.resolveAddress(pages.locale, path);
+    if (!isPublic) return await read();
+    const collections = [
+      ...pages.collections,
+      templates.collection,
+      ...((await config.addressCollections?.()) ?? []),
+    ];
+    // `null` stands for "nobody" inside the cache, which keeps values as JSON.
+    return await cachedFind(async () => (await read()) ?? null, {
+      tags: [...new Set(collections)].flatMap(slug => nextlyTags(slug)),
+      keyParts: [
+        "nextly-content-address",
+        pages.cacheScope ?? "",
+        pages.locale ?? "",
+        path,
+      ],
+      revalidate: await releaseBoundedRevalidate(window),
+    });
+  }
+
+  /** `collection`'s published template, cached and tagged with templates. */
+  async function templateOf(
+    collection: string
+  ): Promise<ContentTemplate | null> {
+    return await cachedFind(
+      async () => (await templates.read(collection, pages.locale)) ?? null,
+      {
+        tags: nextlyTags(templates.collection),
+        keyParts: [
+          "nextly-content-template",
+          pages.cacheScope ?? "",
+          pages.locale ?? "",
+          collection,
+        ],
+        revalidate: await releaseBoundedRevalidate(window),
+      }
+    );
+  }
+
+  /**
+   * The entry as a visitor reads it: published, with the fields the public
+   * may read, through the reader the page's bindings read it with.
+   */
+  async function publicEntry(
+    collection: string,
+    id: string
+  ): Promise<ContentEntry | null> {
+    const { items } = await publicReaderFor(pages, pages.locale, window).find({
+      collection,
+      filters: [{ field: "id", op: "equals", value: id }],
+      limit: 1,
+    });
+    return items[0] ?? null;
+  }
+
+  /**
+   * Whether the pages route's draft gate grants this path to the request: a
+   * page's working draft holds no address, so a preview of one reaches the
+   * pages route only through its gate.
+   */
+  async function draftGranted(slug: string): Promise<boolean> {
+    const decision = pages.draft;
+    if (decision === undefined || decision === false) return false;
+    if (decision === true) return true;
+    for (const collection of pageCollections) {
+      const grant = await decision({
+        collection,
+        slug,
+        ...(pages.locale === undefined ? {} : { locale: pages.locale }),
+      });
+      if (
+        grant === true ||
+        (typeof grant === "object" &&
+          grant !== null &&
+          typeof grant.entryId === "string" &&
+          grant.entryId !== "")
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** What `segments` is served as, or null for not found. */
+  async function answer(
+    segments: readonly string[]
+  ): Promise<ContentAnswer | null> {
+    const slug = segments.join("/");
+    // The route's own answer to which paths it serves: a reserved path, or a
+    // segment URL resolution removes, is never looked up.
+    if (slugToPath(slug) === null) return null;
+    const own = segments.map(encodeURIComponent).join("/");
+    const path = own === "" ? mountPath || "/" : `${mountPath}/${own}`;
+    const holder = await holderOf(path);
+    if (holder === null) {
+      return (await draftGranted(slug)) ? { kind: "page" } : null;
+    }
+    if (pageCollections.has(holder.collection)) return { kind: "page" };
+    // An entry's own address only: an entry's list does not page yet.
+    if (holder.kind === "space") return null;
+    const template = await templateOf(holder.collection);
+    if (template === null) return null;
+    const entry = await publicEntry(holder.collection, holder.id);
+    if (entry === null) return null;
+    return {
+      kind: "entry",
+      route: entryRouteOf(holder.collection),
+      entry: { ...entry, [TEMPLATE_DOCUMENT_KEY]: template.document },
+      context: {
+        collection: holder.collection,
+        slug,
+        ...(pages.locale === undefined ? {} : { locale: pages.locale }),
+      },
+    };
+  }
+
+  async function segmentsOf(args: ContentRouteArgs): Promise<string[]> {
+    return (await args.params).slug ?? [];
+  }
+
+  async function ContentPage(args: ContentRouteArgs): Promise<ReactElement> {
+    const segments = await segmentsOf(args);
+    const found = await answer(segments);
+    if (found === null) return await contentNotFound();
+    if (found.kind === "page") {
+      return await pagesRoute.ContentPage({ params: { slug: segments } });
+    }
+    return await found.route.render(found.entry, found.context);
+  }
+
+  async function generateMetadata(args: ContentRouteArgs): Promise<Metadata> {
+    const segments = await segmentsOf(args);
+    const found = await answer(segments);
+    if (found === null) return {};
+    if (found.kind === "page") {
+      return await pagesRoute.generateMetadata({
+        params: { slug: segments },
+      });
+    }
+    return (
+      (await found.route.buildMetadata?.(found.entry, found.context)) ?? {}
+    );
+  }
+
+  async function generateStaticParams(): Promise<Array<{ slug: string[] }>> {
+    const limit = pages.staticParamsLimit ?? 1000;
+    if (config.addresses === undefined || limit <= 0) return [];
+    const mount = mountPath.split("/").filter(part => part !== "");
+    const held = await config.addresses(pages.locale, limit);
+    // Only the addresses under this route's mount, as the route serves them.
+    return held.flatMap(segments =>
+      mount.every((part, at) => segments[at] === part)
+        ? [{ slug: segments.slice(mount.length) }]
+        : []
+    );
+  }
+
+  return { ContentPage, generateMetadata, generateStaticParams };
+}
+
+/**
+ * The site's one content route, over ACCESS-ENFORCED reads: every path the
+ * site's address store holds, a page's or a collection's entry's.
+ *
+ * - A path a page holds is served as {@link createBlocksPage} serves the
+ *   page, its draft gate included.
+ * - A path a collection's entry holds is drawn with the collection's
+ *   published template, the entry as its bindings' `entry` source, read
+ *   published-only as the public reads it. Its metadata comes from the
+ *   template's own SEO settings.
+ * - Any other path answers not found, and so does an entry whose collection
+ *   has no published template. A page's draft is served where the gate
+ *   grants it, since a draft holds no address.
+ *
+ * Returns no `generateStaticParams`, for the reason `createBlocksPage` has
+ * none.
+ *
+ * @experimental Settles with collection templates.
+ */
+export function createContentPage(
+  config: ContentPageConfig
+): ContentRoute<ReactElement> {
+  const { ContentPage, generateMetadata } = buildContentRoute(config, false);
+  return contentWithinBoundary({ ContentPage, generateMetadata });
+}
+
+/**
+ * The site's one content route over PUBLIC content: cached and
+ * pre-renderable. `generateStaticParams` pre-renders the addresses the store
+ * holds; a path's lookup is cached, tagged with every collection whose writes
+ * change who holds an address.
+ *
+ * @experimental Settles with collection templates.
+ */
+export function createPublicContentPage(
+  config: ContentPageConfig
+): StaticContentRoute<ReactElement> {
+  return contentWithinBoundary(buildContentRoute(config, true));
 }
 
 /**
