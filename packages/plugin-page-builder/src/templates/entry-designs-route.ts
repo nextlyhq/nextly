@@ -85,6 +85,14 @@ import {
   type TemplateGuardSetup,
 } from "./template-guard";
 
+
+/**
+ * The filter the Direct API's `find` takes, as the plugin SDK's own handle
+ * types it: derived from the SDK's surface rather than imported from core.
+ */
+type FindWhere = NonNullable<
+  Parameters<Awaited<ReturnType<typeof getCachedNextly>>["find"]>[0]["where"]
+>;
 /**
  * The most pages of own design rows one read goes through looking for those
  * the caller may read: {@link ENTRY_DESIGNS_MAX} rows each. Own designs are the
@@ -121,7 +129,22 @@ const QUERY_IDS = z
  * collection is meant. A collection or a template, never both; an entry or
  * entries only with a collection, and never both.
  */
-const ENTRY_DESIGNS_QUERY = z
+/**
+ * The route's query once read: the names are `ENTRY_DESIGNS_PARAMS`' values.
+ * Stated rather than inferred, so the parser's exported signature carries a
+ * declared type.
+ */
+export interface EntryDesignsQuery {
+  readonly collection?: string;
+  readonly entry?: string;
+  readonly entries?: string[];
+  readonly template?: string;
+}
+
+const ENTRY_DESIGNS_QUERY: z.ZodType<
+  EntryDesignsQuery,
+  Record<string, string>
+> = z
   .object({
     [ENTRY_DESIGNS_PARAMS.collection]: QUERY_ID.optional(),
     [ENTRY_DESIGNS_PARAMS.entry]: QUERY_ID.optional(),
@@ -151,7 +174,7 @@ const ENTRY_DESIGNS_QUERY = z
 /** The route's query, read from `url`, or a validation error naming it. */
 export function parseEntryDesignsQuery(
   url: string | URL
-): z.output<typeof ENTRY_DESIGNS_QUERY> {
+): EntryDesignsQuery {
   return parseRouteQuery(
     url,
     Object.values(ENTRY_DESIGNS_PARAMS),
@@ -188,7 +211,9 @@ export interface EntryDesignsReads {
   template(id: string): Promise<Record<string, unknown> | null>;
   /** Template rows matching `where`, as the caller reads them. */
   templates(args: {
-    where: Record<string, unknown>;
+    // The Direct API's own filter type, so the read hands `find` exactly what
+    // it takes: a filter typed here is checked where it is built.
+    where: FindWhere;
     limit: number;
     select: Record<string, true>;
     sort?: string[];
