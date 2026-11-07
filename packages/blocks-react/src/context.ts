@@ -409,6 +409,20 @@ export type ReadKind =
   | "component";
 
 /**
+ * Every kind a budget counts, in the order the editor lists them.
+ *
+ * @experimental
+ */
+export const READ_KINDS: readonly ReadKind[] = [
+  "entries",
+  "related",
+  "image",
+  "link",
+  "page",
+  "component",
+];
+
+/**
  * One read's claim: what it is for, and the block that asked, where a block
  * did. A claim with no kind counts as the page's own data.
  *

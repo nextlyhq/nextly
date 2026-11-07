@@ -19,14 +19,18 @@
  */
 import {
   bindingDemand,
+  isPlainRecord,
   type BindingDemand,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import {
   bindingsFromWire,
   listCollections,
+  READ_KINDS,
   type NamedQueryLookup,
   type PageBindings,
+  type PageReadReport,
+  type ReadKind,
 } from "@nextlyhq/blocks-react";
 import {
   useCurrentUserId,
@@ -43,6 +47,64 @@ import {
   type CanvasBindingsResponse,
 } from "../canvas-bindings-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
+
+/**
+ * What each answer's reads cost the page's allowance, by the bindings it
+ * gave, so the editor's read meter adds the binding reads as the route made
+ * them. Kept beside the answer rather than in it, so every reader of the
+ * bindings keeps the shape it always had.
+ */
+const READS = new WeakMap<PageBindings, PageReadReport>();
+
+/** What reading these bindings cost, when the route said; none for none read. */
+export function bindingReadsOf(
+  bindings: PageBindings
+): PageReadReport | undefined {
+  return READS.get(bindings);
+}
+
+const KNOWN_KINDS: ReadonlySet<string> = new Set<ReadKind>(READ_KINDS);
+
+/** Whether a name is one of the kinds a budget counts. */
+function isReadKind(name: string): name is ReadKind {
+  return KNOWN_KINDS.has(name);
+}
+
+/** A count the route sent: a whole number, not below zero. */
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * The reads an answer reports, when they are what a budget reports: checked
+ * here, at the boundary, since the answer arrives over the network. An answer
+ * without them, or with anything else in their place, reports none.
+ */
+function readsIn(answer: unknown): PageReadReport | undefined {
+  const reads = isPlainRecord(answer) ? answer.reads : undefined;
+  if (!isPlainRecord(reads)) return undefined;
+  const { cap, used, refused, unread } = reads;
+  if (!isCount(used) || !isCount(refused)) return undefined;
+  if (typeof cap !== "number" || !Array.isArray(unread)) return undefined;
+  const byKind = kindsIn(reads.byKind);
+  // The route reads no block's data, so it names none.
+  return byKind === undefined
+    ? undefined
+    : { cap, used, refused, byKind, unread: [] };
+}
+
+/** A report's reads by kind, when each is a kind with a count. */
+function kindsIn(
+  byKind: unknown
+): Partial<Record<ReadKind, number>> | undefined {
+  if (!isPlainRecord(byKind)) return undefined;
+  const kinds: Partial<Record<ReadKind, number>> = {};
+  for (const [kind, count] of Object.entries(byKind)) {
+    if (!isReadKind(kind) || !isCount(count)) return undefined;
+    kinds[kind] = count;
+  }
+  return kinds;
+}
 
 /** No source read: what the canvas draws with until an answer arrives. */
 const NONE: PageBindings = Object.freeze({});
@@ -153,7 +215,12 @@ export function canvasBindingsFor(
   if (kept !== undefined && Date.now() - kept.at < KEPT_FOR_MS) {
     return kept.read;
   }
-  const reading = ask(request).then(bindingsFromWire);
+  const reading = ask(request).then(answer => {
+    const bindings = bindingsFromWire(answer);
+    const reads = readsIn(answer);
+    if (reads !== undefined) READS.set(bindings, reads);
+    return bindings;
+  });
   KEPT.set(key, { at: Date.now(), read: reading });
   // A failed ask is not kept, so the next draw asks again.
   reading.catch(() => {

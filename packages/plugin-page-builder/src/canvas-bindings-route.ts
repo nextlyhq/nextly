@@ -30,6 +30,7 @@
  *
  * @module canvas-bindings-route
  */
+import type { PageReadReport } from "@nextlyhq/blocks-react";
 import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { respondDoc } from "nextly";
 import { z } from "nextly/zod";
@@ -132,17 +133,28 @@ const CanvasBindingsBody = z
     message: `At most ${String(MOST)} sources, relations and lists in all.`,
   });
 
+/**
+ * What the route answers: the sources read, and what reading them cost the
+ * page's allowance, so the editor's read meter counts the binding reads as
+ * they were made rather than working them out again.
+ *
+ * @experimental Settles with the editor's read meter.
+ */
+export type CanvasBindingsAnswer = CanvasBindingsResponse & {
+  readonly reads?: PageReadReport;
+};
+
 /** What the route reads with, injected so the read is tested without a server. */
 export interface CanvasBindingsReads {
   /** The sources the request names, read as the caller. */
-  read(request: CanvasBindingsRequest): Promise<CanvasBindingsResponse>;
+  read(request: CanvasBindingsRequest): Promise<CanvasBindingsAnswer>;
 }
 
 /** Answer one ask: the sources it names, as the caller reads them. */
 export function readCanvasBindings(
   request: CanvasBindingsRequest,
   reads: CanvasBindingsReads
-): Promise<CanvasBindingsResponse> {
+): Promise<CanvasBindingsAnswer> {
   return reads.read(request);
 }
 
@@ -175,6 +187,10 @@ function directCanvasBindingsReads(
         { user, ...(actor === undefined ? {} : { actor }) },
         locale === undefined ? {} : { locale }
       );
+      // A published page's own allowance, for one ask, counting what it
+      // spends, so the editor's read meter adds what these reads cost as
+      // they were made, as a named query's run reports its reads.
+      const budget = blocks.createQueryBudget();
       const bindings = await next.readBindingSources({
         documents: [],
         demand: demandFromWire(request.demand),
@@ -190,12 +206,12 @@ function directCanvasBindingsReads(
         page: request.source.slug,
         ...(locale === undefined ? {} : { locale }),
         reader,
-        // A published page's own allowance, for one ask.
-        budget: blocks.createQueryBudget(),
+        budget,
       });
+      const reads = budget.report();
       return bindings === undefined
-        ? { singles: [], shapes: [] }
-        : blocks.bindingsToWire(bindings);
+        ? { singles: [], shapes: [], reads }
+        : { ...blocks.bindingsToWire(bindings), reads };
     },
   };
 }

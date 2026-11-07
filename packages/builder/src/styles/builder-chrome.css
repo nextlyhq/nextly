@@ -184,6 +184,24 @@
     var(--nx-warning) 12%,
     var(--nx-builder-surface-raised)
   );
+  /*
+   * The admin's destructive pair, for a reading past a limit (the page reads
+   * meter over its allowance): the deep red its Delete confirmation uses in
+   * the light theme (destructive-700), on that red's palest tint. Mixed here
+   * from the one token, as the admin's scale mixes them, since that scale is
+   * declared `@theme inline` and emits no property this sheet could read. The
+   * dark theme takes the solid red, below.
+   */
+  --nx-builder-destructive-text: color-mix(
+    in srgb,
+    var(--nx-destructive),
+    black 30%
+  );
+  --nx-builder-destructive-ground: color-mix(
+    in srgb,
+    var(--nx-destructive),
+    white 95%
+  );
   /* The editing colours, picked for the admin's theme — see below. */
   --nx-builder-select: var(--nx-builder-select-on-light);
   --nx-builder-component: var(--nx-builder-component-on-light);
@@ -274,6 +292,14 @@
   --nx-builder-component-text: var(--nx-builder-component-text-on-dark);
   --nx-builder-select-text: var(--nx-builder-select-text-on-dark);
   --nx-builder-ink: #0b0c0f; /* design-lint-ok: the action bar's fixed dark ink */
+  /* The admin's destructive pair in the dark theme: the solid red, on a
+     ground tinted from the editor's raised surface. */
+  --nx-builder-destructive-text: var(--nx-destructive-solid);
+  --nx-builder-destructive-ground: color-mix(
+    in oklch,
+    var(--nx-destructive) 12%,
+    var(--nx-builder-surface-raised)
+  );
 }
 
 .nx-builder-chrome {
@@ -10339,4 +10365,380 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-inspector__visitor-unreadable-lines > p {
   margin: 0;
+}
+
+/*
+ * The page reads meter in the top bar: a count and a short bar at the
+ * editor's control height. Quiet within the limit; amber from 80% of it;
+ * red over it. Each state also changes the mark and the words, so colour is
+ * never the only sign.
+ */
+.nx-read-meter {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.375rem;
+  height: var(--nx-builder-control-height, 1.75rem);
+  padding: 0 var(--nx-builder-control-padding-x, 0.5rem);
+  border: 1px solid var(--nx-builder-border);
+  border-radius: 0.375rem;
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text-muted);
+  font-size: var(--nx-builder-font-size, 0.75rem);
+  /* The count changes as the page is edited; fixed-width digits keep the
+     control from shifting while it is read. */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.nx-read-meter:hover {
+  background: var(--nx-muted);
+}
+
+.nx-read-meter[data-state="open"] {
+  background: var(--nx-muted);
+  border-color: var(--nx-ring);
+}
+
+.nx-read-meter:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-read-meter__mark {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.nx-read-meter__count {
+  color: var(--nx-builder-text);
+}
+
+.nx-read-meter__of,
+.nx-read-meter__unit {
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-read-meter__track {
+  position: relative;
+  flex: none;
+  width: 2rem;
+  height: 0.25rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(
+    in oklch,
+    var(--nx-builder-text-muted) 22%,
+    transparent
+  );
+}
+
+.nx-read-meter__fill {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  border-radius: inherit;
+  background: var(--nx-builder-text-muted);
+}
+
+.nx-read-meter[data-standing="counting"] .nx-read-meter__count {
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-read-meter[data-standing="near"] {
+  border-color: color-mix(in oklch, var(--nx-warning) 55%, transparent);
+  background: var(--nx-builder-warning-ground);
+  color: var(--nx-builder-warning-text);
+}
+
+.nx-read-meter[data-standing="near"]
+  :is(.nx-read-meter__count, .nx-read-meter__of, .nx-read-meter__unit) {
+  color: var(--nx-builder-warning-text);
+}
+
+.nx-read-meter[data-standing="near"] .nx-read-meter__fill {
+  background: var(--nx-warning);
+}
+
+.nx-read-meter[data-standing="over"] {
+  border-color: color-mix(in oklch, var(--nx-destructive) 55%, transparent);
+  background: var(--nx-builder-destructive-ground);
+  color: var(--nx-builder-destructive-text);
+}
+
+.nx-read-meter[data-standing="over"]
+  :is(.nx-read-meter__count, .nx-read-meter__unit) {
+  color: var(--nx-builder-destructive-text);
+}
+
+.nx-read-meter[data-standing="over"] .nx-read-meter__count {
+  font-weight: 600;
+}
+
+.nx-read-meter[data-standing="over"] .nx-read-meter__fill {
+  background: var(--nx-destructive);
+}
+
+/*
+ * Where the top bar is crowded (up to 1300px, so the editor's narrowest
+ * width), the meter gives way before anything else in its column: to its
+ * mark and its number. The document's own chips beside it stay whole, and
+ * only then does the title shorten, which the bar's start column does by
+ * letting the title alone shrink.
+ */
+.nx-read-meter__short {
+  display: none;
+}
+
+@container topbar (max-width: 81.25rem) {
+  .nx-read-meter__full,
+  .nx-read-meter__track {
+    display: none;
+  }
+
+  .nx-read-meter__short {
+    display: inline;
+  }
+}
+
+/* The panel the meter opens. */
+[data-slot="popover-content"].nx-read-panel {
+  width: 20rem;
+  padding: 0;
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+}
+
+.nx-read-panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem 1rem;
+  font-size: var(--nx-builder-font-size, 0.75rem);
+  line-height: var(--nx-builder-line-height, 1rem);
+}
+
+.nx-read-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.nx-read-panel__title {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.nx-read-panel__verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: 999px;
+  color: var(--nx-builder-text-muted);
+  font-size: 0.75rem;
+}
+
+.nx-read-panel__body[data-standing="near"] .nx-read-panel__verdict {
+  border-color: color-mix(in oklch, var(--nx-warning) 55%, transparent);
+  background: var(--nx-builder-warning-ground);
+  color: var(--nx-builder-warning-text);
+}
+
+.nx-read-panel__body[data-standing="over"] .nx-read-panel__verdict {
+  border-color: color-mix(in oklch, var(--nx-destructive) 55%, transparent);
+  background: var(--nx-builder-destructive-ground);
+  color: var(--nx-builder-destructive-text);
+}
+
+.nx-read-panel__figure {
+  margin: 0;
+  color: var(--nx-builder-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.nx-read-panel__used {
+  color: var(--nx-builder-text);
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.5rem;
+}
+
+.nx-read-panel__bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.nx-read-panel__track {
+  position: relative;
+  height: 0.375rem;
+  border-radius: 999px;
+  background: color-mix(
+    in oklch,
+    var(--nx-builder-text-muted) 20%,
+    transparent
+  );
+}
+
+.nx-read-panel__fill {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  border-radius: inherit;
+  background: var(--nx-builder-text-muted);
+}
+
+.nx-read-panel__body[data-standing="near"] .nx-read-panel__fill {
+  background: var(--nx-warning);
+}
+
+.nx-read-panel__body[data-standing="over"] .nx-read-panel__fill {
+  background: var(--nx-destructive);
+}
+
+/* Where the warning starts: 80% along the bar. */
+.nx-read-panel__tick {
+  position: absolute;
+  inset-block: -0.1875rem;
+  inset-inline-start: 80%;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--nx-builder-text);
+}
+
+.nx-read-panel__scale {
+  display: flex;
+  justify-content: space-between;
+  margin: 0;
+  color: var(--nx-builder-text-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.nx-read-panel__kinds {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding-block-start: 0.75rem;
+  border-block-start: 1px solid var(--nx-builder-border);
+}
+
+.nx-read-panel__kind {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.nx-read-panel__kind dt {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--nx-builder-text);
+}
+
+.nx-read-panel__kind dd {
+  margin: 0;
+  color: var(--nx-builder-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.nx-read-panel__kind-mark {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-read-panel__note,
+.nx-read-panel__foot {
+  margin: 0;
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-read-panel__foot {
+  padding-block-start: 0.75rem;
+  border-block-start: 1px solid var(--nx-builder-border);
+}
+
+.nx-read-panel__unread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid color-mix(in oklch, var(--nx-destructive) 40%, transparent);
+  border-radius: 0.5rem;
+  background: var(--nx-builder-destructive-ground);
+}
+
+.nx-read-panel__unread-title {
+  margin: 0;
+  color: var(--nx-builder-destructive-text);
+  font-weight: 600;
+}
+
+.nx-read-panel__unread .nx-read-panel__note {
+  color: var(--nx-builder-text);
+}
+
+.nx-read-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-read-panel__block {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 0.5rem;
+  align-items: center;
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0.25rem 0.5rem;
+  border: none;
+  border-radius: 0.375rem;
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  text-align: start;
+  cursor: pointer;
+}
+
+.nx-read-panel__block:hover:not(:disabled) {
+  background: var(--nx-muted);
+}
+
+.nx-read-panel__block:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-read-panel__block:disabled {
+  cursor: default;
+}
+
+.nx-read-panel__block .nx-read-panel__kind-mark {
+  grid-row: span 2;
+}
+
+.nx-read-panel__block-name {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-read-panel__block-what {
+  color: var(--nx-builder-text-muted);
+  font-size: 0.75rem;
 }

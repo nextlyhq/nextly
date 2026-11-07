@@ -98,6 +98,7 @@ import {
   useMediaSummaryReader,
   type ReadMediaSummary,
 } from "./media-summary-reader";
+import { PageReadMeter } from "./page-read-meter";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
 import { recentIconsStore } from "./recent-icons-store";
@@ -318,6 +319,8 @@ function editorTopBar(
         />
         <DocumentStatusPill isDirty={documentDirty} />
         <HistoryButtons editor={editor} inline={inline} />
+        {/* What the page costs to read, against its allowance. */}
+        <PageReadMeter editor={editor} drawnWith={view.canvasRender} />
       </>
     ),
     topBarCenter: (
