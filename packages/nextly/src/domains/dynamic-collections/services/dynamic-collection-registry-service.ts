@@ -702,8 +702,7 @@ export class DynamicCollectionRegistryService extends BaseService {
     ids: ReadonlyMap<string, string>;
     release: () => Promise<void>;
   }> {
-    // Nothing to release: settled at once, with no work to wait for.
-    const none = (): Promise<void> => Promise.resolve();
+    const none = async (): Promise<void> => undefined;
     if (slugs.length === 0) {
       return { existing: [], ids: new Map(), release: none };
     }

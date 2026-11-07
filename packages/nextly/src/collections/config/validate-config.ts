@@ -62,16 +62,16 @@ import {
   validateSiblingFieldsShared,
 } from "../../shared/base-validator";
 import { isPlainObject } from "../../shared/lib/plain-copy";
-import {
-  RESERVED_SLUGS,
-  SQL_RESERVED_KEYWORDS,
-} from "../../shared/sql-reserved";
-import { consoleLogger } from "../../shared/types";
 import { declaresOwnId } from "../fields/repeater-row-identity";
+import { consoleLogger } from "../../shared/types";
 // RESERVED_SLUGS and SQL_RESERVED_KEYWORDS used to live in this file. They
 // moved to shared/sql-reserved.ts to break a circular dependency with
 // base-validator. Re-exported so existing consumers that import them from this file's
 // path continue to work unchanged.
+import {
+  RESERVED_SLUGS,
+  SQL_RESERVED_KEYWORDS,
+} from "../../shared/sql-reserved";
 // C7/D16 — accept plugin-registered custom field types (must be registered
 // before the config is validated; see field-type-registry).
 

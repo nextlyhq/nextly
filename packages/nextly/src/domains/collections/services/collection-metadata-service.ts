@@ -1516,13 +1516,11 @@ function assertHeldAsLoaded(
     .filter(({ slug, collection }) => {
       const id = held.get(slug);
       if (id === undefined) return true;
-      const loaded = collection.id;
-      if (loaded === undefined || loaded === null) return false;
-      // Compared as text only where it is text or a number; any other value
-      // can name no held id, so it reads as changed, as it always did.
-      return typeof loaded === "string" || typeof loaded === "number"
-        ? String(loaded) !== id
-        : true;
+      return (
+        collection.id !== undefined &&
+        collection.id !== null &&
+        String(collection.id) !== id
+      );
     })
     .map(({ slug }) => slug);
   if (changed.length === 0) return;

@@ -24,15 +24,15 @@ import type { Logger } from "../utils/logger";
 import { answered } from "../utils/prompt-cancelled";
 
 import {
-  storedTemplateAddress,
-  templateAddressNote,
-} from "./db-sync-promote-template-address";
-import {
   collectionChangedAfterConsent,
   openCollectionRegistry,
   sameCollectionRecord,
   withCollectionRegistryWrite,
 } from "./db-sync-registry";
+import {
+  storedTemplateAddress,
+  templateAddressNote,
+} from "./db-sync-promote-template-address";
 
 /**
  * Whether `db:sync --yes` was given, answering the confirmation of

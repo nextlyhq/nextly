@@ -38,6 +38,7 @@ import {
   isEntryDesign,
 } from "./entry-designs";
 import { TEMPLATE_TARGET_FIELDS } from "./template-preview-contract";
+import { templateTargetOf } from "./template-target";
 import {
   addressRefusal,
   heldAddressMessage,
@@ -47,7 +48,6 @@ import {
   TEMPLATE_ADDRESS_FIELD,
   type AddressHolderRead,
 } from "./template-routing";
-import { templateTargetOf } from "./template-target";
 
 /** The template drawing a collection, as a refusal names it. */
 export interface TemplateHolder {
