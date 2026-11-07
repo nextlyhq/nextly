@@ -172,6 +172,8 @@ describe("the context's service names and the resolver that answers them", () =>
       "versionsService",
       "singleRegistryService",
       "singleEntryService",
+      "collectionRegistryService",
+      "fieldGroupRegistryService",
       "db",
       "relations",
       "dialect",
