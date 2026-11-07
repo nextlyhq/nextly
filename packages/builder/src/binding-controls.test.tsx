@@ -361,6 +361,90 @@ describe("a link's address bound inside its group", () => {
   });
 });
 
+describe("an image's alt text bound inside its group", () => {
+  /** An image's alt text and its decorative mark, as `core/image` declares them. */
+  function mountFigure(props: Record<string, unknown>): EditorState {
+    registerBlocks(
+      [
+        {
+          name: "acme/figure",
+          version: 1,
+          description: "A figure.",
+          example: { props: {} },
+          editor: { label: "Figure" },
+          props: {
+            alt: { label: "Alt text", role: "content", type: "text" },
+            decorative: { label: "Decorative (no alt text)", type: "checkbox" },
+          },
+          defaultProps: {},
+          render: () => null,
+        },
+      ] as never,
+      { source: "binding-controls-alt-test" }
+    );
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "f", type: "acme/figure", version: 1, props }],
+    } as BlockDocument;
+    const editor = {
+      document,
+      selectedId: "f",
+      selection: { ids: ["f"], primary: "f" },
+      applyAll: vi.fn(() => document),
+      select: vi.fn(),
+      apply: vi.fn(() => document),
+      undo: vi.fn(),
+      redo: vi.fn(),
+      canUndo: false,
+      canRedo: false,
+      undoDepth: 0,
+      composed: () => undefined,
+    } as unknown as EditorState;
+    render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{ listBindingFields: async () => SOURCES }}
+      />
+    );
+    return editor;
+  }
+
+  /** Bind the alt text to the post's title through the picker. */
+  async function bindAlt(editor: EditorState): Promise<BuilderOp> {
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Alt text to a field" })
+    );
+    fireEvent.click(await screen.findByRole("option", { name: /^Title/ }));
+    expect(vi.mocked(editor.apply)).toHaveBeenCalledTimes(1);
+    return vi.mocked(editor.apply).mock.calls[0]?.[0] as BuilderOp;
+  }
+
+  it("lifts the decorative mark in the same edit as the binding", async () => {
+    // The block reads the mark before the alt text: left on, the bound words
+    // would never reach a screen reader.
+    const editor = mountFigure({ alt: "Kept", decorative: true });
+    expect(await bindAlt(editor)).toEqual({
+      kind: "update",
+      id: "f",
+      patch: {
+        bindings: { alt: { $bind: "title" } },
+        props: { alt: "Kept" },
+      },
+    });
+  });
+
+  it("writes the binding alone for an image that is not decorative", async () => {
+    // The control: nothing to lift, so the props stay out of the edit.
+    const editor = mountFigure({ alt: "Kept" });
+    expect(await bindAlt(editor)).toEqual({
+      kind: "update",
+      id: "f",
+      patch: { bindings: { alt: { $bind: "title" } } },
+    });
+  });
+});
+
 describe("a bound prop's Open source", () => {
   /** The chip's menu, opened from the keyboard as a reader opens it. */
   async function openMenu(): Promise<void> {

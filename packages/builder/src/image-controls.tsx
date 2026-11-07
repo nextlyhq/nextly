@@ -654,7 +654,11 @@ export function ImageAltField({
               />
             </HeldByLock>
           ) : null}
-        </div>
+        </div>,
+        // The block reads a decorative image before its alt text, so binding
+        // the words lifts the mark in the same edit, or the bound alt would
+        // never reach a screen reader.
+        { clearsOnBind: [group.decorative] }
       )}
     </>
   );
