@@ -458,6 +458,45 @@ describe("assignRepeaterRowIds", () => {
       expect(Object.hasOwn(card, "id")).toBe(false);
     });
 
+    it("keeps a row's id when the repeater inside its instance comes back without ids", () => {
+      // A row holding an instance that holds a repeater, sent back unchanged
+      // by a writer that leaves every id out: the instance is opened, so the
+      // nested rows' ids are set aside and the row is matched as unchanged.
+      const rowsWithCards = [
+        {
+          name: "lines",
+          type: "repeater",
+          fields: [{ name: "card", type: "component", component: "card" }],
+        },
+      ];
+      const data: Record<string, unknown> = {
+        lines: [{ card: { title: "t", links: [{ url: "/a" }] } }],
+      };
+      assignRepeaterRowIds(
+        data,
+        {
+          lines: [
+            {
+              id: "row-1",
+              card: {
+                id: "inst-1",
+                title: "t",
+                links: [{ id: "l1", url: "/a" }],
+              },
+            },
+          ],
+        },
+        rowsWithCards,
+        reach,
+        counter()
+      );
+      const [row] = rowsOf(data);
+      expect(row?.id).toBe("row-1");
+      expect((row?.card as Record<string, unknown>).links).toEqual([
+        { id: "l1", url: "/a" },
+      ]);
+    });
+
     it("leaves a field group placed directly on the entry to its own table's write", () => {
       const direct = [{ name: "card", type: "component", component: "card" }];
       const data: Record<string, unknown> = {

@@ -24,7 +24,7 @@ import { addressableFields } from "../addressable-fields";
 
 import { toCamelCase, toSnakeCase } from "./case-conversion";
 import { rowId, rowPairing } from "./denied-change";
-import { sameApartFromIds } from "./same-apart-from-ids";
+import { sameApartFromIds, type InstanceFieldsOf } from "./same-apart-from-ids";
 
 /**
  * The minimal field shape both FieldConfig and FieldDefinition satisfy.
@@ -680,7 +680,9 @@ function carryContainer(
     const index = rows.indexOf(row);
     const carried = kept.size;
     carryLevel(row, storedRow, fields, reach, false, kept, `${path}.${index}.`);
-    refuseAmbiguousCarry(row, storedRow, fields, kept.size > carried, {
+    refuseAmbiguousCarry(row, storedRow, kept.size > carried, {
+      fields,
+      instanceFields: instanceFieldsFor(reach),
       path,
       index,
     });
@@ -699,14 +701,20 @@ function carryContainer(
 function refuseAmbiguousCarry(
   row: Record<string, unknown>,
   storedRow: Record<string, unknown>,
-  fields: readonly NamedField[],
   carriedAPassword: boolean,
-  where: { path: string; index: number }
+  where: {
+    fields: readonly NamedField[];
+    instanceFields: InstanceFieldsOf;
+    path: string;
+    index: number;
+  }
 ): void {
   if (!carriedAPassword || hasRowId(row) || !hasRowId(storedRow)) return;
   // Compared with the carried passwords in place, so only the row's other
   // values can tell it apart from the stored row.
-  if (sameApartFromIds(row, storedRow, fields)) return;
+  if (sameApartFromIds(row, storedRow, where.fields, where.instanceFields)) {
+    return;
+  }
   throw NextlyError.validation({
     errors: [
       {
@@ -1102,4 +1110,20 @@ export function hiddenColumnMatcher(
   const hidden = new Set(hiddenColumnNames(tableName));
   if (hidden.size === 0) return () => false;
   return key => hidden.has(key) || hidden.has(toSnakeCase(key));
+}
+
+/**
+ * How the row comparison opens an inline field-group instance in one write:
+ * by the field groups `reach` follows, as the walks here read instances. An
+ * untyped zone row's schema is a guess, so it is not opened.
+ */
+export function instanceFieldsFor(reach: FieldGroupReach): InstanceFieldsOf {
+  const lookup = { reach, untypedZoneRows: "unknown" as const };
+  return (field, instance) => {
+    const references = extractFieldGroupReferences(field);
+    if (references.single === undefined && references.many === undefined) {
+      return undefined;
+    }
+    return instanceFields(instance, references, lookup);
+  };
 }

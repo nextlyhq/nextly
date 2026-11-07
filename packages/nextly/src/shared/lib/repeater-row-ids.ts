@@ -39,6 +39,7 @@ import { extractFieldGroupReferences } from "../../domains/field-groups/storage/
 
 import {
   instanceFields,
+  instanceFieldsFor,
   isPlainRecord,
   parsedValue,
   reachesFieldWhere,
@@ -50,7 +51,7 @@ import {
 import { declaresOwnId } from "../../collections/fields/repeater-row-identity";
 
 import { rowId } from "./denied-change";
-import { sameApartFromIds } from "./same-apart-from-ids";
+import { sameApartFromIds, type InstanceFieldsOf } from "./same-apart-from-ids";
 
 /** What one walk carries through every level. */
 interface RowIdWalk {
@@ -219,6 +220,7 @@ function assignRows(
     if (!isPlainRecord(row)) return;
     const { id, partner } = rowIdentity(row, index, previous, {
       fields,
+      instanceFields: instanceFieldsFor(walk.reach),
       carried,
       used,
       storedById,
@@ -240,6 +242,7 @@ function rowIdentity(
   previous: readonly unknown[],
   list: {
     fields: readonly NamedField[];
+    instanceFields: InstanceFieldsOf;
     carried: ReadonlySet<string>;
     used: ReadonlySet<string>;
     storedById: ReadonlyMap<string, Record<string, unknown>>;
@@ -260,7 +263,7 @@ function rowIdentity(
     isPlainRecord(atIndex) &&
     !list.carried.has(storedId) &&
     !list.used.has(storedId) &&
-    sameApartFromIds(row, atIndex, list.fields)
+    sameApartFromIds(row, atIndex, list.fields, list.instanceFields)
   ) {
     return { id: storedId, partner: atIndex };
   }
@@ -269,9 +272,11 @@ function rowIdentity(
 
 /**
  * {@link assignLevel} through the instances one inline field-group field
- * holds, each with the stored instance it replaces: by id, or, for one sent
- * without an id, the unchanged stored one at its index, as a row is paired.
- * An instance whose fields are not known is left as it is.
+ * holds, each with the stored instance it replaces: the one its id names
+ * (or, both without ids, the one at its place), or, for one sent without an
+ * id, the stored one at its place when unchanged apart from the system's
+ * ids, as a row is paired. An instance whose fields are not known is left as
+ * it is.
  */
 function assignInstances(
   value: unknown,
@@ -283,15 +288,25 @@ function assignInstances(
   const lookup = { reach: walk.reach, untypedZoneRows: "unknown" as const };
   const visit = (
     instance: Record<string, unknown>,
-    storedInstance: Record<string, unknown> | undefined
+    candidate:
+      | { stored: Record<string, unknown>; byIdentity: boolean }
+      | undefined
   ) => {
     const fields = instanceFields(instance, references, lookup);
     if (fields === undefined) return;
-    // Paired only with a stored instance of the same field group.
+    // Paired only with a stored instance of the same field group, and, for
+    // one matched by place alone, only when it is unchanged.
     const partner =
-      storedInstance &&
-      instanceFields(storedInstance, references, lookup) === fields
-        ? storedInstance
+      candidate !== undefined &&
+      instanceFields(candidate.stored, references, lookup) === fields &&
+      (candidate.byIdentity ||
+        sameApartFromIds(
+          instance,
+          candidate.stored,
+          fields,
+          instanceFieldsFor(walk.reach)
+        ))
+        ? candidate.stored
         : undefined;
     assignLevel(instance, partner, fields, walk, false, new WeakSet());
   };
@@ -303,31 +318,35 @@ function assignInstances(
     });
     return;
   }
-  if (isPlainRecord(value)) {
-    visit(
-      value,
-      isPlainRecord(previous) && sameInstance(value, previous)
-        ? previous
-        : undefined
-    );
+  if (isPlainRecord(value) && isPlainRecord(previous)) {
+    visit(value, {
+      stored: previous,
+      byIdentity: sameInstance(value, previous),
+    });
+  } else if (isPlainRecord(value)) {
+    visit(value, undefined);
   }
 }
 
-/** The stored instance one sent instance of a list replaces, if any. */
+/**
+ * The stored instance one sent instance of a list may replace: the one its
+ * id names, or, sent without an id, the one at its place, to be judged
+ * unchanged before it is taken.
+ */
 function storedInstanceFor(
   instance: Record<string, unknown>,
   index: number,
   storedList: readonly unknown[]
-): Record<string, unknown> | undefined {
+): { stored: Record<string, unknown>; byIdentity: boolean } | undefined {
   const id = rowId(instance);
   if (id !== undefined) {
     const match = storedList.find(stored => rowId(stored) === id);
-    return isPlainRecord(match) ? match : undefined;
+    return isPlainRecord(match)
+      ? { stored: match, byIdentity: true }
+      : undefined;
   }
   const atIndex = storedList[index];
-  return isPlainRecord(atIndex) &&
-    rowId(atIndex) === undefined &&
-    sameApartFromIds(instance, atIndex)
-    ? atIndex
+  return isPlainRecord(atIndex)
+    ? { stored: atIndex, byIdentity: rowId(atIndex) === undefined }
     : undefined;
 }
