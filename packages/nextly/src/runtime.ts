@@ -164,12 +164,15 @@ export type {
 
 // What a binding on a published page reads besides a list, `@experimental`
 // with the reader: the site settings through their public allowlist (a write
-// to them expires `nextlySiteSettingsTags()`), and the field shapes a binding
-// is checked against, as the anonymous visitor may read them. Both load the
-// service container inside the call, so importing this entry loads neither.
+// to them expires `nextlySiteSettingsTags()`), read from the instance a page
+// is served by when one is given (`PublicSiteSettingsSource`), and the field
+// shapes a binding is checked against, as the anonymous visitor may read
+// them. Both load the service container inside the call, so importing this
+// entry loads neither.
 export {
   readPublicSiteSettings,
   type PublicSiteSettings,
+  type PublicSiteSettingsSource,
 } from "./runtime/site-settings-read";
 export {
   bindingFieldShapes,

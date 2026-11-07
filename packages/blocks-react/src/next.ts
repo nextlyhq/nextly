@@ -36,7 +36,6 @@ import {
   type BlockDocument,
   type BlockNode,
   type ConditionDemand,
-  type ConditionSubject,
   type SourceDemand,
   type BlockSeoContribution,
   type DefinitionsById,
@@ -74,6 +73,7 @@ import type {
   ContentRouteConfig,
   NextlyContentReader,
   NextlySingleReader,
+  PublicSiteSettingsSource,
   RenderContext,
   SingleContext,
   SingleDocument,
@@ -254,6 +254,20 @@ export interface BlocksPageConfig
    * mismatch loud instead (see {@link readDocument}).
    */
   field: string;
+  /**
+   * A booted Nextly instance, or a reader of one (defaults to
+   * `requireNextly()`). The page's records AND the site settings it shows,
+   * its site name, address, logo and the time zone its dates and day filters
+   * use, are read through it, so a process serving several sites, each
+   * through an instance of its own, shows each page its own site.
+   *
+   * A reader of your own forwards `publicSiteSettings` from the instance, as
+   * it forwards `find`; one that does not shows no site settings, rather
+   * than another instance's. Routes over different instances in one process
+   * also need their own `cacheScope`: the site settings are cached under it,
+   * as every public read of the route is.
+   */
+  nextly?: NextlyContentReader & Partial<PublicSiteSettingsSource>;
   /** Where block definitions come from. Defaults to the process registry. */
   blocks?: BlockResolver;
   /**
@@ -703,6 +717,28 @@ function singleReaderOf(reader: object): NextlySingleReader | undefined {
   return "findSingle" in reader && typeof reader.findSingle === "function"
     ? (reader as NextlySingleReader)
     : undefined;
+}
+
+/**
+ * Where a route's pages read the site settings: the instance the route reads
+ * its records through, chosen by {@link readerFor} and nowhere else, so a
+ * page's site name and time zone come from the same instance as its content.
+ * A route given no instance reads the process's, as its records do.
+ *
+ * `null` when that instance is a reader of the app's own that offers no
+ * site-settings read: the page then shows none, as a reader without
+ * `findSingle` shows no Single. Another instance's settings never stand in
+ * for them, since on a process serving several sites that is another site's
+ * name and time zone.
+ */
+function siteSettingsSourceFor(
+  config: BlocksPageConfig
+): PublicSiteSettingsSource | null {
+  const reader: object = readerFor(config);
+  return "publicSiteSettings" in reader &&
+    typeof reader.publicSiteSettings === "function"
+    ? (reader as PublicSiteSettingsSource)
+    : null;
 }
 
 /** The route's data provider for one render: the caller's, or the default. */
@@ -2057,18 +2093,33 @@ async function readSingles(
 }
 
 /**
- * The site settings the public may read: one claim, cached under the
- * settings' own tag, so changing the site's name or time zone refreshes the
- * pages that show them.
+ * Where a read takes the site settings from: an instance, none at all
+ * (`null`: the page's own reader cannot read them), or, left `undefined`, the
+ * process's registered instance.
+ */
+type SiteSettingsFrom = PublicSiteSettingsSource | null | undefined;
+
+/**
+ * The site settings the public may read, from `from`: one claim, cached under
+ * the settings' own tag, so changing the site's name or time zone refreshes
+ * the pages that show them. Nothing is read, and no claim spent, when there is
+ * nothing to read them from.
+ *
+ * The cache key holds the route's `cacheScope`, as every public read of a
+ * route does: two routes over different instances in one process name their
+ * own scopes, or their pages share one site's settings. The key cannot be
+ * derived from the instance itself, since the cache outlives the process and
+ * an instance has no name that is the same in the next one.
  */
 async function readSite(
+  from: SiteSettingsFrom,
   cacheScope: string | undefined,
   budget: QueryBudget,
   window: number | false | undefined
 ): Promise<BlocksSiteSettings | undefined> {
-  if (!budget.take()) return undefined;
+  if (from === null || !budget.take()) return undefined;
   try {
-    return await cachedFind(async () => await readPublicSiteSettings(), {
+    return await cachedFind(async () => await readPublicSiteSettings(from), {
       tags: nextlySiteSettingsTags(),
       keyParts: ["nextly-public-site-settings", cacheScope ?? ""],
       revalidate: await releaseBoundedRevalidate(window),
@@ -2200,7 +2251,12 @@ async function listZone(args: {
   const site =
     args.bindings?.site ??
     (args.config.timeZone === undefined
-      ? await readSite(args.config.cacheScope, args.budget, args.window)
+      ? await readSite(
+          siteSettingsSourceFor(args.config),
+          args.config.cacheScope,
+          args.budget,
+          args.window
+        )
       : undefined);
   return (
     args.bindings?.timeZone ??
@@ -2360,6 +2416,13 @@ export interface BindingSourcesArgs {
   readonly budget: QueryBudget;
   /** The route's cache scope, for the public, shared reads. */
   readonly cacheScope?: string;
+  /**
+   * The instance the site settings are read from: the one the page's records
+   * come from. Absent, the process's registered instance, as before; `null`,
+   * none, for a page whose instance cannot read them, which then shows no
+   * site settings rather than another instance's.
+   */
+  readonly siteSettings?: PublicSiteSettingsSource | null;
   /** The route's own time zone, which wins over the site's. */
   readonly timeZone?: string;
   /** The release window the public, shared reads are bounded by. */
@@ -2479,14 +2542,25 @@ function warnOfUnknownTimeZone(zone: string | undefined): void {
 async function siteAndZone(
   args: Pick<
     BindingSourcesArgs,
-    "slug" | "page" | "budget" | "cacheScope" | "timeZone" | "window"
+    | "slug"
+    | "page"
+    | "budget"
+    | "cacheScope"
+    | "siteSettings"
+    | "timeZone"
+    | "window"
   >,
   demand: BindingDemand
 ): Promise<{ site?: BlocksSiteSettings; timeZone?: string }> {
   const needsZone = demand.formatsDates && args.timeZone === undefined;
   const site =
     demand.site || needsZone
-      ? await readSite(args.cacheScope, args.budget, args.window)
+      ? await readSite(
+          args.siteSettings,
+          args.cacheScope,
+          args.budget,
+          args.window
+        )
       : undefined;
   const timeZone = pageTimeZone(args.timeZone, site, {
     collection: args.slug,
@@ -2653,6 +2727,9 @@ async function readPageInputs(args: {
     ...(config.cacheScope === undefined
       ? {}
       : { cacheScope: config.cacheScope }),
+    // The route's instance, as its records are read through, so the page
+    // shows its own site's settings and never the process's.
+    siteSettings: siteSettingsSourceFor(config),
     ...(config.timeZone === undefined ? {} : { timeZone: config.timeZone }),
     ...(args.window === undefined ? {} : { window: args.window }),
     ...(conditioned
@@ -3374,8 +3451,14 @@ export interface BlocksSinglePageConfig
    * over collections through `find`/`findByID`. A reader carrying only one of
    * the two renders either a blank page or a page with no pictures, and neither
    * says which half was missing.
+   *
+   * The site settings the page shows are read through it too, as on the page
+   * route: a reader of your own forwards `publicSiteSettings`, or the page
+   * shows none.
    */
-  nextly?: NextlyContentReader & NextlySingleReader;
+  nextly?: NextlyContentReader &
+    NextlySingleReader &
+    Partial<PublicSiteSettingsSource>;
 }
 
 /**
