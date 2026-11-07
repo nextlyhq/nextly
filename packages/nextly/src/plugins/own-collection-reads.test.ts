@@ -213,14 +213,12 @@ describe("ctx.services.ownCollections", () => {
   describe("host reads", () => {
     /** What a host schema was asked, beside the schema. */
     interface Asked {
-      /** Each schema asked for, as `kind:slug`. */
+      /** Each one-slug schema asked for, as `kind:slug`. */
       asked: string[];
-      /** Each component whose fields were asked for. */
+      /** Each component whose fields were asked for one at a time. */
       components: string[];
-      /** Each page of the collection listing asked for. */
-      pages: number[];
-      /** How many times the Singles were listed. */
-      singleListings: number;
+      /** Each listing and whole-registry read, in the order asked. */
+      reads: string[];
       /** The most questions ever outstanding at once. */
       mostAtOnce: number;
     }
@@ -249,6 +247,18 @@ describe("ctx.services.ownCollections", () => {
       };
     }
 
+    /** The entries of `fields` whose key starts `kind:`, by slug. */
+    function schemasOf(
+      fields: Record<string, readonly unknown[]>,
+      kind: "collection" | "Single"
+    ): Map<string, readonly unknown[]> {
+      return new Map(
+        Object.entries(fields)
+          .filter(([key]) => key.startsWith(`${kind}:`))
+          .map(([key, schema]) => [key.slice(kind.length + 1), schema])
+      );
+    }
+
     /**
      * A host schema: `pages` holds the plugin's `doc` type inside a repeater's
      * group, `promo` and `banner` hold it inside the component `hero`,
@@ -258,13 +268,15 @@ describe("ctx.services.ownCollections", () => {
      *
      * Every question answers after a timer, so two asked together are
      * outstanding together, and `mostAtOnce` says whether any were.
+     * `failComponents` makes the whole-registry component read fail.
      */
-    function hostSchema(): HostSchemaSource & Asked {
+    function hostSchema(
+      options: { failComponents?: boolean } = {}
+    ): HostSchemaSource & Asked {
       const state: Asked = {
         asked: [],
         components: [],
-        pages: [],
-        singleListings: 0,
+        reads: [],
         mostAtOnce: 0,
       };
       let outstanding = 0;
@@ -309,9 +321,7 @@ describe("ctx.services.ownCollections", () => {
         cta: [{ name: "label", type: "text" }] as FieldConfig[],
       };
       const collectionSlugs = [
-        ...Object.keys(fields)
-          .filter(key => key.startsWith("collection:"))
-          .map(key => key.slice("collection:".length)),
+        ...schemasOf(fields, "collection").keys(),
         "ledger",
       ].sort();
       return Object.assign(state, {
@@ -324,17 +334,25 @@ describe("ctx.services.ownCollections", () => {
           state.components.push(slug);
           return later(components[slug] ?? null);
         },
-        listCollections: (page: number, limit: number) => {
-          state.pages.push(page);
-          return later(
-            collectionSlugs
-              .slice((page - 1) * limit, page * limit)
-              .map(listedCollection)
-          );
+        listCollections: (limit: number) => {
+          state.reads.push(`listCollections:${limit}`);
+          return later(collectionSlugs.slice(0, limit).map(listedCollection));
         },
         listSingles: () => {
-          state.singleListings++;
+          state.reads.push("listSingles");
           return later(["home", "footer"].map(listedSingle));
+        },
+        allFieldsOf: (kind: "collection" | "Single") => {
+          state.reads.push(`allFieldsOf:${kind}`);
+          return later(schemasOf(fields, kind));
+        },
+        allComponentFields: async () => {
+          state.reads.push("allComponentFields");
+          const answer = await later(new Map(Object.entries(components)));
+          if (options.failComponents) {
+            throw new Error("the component registry read failed");
+          }
+          return answer;
         },
       });
     }
@@ -485,6 +503,15 @@ describe("ctx.services.ownCollections", () => {
     });
 
     describe("listHostTypesInTransaction", () => {
+      /** The reads one walk of {@link hostSchema} makes, in order. */
+      const ONE_WALK = [
+        `listCollections:${HOST_TYPES_PAGE_SIZE}`,
+        "listSingles",
+        "allFieldsOf:collection",
+        "allFieldsOf:Single",
+        "allComponentFields",
+      ];
+
       it("lists each collection and Single holding the plugin's type at any depth, the plugin's own judged like the rest", async () => {
         const { service, facade } = standIn();
         const schema = hostSchema();
@@ -523,17 +550,9 @@ describe("ctx.services.ownCollections", () => {
         expect(found.collections[0]).toEqual(listedCollection("addons"));
         expect(found.singles).toEqual([listedSingle("home")]);
         expect(service.listEntries).toHaveBeenCalledTimes(4);
-        // Each listed entry judged by its schema, as a host read judges it.
+        // The host reads ask their own slug's schema, one each; the walk
+        // asked none by slug.
         expect(schema.asked).toEqual([
-          "collection:addons",
-          "collection:banner",
-          "collection:ledger",
-          "collection:pages",
-          "collection:posts",
-          "collection:promo",
-          "Single:home",
-          "Single:footer",
-          // The host reads above, each judging its own slug again.
           "collection:addons",
           "collection:banner",
           "collection:pages",
@@ -541,7 +560,7 @@ describe("ctx.services.ownCollections", () => {
         ]);
       });
 
-      it("asks each component once per walk, and never two questions at once", async () => {
+      it("reads each listing and each registry once, one at a time, whatever the number of entries", async () => {
         const { facade } = standIn();
         const schema = hostSchema();
         const reads = ownCollectionReads(facade, [], undefined, schema);
@@ -550,19 +569,48 @@ describe("ctx.services.ownCollections", () => {
           reads.listHostTypesInTransaction(tx)
         );
 
-        // `hero` is named by three collections and asked for once; `addons`
-        // names `cta` and `hero` together, the first time either is asked.
-        expect(schema.components).toEqual(["cta", "hero"]);
+        // Six collections and two Singles judged from five reads; `addons`
+        // asks for `cta` and `hero` together, and both wait on the one
+        // component read.
+        expect(schema.reads).toEqual(ONE_WALK);
+        expect(schema.asked).toEqual([]);
+        expect(schema.components).toEqual([]);
         expect(schema.mostAtOnce).toBe(1);
-        expect(schema.pages).toEqual([1]);
-        expect(schema.singleListings).toBe(1);
       });
 
-      it("pages through the collections until a short page", async () => {
+      it("reads no component when no schema names one", async () => {
         const { facade } = standIn();
-        const pages: number[] = [];
-        // One more collection than a page holds; the first and the last
-        // hold the type, so the last is found only on the second page.
+        const base = hostSchema();
+        const schema: HostSchemaSource = {
+          ...base,
+          allFieldsOf: kind =>
+            base
+              .allFieldsOf(kind)
+              .then(
+                schemas =>
+                  new Map(
+                    [...schemas].filter(
+                      ([slug]) => slug === "pages" || slug === "home"
+                    )
+                  )
+              ),
+        };
+        const reads = ownCollectionReads(facade, [], undefined, schema);
+
+        const found = await withWriteTransactionToken(
+          {} as TransactionContext,
+          tx => reads.listHostTypesInTransaction(tx)
+        );
+
+        expect(found.collections.map(listed => listed.name)).toEqual(["pages"]);
+        expect(base.reads).not.toContain("allComponentFields");
+      });
+
+      it("asks a full listing again for more until one comes back short", async () => {
+        const { facade } = standIn();
+        const limits: number[] = [];
+        // Exactly one more collection than the first ask takes; the first and
+        // the last hold the type, so the last is found only by the second.
         const slugs = Array.from(
           { length: HOST_TYPES_PAGE_SIZE + 1 },
           (_, index) => `c${String(index).padStart(4, "0")}`
@@ -571,23 +619,31 @@ describe("ctx.services.ownCollections", () => {
         const last = slugs[slugs.length - 1];
         const reads = ownCollectionReads(facade, [], undefined, {
           fieldTypes: ["doc"],
-          fieldsOf: (_kind, slug) =>
-            Promise.resolve([
-              {
-                name: "body",
-                type: slug === first || slug === last ? "doc" : "text",
-              },
-            ]),
+          fieldsOf: () => Promise.resolve(null),
           componentFields: () => Promise.resolve(null),
-          listCollections: (page, limit) => {
-            pages.push(page);
-            return Promise.resolve(
-              slugs
-                .slice((page - 1) * limit, page * limit)
-                .map(listedCollection)
-            );
+          listCollections: limit => {
+            limits.push(limit);
+            return Promise.resolve(slugs.slice(0, limit).map(listedCollection));
           },
           listSingles: () => Promise.resolve([]),
+          allFieldsOf: kind =>
+            Promise.resolve(
+              new Map(
+                kind === "Single"
+                  ? []
+                  : slugs.map(slug => [
+                      slug,
+                      [
+                        {
+                          name: "body",
+                          type:
+                            slug === first || slug === last ? "doc" : "text",
+                        },
+                      ],
+                    ])
+              )
+            ),
+          allComponentFields: () => Promise.resolve(new Map()),
         });
 
         const found = await withWriteTransactionToken(
@@ -595,11 +651,34 @@ describe("ctx.services.ownCollections", () => {
           tx => reads.listHostTypesInTransaction(tx)
         );
 
-        expect(pages).toEqual([1, 2]);
+        // Each ask starts from the first collection, so a collection added
+        // or removed between them shifts nothing.
+        expect(limits).toEqual([
+          HOST_TYPES_PAGE_SIZE,
+          HOST_TYPES_PAGE_SIZE * 2,
+        ]);
         expect(found.collections.map(listed => listed.name)).toEqual([
           first,
           last,
         ]);
+      });
+
+      it("starts nothing more once the component read fails", async () => {
+        const { facade } = standIn();
+        const schema = hostSchema({ failComponents: true });
+        const reads = ownCollectionReads(facade, [], undefined, schema);
+
+        await withWriteTransactionToken({} as TransactionContext, async tx => {
+          await expect(reads.listHostTypesInTransaction(tx)).rejects.toThrow(
+            /component registry read failed/
+          );
+        });
+        // Long enough for anything the walk had left queued to start.
+        await new Promise(resolve => setTimeout(resolve, 10));
+
+        expect(schema.reads).toEqual(ONE_WALK);
+        expect(schema.asked).toEqual([]);
+        expect(schema.components).toEqual([]);
       });
 
       it("answers empty for a plugin that registered no field type, reading nothing", async () => {
@@ -620,9 +699,8 @@ describe("ctx.services.ownCollections", () => {
         });
 
         // The spread shares the fixture's arrays, so these see every call.
-        expect(schema.pages).toEqual([]);
+        expect(schema.reads).toEqual([]);
         expect(schema.asked).toEqual([]);
-        expect(schema.components).toEqual([]);
       });
 
       it("refuses a settled token before listing anything", async () => {
@@ -642,9 +720,7 @@ describe("ctx.services.ownCollections", () => {
           code: "VALIDATION_ERROR",
           logContext: { reason: "plugin-transaction-finished" },
         });
-        expect(schema.pages).toEqual([]);
-        expect(schema.singleListings).toBe(0);
-        expect(schema.asked).toEqual([]);
+        expect(schema.reads).toEqual([]);
       });
     });
   });

@@ -1023,12 +1023,18 @@ export interface PluginOwnCollectionReads {
    * Each kind is listed whole, from the listings
    * `services.collections.listCollections` and `services.singles.list`
    * answer, and each entry is judged by the rule the host reads judge a
-   * slug by, so a host read of any slug listed here is not refused on the
-   * same transaction. Those listings take a pooled connection, which on a
-   * pool of one waits for the connection the transaction holds; this reads
-   * on that connection, one query at a time, so it sees the schema as the
-   * transaction does. It reads schemas only, never content rows, so it
-   * takes none of the row locks the reads above take.
+   * slug by, from the schemas as they stand when it reads them, so a host
+   * read of a slug listed here is not refused on the same transaction
+   * unless the schema changes in between. Those listings take a pooled
+   * connection, which on a pool of one waits for the connection the
+   * transaction holds; this reads on that connection, so it sees the
+   * schemas as the transaction does.
+   *
+   * Its reads are a fixed handful whatever the number of entries: each
+   * listing, every collection's and every Single's schema, and every
+   * component's fields once some schema names a component, each one
+   * statement, made one after another. It reads schemas only, never content
+   * rows, so it takes none of the row locks the reads above take.
    *
    * The plugin's own collections and Singles are judged like any other, as
    * the host reads judge them: one is listed only when it holds such a
@@ -1084,41 +1090,53 @@ export interface HostSchemaSource {
   /** A component's own fields, or null where there is none. */
   componentFields(slug: string): Promise<FieldConfig[] | null>;
   /**
-   * Page `page` (counting from 1) of the collections, `limit` to a page, as
-   * `services.collections.listCollections` lists them sorted by slug. A
-   * page shorter than `limit` is the last.
+   * The first `limit` collections, as `services.collections.listCollections`
+   * lists them sorted by slug. Its rows come from one statement, so a
+   * collection added or removed while the walk runs cannot shift one past
+   * another, as pages taken by offset in separate statements could.
    */
-  listCollections(page: number, limit: number): Promise<readonly Collection[]>;
+  listCollections(limit: number): Promise<readonly Collection[]>;
   /**
-   * Every Single, as `services.singles.list` lists them, in one read.
-   *
-   * Not paged: that listing orders by creation time alone, which two Singles
-   * registered in one boot can share, so pages of it taken by offset could
-   * skip one or answer it twice. Collections are paged in slug order, which
-   * is unique.
+   * Every Single, as `services.singles.list` lists them, its rows from one
+   * statement.
    */
   listSingles(): Promise<readonly PluginSingleRecord[]>;
+  /**
+   * Every collection's, or every Single's, declared fields by slug, from one
+   * statement: for each, what {@link fieldsOf} answers, derived from the same
+   * registry row the same way.
+   */
+  allFieldsOf(
+    kind: "collection" | "Single"
+  ): Promise<ReadonlyMap<string, readonly unknown[]>>;
+  /**
+   * Every component's own fields by slug, from one statement: for each, what
+   * {@link componentFields} answers.
+   */
+  allComponentFields(): Promise<ReadonlyMap<string, FieldConfig[]>>;
 }
 
-/** How many collections one page of the host-types walk asks for. */
+/**
+ * How many collections the host-types walk first asks the listing for. A
+ * listing that comes back full is asked again from the start for twice as
+ * many, until one comes back short and so holds every collection.
+ */
 export const HOST_TYPES_PAGE_SIZE = 100;
 
 /**
- * Whether the collection or Single `slug` holds a field of a type the plugin
- * registered, at any depth: its declared fields as `source` answers them,
- * walked by `holdsFieldOfType` with `componentFields` answering each
- * component it names. False for one with no schema.
+ * Whether declared `fields` hold a field of one of `fieldTypes` at any
+ * depth, `componentFields` answering each component they name; false for
+ * content with no schema (`null`). The one rule a host read and the
+ * host-types walk both judge by, whichever way each came by the fields.
  */
 async function holdsOwnFieldType(
-  source: HostSchemaSource,
-  kind: "collection" | "Single",
-  slug: string,
+  fields: readonly unknown[] | null,
+  fieldTypes: readonly string[],
   componentFields: (slug: string) => Promise<FieldConfig[] | null>
 ): Promise<boolean> {
-  const fields = await source.fieldsOf(kind, slug);
   return (
     fields !== null &&
-    (await holdsFieldOfType(fields, source.fieldTypes, componentFields))
+    (await holdsFieldOfType(fields, fieldTypes, componentFields))
   );
 }
 
@@ -1187,8 +1205,10 @@ export function ownCollectionReads(
     const eligible =
       source !== undefined &&
       source.fieldTypes.length > 0 &&
-      (await holdsOwnFieldType(source, kind, slug, componentSlug =>
-        source.componentFields(componentSlug)
+      (await holdsOwnFieldType(
+        await source.fieldsOf(kind, slug),
+        source.fieldTypes,
+        componentSlug => source.componentFields(componentSlug)
       ));
     return {
       grant: issueHookExemptRead(eligible ? [slug] : []),
@@ -1202,52 +1222,65 @@ export function ownCollectionReads(
    * it holds a field of a type this plugin registered, the question
    * `hostGrant` asks, so the two cannot disagree about a slug.
    *
-   * One query at a time, because every one of them runs on the one
-   * connection the transaction holds. Each entry's schema is asked by slug,
-   * as `hostGrant` asks it, rather than read off the listing: a Single's
-   * listed fields drop the component a field names, which the rule follows.
-   * A component's fields are asked once for the whole walk, since many
-   * collections name the same few.
+   * Judged in memory from a fixed handful of reads rather than a read per
+   * entry, since every read here holds the transaction, and on a pool of
+   * one every other request too. The reads run one after another on the
+   * transaction's connection. A Single's listed fields drop the component a
+   * field names, which the rule follows, so the schemas are read from the
+   * registry as `hostGrant` reads them, not off the listings.
    */
   const listHostTypes = async (): Promise<PluginHostTypes> => {
     const source = host;
     if (source === undefined || source.fieldTypes.length === 0) {
       return { collections: [], singles: [] };
     }
-    const components = new Map<string, Promise<FieldConfig[] | null>>();
-    // Lookups wait on the one before, so a schema naming several components
-    // never sends them to the transaction's connection together.
-    let previous: Promise<unknown> = Promise.resolve();
-    const componentFields = (slug: string): Promise<FieldConfig[] | null> => {
-      let fields = components.get(slug);
-      if (fields === undefined) {
-        fields = previous.then(() => source.componentFields(slug));
-        components.set(slug, fields);
-        previous = fields.catch(() => undefined);
-      }
-      return fields;
-    };
-    const holds = (kind: Kind, slug: string): Promise<boolean> =>
-      holdsOwnFieldType(source, kind, slug, componentFields);
+    // A full listing may have stopped short of the last collection, so it is
+    // asked again for more until one is short: each answer is a single
+    // statement, consistent in itself, where pages taken by offset in
+    // separate statements would shift past a collection added or removed
+    // between them.
+    let limit = HOST_TYPES_PAGE_SIZE;
+    let listedCollections = await source.listCollections(limit);
+    while (listedCollections.length >= limit) {
+      limit *= 2;
+      listedCollections = await source.listCollections(limit);
+    }
+    const listedSingles = await source.listSingles();
+    // The schemas after the listings, so an entry removed in between has no
+    // schema and is left out, as a host read of it would be refused.
+    const collectionSchemas = await source.allFieldsOf("collection");
+    const singleSchemas = await source.allFieldsOf("Single");
+    // Read once, when a schema first names a component: the walk asks for
+    // several at a time, and all of them wait on the one statement, so a
+    // failed read fails them together and starts nothing after it.
+    let components: Promise<ReadonlyMap<string, FieldConfig[]>> | undefined;
+    const componentFields = async (
+      slug: string
+    ): Promise<FieldConfig[] | null> =>
+      (await (components ??= source.allComponentFields())).get(slug) ?? null;
+    const holds = (
+      schemas: ReadonlyMap<string, readonly unknown[]>,
+      slug: string
+    ): Promise<boolean> =>
+      holdsOwnFieldType(
+        schemas.get(slug) ?? null,
+        source.fieldTypes,
+        componentFields
+      );
 
     const collections: Collection[] = [];
-    for (let page = 1; ; page++) {
-      const listed = await source.listCollections(page, HOST_TYPES_PAGE_SIZE);
-      for (const listedCollection of listed) {
-        // `name` is the slug: the listing answers it under the name the
-        // admin reads.
-        if (await holds("collection", listedCollection.name)) {
-          collections.push(listedCollection);
-        }
+    for (const listedCollection of listedCollections) {
+      // `name` is the slug: the listing answers it under the name the admin
+      // reads.
+      if (await holds(collectionSchemas, listedCollection.name)) {
+        collections.push(listedCollection);
       }
-      // A short page is the last, as the own reads' docs advise: the
-      // listing's total is a count, which holds no lock.
-      if (listed.length < HOST_TYPES_PAGE_SIZE) break;
     }
-
     const singles: PluginSingleRecord[] = [];
-    for (const listedSingle of await source.listSingles()) {
-      if (await holds("Single", listedSingle.slug)) singles.push(listedSingle);
+    for (const listedSingle of listedSingles) {
+      if (await holds(singleSchemas, listedSingle.slug)) {
+        singles.push(listedSingle);
+      }
     }
     return { collections, singles };
   };

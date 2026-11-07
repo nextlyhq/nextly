@@ -2056,6 +2056,17 @@ function restrictDatabase(
   };
 }
 
+/**
+ * Each registry row's fields, by the row's slug, as `fieldsOf` reduces one
+ * row: for a host-types walk that reads every row in one statement.
+ */
+function fieldsBySlug<R extends { slug: string }, F>(
+  records: readonly R[],
+  fieldsOf: (record: R) => F
+): ReadonlyMap<string, F> {
+  return new Map(records.map(record => [record.slug, fieldsOf(record)]));
+}
+
 export function createPluginContext(
   getServiceFn: <T extends PluginServiceName>(
     name: T
@@ -2575,10 +2586,10 @@ export function createPluginContext(
           // The listings a plugin reads through `services.collections` and
           // `services.singles`, so the host-types walk answers what those
           // answer. The collection listing ignores its request context.
-          listCollections: async (page, limit) =>
+          listCollections: async limit =>
             (
               await collectionService.listCollections(
-                { page, limit, sortBy: "slug", sortOrder: "asc" },
+                { page: 1, limit, sortBy: "slug", sortOrder: "asc" },
                 {}
               )
             ).data,
@@ -2588,6 +2599,27 @@ export function createPluginContext(
                 getServiceFn("singleRegistryService")
               ).list()
             ).data,
+          // Every row at once, each reduced to its fields exactly as
+          // `fieldsOf` and `componentFields` reduce the one row they read.
+          allFieldsOf: async kind =>
+            kind === "Single"
+              ? fieldsBySlug(
+                  await getServiceFn("singleRegistryService").getAllSingles(),
+                  record => record.fields
+                )
+              : fieldsBySlug(
+                  await getServiceFn(
+                    "collectionRegistryService"
+                  ).getAllCollections(),
+                  collectionFields
+                ),
+          allComponentFields: async () =>
+            fieldsBySlug(
+              await getServiceFn(
+                "fieldGroupRegistryService"
+              ).getAllComponents(),
+              record => record.fields
+            ),
         }
       ),
       // The plugin view, refusing the writes that decide who administers the
