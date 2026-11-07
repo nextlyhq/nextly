@@ -1,20 +1,20 @@
 /**
- * The anchor each heading of a passage is drawn with, and the outline a table
- * of contents lists from it.
+ * The rules a heading's anchor is made by: its level, and the id its words
+ * give it.
  *
- * One reading of a passage, shared by the two blocks that must agree on it:
- * `core/rich-text` puts each id on its heading, and `core/table-of-contents`
- * links to the same ids. Two readers would agree until one of them changed,
- * and then every contents link on a published page would go nowhere without
- * a single error to say so.
+ * Which headings a passage draws, and with which words, is the renderer's
+ * question, answered by the walk in `../rich-text` that draws them:
+ * `passageHeadings` reads a passage with that walk and gives each heading the
+ * id this module makes. `core/rich-text` puts the ids on its headings and
+ * `core/table-of-contents` links to them, both from that one reading, so a
+ * contents link and the heading it names cannot disagree.
  *
  * ## How an id is made
  *
- * From the heading's words, as a reader sees them, with the formatting
- * dropped: lower-cased, every letter and digit kept in any script,
- * punctuation removed, and each run of spaces and hyphens one hyphen. A
- * heading whose words leave nothing is `section`. A repeat takes the next
- * free number: `notes`, `notes-2`, `notes-3`.
+ * From the heading's words, as a reader sees them: lower-cased, every letter
+ * and digit kept in any script, punctuation removed, and each run of spaces
+ * and hyphens one hyphen. A heading whose words leave nothing is `section`. A
+ * repeat takes the next free number: `notes`, `notes-2`, `notes-3`.
  *
  * For headings written in ASCII this is the slug the hand-written blog
  * template gives its headings, so a page rebuilt with the builder keeps the
@@ -29,23 +29,18 @@
  *
  * @module blocks/heading-anchors
  */
-import {
-  isRichTextNode,
-  isRichTextValue,
-  richTextToPlainText,
-  type RichTextNode,
-} from "@nextlyhq/blocks-engine";
+import type { RichTextNode } from "@nextlyhq/blocks-engine";
 
 /** The heading levels a passage can hold. */
 export type HeadingRank = 1 | 2 | 3 | 4 | 5 | 6;
 
-/** One heading of a passage, with the id it is drawn with. */
+/** One heading a passage draws, with the id it is drawn with. */
 export interface HeadingAnchor {
-  /** The stored node, so a renderer can find the id of the heading it draws. */
+  /** The node the renderer draws, so it can find the id of the heading it draws. */
   readonly node: RichTextNode;
   /** The anchor, unique within the passage. */
   readonly id: string;
-  /** The heading's words, as a reader sees them. */
+  /** The words the heading draws, as a reader sees them. */
   readonly text: string;
   /** Its level, read as the renderer reads it. */
   readonly rank: HeadingRank;
@@ -64,13 +59,6 @@ export function headingRank(node: RichTextNode): HeadingRank {
   return match === null ? 2 : (Number(match[1]) as HeadingRank);
 }
 
-/**
- * How many nodes one reading visits at most. A stored passage has no size
- * of its own, and a reading past this keeps the headings it found rather than
- * walking an unbounded tree on a live page.
- */
-const MAX_VISITS = 50_000;
-
 /** A heading's words as an anchor, before repeats are numbered. */
 function slug(words: string): string {
   return (
@@ -84,63 +72,35 @@ function slug(words: string): string {
   );
 }
 
-/** A heading's words, read by the engine's own flattener. */
-function wordsOf(node: RichTextNode): string {
-  const children = Array.isArray(node.children) ? node.children : [];
-  return richTextToPlainText({ root: { type: "root", children } }).trim();
-}
-
-/** `base`, or the first of `base-2`, `base-3` … no heading has taken yet. */
-function freeId(base: string, used: Set<string>): string {
-  let id = base;
-  for (let n = 2; used.has(id); n += 1) id = `${base}-${n}`;
-  used.add(id);
-  return id;
-}
-
-/** Puts a node's children on the walk's stack, so they pop in their order. */
-function pushChildren(stack: unknown[], node: RichTextNode): void {
-  if (!Array.isArray(node.children)) return;
-  for (let i = node.children.length - 1; i >= 0; i -= 1) {
-    stack.push(node.children[i]);
-  }
-}
-
 /**
- * Every heading of a passage, in document order, each with its anchor.
+ * The ids of one passage, handed out in the order its headings are drawn.
  *
- * Takes `unknown` because it reads a block prop, which holds whatever was
- * stored: anything that is not rich text has no headings. A heading with no
- * words has no anchor and is not listed, since a link to it would have no
- * text.
+ * Each base remembers the next number it may try, so a passage of thousands
+ * of identical headings costs one probe per heading rather than one per
+ * heading before it. The probe still checks every id taken, so a repeat never
+ * takes an id another heading's own words gave it (`notes-2` written by hand,
+ * then a second `notes`).
+ *
+ * @param used - the ids taken so far; a test passes its own to count probes
  */
-export function headingAnchors(value: unknown): readonly HeadingAnchor[] {
-  if (!isRichTextValue(value)) return [];
-  const anchors: HeadingAnchor[] = [];
-  const used = new Set<string>();
-  const stack: unknown[] = [...value.root.children].reverse();
-  let visits = 0;
-
-  while (stack.length > 0 && visits < MAX_VISITS) {
-    const node = stack.pop();
-    visits += 1;
-    if (!isRichTextNode(node)) continue;
-    // A heading's own children are its words; nothing in them is a heading
-    // the outline could list, so the walk does not go into them.
-    if (node.type !== "heading") {
-      pushChildren(stack, node);
-      continue;
-    }
-    const text = wordsOf(node);
-    if (text === "") continue;
-    anchors.push({
-      node,
-      id: freeId(slug(text), used),
-      text,
-      rank: headingRank(node),
-    });
-  }
-  return anchors;
+export function anchorAllocator(used: Set<string> = new Set()): {
+  take(words: string): string;
+} {
+  const nextNumber = new Map<string, number>();
+  return {
+    take(words: string): string {
+      const base = slug(words);
+      let id = base;
+      if (used.has(id)) {
+        let n = nextNumber.get(base) ?? 2;
+        while (used.has(`${base}-${n}`)) n += 1;
+        id = `${base}-${n}`;
+        nextNumber.set(base, n + 1);
+      }
+      used.add(id);
+      return id;
+    },
+  };
 }
 
 /** The anchors of a passage, by the node each is drawn on. */

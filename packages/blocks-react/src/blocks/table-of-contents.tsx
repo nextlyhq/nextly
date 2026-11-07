@@ -8,9 +8,11 @@
  *
  * ## One reading of the passage
  *
- * The anchors come from {@link headingAnchors}, the function `core/rich-text`
- * draws its heading ids with. Both blocks read the same value through the same
- * function, so a contents link and the heading it names cannot disagree.
+ * The headings, their words and their anchors come from
+ * {@link passageHeadings}: the walk `RichText` draws a passage with, through
+ * the same partition that moves a heading's block content out of it. So a
+ * contents block lists exactly the headings `core/rich-text` draws, in the
+ * words they draw, and links to the ids they carry.
  *
  * ## Nested, not indented
  *
@@ -38,9 +40,10 @@ import {
 import type { ReactElement, ReactNode } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
+import { passageHeadings } from "../rich-text";
 
 import { CONTENT } from "./categories";
-import { headingAnchors, type HeadingAnchor } from "./heading-anchors";
+import type { HeadingAnchor } from "./heading-anchors";
 import { flag, oneOf, text } from "./props";
 
 /** This block's registered name. */
@@ -145,7 +148,7 @@ export function renderTableOfContents({
   const deepest =
     DEEPEST[oneOf(props.depth, TABLE_OF_CONTENTS_DEPTHS, "h2-h3")];
   // Level 1 is the page's own title, never an entry in its contents.
-  const listed = headingAnchors(props.content).filter(
+  const listed = passageHeadings(props.content).filter(
     anchor => anchor.rank >= 2 && anchor.rank <= deepest
   );
   const authorLooking = ctx.diagnostics === true;

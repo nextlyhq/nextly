@@ -307,6 +307,77 @@ describe("a contents block beside its passage, on a page", () => {
     }
   });
 
+  it("links only to ids the page draws, on a messy passage", async () => {
+    const image = (...kids: RichTextNode[]): RichTextNode => ({
+      type: "image",
+      src: "/media/a.png",
+      altText: "A picture",
+      ...(kids.length > 0 ? { children: kids } : {}),
+    });
+    const markup = await render({
+      body: passage(
+        // Block content inside a heading moves out after it.
+        {
+          type: "heading",
+          tag: "h2",
+          children: [words("Before"), image(), words("After")],
+        },
+        // A heading inside a heading is drawn after it, as its own.
+        {
+          type: "heading",
+          tag: "h2",
+          children: [words("Outer"), heading("h3", "Inner")],
+        },
+        // A heading stored under an image is never drawn.
+        image(heading("h2", "Stale")),
+        // A heading in a disclosure label is rebuilt by the renderer.
+        {
+          type: "collapsible-container",
+          open: true,
+          children: [
+            {
+              type: "collapsible-title",
+              children: [
+                {
+                  type: "heading",
+                  tag: "h3",
+                  children: [words("Label"), image()],
+                },
+              ],
+            },
+            {
+              type: "collapsible-content",
+              children: [heading("h3", "Inside")],
+            },
+          ],
+        },
+        // A linked heading, a repeat, and one with no words.
+        {
+          type: "heading",
+          tag: "h2",
+          children: [{ type: "link", url: "/x", children: [words("Linked")] }],
+        },
+        heading("h2", "Outer"),
+        { type: "heading", tag: "h2", children: [] }
+      ),
+    });
+    const listed = links(markup);
+    expect(listed).toEqual([
+      ["before", "Before"],
+      ["outer", "Outer"],
+      ["inner", "Inner"],
+      ["label", "Label"],
+      ["inside", "Inside"],
+      ["linked", "Linked"],
+      ["outer-2", "Outer"],
+    ]);
+    const drawn = new Set(
+      [...markup.matchAll(/<h[1-6] id="([^"]*)"/g)].map(match => match[1])
+    );
+    for (const [id] of listed) expect(drawn.has(id), id).toBe(true);
+    expect(markup).not.toContain("Stale");
+  });
+
   it("draws nothing for a post whose body has no headings, while the body still draws", async () => {
     const markup = await render({
       body: passage({ type: "paragraph", children: [words("Just words.")] }),

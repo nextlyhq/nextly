@@ -13,9 +13,10 @@ import {
 import type { CSSProperties, ReactNode } from "react";
 
 import {
+  anchorAllocator,
   anchorIds,
-  headingAnchors,
   headingRank,
+  type HeadingAnchor,
 } from "./blocks/heading-anchors";
 import { fetchableUrl, oneOf, relFor, text, url } from "./blocks/props";
 import type { BlockHostPolicy } from "./context";
@@ -245,9 +246,15 @@ interface DrawSettings {
   readonly host: BlockHostPolicy | undefined;
   readonly spacingMode: SpacingMode | undefined;
   /**
-   * The id each heading is drawn with, by its stored node, when the caller
-   * asked for anchors; read once per passage by `headingAnchors`, the reading
-   * a table of contents links by.
+   * What each node draws of its children, read once per node for the whole
+   * render: the views take their children only from it, and so does the walk
+   * that finds the passage's headings ({@link passageHeadings}).
+   */
+  readonly parts: PartsReader;
+  /**
+   * The id each heading is drawn with, by the node drawn, when the caller asked
+   * for anchors; found by {@link passageHeadings}'s walk with this render's own
+   * `parts`, the reading a table of contents links by.
    */
   readonly anchors?: ReadonlyMap<RichTextNode, string>;
 }
@@ -625,6 +632,198 @@ export function partitionPhrasing(
 }
 
 /**
+ * What the renderer draws of a node's children: those it draws inside the
+ * node's own element, and those it draws after it, as its siblings (the block
+ * content a heading or a disclosure label cannot hold).
+ */
+interface DrawnParts {
+  readonly inside: readonly RichTextNode[];
+  readonly after: readonly RichTextNode[];
+}
+
+/** How the views that draw children draw them. */
+type ChildrenDrawn = "inside" | "heading" | "summary";
+
+/**
+ * The views in {@link NODE_VIEWS} that draw their node's children, and how.
+ *
+ * Every other view draws none: its content is in its own fields (an image, a
+ * button) or it has none (a rule, a line break), so a child stored on it is
+ * never drawn. A view takes its children only through `drawnParts`, so a view
+ * added there that draws children and is not named here draws none, which its
+ * own tests see at once, rather than drawing children the walk for a
+ * passage's headings never reads.
+ */
+// Exported for its test only: the package entries export `RichText` alone.
+export const VIEWS_DRAWING_CHILDREN: Readonly<Record<string, ChildrenDrawn>> = {
+  heading: "heading",
+  "collapsible-title": "summary",
+  "collapsible-container": "inside",
+  link: "inside",
+  autolink: "inside",
+  list: "inside",
+  code: "inside",
+  table: "inside",
+  tablecell: "inside",
+};
+
+const DRAWS_NOTHING: DrawnParts = { inside: [], after: [] };
+
+/** A phrasing-only container's children: what it keeps, and what follows it. */
+function phrasingParts(
+  node: RichTextNode,
+  permits: ReadonlySet<string>
+): DrawnParts {
+  const kids = kidsOf(node);
+  if (!holdsBlockContent(kids)) return { inside: kids, after: [] };
+  const { keeps, moves } = partitionPhrasing(kids, permits);
+  return { inside: keeps, after: moves };
+}
+
+/**
+ * What the renderer draws of one node's children, decided as
+ * {@link RichTextNodeView} dispatches it: a simple element and the
+ * unknown-node fallback draw all of them, a view draws what
+ * {@link VIEWS_DRAWING_CHILDREN} says, and a text leaf draws none.
+ */
+function drawnParts(node: RichTextNode): DrawnParts {
+  if (Object.hasOwn(SIMPLE_ELEMENTS, node.type))
+    return { inside: kidsOf(node), after: [] };
+  if (Object.hasOwn(NODE_VIEWS, node.type)) {
+    const drawn = Object.hasOwn(VIEWS_DRAWING_CHILDREN, node.type)
+      ? VIEWS_DRAWING_CHILDREN[node.type]
+      : undefined;
+    if (drawn === "heading") return phrasingParts(node, PERMITS_NOTHING);
+    if (drawn === "summary") return phrasingParts(node, SUMMARY_PERMITS);
+    if (drawn === "inside") return { inside: kidsOf(node), after: [] };
+    return DRAWS_NOTHING;
+  }
+  if (typeof node.text === "string") return DRAWS_NOTHING;
+  return { inside: kidsOf(node), after: [] };
+}
+
+/** `drawnParts`, read once per node. */
+type PartsReader = (node: RichTextNode) => DrawnParts;
+
+/**
+ * A reader of `drawnParts` that answers each node once.
+ *
+ * Once, and not merely for speed: a heading's partition rebuilds the nodes it
+ * keeps (a heading inside a disclosure label is copied with the children it
+ * may hold), so two partitions of one node give two different copies. The
+ * render and the walk for its headings share one reader, so the heading the
+ * walk gave an id is the very node the render draws.
+ */
+function partsReader(): PartsReader {
+  const read = new WeakMap<RichTextNode, DrawnParts>();
+  return node => {
+    const known = read.get(node);
+    if (known !== undefined) return known;
+    const parts = drawnParts(node);
+    read.set(node, parts);
+    return parts;
+  };
+}
+
+/**
+ * How many nodes one reading of a passage's headings visits at most, the
+ * words of each heading included. A stored passage has no size of its own;
+ * past this the reading keeps the headings it found, and the headings after
+ * them are drawn without ids, as the table of contents leaves them out.
+ */
+const MAX_HEADING_VISITS = 50_000;
+
+/** What one reading of a passage's headings may still visit. */
+interface VisitBudget {
+  left: number;
+}
+
+/** Puts nodes on a walk's stack so they pop in their order. */
+function pushInOrder(stack: unknown[], nodes: readonly RichTextNode[]): void {
+  for (let i = nodes.length - 1; i >= 0; i -= 1) stack.push(nodes[i]);
+}
+
+/** The words a leaf draws: its text, a line break's space, or none. */
+function leafWords(node: RichTextNode): string {
+  if (node.type === "linebreak") return " ";
+  if (typeof node.text !== "string") return "";
+  // A code token draws its text; any other view keeps a `text` field of its
+  // own (a button's label) that is not a heading's words.
+  return node.type === "code-highlight" || !Object.hasOwn(NODE_VIEWS, node.type)
+    ? node.text
+    : "";
+}
+
+/**
+ * Visits nodes in the order they are drawn, within the budget. `visit` names
+ * what comes after a node, in order: the lists it returns are walked first to
+ * last before the nodes that followed it.
+ */
+function walkDrawn(
+  nodes: readonly RichTextNode[],
+  budget: VisitBudget,
+  visit: (node: RichTextNode) => readonly (readonly RichTextNode[])[]
+): void {
+  const stack: unknown[] = [];
+  pushInOrder(stack, nodes);
+  while (stack.length > 0 && budget.left > 0) {
+    const node = stack.pop();
+    budget.left -= 1;
+    if (!isRichTextNode(node)) continue;
+    const next = visit(node);
+    for (let i = next.length - 1; i >= 0; i -= 1) pushInOrder(stack, next[i]);
+  }
+}
+
+/** The words a heading draws, read through the same parts the render draws. */
+function drawnWords(
+  nodes: readonly RichTextNode[],
+  parts: PartsReader,
+  budget: VisitBudget
+): string {
+  const words: string[] = [];
+  walkDrawn(nodes, budget, node => {
+    words.push(leafWords(node));
+    return [parts(node).inside];
+  });
+  return words.join("").replace(/\s+/g, " ").trim();
+}
+
+/** Every heading a passage's nodes draw, in the order they are drawn. */
+function headingsOf(
+  nodes: readonly RichTextNode[],
+  parts: PartsReader
+): HeadingAnchor[] {
+  const anchors: HeadingAnchor[] = [];
+  const ids = anchorAllocator();
+  const budget: VisitBudget = { left: MAX_HEADING_VISITS };
+  walkDrawn(nodes, budget, node => {
+    const { inside, after } = parts(node);
+    const text =
+      node.type === "heading" ? drawnWords(inside, parts, budget) : "";
+    // A heading with no words has no anchor: a link to it would have none.
+    if (text !== "")
+      anchors.push({ node, id: ids.take(text), text, rank: headingRank(node) });
+    // Walked as the render draws them: the node's own children, then what it
+    // moved out after itself.
+    return [inside, after];
+  });
+  return anchors;
+}
+
+/**
+ * Every heading a stored passage draws, in order, each with its id and the
+ * words it draws, read by the walk `RichText` draws the passage with.
+ *
+ * Takes `unknown` because it reads a block prop, which holds whatever was
+ * stored: anything that is not rich text draws no headings.
+ */
+export function passageHeadings(value: unknown): readonly HeadingAnchor[] {
+  if (!isRichTextValue(value)) return [];
+  return headingsOf(value.root.children, partsReader());
+}
+
+/**
  * A container that may hold only phrasing content, with the rest moved AFTER it.
  *
  * `h1`-`h6` take phrasing content, and `summary` takes phrasing content or a
@@ -668,18 +867,15 @@ function PhrasingOnly({
   /** The element's anchor, for a heading drawn with one. */
   id?: string;
 }): ReactNode {
-  const kids = Array.isArray(node.children) ? node.children : [];
   const anchor = id === undefined ? {} : { id };
-  if (!holdsBlockContent(kids))
-    return <Tag {...anchor}>{children(kids, draw)}</Tag>;
-  const { keeps, moves } = partitionPhrasing(
-    kids,
-    Tag === "summary" ? SUMMARY_PERMITS : PERMITS_NOTHING
-  );
+  // Its kept children, and its block content after it: `phrasingParts`.
+  const { inside, after } = draw.parts(node);
+  if (after.length === 0)
+    return <Tag {...anchor}>{children(inside, draw)}</Tag>;
   return (
     <>
-      <Tag {...anchor}>{children(keeps, draw)}</Tag>
-      {children(moves, draw)}
+      <Tag {...anchor}>{children(inside, draw)}</Tag>
+      {children(after, draw)}
     </>
   );
 }
@@ -728,7 +924,7 @@ function LinkView({
   // not a tidy failure: it leaves a second, empty anchor in the middle of the
   // row, which is focusable and announced with no name.
   if (href === undefined || holdsInteractive(node.children))
-    return <>{children(node.children, draw)}</>;
+    return <>{children(draw.parts(node).inside, draw)}</>;
 
   // Only `_blank` is honoured. It is the one target the editor writes, and it
   // is the one that needs the `rel` below; passing an arbitrary stored string
@@ -736,7 +932,7 @@ function LinkView({
   const target = node.target === "_blank" ? "_blank" : undefined;
   return (
     <a href={href} target={target} rel={relFor(target, node.rel)}>
-      {children(node.children, draw)}
+      {children(draw.parts(node).inside, draw)}
     </a>
   );
 }
@@ -752,7 +948,7 @@ function TableCellView({
   // means the cell heads its row or its column.
   const header = typeof node.headerState === "number" && node.headerState !== 0;
   const Cell = header ? "th" : "td";
-  return <Cell>{children(node.children, draw)}</Cell>;
+  return <Cell>{children(draw.parts(node).inside, draw)}</Cell>;
 }
 
 /**
@@ -1318,7 +1514,9 @@ const NODE_VIEWS: Readonly<
   // `open` is serialized by the editor, default included, so a section the
   // author left expanded publishes expanded.
   "collapsible-container": (node, draw) => (
-    <details open={node.open === true}>{children(node.children, draw)}</details>
+    <details open={node.open === true}>
+      {children(draw.parts(node).inside, draw)}
+    </details>
   ),
   // A `summary` is phrasing-only and cannot be swapped for a `div` — it has to
   // be the first child of its `details` or the disclosure stops working — so it
@@ -1330,7 +1528,7 @@ const NODE_VIEWS: Readonly<
   autolink: (node, draw) => <LinkView node={node} draw={draw} />,
   list: (node, draw) => {
     if (node.listType !== "number")
-      return <ul>{children(node.children, draw)}</ul>;
+      return <ul>{children(draw.parts(node).inside, draw)}</ul>;
     // A list imported from `<ol start="5">` keeps its first number. Dropped,
     // the published list silently restarts at 1 and the prose around it —
     // "step 5" — stops matching. Only a positive integer is forwarded;
@@ -1341,20 +1539,20 @@ const NODE_VIEWS: Readonly<
       node.start > 0
         ? node.start
         : undefined;
-    return <ol start={start}>{children(node.children, draw)}</ol>;
+    return <ol start={start}>{children(draw.parts(node).inside, draw)}</ol>;
   },
   linebreak: () => <br />,
   horizontalrule: () => <hr />,
   code: (node, draw) => (
     <pre>
-      <code>{children(node.children, draw)}</code>
+      <code>{children(draw.parts(node).inside, draw)}</code>
     </pre>
   ),
   // `tbody` rather than bare rows: a browser inserts one anyway, and a React
   // tree that omits it does not match the DOM that results.
   table: (node, draw) => (
     <table>
-      <tbody>{children(node.children, draw)}</tbody>
+      <tbody>{children(draw.parts(node).inside, draw)}</tbody>
     </table>
   ),
   tablecell: (node, draw) => <TableCellView node={node} draw={draw} />,
@@ -1425,7 +1623,7 @@ function RichTextNodeView({
     // {@link PhrasingOnly} instead of by this table.
     const Element =
       declared === "p" && holdsBlockContent(node.children) ? "div" : declared;
-    return <Element>{children(node.children, draw)}</Element>;
+    return <Element>{children(draw.parts(node).inside, draw)}</Element>;
   }
 
   if (Object.hasOwn(NODE_VIEWS, node.type)) {
@@ -1437,7 +1635,7 @@ function RichTextNodeView({
     return formatted(node.text, node.format, node.style);
 
   // Unknown node: keep the words, lose the wrapper. See the module docblock.
-  return <>{children(node.children, draw)}</>;
+  return <>{children(draw.parts(node).inside, draw)}</>;
 }
 
 export interface RichTextProps {
@@ -1490,11 +1688,15 @@ export function RichText({
   anchorHeadings,
 }: RichTextProps): ReactNode {
   if (!isRichTextValue(value)) return null;
+  // One reader for the render and for its headings' ids, so each id is found
+  // on the node the render draws (see `partsReader`).
+  const parts = partsReader();
   const draw: DrawSettings = {
     host: hostPolicy,
     spacingMode,
+    parts,
     ...(anchorHeadings === true
-      ? { anchors: anchorIds(headingAnchors(value)) }
+      ? { anchors: anchorIds(headingsOf(value.root.children, parts)) }
       : {}),
   };
   return <>{children(value.root.children, draw)}</>;
