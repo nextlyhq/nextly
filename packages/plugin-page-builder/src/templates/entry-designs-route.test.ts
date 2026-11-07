@@ -2,17 +2,24 @@
  * The entry designs read with its reads injected: the caller's rights asked
  * before anything is read, own designs kept only where the caller may read
  * their entries, one entry's own design answered by its key rather than
- * from the capped list, what the caller is offered, and what a template's
- * screens ask about.
+ * from the capped list, the own designs of a list's rows answered by their
+ * keys in one read, what the caller is offered, what a template's screens
+ * ask about, and the query the route accepts.
  *
  * Against a real instance, access included, is the integration suite's.
  */
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
-import { ENTRY_DESIGNS_MAX } from "./entry-designs-contract";
+import {
+  ENTRY_DESIGNS_ENTRIES_MAX,
+  ENTRY_DESIGNS_MAX,
+  entryDesignsForEntriesPath,
+} from "./entry-designs-contract";
 import {
   askOfTemplate,
   ENTRY_DESIGNS_SCAN_PAGES,
+  parseEntryDesignsQuery,
   readEntryDesigns,
   type EntryDesignsAsk,
   type EntryDesignsReads,
@@ -286,6 +293,132 @@ describe("readEntryDesigns", () => {
     );
     expect(answer.meta.templateAllowed).toBe(false);
     expect(answer.meta.mayCreateTemplate).toBe(false);
+  });
+});
+
+describe("the own designs of some entries", () => {
+  it("answers the entries asked about by their keys, in one read", async () => {
+    const { setup } = guard();
+    const { injected, templates } = reads(ALL_RIGHTS, {
+      designs: [design("d7", "p7"), design("d9", "p9")],
+    });
+    const answer = await readEntryDesigns(
+      { collection: "posts", entries: ["p7", "p8", "p9"] },
+      setup,
+      injected
+    );
+
+    expect(answer.items.map(item => item.entryId)).toEqual(["p7", "p9"]);
+    // Answered for these entries in full: nothing past them is implied.
+    expect(answer.meta.hasNext).toBe(false);
+    const designReads = templates.mock.calls
+      .map(([args]) => args)
+      .filter(args => !("collection" in args.where));
+    expect(designReads).toEqual([
+      expect.objectContaining({
+        where: { entry: { in: ["posts/p7", "posts/p8", "posts/p9"] } },
+        limit: 3,
+      }),
+    ]);
+  });
+
+  it("keeps only the own designs of entries the caller may read", async () => {
+    const { setup } = guard();
+    const { injected, readableEntries } = reads(
+      ALL_RIGHTS,
+      { designs: [design("d7", "p7"), design("d9", "p9")] },
+      ["p9"]
+    );
+    const answer = await readEntryDesigns(
+      { collection: "posts", entries: ["p7", "p9"] },
+      setup,
+      injected
+    );
+
+    // A lookup that trusted the ids it was given would list both.
+    expect(answer.items.map(item => item.entryId)).toEqual(["p9"]);
+    expect(readableEntries).toHaveBeenCalledTimes(1);
+    expect(readableEntries).toHaveBeenCalledWith("posts", ["p7", "p9"]);
+  });
+
+  it("reads nothing for a caller who may not read the collection", async () => {
+    const { setup } = guard();
+    const { injected, templates } = reads({ "read-templates": true });
+    const answer = await readEntryDesigns(
+      { collection: "posts", entries: ["p7"] },
+      setup,
+      injected
+    );
+
+    expect(answer.items).toEqual([]);
+    expect(answer.meta.templateReadable).toBe(false);
+    expect(templates).not.toHaveBeenCalled();
+  });
+});
+
+describe("the route's query", () => {
+  const BASE = "http://nextly.test/plugins/page-builder";
+
+  /** The validation error a refused path throws, or a failure naming it. */
+  function refused(path: string): NextlyError {
+    try {
+      parseEntryDesignsQuery(`${BASE}${path}`);
+    } catch (error) {
+      if (NextlyError.is(error)) return error;
+      throw error;
+    }
+    throw new Error(`expected ${path} to be refused`);
+  }
+
+  it("reads a list's entries as the column asks for them", () => {
+    // The positive control: every refusal below is satisfied by a parser
+    // that refuses everything.
+    expect(
+      parseEntryDesignsQuery(
+        `${BASE}${entryDesignsForEntriesPath("posts", ["p1", "p2"])}`
+      )
+    ).toEqual({ collection: "posts", entries: ["p1", "p2"] });
+  });
+
+  it("folds blanks and repeats, and keeps an id that needed encoding whole", () => {
+    expect(
+      parseEntryDesignsQuery(
+        `${BASE}/templates/entry-designs?collection=posts&entries=a,,a,%20b`
+      ).entries
+    ).toEqual(["a", "b"]);
+    expect(
+      parseEntryDesignsQuery(
+        `${BASE}${entryDesignsForEntriesPath("posts", ["a&b", "c d"])}`
+      ).entries
+    ).toEqual(["a&b", "c d"]);
+  });
+
+  it("takes a page's worth of entries, and refuses more rather than cutting", () => {
+    const ids = (count: number) =>
+      Array.from({ length: count }, (_, index) => `p${String(index)}`);
+    expect(
+      parseEntryDesignsQuery(
+        `${BASE}${entryDesignsForEntriesPath("posts", ids(ENTRY_DESIGNS_ENTRIES_MAX))}`
+      ).entries
+    ).toHaveLength(ENTRY_DESIGNS_ENTRIES_MAX);
+    expect(
+      refused(
+        entryDesignsForEntriesPath("posts", ids(ENTRY_DESIGNS_ENTRIES_MAX + 1))
+      ).code
+    ).toBe("VALIDATION_ERROR");
+  });
+
+  it("refuses entries without their collection, beside an entry, or none at all", () => {
+    expect(
+      refused("/templates/entry-designs?template=t1&entries=p1").code
+    ).toBe("VALIDATION_ERROR");
+    expect(
+      refused("/templates/entry-designs?collection=posts&entry=p1&entries=p2")
+        .code
+    ).toBe("VALIDATION_ERROR");
+    expect(
+      refused("/templates/entry-designs?collection=posts&entries=,").code
+    ).toBe("VALIDATION_ERROR");
   });
 });
 

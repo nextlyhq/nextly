@@ -21,11 +21,17 @@
  * given later brings it back.
  *
  * Each cell reads the same cached answer (`useEntryDesigns`), so a page of
- * rows asks the server once, not once per row. On a narrow list the column
- * rides on each card, as every list column does. A provider's column is
- * appended after every field's, off screen on a wide collection, so the
- * column is moved to sit right after Status, beside the lifecycle it reads
- * with.
+ * rows asks the server once, not once per row. That answer is capped, so
+ * where it says more may exist (`meta.hasNext`), a row it does not list
+ * might still have an own design. Each cell then also names its row as on
+ * screen, and every cell of the list reads one lookup of the rows on screen
+ * by their ids (`useEntriesDesigns`): one more request for the page, asked
+ * again when the page changes, and never one per row.
+ *
+ * On a narrow list the column rides on each card, as every list column
+ * does. A provider's column is appended after every field's, off screen on a
+ * wide collection, so the column is moved to sit right after Status, beside
+ * the lifecycle it reads with.
  *
  * @module admin/entry-design-column
  */
@@ -34,11 +40,14 @@ import {
   transformColumns,
   type NextlyColumn,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useEffect, type JSX } from "react";
+import { useEffect, useSyncExternalStore, type JSX } from "react";
+
+import { ENTRY_DESIGNS_ENTRIES_MAX } from "../templates/entry-designs-contract";
 
 import {
   designOf,
   readCollectionDesigns,
+  useEntriesDesigns,
   useEntryDesigns,
   type EntryDesignsResponse,
 } from "./entry-designs-client";
@@ -182,6 +191,95 @@ function rowIdOf(row: Record<string, unknown>): string | undefined {
 }
 
 /**
+ * The rows each collection's list has on screen, by id, each counted by the
+ * cells naming it, so a row drawn twice (a table and its card) is one id and
+ * stays named until both are gone.
+ */
+const onScreen = new Map<string, Map<string, number>>();
+/** Each collection's rows on screen as one sorted list, until they change. */
+const onScreenLists = new Map<string, readonly string[]>();
+/** The cells to tell when the rows on screen change. */
+const onScreenWatchers = new Set<() => void>();
+/** Whether a change is already waiting to be told. */
+let onScreenTelling = false;
+/** No rows: one value, so a cell with nothing named does not redraw. */
+const NO_ROWS: readonly string[] = [];
+
+/**
+ * Tell every cell, once for every change made in the same pass: the cells of
+ * a page name their rows one after another as they mount, and the lookup is
+ * asked for the page they make together, not for each row as it arrives.
+ */
+function rowsOnScreenChanged(collection: string): void {
+  onScreenLists.delete(collection);
+  if (onScreenTelling) return;
+  onScreenTelling = true;
+  queueMicrotask(() => {
+    onScreenTelling = false;
+    for (const watcher of [...onScreenWatchers]) watcher();
+  });
+}
+
+/** Name `id` as on screen in `collection`'s list, until the removal is run. */
+function nameOnScreen(collection: string, id: string): () => void {
+  const ids = onScreen.get(collection) ?? new Map<string, number>();
+  onScreen.set(collection, ids);
+  ids.set(id, (ids.get(id) ?? 0) + 1);
+  rowsOnScreenChanged(collection);
+  return () => {
+    const left = (ids.get(id) ?? 1) - 1;
+    if (left > 0) ids.set(id, left);
+    else ids.delete(id);
+    if (ids.size === 0 && onScreen.get(collection) === ids) {
+      onScreen.delete(collection);
+    }
+    rowsOnScreenChanged(collection);
+  };
+}
+
+/** `collection`'s rows on screen, sorted, so every cell asks the one path. */
+function rowsOnScreenOf(collection: string): readonly string[] {
+  const cached = onScreenLists.get(collection);
+  if (cached !== undefined) return cached;
+  const ids = onScreen.get(collection);
+  const list = ids === undefined ? NO_ROWS : [...ids.keys()].sort();
+  onScreenLists.set(collection, list);
+  return list;
+}
+
+/** Watch the rows on screen, as `useSyncExternalStore` asks. */
+function watchRowsOnScreen(watcher: () => void): () => void {
+  onScreenWatchers.add(watcher);
+  return () => {
+    onScreenWatchers.delete(watcher);
+  };
+}
+
+/**
+ * The rows on screen that `id`'s lookup asks about: all of them, or, past
+ * the lookup's bound (two lists of one collection open together, say), the
+ * share of them holding `id`, so each lookup stays within it.
+ */
+function lookupRowsOf(
+  rows: readonly string[],
+  id: string | undefined
+): readonly string[] {
+  const at = id === undefined ? -1 : rows.indexOf(id);
+  if (at === -1) return NO_ROWS;
+  if (rows.length <= ENTRY_DESIGNS_ENTRIES_MAX) return rows;
+  const start = at - (at % ENTRY_DESIGNS_ENTRIES_MAX);
+  return rows.slice(start, start + ENTRY_DESIGNS_ENTRIES_MAX);
+}
+
+/**
+ * Whether a row can be named in the lookup: its ids travel comma-separated,
+ * so one holding a comma would be read as two.
+ */
+function lookupNames(id: string | undefined): id is string {
+  return id !== undefined && !id.includes(",");
+}
+
+/**
  * One row's mark: the pill for an own design, "Template" for the rest while
  * the collection has one.
  */
@@ -195,23 +293,33 @@ export function DesignCell({
   const read = useEntryDesigns(collection);
   const id = rowIdOf(row);
   const settled = read.fetching ? undefined : read.data;
+  // Where the collection's answer is capped, its absence of a row says
+  // nothing, so the row is named for the lookup of the rows on screen.
+  const capped = read.data?.meta.hasNext === true && lookupNames(id);
+  const rows = useSyncExternalStore(watchRowsOnScreen, () =>
+    rowsOnScreenOf(collection)
+  );
+  const lookup = useEntriesDesigns(
+    collection,
+    capped ? lookupRowsOf(rows, id) : NO_ROWS
+  );
+  useEffect(() => {
+    if (!capped || id === undefined) return undefined;
+    return nameOnScreen(collection, id);
+  }, [capped, collection, id]);
   useEffect(() => {
     // Only a settled answer moves the column: one shown from the cache while
     // the read is asked again may be the answer that went out of date.
     if (settled !== undefined) followDesigns(collection, settled);
   }, [collection, settled]);
-  if (read.data === undefined) {
-    // The pill's own size while the read is out, so the row does not move
-    // when it lands; nothing at all once it failed.
-    return read.error !== null ? null : (
-      <span
-        aria-hidden="true"
-        className="inline-block h-[22px] w-20 animate-pulse rounded-full bg-muted"
-      />
-    );
-  }
+  if (read.data === undefined) return readPending(read.error !== null);
   const { meta } = read.data;
-  const design = id === undefined ? undefined : designOf(read.data, id);
+  // The lookup answers for this row by its key, so it goes first; the
+  // collection's answer stands in until it lands.
+  const design =
+    id === undefined
+      ? undefined
+      : (designOf(lookup.data, id) ?? designOf(read.data, id));
   if (design !== undefined) {
     return (
       <OwnDesignPill
@@ -222,9 +330,29 @@ export function DesignCell({
       />
     );
   }
-  // A list cut at its bound cannot say an entry past it has none, and an
-  // entry without its own design in a collection with no template is drawn
-  // with nothing: "Template" there would name one that does not exist.
-  if (meta.hasNext || meta.template === null) return null;
+  if (capped) {
+    // A capped answer cannot say this row has none: the lookup does. While
+    // it is out the pill's place is held; if it fails, nothing is claimed.
+    if (lookup.data === undefined) return readPending(lookup.error !== null);
+  } else if (meta.hasNext) {
+    // A row the lookup cannot name, past a capped answer: nothing claimed.
+    return null;
+  }
+  // An entry without its own design in a collection with no template is
+  // drawn with nothing: "Template" there would name one that does not exist.
+  if (meta.template === null) return null;
   return <span className="text-xs text-muted-foreground">Template</span>;
+}
+
+/**
+ * A cell while its answer is out: the pill's own size, so the row does not
+ * move when it lands; nothing at all once it failed.
+ */
+function readPending(failed: boolean): JSX.Element | null {
+  return failed ? null : (
+    <span
+      aria-hidden="true"
+      className="inline-block h-[22px] w-20 animate-pulse rounded-full bg-muted"
+    />
+  );
 }
