@@ -219,8 +219,10 @@ export interface CanvasFrameProps {
   title: string | undefined;
   /**
    * The site's theme the page is shown in, stated as `data-nx-theme` on the
-   * frame's root element where a site's dark tokens are switched by it. Left
-   * out, the page shows whatever the site applies by default.
+   * frame's root element where a site's dark tokens are switched by it, and,
+   * when it is `light` or `dark`, as the iframe element's `color-scheme`, which
+   * the frame's `prefers-color-scheme` follows. Left out, the page shows
+   * whatever the site applies by default.
    */
   theme?: string;
   /**
@@ -329,8 +331,14 @@ function FramedCanvas({
           className="nx-canvas-frame__page"
           title={canvasFrameTitle(title)}
           {...frameDocumentProps(shown, pending)}
-          // Laid out at the device's size and painted at the zoom.
-          style={{ width, height, transform: `scale(${String(scale)})` }}
+          // Laid out at the device's size and painted at the zoom, in the
+          // colour scheme of the theme the page is shown in, where one is.
+          style={{
+            width,
+            height,
+            transform: `scale(${String(scale)})`,
+            ...frameColorScheme(markers.theme),
+          }}
         />
         <div
           ref={layer}
@@ -351,6 +359,24 @@ function FramedCanvas({
       <FramePage mountPoint={mountPoint}>{children}</FramePage>
     </div>
   );
+}
+
+/**
+ * The iframe ELEMENT's own `color-scheme`, for the theme the page is shown in.
+ *
+ * A frame's `prefers-color-scheme` follows the used `color-scheme` of the
+ * element that embeds it, as the CSS Working Group resolved, so stating the
+ * theme here is what can turn a page the site serves, whose own CSS asks
+ * `@media (prefers-color-scheme)`, to that theme too; the `data-nx-theme`
+ * marker reaches only the site's variables. Driven by the same `theme` the
+ * marker is, so the two cannot disagree. Only `light` and `dark` are schemes:
+ * any other theme, or none, states nothing, and the frame's sheet leaves the
+ * scheme to the device, as a visitor's browser does.
+ */
+function frameColorScheme(
+  theme: string | undefined
+): { colorScheme: "light" | "dark" } | Record<string, never> {
+  return theme === "light" || theme === "dark" ? { colorScheme: theme } : {};
 }
 
 /**

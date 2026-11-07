@@ -35,6 +35,7 @@ import {
   type PageClassBlocks,
   type SiteFamily,
   type TokensPanelProps,
+  type VariablesPreview,
   useVariablesHeader,
 } from "@nextlyhq/builder/shell";
 import {
@@ -181,6 +182,7 @@ export function TokensStudio({
   spacingMode,
   classes,
   opens,
+  preview,
   children,
 }: {
   /** The site's tokens as the canvas compiles them: config under stored. */
@@ -201,6 +203,12 @@ export function TokensStudio({
   classes?: readonly NamedClass[];
   /** Where a shared style or a block look using a variable opens. */
   opens?: StyleOpeners;
+  /**
+   * The preview mode the editor holds, which it draws the canvas in too, so
+   * the header's switch previews the canvas as well as the swatches. Absent,
+   * the switch keeps its mode itself and previews the swatches alone.
+   */
+  preview?: VariablesPreview;
   /** The Design panel's tabs. */
   children: React.ReactNode;
 }): React.JSX.Element {
@@ -246,6 +254,7 @@ export function TokensStudio({
     onChange: commit,
     currentTokens,
     readOnly: !mayChange,
+    preview,
   });
   const studio: TokensPanelProps = {
     tokens: edits ?? editable,

@@ -26,6 +26,7 @@ import {
   TokensPanel,
   useVariablesHeader,
   type TokensPanelProps,
+  type VariablesPreview,
 } from "./tokens-panel";
 
 type HostedProps = Omit<TokensPanelProps, "currentTokens" | "onChange"> &
@@ -1106,6 +1107,115 @@ describe("the preview's first mode", () => {
       ).toHaveProperty("ariaPressed", "true");
     } finally {
       window.matchMedia = original;
+    }
+  });
+});
+
+/** The Design panel's header, held by a host as the editor holds it. */
+function HeaderHost({
+  preview,
+}: {
+  preview?: VariablesPreview;
+}): React.JSX.Element {
+  const header = useVariablesHeader({
+    onChange: () => undefined,
+    currentTokens: () => SITE,
+    readOnly: false,
+    ...(preview === undefined ? {} : { preview }),
+  });
+  return (
+    <>
+      <div data-testid="host-header">{header.controls}</div>
+      <TokensPanel
+        tokens={SITE}
+        onChange={() => undefined}
+        currentTokens={() => SITE}
+        header={header}
+      />
+    </>
+  );
+}
+
+const brandSwatch = (): string =>
+  (
+    row(/^Brand/).querySelector(".nx-vars__swatch--main") as HTMLElement
+  ).style.getPropertyValue("--nx-swatch");
+
+const pressed = (name: "Light" | "Dark"): string | null =>
+  within(screen.getByRole("group", { name: "Preview" })).getByRole("button", {
+    name,
+  }).ariaPressed;
+
+describe("a preview mode the host holds", () => {
+  it("shows the host's pick and hands a press to the host rather than keeping it", () => {
+    const onPick = vi.fn();
+    const { rerender } = render(
+      <HeaderHost preview={{ picked: "dark", onPick }} />
+    );
+    expect(pressed("Dark")).toBe("true");
+    expect(brandSwatch()).toBe("#8fa7ff");
+
+    fireEvent.click(screen.getByRole("button", { name: "Light" }));
+    expect(onPick).toHaveBeenCalledWith("light");
+    // The host has not taken the pick yet, so nothing changed here: a header
+    // keeping the press itself would show Light already.
+    expect(pressed("Dark")).toBe("true");
+    expect(brandSwatch()).toBe("#8fa7ff");
+
+    rerender(<HeaderHost preview={{ picked: "light", onPick }} />);
+    expect(pressed("Light")).toBe("true");
+    expect(brandSwatch()).toBe("#1d2b6b");
+  });
+
+  it("keeps a press itself when no host holds the mode", () => {
+    render(<HeaderHost />);
+    expect(pressed("Light")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Dark" }));
+    expect(pressed("Dark")).toBe("true");
+    expect(brandSwatch()).toBe("#8fa7ff");
+  });
+});
+
+describe("the preview while nothing is picked", () => {
+  /**
+   * A canvas root under a page's own theme marker, on a device that prefers
+   * light (jsdom answers no media query), so the canvas draws one mode and
+   * the device names the other.
+   */
+  function canvasUnder(mode: "light" | "dark"): () => void {
+    const page = document.createElement("div");
+    page.setAttribute("data-nx-theme", mode);
+    const root = document.createElement("div");
+    root.className = "nx-canvas";
+    page.append(root);
+    document.body.append(page);
+    return () => page.remove();
+  }
+
+  it("shows the mode the canvas draws, not the device's, with a host holding none", () => {
+    const remove = canvasUnder("dark");
+    try {
+      render(
+        <HeaderHost preview={{ picked: null, onPick: () => undefined }} />
+      );
+      expect(pressed("Dark")).toBe("true");
+      expect(brandSwatch()).toBe("#8fa7ff");
+    } finally {
+      remove();
+    }
+  });
+
+  it("shows the mode the canvas draws on its own too, and follows the page's marker", async () => {
+    const remove = canvasUnder("dark");
+    try {
+      render(<HeaderHost />);
+      expect(pressed("Dark")).toBe("true");
+      const marked = document.querySelector("[data-nx-theme]");
+      // Heard through a mutation observer, which answers after this task.
+      marked?.setAttribute("data-nx-theme", "light");
+      await waitFor(() => expect(pressed("Light")).toBe("true"));
+    } finally {
+      remove();
     }
   });
 });
