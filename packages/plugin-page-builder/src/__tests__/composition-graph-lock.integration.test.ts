@@ -499,9 +499,11 @@ describe.each(getConfiguredTestDialects())(
       expect(one.status).toBe("fulfilled");
       expect(two.status).toBe("rejected");
       // Refused by the composition check, judged too deep or, where it met
-      // the first save, as a race: not for a reason any save can fail.
+      // the first save, as the graph lock's own race (MySQL answers from an
+      // older snapshot): not for a reason any save can fail, nor any other
+      // conflict.
       expect(String(two.status === "rejected" ? two.reason : "")).toMatch(
-        /depth-exceeded|"code":"CONFLICT"/
+        /depth-exceeded|raced another change to the page builder's components/
       );
     });
 
