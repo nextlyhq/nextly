@@ -242,17 +242,34 @@ describe("the picker's fields", () => {
     });
   });
 
-  it("fails the ask on a read that fails for any reason but access", async () => {
-    await expect(
-      readBindingFields(
-        { source: { kind: "collection", slug: "posts", id: "p1" } },
-        {
-          ...reads(),
-          asEditor: async () => {
+  it("names a source whose read fails for a reason but access, and lists the rest", async () => {
+    const answer = await readBindingFields(
+      { source: { kind: "collection", slug: "posts", id: "p1" } },
+      {
+        ...reads(),
+        asEditor: async (ref, select) => {
+          if ("single" in ref && ref.single === "contact") {
             throw new Error("connection reset");
-          },
-        }
-      )
-    ).rejects.toThrow("connection reset");
+          }
+          return reads().asEditor(ref, select);
+        },
+      }
+    );
+    // The failing Single is named, with nothing to bind, and said to have
+    // failed; the entry and the site still list.
+    expect(
+      answer.sources.find(source => source.label === "Contact details")
+    ).toEqual({
+      binding: { source: "single", sourceKey: "contact" },
+      label: "Contact details",
+      fields: [],
+      readFailed: true,
+    });
+    expect(named(fieldsOf(answer, "Post"), "title")?.preview).toBe(
+      "Spring sale"
+    );
+    expect(answer.sources.at(-1)?.binding).toEqual({ source: "site" });
+    // Refused is not failed: the payroll Single is still not named at all.
+    expect(JSON.stringify(answer)).not.toContain("payroll");
   });
 });

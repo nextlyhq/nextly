@@ -51,6 +51,12 @@ export interface BindingFieldSource {
   /** The source's name: a collection's or a Single's label. */
   readonly label: string;
   readonly fields: readonly BindingFieldChoice[];
+  /**
+   * Set where the source's read failed for a reason other than access: it is
+   * named, with no fields, so the picker can say it could not be read while
+   * the other sources still list.
+   */
+  readonly readFailed?: true;
 }
 
 /**
