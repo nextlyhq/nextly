@@ -65,6 +65,8 @@ const HARNESS = "@t/delete-harness";
 const NOTES = "notes";
 /** A collection with a lifecycle of its own, beside the pages. */
 const BRIEFS = "briefs";
+/** The same, translated, with its status kept per language. */
+const LOCAL_BRIEFS = "local-briefs";
 /** The plugin's run table, as its adapter names it. */
 const RUNS = "page_builder__component_deletions";
 /** The slug of a field group made in the admin, after start. */
@@ -266,6 +268,30 @@ function siteShapes(site: {
   };
 }
 
+/** A plugin letting components be created under an id the caller names. */
+function componentIdsNamed(): PluginDefinition {
+  return definePlugin({
+    name: "@t/component-ids-named",
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    dependsOn: { [PAGE_BUILDER_PLUGIN_NAME]: "*" },
+    contributes: {
+      transforms: [
+        {
+          target: COMPONENTS_SLUG,
+          transform: entity => ({
+            ...entity,
+            db: {
+              ...((entity as { db?: Record<string, unknown> }).db ?? {}),
+              allowIdOnCreate: true,
+            },
+          }),
+        },
+      ],
+    },
+  });
+}
+
 /** The plugin's own job of this slug, run once as the runner would. */
 function jobTick(
   plugin: PluginDefinition,
@@ -332,6 +358,10 @@ describe.each(getConfiguredTestDialects())(
         blocksInGroup?: boolean;
         /** A collection with a lifecycle of its own, beside the pages. */
         briefs?: boolean;
+        /** The same, translated, with a lifecycle per language. */
+        localBriefs?: boolean;
+        /** Components may be created under an id the caller names. */
+        reuseIds?: boolean;
         /**
          * A Single embedding a field group made in the admin after start:
          * one of plain fields, or one holding a blocks field.
@@ -346,6 +376,7 @@ describe.each(getConfiguredTestDialects())(
           plugin,
           harness(switches),
           ...(site.rowRule === true ? [oneDeletableComponent()] : []),
+          ...(site.reuseIds === true ? [componentIdsNamed()] : []),
         ],
         seedPublic: true,
         collections: [
@@ -356,6 +387,19 @@ describe.each(getConfiguredTestDialects())(
               { name: "content", type: BLOCKS_TYPE },
             ],
           } as never,
+          ...(site.localBriefs === true
+            ? [
+                {
+                  slug: LOCAL_BRIEFS,
+                  status: true,
+                  localized: true,
+                  fields: [
+                    { name: "title", type: "text", localized: true },
+                    { name: "content", type: BLOCKS_TYPE, localized: true },
+                  ],
+                } as never,
+              ]
+            : []),
           ...(site.briefs === true
             ? [
                 {
@@ -385,6 +429,9 @@ describe.each(getConfiguredTestDialects())(
             : []),
         ],
         ...siteShapes(site),
+        ...(site.localBriefs === true
+          ? { localization: { locales: ["en", "de"], defaultLocale: "en" } }
+          : {}),
       });
       const t = current;
       // The first user is the super admin: the person deleting, here.
@@ -1426,6 +1473,98 @@ describe.each(getConfiguredTestDialects())(
 
       expect(refused.status).toBe(400);
       expect((await call(cookie, cardId, "GET")).item.status).toBe("idle");
+    });
+    it("refuses changing the component itself while its check runs", async () => {
+      const { t, cookie } = await boot();
+      const cardId = await card(t);
+      // Enough documents that the check takes more than one step.
+      for (let n = 0; n < 30; n += 1) {
+        await note(t, `Plain ${String(n)}`, [heading(`h${String(n)}`, "x")]);
+      }
+      expect((await call(cookie, cardId, "POST", {})).item.status).toBe(
+        "preflight"
+      );
+
+      await expect(
+        t.nextly.update({
+          collection: COMPONENTS_SLUG,
+          id: cardId,
+          data: { title: "Renamed", _overwrite: true },
+          overrideAccess: true,
+        })
+      ).rejects.toThrow("This component is being deleted");
+    });
+
+    it("refuses creating a component under the id of one it deleted", async () => {
+      const { t, cookie } = await boot({}, { reuseIds: true });
+      const cardId = await card(t);
+      expect((await deleteToTheEnd(cookie, cardId)).item.status).toBe("done");
+      const again = () =>
+        t.nextly.create({
+          collection: COMPONENTS_SLUG,
+          data: {
+            id: cardId,
+            title: "Again",
+            slug: `again-${String(Math.random()).slice(2, 10)}`,
+            status: "published",
+            content: {
+              formatVersion: DOCUMENT_FORMAT_VERSION,
+              kind: "component",
+              nodes: [heading("t", "Again")],
+            },
+          },
+          overrideAccess: true,
+        });
+
+      await expect(again()).rejects.toThrow(
+        "A component with this id was deleted; choose a new id."
+      );
+      expect(await exists(t, cardId)).toBe(false);
+    });
+
+    it("lets a person who may update but not publish convert a translation already published under a draft", async () => {
+      const { t, anAuthor } = await boot({}, { localBriefs: true });
+      const cardId = await card(t);
+      const created = await t.nextly.create({
+        collection: LOCAL_BRIEFS,
+        data: { title: "Brief", content: pageDoc([]), status: "draft" },
+        locale: "en",
+        overrideAccess: true,
+      });
+      const id = String(created.item.id);
+      // The German translation is live, while the default row stays a draft.
+      await t.nextly.update({
+        collection: LOCAL_BRIEFS,
+        id,
+        locale: "de",
+        data: {
+          title: "Kurz",
+          content: pageDoc([copyOf("d1", cardId)]),
+          status: "published",
+          _overwrite: true,
+        },
+        overrideAccess: true,
+      });
+      const editor = await anAuthor("editor", [
+        "read-components",
+        "delete-components",
+        `read-${LOCAL_BRIEFS}`,
+        `update-${LOCAL_BRIEFS}`,
+      ]);
+
+      const done = await deleteToTheEnd(editor, cardId);
+
+      expect(done.item.status, JSON.stringify(done.body)).toBe("done");
+      const row = (await t.nextly.findByID({
+        collection: LOCAL_BRIEFS,
+        id,
+        locale: "de",
+        status: "all",
+        depth: 0,
+        overrideAccess: true,
+      })) as unknown as Record<string, unknown>;
+      const nodes = (asDocument(row.content)?.nodes ?? []) as Node[];
+      expect(copies(nodes, cardId)).toBe(0);
     });
   }
 );

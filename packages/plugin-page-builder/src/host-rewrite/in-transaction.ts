@@ -30,9 +30,11 @@
  *   tombstone never expires, so a save held for any length of time is
  *   refused all the same.
  *
- * And a write to the component ITSELF, an update or a publish, is refused
- * from the moment its copies start converting until it is gone, so every
- * copy is converted from one definition.
+ * And a write to the component ITSELF is judged too: an update or a publish
+ * is refused from the moment its run opens (`preflight`) until it is gone, so
+ * the hosts are judged and converted from one definition; and creating a
+ * component under the id of one a run deleted is refused, since that id's
+ * tombstone would treat the new component as deleted.
  *
  * Throwing aborts the write and everything it did, a batch included. A write
  * holding no component costs nothing here: its documents are surveyed before
@@ -95,10 +97,12 @@ const WALKING: readonly StoredPhase[] = ["converting", "final", "done"];
 const DELETING: ReadonlySet<StoredPhase> = new Set(["deleting", "deleted"]);
 
 /**
- * The phases in which the component itself may not change: from its first
- * copy converted until it is gone, so every copy converts from one definition.
+ * The phases in which the component itself may not change: from the run's
+ * opening until it is gone, so its hosts are judged and converted from one
+ * definition.
  */
 const DEFINITION_HELD: ReadonlySet<StoredPhase> = new Set([
+  "preflight",
   "converting",
   "final",
   "done",
@@ -160,13 +164,25 @@ export async function judgeInTransaction(
   }
 }
 
-/** Refuse an update or publish of a component whose copies are converting. */
+/**
+ * Refuse an update or publish of a component being deleted, and a create
+ * under the id of one a run deleted.
+ */
 async function refuseWhileDefinitionHeld(write: FencedWrite): Promise<void> {
   const t = write.db.table(componentDeletions);
   const where = and(eq(t.componentId, write.id), eq(t.purpose, "delete"));
   if (where === undefined) return;
   const run = await write.db.select(componentDeletions).where(where).first();
-  if (run !== null && DEFINITION_HELD.has(run.phase as StoredPhase)) {
+  if (run === null) return;
+  const phase = run.phase as StoredPhase;
+  if (write.operation === "create" && DELETING.has(phase)) {
+    throw NextlyError.conflict({
+      reason: "state",
+      message: ID_REUSED_MESSAGE,
+      logContext: { reason: "component-id-deleted", componentId: write.id },
+    });
+  }
+  if (write.operation === "update" && DEFINITION_HELD.has(phase)) {
     throw NextlyError.conflict({
       reason: "state",
       message: DEFINITION_HELD_MESSAGE,
@@ -360,6 +376,9 @@ function deletedMessage(componentId: string, phase: StoredPhase): string {
 function movedOnMessage(componentId: string): string {
   return `Component "${componentId}" is being deleted, and its copies were being turned into plain blocks while this was saved, so it was not saved. Try again.`;
 }
+
+const ID_REUSED_MESSAGE =
+  "A component with this id was deleted; choose a new id.";
 
 const DEFINITION_HELD_MESSAGE =
   "This component is being deleted, so it can't be changed until the delete finishes. Its copies are being turned into plain blocks from it as it is now.";
