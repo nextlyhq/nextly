@@ -36,7 +36,6 @@ import {
   OnboardingChecklist,
   SelectionBreadcrumb,
   SpacingOverlay,
-  VariantPreviewTag,
   VisitorUnreadableBadges,
   VisitorUnreadableProvider,
   type ComponentFieldsHost,
@@ -91,6 +90,7 @@ import { OwnDesignsChip } from "../TemplateOwnDesigns";
 import type { OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
+import { previewedCanvas } from "./canvas-preview-mode";
 import {
   editorPanelRenderer,
   useEditorPanels,
@@ -102,6 +102,7 @@ import {
   useMediaSummaryReader,
   type ReadMediaSummary,
 } from "./media-summary-reader";
+import { PageReadMeter } from "./page-read-meter";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
 import { recentIconsStore } from "./recent-icons-store";
@@ -342,6 +343,16 @@ function editorTopBar(
             own design, opening the list; nothing on any other document. */}
         <OwnDesignsChip />
         <HistoryButtons editor={editor} inline={inline} />
+        {/* What the page costs to read, against its allowance: a page's
+            alone, since a component is read as part of each page placing it. */}
+        {view.initialDocument.kind === "page" ? (
+          <PageReadMeter
+            editor={editor}
+            drawnWith={view.canvasRender}
+            regions={view.canvasRegions}
+            componentTitle={view.componentLibrary.titleOf}
+          />
+        ) : null}
       </>
     ),
     topBarCenter: (
@@ -689,6 +700,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     canvasDir,
     visitorUnreadable,
   } = view;
+  // The theme the frame draws the page in and the tags saying so, from one
+  // answer, so the tag never names a mode the canvas is not drawn in.
+  const previewed = previewedCanvas(view.previewMode, view.preview.previewing);
   return (
     <>
       {/*
@@ -763,9 +777,13 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             // is drawn inside the site's own layout and stylesheets.
             source={canvasSource}
             onSourceFallback={onCanvasFallback}
+            // The site mode the author picked, on the frame's document and
+            // the frame element only; nothing picked draws the page's own.
+            theme={previewed.theme}
             overlay={
               <>
-                <VariantPreviewTag name={view.preview.previewing} />
+                {/* One row: the variant previewed and the mode picked. */}
+                {previewed.tags}
                 {/* A selected block the page hides on this device is drawn
                     anyway, and its ring says so. */}
                 <CanvasMarks

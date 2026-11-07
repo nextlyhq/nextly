@@ -13,7 +13,7 @@ import {
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
-import type { BindingSourceRef } from "nextly/runtime";
+import { createPublicReader, type BindingSourceRef } from "nextly/runtime";
 import { createElement, type ReactElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -45,11 +45,15 @@ import { throughBoundary } from "./__tests__/through-boundary";
 import { coreBlocks } from "./blocks";
 import {
   createDefaultDataProvider,
+  createQueryBudget,
+  createStandaloneContext,
   defineBlock,
   type BlocksDataProviderFactory,
   type NamedQueryLookup,
+  type PageReadReport,
 } from "./context";
-import { createPublicBlocksPage } from "./next";
+import { createPublicBlocksPage, readBindingSources } from "./next";
+import { countPageReads } from "./page-read-count";
 import type { PageRendererProps } from "./page-renderer";
 import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
@@ -92,6 +96,12 @@ function matches(row: Row, where: unknown): boolean {
           return (operand as unknown[]).map(String).includes(value);
         case "less_than":
           return value < String(operand);
+        case "less_than_equal":
+          return value <= String(operand);
+        case "greater_than":
+          return value > String(operand);
+        case "greater_than_equal":
+          return value >= String(operand);
         default:
           throw new Error(`The fake has no operator "${op}".`);
       }
@@ -1085,5 +1095,245 @@ describe("what a page costs to read, measured", () => {
     // Each link's four reads, the entries and the one image: the author
     // names, never followed without the read-ahead, fall back.
     expect(oneByOne.total).toBe(402);
+  });
+});
+
+/**
+ * A page holding each stage the route reads before it draws: a component
+ * placing another, a block kept by an entry condition that holds, a list
+ * filtered by a day and split into pages, whose entries follow a relation
+ * and link by an item-bound id, all inside the header of the Layout the
+ * page names.
+ */
+function everyStage(): {
+  nextly: Site;
+  definitions: Map<string, BlockDocument>;
+} {
+  const component = (nodes: readonly unknown[]): BlockDocument =>
+    ({ ...pageOf(nodes), kind: "component" }) as BlockDocument;
+  const instance = (id: string, componentId: string) => ({
+    id,
+    type: "nextly/component-instance",
+    version: 1,
+    props: { componentId },
+  });
+  const document = pageOf([
+    instance("outer-placed", "outer"),
+    {
+      id: "kept",
+      type: "core/image",
+      version: 1,
+      props: { alt: "", mediaId: "image-2" },
+      visibility: {
+        conditions: [[{ field: "title", op: "equals", value: "Journal" }]],
+      },
+    },
+    {
+      ...postsList("posts", 3, [
+        itemHeading("title", "title", "None"),
+        itemHeading("author", "author.name", "No author"),
+        {
+          id: "more",
+          type: "core/button",
+          version: 1,
+          props: { label: "Read", entryCollection: "posts" },
+          bindings: { entryId: { $bind: "id", source: "item" } },
+        },
+      ]),
+      props: {
+        collection: "posts",
+        limit: 3,
+        paginate: true,
+        filters: [
+          { field: "publishedAt", op: "greater_than", value: "2026-01-01" },
+        ],
+      },
+    },
+  ]);
+  const nextly = site(9, document);
+  for (const post of nextly.stored.posts ?? []) post.publishedAt = "2026-06-01";
+  const definitions = new Map<string, BlockDocument>([
+    ["outer", component([instance("inner-placed", "inner")])],
+    [
+      "inner",
+      component([
+        {
+          id: "inner-picture",
+          type: "core/image",
+          version: 1,
+          props: { alt: "", mediaId: "image-1" },
+        },
+      ]),
+    ],
+    ["head", component([postsList("head-list", 2, [])])],
+  ]);
+  nextly.stored.components = [...definitions].map(([id, content]) => ({
+    id,
+    content,
+  }));
+  nextly.stored.layouts = [
+    { id: "main", areas: [{ area: "header", component: "head" }] },
+  ];
+  // The page names its Layout, so the route reads that Layout's row alone:
+  // the editor draws the Layout it resolved, and a default's resolution is
+  // the route's own (the count's stated limit).
+  for (const page of nextly.stored.pages ?? []) page.layout = "main";
+  return { nextly, definitions };
+}
+
+/** The budget a rendered element's page drew under, wherever it sits. */
+function reportIn(element: unknown): PageReadReport | undefined {
+  const props = (element as { props?: Record<string, unknown> } | null)?.props;
+  if (props === undefined) return undefined;
+  const queries = (props.context as { queries?: unknown } | undefined)?.queries;
+  if (queries !== undefined) {
+    return (queries as { report(): PageReadReport }).report();
+  }
+  const children = props.children;
+  for (const child of Array.isArray(children) ? children : [children]) {
+    const found = reportIn(child);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/**
+ * What a count reports, as two counts are compared: the reads made, by kind,
+ * the blocks named unread, and whether any read was refused. How many were
+ * refused is a lower bound on what the page needs (a read refused never asks
+ * for what it would have led to), and it is not compared: the route asks a
+ * refused link's reads again where the count stops at the first refused.
+ */
+function comparable(report: PageReadReport | undefined) {
+  return {
+    used: report?.used,
+    refused: (report?.refused ?? 0) > 0,
+    byKind: report?.byKind,
+    unread: [...new Set(report?.unread.map(block => block.nodeId))].sort(),
+  };
+}
+
+describe("the editor's count of a page's reads", () => {
+  it("reads and refuses as the published route does, at every allowance", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    runtime.shapes.set("collection:posts", [
+      { name: "title", type: "text" },
+      { name: "slug", type: "text" },
+      { name: "publishedAt", type: "date" },
+      { name: "author", type: "relationship", relationTo: "authors" },
+    ]);
+    const published = async (cap: number) => {
+      const { nextly } = everyStage();
+      const route = createPublicBlocksPage({
+        collections: ["pages", "posts"],
+        field: "content",
+        blocks,
+        mediaCollection: "images",
+        maxQueries: cap,
+        layouts: {
+          readDefault: () => Promise.resolve("main"),
+          singles: ["page-builder-settings"],
+        },
+        nextly: nextly as never,
+      });
+      const element = await throughBoundary<{ children?: unknown }>(
+        route.ContentPage({ params: { slug: ["journal"] } })
+      );
+      const html = await renderToHtml(element);
+      return { html, report: reportIn(element) };
+    };
+    const counted = async (cap: number) => {
+      const { nextly, definitions } = everyStage();
+      // The public's reader, as the route's lists and bindings read.
+      const reader = createPublicReader(
+        { find: async args => (await nextly.find({ ...args })) as never },
+        {}
+      );
+      const images = nextly.stored.images ?? [];
+      return await countPageReads({
+        drawnWith: {
+          blocks,
+          definitions,
+          context: createStandaloneContext({
+            entry: { id: "p1" },
+            entryCollection: "pages",
+            data: createDefaultDataProvider(reader as never),
+            resolveMedia: id => {
+              const image = images.find(row => row.id === id);
+              return Promise.resolve(
+                image === undefined ? null : { url: String(image.url) }
+              );
+            },
+          }),
+        },
+        document: (nextly.stored.pages?.[0]?.content ??
+          pageOf([])) as BlockDocument,
+        regions: [
+          {
+            area: "header",
+            document: pageOf([
+              {
+                id: "nextly-region-header",
+                type: "nextly/component-instance",
+                version: 1,
+                props: { componentId: "head" },
+              },
+            ]),
+            definitions,
+          },
+        ],
+        entrySource: "collection",
+        where: {
+          collection: "pages",
+          slug: "journal",
+          page: 1,
+          listPagePath: page => `/journal/page/${String(page)}`,
+        },
+        // The bindings and conditions read as the route reads them, under
+        // the reads the page has left, as the canvas bindings route does.
+        readBindings: async (ask, allowance) => {
+          const budget = createQueryBudget(allowance);
+          const bindings = await readBindingSources({
+            documents: ask.documents,
+            ...(ask.conditions === undefined
+              ? {}
+              : { conditions: ask.conditions }),
+            entrySource: "collection",
+            slug: "pages",
+            entryId: "p1",
+            page: "journal",
+            reader: reader as never,
+            budget,
+            siteSettings: nextly as never,
+          });
+          return bindings === undefined
+            ? undefined
+            : { bindings, reads: budget.report() };
+        },
+        draw: async element => {
+          await renderToHtml(element);
+        },
+        cap,
+      });
+    };
+    const full = await published(500);
+    // Every stage reached: the nested component's image, the kept block's,
+    // the list's entries, their authors and their links.
+    expect(full.html).toContain("/media/1.jpg");
+    expect(full.html).toContain("/media/2.jpg");
+    expect(full.html).toContain("Writer ");
+    expect(full.html).toContain('href="/post-1"');
+    const most = full.report?.used ?? 0;
+    expect(most).toBeGreaterThan(8);
+    // Each allowance from none to past the page's need, both ways, compared
+    // whole, so every allowance that differs is shown at once.
+    const caps = Array.from({ length: most + 2 }, (_, cap) => cap);
+    const route: unknown[] = [];
+    const editor: unknown[] = [];
+    for (const cap of caps) {
+      route.push({ cap, ...comparable((await published(cap)).report) });
+      editor.push({ cap, ...comparable(await counted(cap)) });
+    }
+    expect(editor).toEqual(route);
   });
 });

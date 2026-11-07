@@ -37,6 +37,15 @@ export interface FingerprintSources {
   readonly singles: () => Promise<readonly unknown[]>;
   /** Every field group, whose fields a binding reaches where one is placed. */
   readonly fieldGroups?: () => Promise<readonly unknown[]>;
+  /**
+   * Every named query's declared rows, by name: a list's item bindings are
+   * judged against them, so a change to a query's rows is judged on every
+   * page listing it.
+   */
+  readonly namedQueries?: () => readonly {
+    readonly name: string;
+    readonly rows: unknown;
+  }[];
   readonly blocks: () => readonly BlockRow[];
   /**
    * When a component or a Layout was last saved: a placed component's, or a
@@ -79,6 +88,9 @@ export async function schemaFingerprint(
     ...collections.map(row => recordPart("c", row)),
     ...singles.map(row => recordPart("s", row)),
     ...fieldGroups.map(row => recordPart("g", row)),
+    ...(sources.namedQueries?.() ?? []).map(
+      query => `q:${query.name}:${JSON.stringify(query.rows)}`
+    ),
     ...sources
       .blocks()
       .map(block => `b:${block.name}:${JSON.stringify(block.props ?? {})}`),

@@ -3,6 +3,12 @@
  * that is being deleted, in the delete's transaction: the copies are kept,
  * and keep serving their entries, but name no template that is gone.
  *
+ * A copy written while the walk runs is not missed: a write linking a row to
+ * a template holds that template's row for share on its own transaction
+ * (`entry-design-write`), which the delete locked for update before this
+ * walk began. So the copy committed before the delete went on, and is read
+ * here, or waits for the delete and is refused, the template gone.
+ *
  * Templates keep drafts, so where the write lands matters. A write that
  * names no status, to a published design, is stored as its working draft and
  * leaves the live row as it was, still naming the deleted template. So a

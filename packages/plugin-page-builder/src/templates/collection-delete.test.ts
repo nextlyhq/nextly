@@ -24,7 +24,13 @@ function standIn(rows: Record<string, unknown>[]) {
   const matches = (
     where: Record<string, unknown>,
     row: Record<string, unknown>
-  ) => JSON.stringify(where).includes(String(row[TEMPLATE_COLLECTION_FIELD]));
+  ): boolean =>
+    Array.isArray(where.or)
+      ? (where.or as Record<string, unknown>[]).some(each => matches(each, row))
+      : Object.entries(where).every(
+          ([field, condition]) =>
+            row[field] === (condition as { equals: unknown }).equals
+        );
   const services: TemplateDeleteServices<typeof TX> = {
     listTemplates: async options => {
       asked.push({ where: options.where, locked: false });
@@ -123,6 +129,43 @@ describe("the page builder's collection-delete handlers", () => {
     expect(deleted).toHaveLength(150);
     expect(stored.map(row => row.id)).toEqual(["kept"]);
     expect(asked.every(call => call.locked)).toBe(true);
+  });
+
+  it("deletes the entries' own designs before the collection's template, so none is unlinked first", async () => {
+    // The template first, as a read naming both would find it: deleted
+    // first, it would empty the link of designs deleted a moment later.
+    const { services, asked, deleted, stored } = standIn([
+      {
+        id: "t1",
+        title: "Article page",
+        [TEMPLATE_COLLECTION_FIELD]: "articles",
+      },
+      {
+        id: "d1",
+        entryCollection: "articles",
+        entryId: "e1",
+        forkedFrom: "t1",
+      },
+      {
+        id: "d2",
+        entryCollection: "articles",
+        entryId: "e2",
+        forkedFrom: "t1",
+      },
+      // The control: a design of another collection copied from the same
+      // template is not this delete's, and stays to have its link emptied.
+      { id: "d3", entryCollection: "posts", entryId: "p1", forkedFrom: "t1" },
+    ]);
+    const handlers = templateCollectionDelete({ services, own });
+
+    await handlers.inTransaction({ slug: "articles", transaction: TX });
+
+    expect(deleted).toEqual(["d1", "d2", "t1"]);
+    expect(stored.map(row => row.id)).toEqual(["d3"]);
+    expect(asked.map(call => call.where)).toEqual([
+      { entryCollection: { equals: "articles" } },
+      { [TEMPLATE_COLLECTION_FIELD]: { equals: "articles" } },
+    ]);
   });
 
   it("skips the plugin's own collections, asking nothing", async () => {

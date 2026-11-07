@@ -1552,6 +1552,25 @@ export interface NamedQueryHiddenRead {
 }
 
 /**
+ * The schema a list's items bind against: the collection their entries are
+ * of, where they are a collection's entries (an ordinary list's collection,
+ * or a named query whose rows are that collection's entries); else the named
+ * query's own declared rows; else none known. The one rule the render, the
+ * save and the report of bindings to fix all read an item binding by.
+ *
+ * @experimental
+ */
+export function listItemRef(rows: {
+  readonly collection?: string | undefined;
+  readonly query?: string | undefined;
+}): { readonly collection: string } | { readonly query: string } | undefined {
+  if (typeof rows.collection === "string" && rows.collection !== "") {
+    return { collection: rows.collection };
+  }
+  return typeof rows.query === "string" ? { query: rows.query } : undefined;
+}
+
+/**
  * The collections a named query declares it reads, other than the one its
  * rows are entries of, that visitors can read nothing of, as far as `fields`
  * knows: the one answer the save's warning, the editor's inspector and its
