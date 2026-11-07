@@ -108,7 +108,7 @@ export type CollectionFieldView =
 
 /** Said where a saved template's collection is not among those listed. */
 export function unlistedNote(slug: string): string {
-  return `No collection named "${slug}" is listed now. If it was renamed or removed, choose the collection this template draws.`;
+  return `"${slug}" isn't among the collections you can see, so it is shown by its slug.`;
 }
 
 /** Said where the collections could not be listed. */
@@ -152,12 +152,16 @@ export function collectionFieldView(
           slug: value,
           note: LIST_FAILED_NOTE,
         };
+      // Kept as saved even where the list does not name it: the list leaves
+      // out collections this author may not read, so its absence does not
+      // say the collection is gone, and the guard refuses a change of a
+      // collection that still exists.
       case "answered":
         return name === null
           ? {
-              kind: "choose",
-              options: choices.offered,
-              loading: false,
+              kind: "fixed",
+              label: null,
+              slug: value,
               note: unlistedNote(value),
             }
           : { kind: "fixed", label: name, slug: value, note: null };
@@ -192,7 +196,8 @@ export function offeredCollections(
     .filter(
       item =>
         item.slug !== pagesCollection &&
-        item.declared.includes(TEMPLATE_ENTRY_ADDRESS_FIELD)
+        item.declared.includes(TEMPLATE_ENTRY_ADDRESS_FIELD) &&
+        slugIsText(item)
     )
     .map(item => ({ slug: item.slug, label: item.label }))
     .sort(
@@ -200,11 +205,26 @@ export function offeredCollections(
     );
 }
 
+/**
+ * Whether the collection's `slug` field holds text, as an entry's address
+ * needs. Its type is known where visitors can read the field; elsewhere
+ * the collection is offered and the guard judges the field on save.
+ */
+function slugIsText(item: LoopCollectionItem): boolean {
+  const slug = item.readable.find(
+    field => field.name === TEMPLATE_ENTRY_ADDRESS_FIELD
+  );
+  return slug === undefined || slug.type === "text";
+}
+
 /** The list of collections, asked once per form, with the pages slug. */
 function useCollectionChoices(): CollectionChoices {
   const listed = usePluginRoute<LoopCollectionsResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: loopCollectionsPath(),
+    // Asked again on every mount: collections are added, renamed and
+    // removed in the Schema Builder, whose writes do not refresh this read.
+    staleTime: 0,
   });
   const resolved = usePluginRoute<PageCollectionResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,

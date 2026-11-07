@@ -34,7 +34,10 @@ import {
 } from "@nextlyhq/plugin-sdk/admin";
 
 import { PAGE_COLLECTION_ROUTE_PATH } from "../layout-choices-contract";
-import type { LoopCollectionItem } from "../loop-collections-contract";
+import {
+  loopCollectionsPath,
+  type LoopCollectionItem,
+} from "../loop-collections-contract";
 
 import {
   collectionFieldView,
@@ -151,13 +154,15 @@ describe("collectionFieldView", () => {
     ).toEqual({ kind: "fixed", label: "Posts", slug: "posts", note: null });
   });
 
-  it("offers the choice on a saved template whose collection is not listed, saying why", () => {
+  it("keeps a saved template's collection fixed where the list does not name it, saying why", () => {
+    // The list leaves out collections the author may not read, so a saved
+    // collection missing from it may still exist: no change is offered.
     expect(
       collectionFieldView({ saved: true, value: "articles" }, answered)
     ).toEqual({
-      kind: "choose",
-      options: answered.offered,
-      loading: false,
+      kind: "fixed",
+      label: null,
+      slug: "articles",
       note: unlistedNote("articles"),
     });
   });
@@ -214,6 +219,38 @@ describe("offeredCollections", () => {
       "pages",
       "posts",
     ]);
+  });
+});
+
+describe("offeredCollections, by the slug field's type", () => {
+  it("leaves out a collection whose readable slug field is not text, keeping one whose type is not known", () => {
+    const numbered: LoopCollectionItem = {
+      ...item("issues", "Issues"),
+      readable: [{ name: "slug", type: "number" }],
+    };
+    const texted: LoopCollectionItem = {
+      ...item("notes", "Notes"),
+      readable: [{ name: "slug", type: "text" }],
+    };
+    expect(
+      offeredCollections(
+        [numbered, texted, item("posts", "Posts")],
+        "pages"
+      ).map(c => c.slug)
+    ).toEqual(["notes", "posts"]);
+  });
+});
+
+describe("the collection list read", () => {
+  it("is asked again on every mount, since schema edits do not refresh it", () => {
+    renderField("", undefined);
+    const asked = read.mock.calls.map(([options]) => options);
+    expect(
+      asked.some(
+        options =>
+          options.path === loopCollectionsPath() && options.staleTime === 0
+      )
+    ).toBe(true);
   });
 });
 
