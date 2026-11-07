@@ -714,29 +714,72 @@ async function settleDesigned(
 ): Promise<void> {
   const all = [...ids];
   if (address === null) {
-    for (const id of all) {
-      await releaseClaims(deps.claims, tx, { collection, id });
-    }
+    await releaseEach(deps, tx, collection, all);
     return;
   }
-  const locales = deps.locales();
-  const lifecycle = await deps.lifecycle(collection, tx);
+  const served: ServedBatchContext = {
+    collection,
+    address,
+    locales: deps.locales(),
+    lifecycle: await deps.lifecycle(collection, tx),
+  };
   for (let at = 0; at < all.length; at += BATCH) {
-    const batch = all.slice(at, at + BATCH);
-    const rows = new Map<string, Row>();
-    for (const row of await deps.entriesWithIds(collection, batch, tx)) {
-      // Matched to the id asked exactly: a database may compare loosely.
-      if (typeof row.id === "string" || typeof row.id === "number") {
-        rows.set(String(row.id), row);
-      }
-    }
-    for (const id of batch) {
-      const row = rows.get(id);
-      await (row === undefined || !isPublished(row, lifecycle)
-        ? releaseClaims(deps.claims, tx, { collection, id })
-        : settleEntry(deps, tx, collection, address, locales, row, lifecycle));
+    await settleBatch(deps, tx, served, all.slice(at, at + BATCH));
+  }
+}
+
+/** What every batch of one `settleDesigned` call is settled against. */
+interface ServedBatchContext {
+  readonly collection: string;
+  readonly address: readonly string[];
+  readonly locales: ReturnType<EntryClaimsDeps["locales"]>;
+  readonly lifecycle: Awaited<ReturnType<EntryClaimsDeps["lifecycle"]>>;
+}
+
+/** Give up the address of each of `collection`'s entries `ids`. */
+async function releaseEach(
+  deps: EntryClaimsDeps,
+  tx: Tx,
+  collection: string,
+  ids: readonly string[]
+): Promise<void> {
+  for (const id of ids) {
+    await releaseClaims(deps.claims, tx, { collection, id });
+  }
+}
+
+/**
+ * Settle one batch of entries read together: each published one claims or
+ * waits at the address, and one not published, or gone, gives it up.
+ */
+async function settleBatch(
+  deps: EntryClaimsDeps,
+  tx: Tx,
+  served: ServedBatchContext,
+  batch: readonly string[]
+): Promise<void> {
+  const { collection, address, locales, lifecycle } = served;
+  const rows = rowsById(await deps.entriesWithIds(collection, batch, tx));
+  for (const id of batch) {
+    const row = rows.get(id);
+    await (row === undefined || !isPublished(row, lifecycle)
+      ? releaseClaims(deps.claims, tx, { collection, id })
+      : settleEntry(deps, tx, collection, address, locales, row, lifecycle));
+  }
+}
+
+/**
+ * The rows read, by id as text. Matched to the id asked exactly: a database
+ * may compare loosely, so a row is found only under the id it carries.
+ */
+function rowsById(read: readonly Row[]): Map<string, Row> {
+  const rows = new Map<string, Row>();
+  for (const row of read) {
+    if (typeof row.id === "string" || typeof row.id === "number") {
+      rows.set(String(row.id), row);
     }
   }
+  return rows;
 }
 
 /**
