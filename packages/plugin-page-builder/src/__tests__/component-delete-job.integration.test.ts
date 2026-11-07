@@ -49,7 +49,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { asDocument } from "../component-store-source";
-import type { ComponentDeleteResult } from "../component-delete/contract";
+import {
+  DELETE_BUSY_REASON,
+  type ComponentDeleteResult,
+} from "../component-delete/contract";
 import { BLOCKS_TYPE } from "../fields/blocksField";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
@@ -799,6 +802,10 @@ describe.each(getConfiguredTestDialects())(
 
       expect(started.item.status, JSON.stringify(started.body)).toBe("running");
       expect(refused.status).toBe(409);
+      // Told apart from any other conflict by its code, not its words.
+      expect(refused.body).toMatchObject({
+        error: { data: { errors: [{ code: DELETE_BUSY_REASON }] } },
+      });
       expect(seen.item).toMatchObject({
         status: "running",
         run: { yours: false },
