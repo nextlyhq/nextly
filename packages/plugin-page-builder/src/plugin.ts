@@ -26,6 +26,7 @@ import {
   resolvedCollectionView,
   type PluginCollectionView,
   type PluginDefinition,
+  type PluginCollectionTransaction,
   type PluginRouteContext,
   type PluginVersionPinHolder,
 } from "@nextlyhq/plugin-sdk";
@@ -44,7 +45,7 @@ import {
   publishedPages,
   type PagesReader,
 } from "./address-claims/backfill";
-import { lockHolder } from "./address-claims/claim-store";
+import { lockHolder, releaseHolderLock } from "./address-claims/claim-store";
 import { claimLocales } from "./address-claims/page-claims";
 import { registerPageAddressClaims } from "./address-claims/page-claims-hook";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
@@ -103,7 +104,7 @@ import type { PagesCollectionOptions } from "./collections/pages";
 import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import {
-  TEMPLATE_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_COLLECTION_FIELD,
   TEMPLATE_FORKED_FROM_FIELD,
   templatesCollection,
   TEMPLATES_SLUG,
@@ -2015,43 +2016,55 @@ export const pageBuilder = (
       registerTemplateGuard(ctx, templateGuard);
       // An entry's own design is deleted with its entry, in the delete's
       // transaction.
+      // The id of the own design held under `key`, read on the transaction
+      // `tx` stands for, with the lock asked for.
+      const designIdUnder = async (
+        tx: PluginCollectionTransaction,
+        key: string,
+        lock: "share" | "update"
+      ): Promise<string | null> => {
+        const found =
+          await ctx.services.ownCollections.listEntriesInTransaction(
+            tx,
+            templates,
+            {
+              where: designUnderWhere(key),
+              pagination: { limit: 1 },
+              depth: 0,
+            },
+            { lock }
+          );
+        const id = (found.data[0] as { id?: unknown } | undefined)?.id;
+        return typeof id === "string" || typeof id === "number"
+          ? String(id)
+          : null;
+      };
       registerEntryDesignCascade(ctx.hooks, {
         templates,
         ownCollections: () => new Set(Object.values(ctx.self.collections)),
-        hasTemplate: async (tx, collection) => {
+        hasDesigns: async (tx, collection) => {
           const found =
             await ctx.services.ownCollections.listEntriesInTransaction(
               tx,
               templates,
               {
-                where: { [TEMPLATE_COLLECTION_FIELD]: { equals: collection } },
+                where: {
+                  [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection },
+                },
                 pagination: { limit: 1 },
                 depth: 0,
               }
             );
           return found.data.length > 0;
         },
+        designAt: (tx, key) => designIdUnder(tx, key, "share"),
         lockEntry: (tx, entry) => lockHolder(addressClaims, tx, entry),
+        releaseEntryLock: (tx, entry) =>
+          releaseHolderLock(addressClaims, tx, entry),
         // On the delete's own transaction, for update: the design is deleted
         // next, and no second pooled connection is taken while the delete
         // holds one.
-        designUnder: async (tx, key) => {
-          const found =
-            await ctx.services.ownCollections.listEntriesInTransaction(
-              tx,
-              templates,
-              {
-                where: designUnderWhere(key),
-                pagination: { limit: 1 },
-                depth: 0,
-              },
-              { lock: "update" }
-            );
-          const id = (found.data[0] as { id?: unknown } | undefined)?.id;
-          return typeof id === "string" || typeof id === "number"
-            ? String(id)
-            : null;
-        },
+        designUnder: (tx, key) => designIdUnder(tx, key, "update"),
         unlinkCopiesOf: async (tx, id) => {
           // Every copy first, then each emptied: paged by a short page, as an
           // in-transaction list's total is an unlocked count.

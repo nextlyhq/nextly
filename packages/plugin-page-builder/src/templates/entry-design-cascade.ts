@@ -17,6 +17,8 @@ interface DeletedWrite {
   readonly operation: "create" | "update" | "delete";
   readonly id: string;
   readonly transaction: PluginCollectionTransaction;
+  /** The same for every handler call on one transaction. */
+  readonly transactionKey?: object;
 }
 
 /** What the cascade needs. */
@@ -26,11 +28,13 @@ export interface EntryDesignCascadeSetup {
   /** The page builder's own collections, whose entries have no own design. */
   readonly ownCollections: () => ReadonlySet<string>;
   /**
-   * Whether `collection` has a template, read on `tx`: only a templated
-   * collection's entries can have an own design, so only their deletes look
-   * for one or take the entry's lock.
+   * Whether any entry of `collection` has an own design, read on `tx`: asked
+   * once per collection and transaction, so a bulk delete of a collection
+   * with none makes one read, not one per entry. Asked of the designs
+   * themselves, not of the collection's template, since a design outlives
+   * the template it was copied from.
    */
-  readonly hasTemplate: (
+  readonly hasDesigns: (
     tx: PluginCollectionTransaction,
     collection: string
   ) => Promise<boolean>;
@@ -42,7 +46,17 @@ export interface EntryDesignCascadeSetup {
     tx: PluginCollectionTransaction,
     entry: { readonly collection: string; readonly id: string }
   ) => Promise<void>;
-  /** The id of the own design held under `key`, read on `tx`, or null. */
+  /** Remove the entry's lock row, in `tx`, once the entry is gone. */
+  readonly releaseEntryLock: (
+    tx: PluginCollectionTransaction,
+    entry: { readonly collection: string; readonly id: string }
+  ) => Promise<void>;
+  /** The id of the own design held under `key`, read on `tx` (shared), or null. */
+  readonly designAt: (
+    tx: PluginCollectionTransaction,
+    key: string
+  ) => Promise<string | null>;
+  /** The id of the own design held under `key`, read on `tx` for update, or null. */
   readonly designUnder: (
     tx: PluginCollectionTransaction,
     key: string
@@ -79,8 +93,38 @@ export function registerEntryDesignCascade(
   hooks.onInTransaction("*", write => deleteEntryDesign(write, setup));
 }
 
+/**
+ * Whether each collection has own designs, per transaction: one transaction's
+ * every handler call shares its key, so a bulk delete asks once per collection.
+ */
+const designsByTransaction = new WeakMap<
+  object,
+  Map<string, Promise<boolean>>
+>();
+
+/** `setup.hasDesigns`, asked once per collection on the transaction keyed `key`. */
+function hasDesignsOnce(
+  write: DeletedWrite,
+  setup: EntryDesignCascadeSetup
+): Promise<boolean> {
+  const key = write.transactionKey;
+  if (key === undefined)
+    return setup.hasDesigns(write.transaction, write.collection);
+  let known = designsByTransaction.get(key);
+  if (known === undefined) {
+    known = new Map();
+    designsByTransaction.set(key, known);
+  }
+  let answer = known.get(write.collection);
+  if (answer === undefined) {
+    answer = setup.hasDesigns(write.transaction, write.collection);
+    known.set(write.collection, answer);
+  }
+  return answer;
+}
+
 /** Delete the own design of the entry `write` deletes, if it has one. */
-export async function deleteEntryDesign(
+async function deleteEntryDesign(
   write: DeletedWrite,
   setup: EntryDesignCascadeSetup
 ): Promise<void> {
@@ -92,20 +136,21 @@ export async function deleteEntryDesign(
   // A page, a template or any other of the plugin's own documents is not an
   // entry a template serves.
   if (setup.ownCollections().has(write.collection)) return;
-  if (!(await setup.hasTemplate(write.transaction, write.collection))) return;
-  // Under the entry's lock, which giving it a design takes too: one given
-  // first has committed and is read here, and one given after waits, then
-  // finds the entry gone.
-  await setup.lockEntry(write.transaction, {
-    collection: write.collection,
-    id: write.id,
-  });
-  const design = await setup.designUnder(
-    write.transaction,
-    entryDesignKey(write.collection, write.id)
-  );
-  if (design === null) return;
-  await setup.deleteInTransaction(write.transaction, setup.templates, design);
+  if (!(await hasDesignsOnce(write, setup))) return;
+  const entry = { collection: write.collection, id: write.id };
+  const key = entryDesignKey(write.collection, write.id);
+  // An entry with no design takes no lock: a design being given to it at
+  // once is removed by that give, which checks the entry again once it has
+  // committed.
+  if ((await setup.designAt(write.transaction, key)) === null) return;
+  // Under the entry's lock, which giving it a design takes too, read again
+  // for update, then deleted, and the lock row with it: the entry is gone.
+  await setup.lockEntry(write.transaction, entry);
+  const design = await setup.designUnder(write.transaction, key);
+  if (design !== null) {
+    await setup.deleteInTransaction(write.transaction, setup.templates, design);
+  }
+  await setup.releaseEntryLock(write.transaction, entry);
 }
 
 /** The where clause finding the own design held under `key`. */

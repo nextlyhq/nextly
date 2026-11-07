@@ -57,27 +57,47 @@ export function designShapeProblem(
   original: Readonly<Record<string, unknown>> | null,
   data: Readonly<Record<string, unknown>>
 ): DesignShapeProblem | null {
-  const has = (field: string) =>
-    Object.prototype.hasOwnProperty.call(data, field);
-  if (original !== null) {
-    // A template keeps what it serves: an own design its entry, and a
-    // collection's template stays one, so a key once held never moves.
-    for (const field of ENTRY_FIELDS) {
-      const before = filled(original[field]) ? original[field] : null;
-      const after = filled(data[field]) ? data[field] : null;
-      if (has(field) && before !== after) {
-        return {
-          path: field,
-          message:
-            "A template keeps what it serves: an entry's own design keeps its entry, and a collection's template never becomes one.",
-        };
-      }
-    }
-    if (isEntryDesign(original) && namesCollection(data)) {
-      return collectionNamed();
-    }
-    return null;
+  return original === null
+    ? newDesignProblem(data)
+    : changedTemplateProblem(original, data);
+}
+
+/**
+ * What is wrong with an update to a stored template: a change to what it
+ * serves (an own design keeps its entry, and a collection's template never
+ * becomes one, so a key once held never moves), or an own design given a
+ * collection.
+ */
+function changedTemplateProblem(
+  original: Readonly<Record<string, unknown>>,
+  data: Readonly<Record<string, unknown>>
+): DesignShapeProblem | null {
+  const moved = ENTRY_FIELDS.find(
+    field =>
+      Object.prototype.hasOwnProperty.call(data, field) &&
+      (filled(original[field]) ? original[field] : null) !==
+        (filled(data[field]) ? data[field] : null)
+  );
+  if (moved !== undefined) {
+    return {
+      path: moved,
+      message:
+        "A template keeps what it serves: an entry's own design keeps its entry, and a collection's template never becomes one.",
+    };
   }
+  return isEntryDesign(original) && namesCollection(data)
+    ? collectionNamed()
+    : null;
+}
+
+/**
+ * What is wrong with a new own design: one that names a collection, names
+ * its entry only in part, or carries a key its entry does not make. A new
+ * collection's template is judged elsewhere.
+ */
+function newDesignProblem(
+  data: Readonly<Record<string, unknown>>
+): DesignShapeProblem | null {
   if (!isEntryDesign(data)) return null;
   if (namesCollection(data)) return collectionNamed();
   const collection = data[TEMPLATE_ENTRY_COLLECTION_FIELD];
@@ -95,13 +115,12 @@ export function designShapeProblem(
     };
   }
   const key = entryDesignKey(collection, id);
-  if (data[TEMPLATE_ENTRY_FIELD] !== key) {
-    return {
-      path: TEMPLATE_ENTRY_FIELD,
-      message: `An entry's own design is held under the key its entry makes, "${key}".`,
-    };
-  }
-  return null;
+  return data[TEMPLATE_ENTRY_FIELD] === key
+    ? null
+    : {
+        path: TEMPLATE_ENTRY_FIELD,
+        message: `An entry's own design is held under the key its entry makes, "${key}".`,
+      };
 }
 
 /**
