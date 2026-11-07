@@ -1098,16 +1098,11 @@ const PAGE_CHROME_TOKENS: readonly {
   },
   {
     // An Entry content block's note to its author holds the admin's words
-    // alone, so it takes the admin's face, and its red one the admin's
-    // colours.
+    // alone, so it takes the admin's face.
     selector: `[${ENTRY_CONTENT_NOTE_ATTRIBUTE}]`,
-    tokens: [
-      "--nx-builder-danger",
-      "--nx-builder-surface-raised",
-      "--nx-builder-scheme",
-      "--font-sans",
-      "--radius-sm",
-    ],
+    // Its face, and the red hue alone: every other colour of it is the
+    // page's own, so it reads on the page in either admin theme.
+    tokens: ["--nx-builder-danger", "--font-sans", "--radius-sm"],
   },
   {
     // A list drawing its empty state holds the site's content, so its tag

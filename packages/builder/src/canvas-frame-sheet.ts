@@ -430,16 +430,15 @@ ${ROOT} [${ENTRY_CONTENT_DRAWN_ATTRIBUTE}] * {
   font-weight: 500;
 }
 
+/* The red note, drawn on the page as the muted one is: its tint over the
+   page itself and its words mixed with the page's own ink, so it reads on a
+   light page and a dark section alike, whatever the admin's theme. The red
+   is the admin's danger hue, the one value taken from the editor. */
 [${ENTRY_CONTENT_NOTE_ATTRIBUTE}="failed"] {
-  color-scheme: var(--nx-builder-scheme, light);
   border-style: solid;
-  border-color: color-mix(in srgb, var(--nx-builder-danger, CanvasText) 55%, transparent);
-  background: color-mix(
-    in srgb,
-    var(--nx-builder-danger, CanvasText) 8%,
-    var(--nx-builder-surface-raised, Canvas)
-  );
-  color: var(--nx-builder-danger, CanvasText);
+  border-color: color-mix(in srgb, var(--nx-builder-danger, currentColor) 55%, transparent);
+  background: color-mix(in srgb, var(--nx-builder-danger, currentColor) 8%, transparent);
+  color: color-mix(in oklab, var(--nx-builder-danger, currentColor) 70%, currentColor);
 }
 
 [${ENTRY_CONTENT_NOTE_ATTRIBUTE}="failed"] span > span {
