@@ -228,6 +228,19 @@ export { PLUGIN_CATEGORIES, isPluginCategory, pluginAdminSlug } from "nextly";
 export { isLocaleSelector } from "nextly";
 
 /**
+ * Where an entry is served, and what names it, as the core answers both.
+ * @experimental `previewUrlFromTemplate` fills a path template such as
+ *   `/blog/{slug}` from an entry, the way the admin's preview and page search
+ *   do, so a plugin holding or linking an entry's address names the one the
+ *   host serves rather than a second spelling of it. `readableTitleText`
+ *   answers whether a title field's value can name an entry, and as what
+ *   text, the way the admin and the activity feed read it. Intended to be
+ *   stable; `plugin-page-builder`'s address claims exercise both, and they
+ *   graduate per D55 once that ships in a release.
+ */
+export { previewUrlFromTemplate, readableTitleText } from "nextly/config";
+
+/**
  * Core plugin contract types.
  * @public `PluginDefinition`, `PluginContributions`, `PluginContext`,
  *   `PluginPermission`, `PermissionSlug`, `ServiceOpts`, `AuthUser`.

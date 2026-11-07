@@ -30,6 +30,7 @@ import { asOverwrite } from "../document-version";
 
 import {
   claimKey,
+  holderLockKey,
   pathOf,
   servedAddress,
   spaceHolding,
@@ -69,7 +70,7 @@ export interface Claims {
   readonly dialect: PluginRouteContext["dialect"];
 }
 
-type Tx = PluginCollectionTransaction;
+export type Tx = PluginCollectionTransaction;
 
 /** Names a holder in a refusal, as the person asking may see it. */
 export type DescribeHolder = (holder: Holder) => Promise<string>;
@@ -112,12 +113,26 @@ interface Pending {
 const pendingByTransaction = new WeakMap<object, Pending>();
 
 function pendingOf(tx: Tx): Pending {
-  let pending = pendingByTransaction.get(tx);
+  const key: object = sharedKeys.get(tx) ?? tx;
+  let pending = pendingByTransaction.get(key);
   if (pending === undefined) {
     pending = { gone: new Set(), written: new Map() };
-    pendingByTransaction.set(tx, pending);
+    pendingByTransaction.set(key, pending);
   }
   return pending;
+}
+
+/** The transaction each token stands for, where several tokens share one. */
+const sharedKeys = new WeakMap<Tx, object>();
+
+/**
+ * Keep what is written through `tx` with what other tokens of the same
+ * transaction wrote, under `key`: the in-transaction phase hands each
+ * handler call a token of its own and one key for the whole transaction, so
+ * pages saved in one batch see each other's claims.
+ */
+export function sharePending(tx: Tx, key: object): void {
+  sharedKeys.set(tx, key);
 }
 
 /**
@@ -328,13 +343,50 @@ async function lock(
   tx: Tx,
   list: ServedAddress
 ): Promise<void> {
-  if (claims.dialect === "sqlite") return;
   const key = claimKey("lock", list);
+  await holdLockRow(claims, tx, key, columns("lock", key, list, null), {
+    path: pathOf(list),
+  });
+}
+
+/**
+ * Hold `holder`'s own lock row until this transaction ends, so whatever else
+ * reconciles that holder's claims waits for this transaction, then reads
+ * what it left. The start-up pass takes it before it reads the page it
+ * reconciles, and a save of that page takes it while the pass runs, so the
+ * pass never reconciles a page from a row a save has since changed. Taken
+ * before any address's lock, in both.
+ */
+export async function lockHolder(
+  claims: Claims,
+  tx: Tx,
+  holder: Holder
+): Promise<void> {
+  const key = holderLockKey(holder);
+  await holdLockRow(
+    claims,
+    tx,
+    key,
+    { claimKey: storedKey(key), kind: "lock" },
+    { kind: "lock" }
+  );
+}
+
+/**
+ * Hold the lock row keyed `key`, created with `created` where none is stored
+ * yet, and otherwise held by writing `touched` over it (see {@link lock}).
+ */
+async function holdLockRow(
+  claims: Claims,
+  tx: Tx,
+  key: string,
+  created: Record<string, unknown>,
+  touched: Record<string, unknown>
+): Promise<void> {
+  if (claims.dialect === "sqlite") return;
   let [row] = await keyed(claims, tx, [key]);
   if (row === undefined) {
-    if ((await insert(claims, tx, columns("lock", key, list, null))) !== null) {
-      return;
-    }
+    if ((await insert(claims, tx, created)) !== null) return;
     [row] = await keyed(claims, tx, [key]);
     if (row === undefined) {
       throw NextlyError.internal({
@@ -348,7 +400,7 @@ async function lock(
     tx,
     claims.slug,
     row.id,
-    asOverwrite({ path: pathOf(list) })
+    asOverwrite(touched)
   );
 }
 
@@ -659,4 +711,99 @@ async function handOver(claims: Claims, tx: Tx, key: string): Promise<void> {
     // waits on that one.
     await claimOrWait(claims, tx, { address, holder });
   }
+}
+
+/** What a holder should hold: its addresses, and the spaces of its lists. */
+export interface DesiredClaims {
+  readonly addresses: readonly ServedAddress[];
+  readonly spaces: readonly ServedAddress[];
+}
+
+/**
+ * Bring what `holder` holds to `desired`, in `tx`: claim each address and
+ * space it should hold and does not, then release each it holds and should
+ * not, handing a released one to whatever waited on it. A holder that holds
+ * exactly what it should is read and left alone, taking no lock.
+ *
+ * Every lock the change takes is taken first, in key order, so a save
+ * moving `/a` to `/b` and one moving `/b` to `/a` never wait on each other
+ * crosswise. Claims come before releases, so a claim that is refused leaves
+ * what the holder held in place, and the refusal rolls the save back whole.
+ *
+ * @returns Whether anything changed.
+ */
+export async function reconcileHolder(
+  claims: Claims,
+  tx: Tx,
+  holder: Holder,
+  desired: DesiredClaims,
+  describe: DescribeHolder
+): Promise<boolean> {
+  const held = await claimsIn(
+    claims,
+    tx,
+    {
+      holderCollection: { equals: holder.collection },
+      holderId: { equals: holder.id },
+    },
+    row =>
+      sameHolder(row.holder, holder) &&
+      (row.kind === "address" || row.kind === "space" || row.kind === "waiting")
+  );
+  const waits = held.filter(row => row.kind === "waiting");
+  const owned = held.filter(row => row.kind !== "waiting");
+  const heldKeys = new Set(owned.map(row => row.key));
+  const wanted = new Set([
+    ...desired.addresses.map(at => storedKey(claimKey("address", at))),
+    ...desired.spaces.map(at => storedKey(claimKey("space", at))),
+  ]);
+  const claimAddresses = desired.addresses.filter(
+    at => !heldKeys.has(storedKey(claimKey("address", at)))
+  );
+  const claimSpaces = desired.spaces.filter(
+    at => !heldKeys.has(storedKey(claimKey("space", at)))
+  );
+  const release = owned.filter(row => !wanted.has(row.key));
+  // A wait for an address the holder no longer wants (it moved, or stopped
+  // being published) is dropped, so releasing what blocked it never hands
+  // the holder an address it gave up.
+  const wantedAddresses = new Set(
+    desired.addresses.map(at => claimKey("address", at))
+  );
+  const staleWaits = waits.filter(
+    row =>
+      row.address === null ||
+      !wantedAddresses.has(claimKey("address", row.address))
+  );
+  if (
+    claimAddresses.length === 0 &&
+    claimSpaces.length === 0 &&
+    release.length === 0 &&
+    staleWaits.length === 0
+  ) {
+    return false;
+  }
+  await lockInOrder(claims, tx, [
+    ...claimAddresses.flatMap(locksFor),
+    ...claimSpaces,
+    ...release.flatMap(locksOf),
+    ...staleWaits.flatMap(row =>
+      row.address === null ? [] : locksFor(row.address)
+    ),
+  ]);
+  for (const row of staleWaits) await remove(claims, tx, row);
+  for (const address of claimAddresses) {
+    await claimAddress(claims, tx, { address, holder, describe });
+  }
+  for (const list of claimSpaces) {
+    await claimSpace(claims, tx, { list, holder, describe });
+  }
+  for (const row of release) {
+    if (row.address === null) continue;
+    await releaseClaims(claims, tx, holder, {
+      address: row.address,
+      kind: row.kind === "space" ? "space" : "address",
+    });
+  }
+  return true;
 }
