@@ -28,6 +28,7 @@
  * @module entry-content
  */
 import {
+  COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
   renderedDomId,
   type BlockDocument,
@@ -35,7 +36,7 @@ import {
 } from "./document";
 import { remapFragmentBindings, remapFragmentProps } from "./fragment-refs";
 import { describeValue, pointer } from "./issue-text";
-import { DEFAULT_LIMITS } from "./limits";
+import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
 import { isPlainRecord } from "./plain-record";
 import {
   claimedDomId,
@@ -418,54 +419,146 @@ function drawableForest(
     readonly depth: number;
     /** The deepest the drawn page may nest, as the renderer counts it. */
     readonly maxDepth: number;
+    /**
+     * What one of the entry's nodes costs once drawn, at `depth`, with at
+     * most `left` to spend: one for a block, what it expands to for a
+     * component placement. More than `left` where it does not fit.
+     */
+    readonly costOf: (node: BlockNode, depth: number, left: number) => number;
   }
 ): BlockNode[] {
   let left = limits.budget;
-  const cut = (forest: readonly unknown[], depth: number): BlockNode[] => {
+  /**
+   * One entry of a forest, charged where `charged`: its block as drawn, or
+   * nothing for an entry that draws nothing; `undefined` once the page has
+   * no room left for it, which ends the cut, as the renderer would refuse
+   * what follows it.
+   */
+  const take = (
+    node: unknown,
+    depth: number,
+    charged: boolean
+  ): BlockNode | null | undefined => {
+    if (!isPlainRecord(node) || node.type === ENTRY_CONTENT_TYPE) {
+      if (charged) left -= 1;
+      return null;
+    }
+    const block = node as unknown as BlockNode;
+    const cost = charged ? limits.costOf(block, depth, left) : 0;
+    if (cost > left) {
+      left = 0;
+      return undefined;
+    }
+    left -= cost;
+    // A placement's own blocks were charged with its expansion.
+    return withCutSlots(block, depth, charged && cost === 1);
+  };
+  const cut = (
+    forest: readonly unknown[],
+    depth: number,
+    charged: boolean
+  ): BlockNode[] => {
     const kept: BlockNode[] = [];
     if (depth > limits.maxDepth) return kept;
-    for (let at = 0; at < forest.length && left > 0; at += 1) {
-      left -= 1;
-      const node = forest[at];
-      if (!isPlainRecord(node) || node.type === ENTRY_CONTENT_TYPE) continue;
-      kept.push(withCutSlots(node as unknown as BlockNode, depth));
+    for (let at = 0; at < forest.length && (left > 0 || !charged); at += 1) {
+      const taken = take(forest[at], depth, charged);
+      if (taken === undefined) break;
+      if (taken !== null) kept.push(taken);
     }
     return kept;
   };
-  const withCutSlots = (node: BlockNode, depth: number): BlockNode => {
+  const withCutSlots = (
+    node: BlockNode,
+    depth: number,
+    charged: boolean
+  ): BlockNode => {
     if (!isPlainRecord(node.slots)) return node;
     const slots: Record<string, BlockNode[]> = {};
     for (const [name, children] of Object.entries(node.slots)) {
-      if (Array.isArray(children)) slots[name] = cut(children, depth + 1);
+      if (Array.isArray(children)) {
+        slots[name] = cut(children, depth + 1, charged);
+      }
     }
     return { ...node, slots };
   };
-  return cut(nodes, limits.depth);
+  return cut(nodes, limits.depth, true);
 }
 
 /**
  * What the template costs of the page's node limit once drawn: its stored
  * nodes (`stored`), or, given the components' definitions, the nodes it
- * holds once the resolver has expanded its instances under that limit, as
- * the renderer will. Conditioned instances are expanded too, so the room
- * kept is the most any entry of the collection can need.
+ * holds once the resolver has expanded its instances under the page's own
+ * limits, its node cap and its depth, as the renderer will. Conditioned
+ * instances are expanded too, so the room kept is the most any entry of the
+ * collection can need.
  */
 function templateCost(
   document: BlockDocument,
   stored: number,
   source: EntryContentSource,
-  maxNodes: number
+  limits: DocumentLimits
 ): number {
   if (source.definitions === undefined) return stored;
-  const resolved = resolveComponentInstances(document, source.definitions, {
-    limits: { ...DEFAULT_LIMITS, maxNodes },
+  return Math.max(stored, expandedCount(document, source.definitions, limits));
+}
+
+/**
+ * How many nodes `document` holds once the resolver has expanded its
+ * component placements under `limits`; more than `limits.maxNodes` where a
+ * placement is refused for want of room, so a caller never takes a refused
+ * expansion for a cheap one. One refused for any other reason (a component
+ * missing, a loop) is drawn as the one placeholder it stands as.
+ */
+function expandedCount(
+  document: BlockDocument,
+  definitions: ComponentLookup,
+  limits: DocumentLimits
+): number {
+  const resolved = resolveComponentInstances(document, definitions, {
+    limits,
     conditioned: "carry",
-  }).document;
+  });
+  if (resolved.unresolved.some(instance => instance.reason === "budget")) {
+    return limits.maxNodes + 1;
+  }
   let count = 0;
-  walkNodes(resolved.nodes, () => {
+  walkNodes(resolved.document.nodes, () => {
     count += 1;
   });
-  return Math.max(stored, count);
+  return count;
+}
+
+/**
+ * What one of the entry's nodes costs of the page's node limit, drawn at
+ * `depth` with `left` still to spend: one for a block, and, given the
+ * components' definitions, what a placement expands to under what is left
+ * and the depth below it, as the template's own placements are charged. The
+ * blocks inside any other node are charged one by one as the cut reaches
+ * them.
+ */
+function entryNodeCost(
+  node: BlockNode,
+  depth: number,
+  left: number,
+  source: EntryContentSource,
+  limits: DocumentLimits
+): number {
+  if (
+    node.type !== COMPONENT_INSTANCE_TYPE ||
+    source.definitions === undefined
+  ) {
+    return 1;
+  }
+  return expandedCount(
+    { formatVersion: DOCUMENT_FORMAT_VERSION, kind: "page", nodes: [node] },
+    source.definitions,
+    {
+      ...limits,
+      maxNodes: left,
+      // Resolved on its own, at the top: the depth left below where it sits.
+      maxDepth: limits.maxDepth - depth + 1,
+    }
+  );
 }
 
 /**
@@ -503,7 +596,14 @@ export function composeEntryContent(
     return document;
   }
   if (!Array.isArray(document.nodes)) return document;
-  const maxNodes = source.maxNodes ?? DEFAULT_LIMITS.maxNodes;
+  // The page's own limits, its node cap and its depth: every pass below,
+  // and every expansion charged, is held to the same two.
+  const limits: DocumentLimits = {
+    ...DEFAULT_LIMITS,
+    ...(source.maxNodes === undefined ? {} : { maxNodes: source.maxNodes }),
+    ...(source.maxDepth === undefined ? {} : { maxDepth: source.maxDepth }),
+  };
+  const { maxNodes } = limits;
   // What the template holds, read once and no further than the page may
   // draw: a template past that composes nothing, as nothing past it draws.
   const host = hostIdsIn(document.nodes, maxNodes);
@@ -516,12 +616,16 @@ export function composeEntryContent(
   if (entry === null || entry.nodes.length === 0) return document;
   // The entry's blocks within what the page may still draw beside the
   // template's own, cut before any of them is minted, walked or copied.
+  // Charged as the page is drawn in full: the template's placements and the
+  // entry's own at what they expand to, so every placement still resolves.
   const kept = drawableForest(entry.nodes, {
-    budget: maxNodes - templateCost(document, host.count, source, maxNodes),
+    budget: maxNodes - templateCost(document, host.count, source, limits),
     // A slot's blocks one below the block holding it, which sits as deep as
     // its path has slots below the top (a top-level block at depth 1).
     depth: depthOf(first.path) + 1,
-    maxDepth: source.maxDepth ?? DEFAULT_LIMITS.maxDepth,
+    maxDepth: limits.maxDepth,
+    costOf: (node, depth, left) =>
+      entryNodeCost(node, depth, left, source, limits),
   });
   if (kept.length === 0) return document;
   const ids = drawnIds(kept, first.node.id, host.ids);

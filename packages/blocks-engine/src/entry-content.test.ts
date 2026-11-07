@@ -524,3 +524,112 @@ describe("an entry beside a template that places a component", () => {
     expect(resolvedUnderCap(composed).unresolved).toHaveLength(1);
   });
 });
+
+describe("an entry that places a component of its own", () => {
+  const card = documentOf(
+    "component",
+    text("c1", "Card title"),
+    text("c2", "Card body")
+  );
+  const definitions = new Map([["card", card]]);
+  const template = documentOf("template", entryContent("ec"));
+  // The entry's own placement first, then plain blocks after it.
+  const body = documentOf(
+    "page",
+    {
+      id: "own",
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId: "card" },
+    },
+    text("e1", "One"),
+    text("e2", "Two"),
+    text("e3", "Three")
+  );
+
+  /** The page as the renderer resolves it under a cap of 4. */
+  function resolvedUnderCap(composed: BlockDocument) {
+    const resolved = resolveComponentInstances(composed, definitions, {
+      limits: { ...DEFAULT_LIMITS, maxNodes: 4 },
+      conditioned: "carry",
+    });
+    let nodes = 0;
+    walkNodes(resolved.document.nodes, () => {
+      nodes += 1;
+    });
+    return { unresolved: resolved.unresolved, nodes };
+  }
+
+  it("charges the placement at what it expands to, so it resolves and the page fits", () => {
+    const composed = composeEntryContent(template, {
+      valueOf: () => body,
+      maxNodes: 4,
+      definitions,
+    });
+    const resolved = resolvedUnderCap(composed);
+    expect(resolved.unresolved).toEqual([]);
+    expect(resolved.nodes).toBeLessThanOrEqual(4);
+    // The placement is drawn, and the blocks after it are cut to the room.
+    const drawn = composed.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT] ?? [];
+    expect(drawn[0]?.type).toBe(COMPONENT_INSTANCE_TYPE);
+    expect(drawn.length).toBeLessThan(4);
+  });
+
+  it("leaves it unresolved when it is charged as one node (the control)", () => {
+    const composed = composeEntryContent(template, {
+      valueOf: () => body,
+      maxNodes: 4,
+    });
+    expect(resolvedUnderCap(composed).unresolved).toHaveLength(1);
+  });
+});
+
+describe("a template placement below the format's own depth", () => {
+  const card = documentOf(
+    "component",
+    text("c1", "Card title"),
+    text("c2", "Card body")
+  );
+  const definitions = new Map([["card", card]]);
+  // Thirteen boxes deep, past the format's own depth of 12, a placement.
+  let deep: unknown = {
+    id: "deep",
+    type: COMPONENT_INSTANCE_TYPE,
+    version: 1,
+    props: { componentId: "card" },
+  };
+  for (let level = 12; level >= 0; level -= 1) {
+    deep = box(`b${String(level)}`, [deep]);
+  }
+  const template = documentOf("template", deep, entryContent("ec"));
+  const body = documentOf(
+    "page",
+    ...Array.from({ length: 10 }, (_, at) =>
+      text(`e${String(at)}`, `Block ${String(at)}`)
+    )
+  );
+  const limits = { ...DEFAULT_LIMITS, maxNodes: 20, maxDepth: 30 };
+
+  it("is charged expanded under the raised depth, so the page still fits", () => {
+    const composed = composeEntryContent(template, {
+      valueOf: () => body,
+      maxNodes: 20,
+      maxDepth: 30,
+      definitions,
+    });
+    const resolved = resolveComponentInstances(composed, definitions, {
+      limits,
+      conditioned: "carry",
+    });
+    expect(resolved.unresolved).toEqual([]);
+    let nodes = 0;
+    walkNodes(resolved.document.nodes, () => {
+      nodes += 1;
+    });
+    expect(nodes).toBeLessThanOrEqual(20);
+    // The entry is cut to the room the expanded placement leaves.
+    const drawn = composed.nodes[1]?.slots?.[ENTRY_CONTENT_SLOT] ?? [];
+    expect(drawn.length).toBeGreaterThan(0);
+    expect(drawn.length).toBeLessThan(10);
+  });
+});
