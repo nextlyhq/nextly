@@ -155,6 +155,27 @@ describe("the field picker", () => {
     expect(within(list).getByRole("group", { name: "Site" })).toBeTruthy();
   });
 
+  it("says which source could not be read, and lists the others", async () => {
+    mount(undefined, {
+      listBindingFields: async () => [
+        ...SOURCES,
+        {
+          binding: { source: "single", sourceKey: "contact" },
+          label: "Contact details",
+          fields: [],
+          readFailed: true,
+        },
+      ],
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Text to a field" })
+    );
+    expect(
+      (await screen.findByText(/^Could not read Contact details\./)).textContent
+    ).toBe("Could not read Contact details. Close this and try again.");
+    expect(screen.getByRole("option", { name: /^Title/ })).toBeTruthy();
+  });
+
   it("writes the pick as one edit of the block's bindings", async () => {
     const editor = mount(undefined);
     fireEvent.click(

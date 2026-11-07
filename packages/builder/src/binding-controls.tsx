@@ -230,6 +230,8 @@ function BindingPicker({
   // A source with nothing to offer this prop is not listed: an empty group
   // only lengthens the list.
   const offering = new Set(options.map(option => option.group));
+  // A source the host could not read is said, above the fields that did.
+  const failed = sources.filter(source => source.readFailed === true);
   return (
     <div className="nx-binding-picker">
       <ChoiceList
@@ -251,6 +253,13 @@ function BindingPicker({
             : `${choice.label}: ${choice.field.preview}`
         }
         searchFrom={0}
+        leading={
+          failed.length === 0 ? undefined : (
+            <p className="nx-binding-picker__failed" role="status">
+              {`Could not read ${failed.map(sourceName).join(", ")}. Close this and try again.`}
+            </p>
+          )
+        }
       />
       <p className="nx-binding-picker__hint">
         {options.length === 0

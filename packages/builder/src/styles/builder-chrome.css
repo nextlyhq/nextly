@@ -11429,6 +11429,16 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   border-block-start: 1px solid var(--nx-border);
 }
 
+/* A source the host could not read, said above the fields that did list. */
+.nx-binding-picker__failed {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-block-end: 1px solid var(--nx-border);
+  color: var(--nx-foreground);
+  background: color-mix(in oklch, var(--nx-warning) 10%, var(--nx-background));
+  font-size: 0.75rem;
+}
+
 .nx-binding-option {
   display: flex;
   align-items: baseline;
