@@ -50,6 +50,14 @@ describe("the picker's read of the fields", () => {
     expect(ask).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps nothing while the person signed in is not known", async () => {
+    const ask = vi.fn(async () => SITE);
+    const read = bindingFieldsReader(post, "es", null, ask, () => 7);
+    await read();
+    await read();
+    expect(ask).toHaveBeenCalledTimes(2);
+  });
+
   it("never hands one person's answer to the next", async () => {
     const ask = vi.fn(async () => SITE);
     await bindingFieldsReader(post, "de", "u-one", ask, () => 9)();
