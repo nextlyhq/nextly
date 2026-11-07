@@ -256,7 +256,7 @@ export function listOf(
 }
 
 /** The public reader, as the published page reads with it. */
-async function publicReader(locale: string | undefined) {
+export async function publicReader(locale: string | undefined) {
   const [runtime, nextly] = await Promise.all([
     import("nextly/runtime"),
     getCachedNextly(),
