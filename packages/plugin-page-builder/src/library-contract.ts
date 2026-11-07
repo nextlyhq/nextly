@@ -31,7 +31,7 @@ import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
 import type { HookWarning } from "nextly/config";
 
 import type { RemovalDryRun } from "./breakpoint-removal/dry-run";
-import type { CspCheck } from "./site-code/csp";
+import type { CspAddition, CspCheck } from "./site-code/csp";
 
 /**
  * The name this plugin registers under, which is also how its routes are
@@ -1354,6 +1354,19 @@ export interface SiteCodeRead {
   readonly version: string | null;
   /** Whether the site declared its Content Security Policy to the plugin. */
   readonly policyDeclared: boolean;
+  /**
+   * What each place holds, in plain words, from the stored entries ("A
+   * script from www.googletagmanager.com", "an inline script"): what Settings
+   * shows before the code is opened. Empty for a place with nothing in it.
+   */
+  readonly described: {
+    readonly head: readonly string[];
+    readonly body: readonly string[];
+  };
+  /** When the code was last saved, as an ISO date; `null` before any save. */
+  readonly changedAt: string | null;
+  /** The name of the person who saved it last, when it can be read. */
+  readonly changedBy: string | null;
 }
 
 /**
@@ -1390,6 +1403,13 @@ export interface SiteCodeSlotJudged {
 export interface SiteCodePolicyChecked {
   readonly source: "declared" | "live";
   readonly check: CspCheck;
+  /**
+   * What to add to this policy for the code to run, as
+   * `mergeSiteCodeIntoCsp` adds it: per directive, the sources it lacks. A
+   * directive the policy doesn't name yet comes whole, as it must be added.
+   * Empty when nothing is blocked or nothing was checked.
+   */
+  readonly additions: readonly CspAddition[];
 }
 
 /** What checking the site's code answers, and what a save answers too. */

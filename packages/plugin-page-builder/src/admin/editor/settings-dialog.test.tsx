@@ -17,7 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { cloneElement, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { SiteSettingsRead } from "../../library-contract";
+import type { SiteCodeRead, SiteSettingsRead } from "../../library-contract";
 import type { PageAddressResponse } from "../../pages-search-contract";
 import {
   settingsAddressOf,
@@ -26,6 +26,16 @@ import {
 } from "./settings-address";
 
 let siteRead: SiteSettingsRead | undefined;
+/** The site code read, empty: its section has tests of its own. */
+const codeRead: SiteCodeRead = {
+  head: "",
+  body: "",
+  version: null,
+  policyDeclared: false,
+  described: { head: [], body: [] },
+  changedAt: null,
+  changedBy: null,
+};
 // The page address read's answer, and the paths it was asked at.
 let addressRead: PageAddressResponse | undefined;
 const addressAsked: string[] = [];
@@ -40,6 +50,15 @@ const asked: unknown[] = [];
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginRoute: ({ path }: { path: string }) => {
+    if (path === "/site/code") {
+      return {
+        data: codeRead,
+        pending: false,
+        error: null,
+        fetching: false,
+        refetch: vi.fn(),
+      };
+    }
     if (path.startsWith("/pages/address")) {
       addressAsked.push(path);
       return {
@@ -72,9 +91,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 // when editing starts, as the real one does.
 vi.mock("@nextlyhq/builder/shell", async importOriginal => ({
   // The editor's real words, so the dialog's title reads as an author sees it.
-  ...(({ EDITOR_WORDS, BASE_DEVICE_LABEL }) => ({
+  ...(({ EDITOR_WORDS, BASE_DEVICE_LABEL, SITE_CODE_POLICY_DOCS_HREF }) => ({
     EDITOR_WORDS,
     BASE_DEVICE_LABEL,
+    SITE_CODE_POLICY_DOCS_HREF,
   }))(await importOriginal<typeof import("@nextlyhq/builder/shell")>()),
   BreakpointManager: ({
     status,

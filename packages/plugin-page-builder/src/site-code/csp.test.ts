@@ -12,6 +12,7 @@ import {
   checkSiteCodeAgainstCsp,
   cspHash,
   mergeSiteCodeIntoCsp,
+  siteCodePolicyAdditions,
   parseCsp,
   siteCodeFacts,
   type CspCheck,
@@ -772,6 +773,28 @@ describe("adding what site code needs to a policy", () => {
     expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(
       `${policy}; script-src-elem https://cdn.example/approved/ ${await loaderHash()}`
     );
+  });
+
+  it("says what the merge adds: new sources of a named directive, a new directive whole", async () => {
+    const facts = await siteCodeFacts(
+      [loaded("/analytics.js"), pixel("img", "https://t.example/p.gif")],
+      ORIGIN
+    );
+    const policy = "script-src 'self' https://cdn.example; img-src 'self'";
+    // script-src-elem is new, so it comes whole; img-src gains one URL.
+    expect(siteCodePolicyAdditions(policy, facts)).toEqual([
+      {
+        directive: "img-src",
+        sources: ["https://t.example/p.gif"],
+      },
+      {
+        directive: "script-src-elem",
+        sources: ["'self'", "https://cdn.example", await loaderHash()],
+      },
+    ]);
+    expect(
+      siteCodePolicyAdditions("default-src * 'unsafe-inline'", facts)
+    ).toEqual([]);
   });
 
   it("adds the one URL a blocked load needs, never its whole host", async () => {

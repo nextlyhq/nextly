@@ -1,0 +1,818 @@
+"use client";
+
+/**
+ * Settings → Site → Code: the code every published page carries, in its head
+ * and at the end of its body.
+ *
+ * What is saved is described in plain words until Edit code opens the code
+ * itself. A save checks the code on the server first: what can't be stored is
+ * named under the place it is in and nothing is saved; what the site's
+ * security policy would block is shown, with what to add to the policy, and
+ * is saved only once the person says they understand; with no policy known
+ * the person is told so before saving, rather than shown a pass.
+ *
+ * @module admin/editor/site-code-settings
+ * @experimental
+ */
+import { SITE_CODE_POLICY_DOCS_HREF } from "@nextlyhq/builder/shell";
+import { usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import {
+  Alert,
+  AlertDescription,
+  Button,
+  Checkbox,
+  Textarea,
+} from "@nextlyhq/ui";
+import { Check, Copy, Info, Loader2, TriangleAlert } from "lucide-react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type JSX,
+  type ReactNode,
+  type RefObject,
+} from "react";
+
+import {
+  PAGE_BUILDER_PLUGIN_NAME,
+  SITE_CODE_ROUTE_PATH,
+  type SiteCodeChecked,
+  type SiteCodeRead,
+} from "../../library-contract";
+import type { CspAddition, CspFinding } from "../../site-code/csp";
+import { SITE_CODE_LIMITS } from "../../site-code/limits";
+import {
+  checkSiteCode,
+  readLivePolicy,
+  saveSiteCode,
+  type SiteCodeDraft,
+} from "../site-code-client";
+
+/** The two places site code goes, in the order a page has them. */
+const PLACES = [
+  { slot: "head", label: "Head" },
+  { slot: "body", label: "End of body" },
+] as const;
+
+type Place = (typeof PLACES)[number]["slot"];
+
+/** Where the section is: shown, being edited, or being checked before a save. */
+type Step =
+  | { readonly kind: "view"; readonly saved?: SiteCodeChecked }
+  | { readonly kind: "edit"; readonly refused?: SiteCodeChecked }
+  | {
+      readonly kind: "csp";
+      readonly checked: SiteCodeChecked;
+      readonly draft: SiteCodeDraft;
+    }
+  | {
+      readonly kind: "no-policy";
+      readonly checked: SiteCodeChecked;
+      readonly draft: SiteCodeDraft;
+    };
+
+/** What the section tells the Site tab while the code is open. */
+export interface SiteCodeSectionProps {
+  /** Open with changes not yet saved: leaving asks first. */
+  readonly onEditingChange: (editing: boolean) => void;
+  /** A save is in flight: leaving waits for it. */
+  readonly onSavingChange: (saving: boolean) => void;
+  /** The code is open, so the other Site sections step aside. */
+  readonly onOpenChange: (open: boolean) => void;
+}
+
+/**
+ * Where a check leads: back to the code with what it refused, to what a
+ * policy blocks, to the word that no policy is known, or straight to a save.
+ */
+function stepAfter(
+  checked: SiteCodeChecked,
+  draft: SiteCodeDraft
+): Step | "save" {
+  if (checked.head.refusals.length + checked.body.refusals.length > 0) {
+    return { kind: "edit", refused: checked };
+  }
+  if (checked.cspKey !== null) return { kind: "csp", checked, draft };
+  if (checked.csp.every(policy => !policy.check.checked)) {
+    return { kind: "no-policy", checked, draft };
+  }
+  return "save";
+}
+
+/** Why a check or a save failed, in words. */
+function failureOf(reason: unknown): string {
+  return reason instanceof Error
+    ? reason.message
+    : "The site code could not be saved.";
+}
+
+/**
+ * Tell the Site tab what the section is doing: open (the other sections step
+ * aside), changed (leaving asks first) and saving (leaving waits). Taken off
+ * the tab, by a breakpoint step that has it to itself, it leaves nothing open.
+ */
+function useTellTheTab(
+  { onEditingChange, onSavingChange, onOpenChange }: SiteCodeSectionProps,
+  state: { open: boolean; changed: boolean; working: boolean }
+): void {
+  useEffect(() => onOpenChange(state.open), [state.open, onOpenChange]);
+  useEffect(
+    () => onEditingChange(state.changed),
+    [state.changed, onEditingChange]
+  );
+  useEffect(
+    () => onSavingChange(state.working),
+    [state.working, onSavingChange]
+  );
+  useEffect(
+    () => () => {
+      onOpenChange(false);
+      onEditingChange(false);
+      onSavingChange(false);
+    },
+    [onOpenChange, onEditingChange, onSavingChange]
+  );
+}
+
+/** The section's read, its step, the code as typed, and what can be done. */
+function useSiteCodeFlow(props: SiteCodeSectionProps) {
+  const read = usePluginRoute<SiteCodeRead>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: SITE_CODE_ROUTE_PATH,
+    staleTime: 0,
+  });
+  const [step, setStep] = useState<Step>({ kind: "view" });
+  const [text, setText] = useState({ head: "", body: "" });
+  // The version the open code was read at; a save made since refuses it.
+  const [version, setVersion] = useState<string | null>(null);
+  const [working, setWorking] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const stored = read.data;
+  const unchanged =
+    text.head === (stored?.head ?? "") && text.body === (stored?.body ?? "");
+  useTellTheTab(props, {
+    open: step.kind !== "view",
+    changed: step.kind !== "view" && (step.kind !== "edit" || !unchanged),
+    working,
+  });
+
+  const save = async (
+    draft: SiteCodeDraft,
+    acknowledgeCsp: string | null
+  ): Promise<void> => {
+    const saved = await saveSiteCode(draft, version, acknowledgeCsp);
+    read.refetch();
+    setStep({ kind: "view", saved });
+  };
+  // Every save is checked first, with the policy the site sends read now.
+  const check = async (): Promise<void> => {
+    const livePolicy = await readLivePolicy();
+    const draft: SiteCodeDraft = {
+      head: text.head,
+      body: text.body,
+      ...(livePolicy === undefined ? {} : { livePolicy }),
+    };
+    const next = stepAfter(await checkSiteCode(draft), draft);
+    if (next === "save") await save(draft, null);
+    else setStep(next);
+  };
+  const run = (work: () => Promise<void>): void => {
+    setWorking(true);
+    setProblem(null);
+    work().then(
+      () => setWorking(false),
+      (reason: unknown) => {
+        setWorking(false);
+        setProblem(failureOf(reason));
+      }
+    );
+  };
+  return {
+    read,
+    step,
+    text,
+    setText,
+    working,
+    problem,
+    edit: (): void => {
+      if (stored === undefined) return;
+      setText({ head: stored.head, body: stored.body });
+      setVersion(stored.version);
+      setProblem(null);
+      setStep({ kind: "edit" });
+    },
+    back: (): void => setStep({ kind: "edit" }),
+    cancel: (): void => setStep({ kind: "view" }),
+    check: (): void => run(check),
+    save: (draft: SiteCodeDraft, acknowledgeCsp: string | null): void =>
+      run(() => save(draft, acknowledgeCsp)),
+  };
+}
+
+type SiteCodeFlow = ReturnType<typeof useSiteCodeFlow>;
+
+/** The site's code, in Settings → Site. */
+export function SiteCodeSection(props: SiteCodeSectionProps): JSX.Element {
+  const flow = useSiteCodeFlow(props);
+  return (
+    <section aria-labelledby="settings-code-title" className="space-y-2">
+      <h3 id="settings-code-title" className="text-sm font-semibold">
+        Code
+      </h3>
+      <p className="text-sm text-muted-foreground">
+        Added to every published page: analytics, tag managers, verification
+        tags.
+      </p>
+      {flow.read.data === undefined ? (
+        <ReadState read={flow.read} />
+      ) : (
+        <StepView flow={flow} stored={flow.read.data} />
+      )}
+    </section>
+  );
+}
+
+/** What the section shows at its step. */
+function StepView({
+  flow,
+  stored,
+}: {
+  flow: SiteCodeFlow;
+  stored: SiteCodeRead;
+}): JSX.Element {
+  const { step, working, problem } = flow;
+  switch (step.kind) {
+    case "view":
+      return <Summary stored={stored} saved={step.saved} onEdit={flow.edit} />;
+    case "edit":
+      return (
+        <Editor
+          text={flow.text}
+          onText={flow.setText}
+          refused={step.refused}
+          policyDeclared={stored.policyDeclared}
+          working={working}
+          problem={problem}
+          onCancel={flow.cancel}
+          onSave={flow.check}
+        />
+      );
+    case "csp":
+      return (
+        <PolicyFindings
+          checked={step.checked}
+          working={working}
+          problem={problem}
+          onBack={flow.back}
+          onSave={() => flow.save(step.draft, step.checked.cspKey)}
+        />
+      );
+    case "no-policy":
+      return (
+        <NoPolicy
+          working={working}
+          problem={problem}
+          onBack={flow.back}
+          onSave={() => flow.save(step.draft, null)}
+        />
+      );
+  }
+}
+
+/** While the stored code is read, or why it could not be. */
+function ReadState({
+  read,
+}: {
+  read: ReturnType<typeof usePluginRoute<SiteCodeRead>>;
+}): JSX.Element | null {
+  if (read.error === null) return null;
+  return (
+    <div className="flex items-center gap-3 text-sm">
+      <span>{"The site's code could not be loaded."}</span>
+      <Button type="button" variant="outline" size="sm" onClick={read.refetch}>
+        Retry
+      </Button>
+    </div>
+  );
+}
+
+/** A count of elements, in words: "1 element", "3 elements". */
+function elements(count: number): string {
+  return `${count} ${count === 1 ? "element" : "elements"}`;
+}
+
+/** What is saved, in plain words, with the way into the code. */
+function Summary({
+  stored,
+  saved,
+  onEdit,
+}: {
+  stored: SiteCodeRead;
+  saved: SiteCodeChecked | undefined;
+  onEdit: () => void;
+}): JSX.Element {
+  const empty =
+    stored.described.head.length === 0 && stored.described.body.length === 0;
+  return (
+    <div className="space-y-3">
+      {saved === undefined ? null : (
+        <StatusRow
+          icon={<Check className="size-4 text-success" aria-hidden="true" />}
+          title="Site code saved"
+          role="status"
+        >
+          It runs on every published page from the next visit.{" "}
+          {elements(saved.head.elements)} in the head, {saved.body.elements} at
+          the end of the body.
+        </StatusRow>
+      )}
+      <dl className="divide-y rounded-md border text-sm">
+        {PLACES.map(place => (
+          <div key={place.slot} className="flex gap-3 px-3 py-2.5">
+            <dt className="w-24 shrink-0 font-medium">{place.label}</dt>
+            <dd className="text-muted-foreground">
+              {stored.described[place.slot].length === 0
+                ? "Nothing yet"
+                : stored.described[place.slot].join(", ")}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="button" variant="outline" onClick={onEdit}>
+          {empty ? "Add code" : "Edit code"}
+        </Button>
+        <LastChanged stored={stored} />
+      </div>
+    </div>
+  );
+}
+
+/** "Last changed 6 November by …", where the code has been saved. */
+function LastChanged({ stored }: { stored: SiteCodeRead }): JSX.Element | null {
+  if (stored.changedAt === null) return null;
+  const at = new Date(stored.changedAt);
+  if (Number.isNaN(at.getTime())) return null;
+  const sameYear = at.getFullYear() === new Date().getFullYear();
+  const day = at.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "long",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
+  return (
+    <span className="text-xs text-muted-foreground">
+      Last changed {day}
+      {stored.changedBy === null ? "" : ` by ${stored.changedBy}`}
+    </span>
+  );
+}
+
+/** The two places' code, the warning above them, and Save. */
+function Editor({
+  text,
+  onText,
+  refused,
+  policyDeclared,
+  working,
+  problem,
+  onCancel,
+  onSave,
+}: {
+  text: { head: string; body: string };
+  onText: (text: { head: string; body: string }) => void;
+  refused: SiteCodeChecked | undefined;
+  policyDeclared: boolean;
+  working: boolean;
+  problem: string | null;
+  onCancel: () => void;
+  onSave: () => void;
+}): JSX.Element {
+  const firstRefusal = useRef<HTMLLIElement>(null);
+  // Each check that refuses moves focus to the first thing it refused, so a
+  // keyboard or screen reader user hears why nothing was saved.
+  useEffect(() => {
+    if (refused !== undefined) firstRefusal.current?.focus();
+  }, [refused]);
+  const firstPlace = PLACES.find(
+    place => (refused?.[place.slot].refusals.length ?? 0) > 0
+  )?.slot;
+  return (
+    <div className="space-y-4">
+      <Alert variant="warning">
+        <TriangleAlert className="size-4" aria-hidden="true" />
+        <AlertDescription>
+          <strong className="font-semibold">
+            Code here runs on every page, with the access of whoever views it.
+          </strong>{" "}
+          Only add code from sources you trust.
+        </AlertDescription>
+      </Alert>
+      {PLACES.map(place => (
+        <PlaceEditor
+          key={place.slot}
+          place={place.slot}
+          label={place.label}
+          value={text[place.slot]}
+          onChange={value => onText({ ...text, [place.slot]: value })}
+          refusals={refused?.[place.slot].refusals ?? []}
+          firstRefusal={place.slot === firstPlace ? firstRefusal : undefined}
+        />
+      ))}
+      <p className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span
+          aria-hidden="true"
+          className={`size-2 shrink-0 rounded-full ${policyDeclared ? "bg-success" : "bg-muted-foreground"}`}
+        />
+        {policyDeclared
+          ? "Checked against the policy this site declares, and the one it sends."
+          : "Checked against the policy the site sends, if it sends one."}
+      </p>
+      <Actions
+        hint={
+          refused === undefined
+            ? "Saving checks the code first. Nothing runs inside the admin or in previews."
+            : "Nothing was saved."
+        }
+        working={working}
+        problem={problem}
+      >
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onCancel}
+          disabled={working}
+        >
+          Cancel
+        </Button>
+        <Button type="button" onClick={onSave} disabled={working}>
+          Save code
+        </Button>
+      </Actions>
+    </div>
+  );
+}
+
+/** One place's code, its length, and what in it can't be stored. */
+function PlaceEditor({
+  place,
+  label,
+  value,
+  onChange,
+  refusals,
+  firstRefusal,
+}: {
+  place: Place;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  refusals: readonly string[];
+  firstRefusal: RefObject<HTMLLIElement | null> | undefined;
+}): JSX.Element {
+  const id = useId();
+  const refusedId = `${id}-refused`;
+  const countId = `${id}-count`;
+  const over = value.length > SITE_CODE_LIMITS.slotChars;
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-baseline justify-between gap-3">
+        <label htmlFor={id} className="text-sm font-medium">
+          {label}
+        </label>
+        <span
+          id={countId}
+          className={`text-xs ${over ? "text-destructive" : "text-muted-foreground"}`}
+        >
+          {value.length.toLocaleString()} of{" "}
+          {SITE_CODE_LIMITS.slotChars.toLocaleString()} characters
+        </span>
+      </div>
+      <Textarea
+        id={id}
+        value={value}
+        onChange={event => onChange(event.target.value)}
+        spellCheck={false}
+        autoCapitalize="off"
+        autoCorrect="off"
+        wrap="off"
+        rows={place === "head" ? 8 : 4}
+        aria-invalid={refusals.length > 0 || over}
+        aria-describedby={
+          refusals.length > 0 ? `${countId} ${refusedId}` : countId
+        }
+        className="resize-y bg-muted/40 font-mono text-xs leading-relaxed"
+      />
+      {refusals.length === 0 ? null : (
+        <div
+          id={refusedId}
+          className="rounded-md border border-l-4 border-l-destructive bg-destructive-50 p-3 text-sm dark:bg-destructive-950"
+        >
+          <p className="mb-1 font-medium text-destructive">
+            {"This can't be saved yet"}
+          </p>
+          <ul className="list-disc space-y-0.5 pl-5">
+            {refusals.map((refusal, index) => (
+              <li
+                key={`${index}-${refusal}`}
+                ref={index === 0 ? firstRefusal : undefined}
+                tabIndex={index === 0 ? -1 : undefined}
+                className="outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {refusal}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** An ordinal in words for a place's element: "1st", "2nd", "11th". */
+function ordinal(index: number): string {
+  const n = index + 1;
+  const teen = n % 100 >= 11 && n % 100 <= 13;
+  const suffix = teen ? "th" : (["th", "st", "nd", "rd"][n % 10] ?? "th");
+  return `${n}${suffix}`;
+}
+
+/** One block, with every policy that makes it. */
+interface Seen {
+  readonly finding: CspFinding;
+  readonly sources: string[];
+}
+
+/** The findings of every policy checked, each block once with its sources. */
+function findingsOf(checked: SiteCodeChecked): Seen[] {
+  const seen = new Map<string, Seen>();
+  for (const { source, check } of checked.csp) {
+    if (!check.checked) continue;
+    for (const finding of check.findings) {
+      const key = `${finding.slot} ${finding.index} ${finding.directive} ${finding.message}`;
+      const known = seen.get(key);
+      if (known === undefined) seen.set(key, { finding, sources: [source] });
+      else if (!known.sources.includes(source)) known.sources.push(source);
+    }
+  }
+  return [...seen.values()];
+}
+
+/** What to add to the site's policy, each directive once. */
+function additionsOf(checked: SiteCodeChecked): CspAddition[] {
+  const added = new Map<string, string[]>();
+  for (const policy of checked.csp) {
+    for (const { directive, sources } of policy.additions) {
+      const known = added.get(directive) ?? [];
+      added.set(directive, [...new Set([...known, ...sources])]);
+    }
+  }
+  return [...added].map(([directive, sources]) => ({ directive, sources }));
+}
+
+/** A finding's message as the start of a line. */
+function sentence(message: string): string {
+  return message.charAt(0).toUpperCase() + message.slice(1);
+}
+
+/** What the site's policy would block, and the choice to save anyway. */
+function PolicyFindings({
+  checked,
+  working,
+  problem,
+  onBack,
+  onSave,
+}: {
+  checked: SiteCodeChecked;
+  working: boolean;
+  problem: string | null;
+  onBack: () => void;
+  onSave: () => void;
+}): JSX.Element {
+  const [understood, setUnderstood] = useState(false);
+  const understoodId = useId();
+  const findings = findingsOf(checked);
+  const additions = additionsOf(checked);
+  return (
+    <div className="space-y-3">
+      <div className="rounded-lg border border-l-4 border-l-warning p-4">
+        <h4 className="mb-1.5 text-base font-semibold">
+          {"The site's security policy would block some of this code"}
+        </h4>
+        <p className="mb-3 text-sm text-muted-foreground">
+          {
+            "Pages keep loading, but these parts won't run until the policy allows them."
+          }
+        </p>
+        <ul className="mb-3 divide-y border-y text-sm">
+          {findings.map(({ finding, sources }) => (
+            <li
+              key={`${finding.slot}-${finding.index}-${finding.directive}-${finding.message}`}
+              className="flex flex-wrap gap-x-3 gap-y-0.5 py-2"
+            >
+              <span className="w-32 shrink-0 text-muted-foreground">
+                {finding.slot === "head" ? "Head" : "End of body"},{" "}
+                {ordinal(finding.index)} element
+              </span>
+              <span className="min-w-0 flex-1 break-words">
+                {sentence(finding.message)}
+                {finding.level === "warning" ? " (reported only)" : ""}
+              </span>
+              <span className="whitespace-nowrap text-xs text-muted-foreground">
+                {finding.directive} · {sources.join(", ")}
+              </span>
+            </li>
+          ))}
+        </ul>
+        {additions.length === 0 ? null : <ToAllow additions={additions} />}
+        <div className="flex items-start gap-2 text-sm">
+          <Checkbox
+            id={understoodId}
+            checked={understood}
+            onCheckedChange={value => setUnderstood(value === true)}
+            className="mt-0.5"
+          />
+          <label htmlFor={understoodId}>
+            {
+              "I understand this code won't run on pages until the policy allows it."
+            }
+          </label>
+        </div>
+      </div>
+      <Actions working={working} problem={problem}>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onBack}
+          disabled={working}
+        >
+          Back to the code
+        </Button>
+        <Button
+          type="button"
+          onClick={onSave}
+          disabled={!understood || working}
+        >
+          Save anyway
+        </Button>
+      </Actions>
+    </div>
+  );
+}
+
+/** "To allow it, add to the site's policy: …", with a Copy button. */
+function ToAllow({
+  additions,
+}: {
+  additions: readonly CspAddition[];
+}): JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const lines = additions.map(
+    ({ directive, sources }) => `${directive} ${sources.join(" ")}`
+  );
+  const copy = (): void => {
+    void navigator.clipboard?.writeText(lines.join("; ")).then(
+      () => setCopied(true),
+      () => setCopied(false)
+    );
+  };
+  return (
+    <div className="mb-3 rounded-md bg-muted p-3 text-sm text-muted-foreground">
+      <div className="mb-1.5 flex items-center justify-between gap-3">
+        <span>
+          <strong className="font-medium text-foreground">To allow it,</strong>{" "}
+          {"add to the site's policy:"}
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={copy}
+          aria-label={copied ? "Copied" : "Copy what to add"}
+        >
+          {copied ? (
+            <Check className="size-4" aria-hidden="true" />
+          ) : (
+            <Copy className="size-4" aria-hidden="true" />
+          )}
+          {copied ? "Copied" : "Copy"}
+        </Button>
+      </div>
+      <ul className="space-y-1">
+        {lines.map(line => (
+          <li key={line}>
+            <code className="break-all rounded bg-background px-1 py-0.5 font-mono text-xs text-foreground">
+              {line}
+            </code>
+          </li>
+        ))}
+      </ul>
+      <a
+        href={SITE_CODE_POLICY_DOCS_HREF}
+        target="_blank"
+        rel="noreferrer"
+        className="mt-2 inline-block text-primary underline-offset-4 hover:underline"
+      >
+        How site code and your policy work
+      </a>
+    </div>
+  );
+}
+
+/** No policy is known, said plainly rather than shown as a pass. */
+function NoPolicy({
+  working,
+  problem,
+  onBack,
+  onSave,
+}: {
+  working: boolean;
+  problem: string | null;
+  onBack: () => void;
+  onSave: () => void;
+}): JSX.Element {
+  return (
+    <div className="space-y-3">
+      <StatusRow
+        icon={
+          <Info className="size-4 text-muted-foreground" aria-hidden="true" />
+        }
+        title="No security policy is known for this site, so nothing was checked against one"
+      >
+        {
+          "The code is otherwise ready to save. If your site sends a Content Security Policy, declare it in the page builder's settings so code is checked against it."
+        }
+      </StatusRow>
+      <Actions working={working} problem={problem}>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onBack}
+          disabled={working}
+        >
+          Back to the code
+        </Button>
+        <Button type="button" onClick={onSave} disabled={working}>
+          Save code
+        </Button>
+      </Actions>
+    </div>
+  );
+}
+
+/** A bordered row: an icon, a line, and what it means. */
+function StatusRow({
+  icon,
+  title,
+  role,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  role?: "status";
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <div role={role} className="flex gap-2.5 rounded-md border p-3">
+      <span className="mt-0.5 shrink-0">{icon}</span>
+      <div className="space-y-0.5">
+        <p className="text-sm font-medium">{title}</p>
+        <p className="text-xs text-muted-foreground">{children}</p>
+      </div>
+    </div>
+  );
+}
+
+/** The buttons, with a hint before them and why a save failed. */
+function Actions({
+  hint,
+  working,
+  problem,
+  children,
+}: {
+  hint?: string;
+  working: boolean;
+  problem: string | null;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {hint === undefined ? null : (
+          <span className="mr-auto text-xs text-muted-foreground">{hint}</span>
+        )}
+        {working ? (
+          <Loader2
+            className="size-4 animate-spin text-muted-foreground"
+            aria-label="Checking"
+          />
+        ) : null}
+        {children}
+      </div>
+      {problem === null ? null : (
+        <p role="alert" className="text-right text-sm text-destructive">
+          {problem}
+        </p>
+      )}
+    </div>
+  );
+}

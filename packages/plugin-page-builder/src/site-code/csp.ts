@@ -1067,6 +1067,45 @@ function loadNeeds(
   return [exactSource(url)];
 }
 
+/** The sources one directive of a policy needs for site code to run. */
+export interface CspAddition {
+  readonly directive: string;
+  readonly sources: readonly string[];
+}
+
+/**
+ * What `mergeSiteCodeIntoCsp` adds to a policy, per directive: the sources a
+ * directive lacks, or the directive whole where the policy doesn't name it
+ * yet, as it must then be added. Read from the merge itself, so what a person
+ * is told to add is exactly what the merge would.
+ */
+export function siteCodePolicyAdditions(
+  header: string,
+  facts: SiteCodeFacts,
+  options: { readonly siteNonce?: boolean | string } = {}
+): CspAddition[] {
+  const policies = parsePolicies(header);
+  const context = {
+    siteOrigin: facts.siteOrigin,
+    nonce: elementNonce(options.siteNonce, policies),
+  };
+  const added = new Map<string, readonly string[]>();
+  for (const parsed of policies) {
+    for (const [directive, sources] of mergedPolicy(parsed, facts, context)) {
+      const had = parsed.get(directive);
+      const fresh =
+        had === undefined
+          ? sources
+          : sources.filter(source => !had.includes(source));
+      if (fresh.length === 0) continue;
+      added.set(directive, [
+        ...new Set([...(added.get(directive) ?? []), ...fresh]),
+      ]);
+    }
+  }
+  return [...added].map(([directive, sources]) => ({ directive, sources }));
+}
+
 /**
  * The host's policy with what site code needs added, and nothing more: only
  * what the policy blocks now is added, so a load it already allows (under a

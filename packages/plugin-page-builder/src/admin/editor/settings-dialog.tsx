@@ -89,6 +89,7 @@ import { undoableHint } from "./breakpoint-undo-flow";
 import { UndoStatusRow, UndoStepPanel } from "./breakpoint-undo-step";
 import type { SettingsAddress } from "./settings-address";
 import type { SharePreview } from "./share-preview";
+import { SiteCodeSection } from "./site-code-settings";
 import {
   useBreakpointRemoval,
   type BreakpointRemoval,
@@ -241,6 +242,8 @@ export function SettingsDialog({
                   breakpoints={breakpoints}
                   onEditingBreakpoints={leave.setEditing}
                   onSavingBreakpoints={leave.setSaving}
+                  onEditingCode={leave.setEditingCode}
+                  onSavingCode={leave.setSavingCode}
                   onClose={() => leave.request({ kind: "close" })}
                 />
               </TabsContent>
@@ -264,10 +267,14 @@ export function SettingsDialog({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Discard your breakpoint changes?
+              {leave.discarding === "code"
+                ? "Discard your code changes?"
+                : "Discard your breakpoint changes?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              They have not been saved. The site keeps the breakpoints it has.
+              {leave.discarding === "code"
+                ? "They have not been saved. The site keeps the code it has."
+                : "They have not been saved. The site keeps the breakpoints it has."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -286,15 +293,18 @@ export function SettingsDialog({
 type Leave = { kind: "close" } | { kind: "tab"; to: string };
 
 /**
- * Leaving the Site tab while its breakpoints are being edited asks first, by
- * closing Settings or by switching tabs alike, since either takes the draft
- * away. While a save of them is in flight, neither happens: the write must
- * answer on screen, and a "discard" could not stop it reaching the site.
+ * Leaving the Site tab while its breakpoints or its code are being edited
+ * asks first, by closing Settings or by switching tabs alike, since either
+ * takes the draft away. While a save of either is in flight, neither happens:
+ * the write must answer on screen, and a "discard" could not stop it reaching
+ * the site.
  */
 function useLeaveGuard(onOpenChange: (open: boolean) => void, open: boolean) {
   const [tab, setTab] = useState("page");
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [editingCode, setEditingCode] = useState(false);
+  const [savingCode, setSavingCode] = useState(false);
   const [pending, setPending] = useState<Leave | null>(null);
   // Closed from outside (the editor giving way to its narrow-window notice),
   // the editor's draft went with the dialog, so nothing is left to guard.
@@ -302,6 +312,8 @@ function useLeaveGuard(onOpenChange: (open: boolean) => void, open: boolean) {
     if (open) return;
     setEditing(false);
     setSaving(false);
+    setEditingCode(false);
+    setSavingCode(false);
     setPending(null);
   }, [open]);
   const go = (leave: Leave): void => {
@@ -311,12 +323,16 @@ function useLeaveGuard(onOpenChange: (open: boolean) => void, open: boolean) {
   return {
     tab,
     asking: pending !== null,
+    // What a discard would throw away: the code's draft, else breakpoints'.
+    discarding: editingCode ? ("code" as const) : ("breakpoints" as const),
     setEditing,
     setSaving,
+    setEditingCode,
+    setSavingCode,
     request: (leave: Leave): void => {
-      if (saving) return;
+      if (saving || savingCode) return;
       if (leave.kind === "tab" && leave.to === tab) return;
-      if (editing && tab === "site") {
+      if ((editing || editingCode) && tab === "site") {
         setPending(leave);
         return;
       }
@@ -328,6 +344,7 @@ function useLeaveGuard(onOpenChange: (open: boolean) => void, open: boolean) {
     },
     discard: (): void => {
       setEditing(false);
+      setEditingCode(false);
       if (pending !== null) go(pending);
       setPending(null);
     },
@@ -340,12 +357,16 @@ function SiteTab({
   breakpoints,
   onEditingBreakpoints,
   onSavingBreakpoints,
+  onEditingCode,
+  onSavingCode,
   onClose,
 }: {
   site: ReturnType<typeof usePluginRoute<SiteSettingsRead>>;
   breakpoints: SettingsDialogProps["breakpoints"];
   onEditingBreakpoints: (editing: boolean) => void;
   onSavingBreakpoints: (saving: boolean) => void;
+  onEditingCode: (editing: boolean) => void;
+  onSavingCode: (saving: boolean) => void;
   onClose: () => void;
 }): JSX.Element | null {
   if (site.data === undefined) {
@@ -388,6 +409,8 @@ function SiteTab({
       }}
       onEditingBreakpoints={onEditingBreakpoints}
       onSavingBreakpoints={onSavingBreakpoints}
+      onEditingCode={onEditingCode}
+      onSavingCode={onSavingCode}
       onClose={onClose}
     />
   );
@@ -552,6 +575,8 @@ function SiteSettings({
   breakpoints,
   onEditingBreakpoints,
   onSavingBreakpoints,
+  onEditingCode,
+  onSavingCode,
   onClose,
 }: {
   read: SiteSettingsRead;
@@ -559,8 +584,13 @@ function SiteSettings({
   breakpoints: SettingsDialogProps["breakpoints"];
   onEditingBreakpoints: (editing: boolean) => void;
   onSavingBreakpoints: (saving: boolean) => void;
+  onEditingCode: (editing: boolean) => void;
+  onSavingCode: (saving: boolean) => void;
   onClose: () => void;
 }): JSX.Element {
+  // While the code is open the other sections step aside, as they do for a
+  // breakpoint removal's steps.
+  const [codeOpen, setCodeOpen] = useState(false);
   const { refresh, ...manager } = breakpoints;
   const removal = useBreakpointRemoval({
     current: manager.value,
@@ -611,6 +641,8 @@ function SiteSettings({
       <section
         aria-labelledby="settings-breakpoints-title"
         className="space-y-2"
+        // Kept mounted while the code is open, so a breakpoint draft stays.
+        hidden={codeOpen}
       >
         <h3 id="settings-breakpoints-title" className="text-sm font-semibold">
           Breakpoints
@@ -647,8 +679,42 @@ function SiteSettings({
         </div>
       </section>
       {/* The step has the tab to itself while it asks or works. */}
-      {takesOver ? null : <DefaultLayout read={read} reread={reread} />}
+      {takesOver ? null : (
+        <LaterSections
+          read={read}
+          reread={reread}
+          codeOpen={codeOpen}
+          code={{
+            onEditingChange: onEditingCode,
+            onSavingChange: onSavingCode,
+            onOpenChange: setCodeOpen,
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * The Site sections after the breakpoints: the default Layout, which steps
+ * aside while the code is open, and the code.
+ */
+function LaterSections({
+  read,
+  reread,
+  codeOpen,
+  code,
+}: {
+  read: SiteSettingsRead;
+  reread: () => void;
+  codeOpen: boolean;
+  code: ComponentProps<typeof SiteCodeSection>;
+}): JSX.Element {
+  return (
+    <>
+      {codeOpen ? null : <DefaultLayout read={read} reread={reread} />}
+      <SiteCodeSection {...code} />
+    </>
   );
 }
 
