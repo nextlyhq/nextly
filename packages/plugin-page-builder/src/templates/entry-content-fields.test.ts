@@ -19,27 +19,54 @@ const POSTS = {
   fields: [
     { name: "title", type: "text" },
     { name: "body", type: "blocks", label: "Body" },
-    // An unnamed group: presentation only, its fields stored on the entry.
-    { type: "group", fields: [{ name: "membersOnly", type: "blocks" }] },
+    // An unnamed row: presentation only, its fields stored on the entry.
+    { type: "row", fields: [{ name: "membersOnly", type: "blocks" }] },
   ],
 };
 
-describe("a blocks field inside an unnamed container", () => {
-  it("is the entry's own inside a group, never inside a repeater, whose rows store it", () => {
+describe("a blocks field inside a container", () => {
+  it("is the entry's own inside every presentation-only container", () => {
     const record = {
       fields: [
         { type: "group", fields: [{ name: "intro", type: "blocks" }] },
-        // Unnamed, yet its children are stored per row.
+        { type: "row", fields: [{ name: "sidebar", type: "blocks" }] },
+        { type: "tabs", fields: [{ name: "tabbed", type: "blocks" }] },
+        {
+          type: "collapsible",
+          fields: [{ name: "folded", type: "blocks" }],
+        },
+      ],
+    };
+    expect(entryBlocksFieldsOf(record).map(field => field.name)).toEqual([
+      "intro",
+      "sidebar",
+      "tabbed",
+      "folded",
+    ]);
+  });
+
+  it("is never the entry's own inside a repeater, named or not, or a named group", () => {
+    const record = {
+      fields: [
+        // Stored per row.
         { type: "repeater", fields: [{ name: "slides", type: "blocks" }] },
         {
           name: "steps",
           type: "repeater",
           fields: [{ name: "step", type: "blocks" }],
         },
+        // Stored under the group's own name.
+        {
+          name: "meta",
+          type: "group",
+          fields: [{ name: "note", type: "blocks" }],
+        },
+        // The control: one the entry stores itself.
+        { name: "body", type: "blocks" },
       ],
     };
     expect(entryBlocksFieldsOf(record).map(field => field.name)).toEqual([
-      "intro",
+      "body",
     ]);
   });
 });
