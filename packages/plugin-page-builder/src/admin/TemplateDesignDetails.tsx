@@ -68,7 +68,7 @@ function filledText(value: unknown): string | null {
 }
 
 /** Whether the form is an entry's own design: any of its fields names one. */
-export function isOwnDesign(values: DesignDetailValues): boolean {
+function isOwnDesign(values: DesignDetailValues): boolean {
   return (
     values.entry !== null ||
     values.entryCollection !== null ||

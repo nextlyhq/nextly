@@ -40,6 +40,7 @@ import {
   type Control,
   type FieldValues,
   type Path,
+  type RefCallBack,
 } from "react-hook-form";
 
 // The CONTRACTS, not the routes: the routes reach server-only modules.
@@ -352,14 +353,55 @@ export function TemplateCollectionField<
   disabled = false,
 }: TemplateCollectionFieldProps<TFieldValues>): JSX.Element {
   const { field, fieldState, formState } = useController({ name, control });
-  const identity = useDocumentIdentity();
-  const choices = useCollectionChoices();
   const value = typeof field.value === "string" ? field.value : "";
   // The form starts again from the stored row on load and after each save,
   // so its defaults hold the collection the template is saved with. A form
   // that keeps no default for the field is read by its value, as before.
   const savedValue: unknown = get(formState.defaultValues, name);
   const stored = typeof savedValue === "string" ? savedValue : value;
+  const { view, busy } = useCollectionFieldState(readOnly, value, stored);
+  const noteId = useId();
+  const handed: CollectionControlProps = {
+    label: declaredLabel(declaration),
+    describedBy: view.note === null ? undefined : noteId,
+    value,
+    invalid: fieldState.invalid,
+    disabled,
+    onChange: next => field.onChange(next),
+    onBlur: field.onBlur,
+    inputRef: field.ref,
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {view.kind === "fixed" ? (
+        <FixedCollection view={view} busy={busy} {...handed} />
+      ) : view.kind === "choose" ? (
+        <ChooseCollection view={view} {...handed} />
+      ) : (
+        <TypedCollection {...handed} />
+      )}
+      {view.note === null ? null : (
+        <p id={noteId} className="text-xs text-muted-foreground">
+          {view.note}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The control's view and whether it is still waiting, from the template's
+ * identity, the collection list and, for a saved collection the list does
+ * not name, whether it still exists.
+ */
+function useCollectionFieldState(
+  readOnly: boolean,
+  value: string,
+  stored: string
+): { view: CollectionFieldView; busy: boolean } {
+  const identity = useDocumentIdentity();
+  const choices = useCollectionChoices();
   const saved =
     typeof identity?.documentId === "string" && identity.documentId !== "";
   const askExistence =
@@ -369,117 +411,158 @@ export function TemplateCollectionField<
     choices.state === "answered" &&
     !choices.named.has(stored);
   const existence = useCollectionExistence(stored, askExistence);
-  const view = collectionFieldView(
-    { readOnly, saved, value, stored },
-    choices,
-    existence
-  );
-  const noteId = useId();
-  const label = declaredLabel(declaration);
-  const { note } = view;
-  const describedBy = note === null ? undefined : noteId;
+  return {
+    view: collectionFieldView(
+      { readOnly, saved, value, stored },
+      choices,
+      existence
+    ),
+    busy:
+      choices.state === "pending" || (askExistence && existence === "pending"),
+  };
+}
 
+/** What each of the control's three forms is handed. */
+interface CollectionControlProps {
+  readonly label: string;
+  readonly describedBy: string | undefined;
+  readonly value: string;
+  readonly invalid: boolean;
+  readonly disabled: boolean;
+  readonly onChange: (next: string) => void;
+  readonly onBlur: () => void;
+  readonly inputRef: RefCallBack;
+}
+
+/** The collection as text: its name with its slug, read-only. */
+function FixedCollection({
+  view,
+  busy,
+  label,
+  describedBy,
+}: CollectionControlProps & {
+  readonly view: Extract<CollectionFieldView, { kind: "fixed" }>;
+  readonly busy: boolean;
+}): JSX.Element {
   return (
-    <div className="flex flex-col gap-1.5">
-      {view.kind === "fixed" ? (
-        <div
-          role="textbox"
-          aria-readonly="true"
-          // The wrapper's label is not tied to a plugin editor's control, so
-          // the value carries its own name.
-          aria-label={label}
-          aria-describedby={describedBy}
-          aria-busy={
-            choices.state === "pending" ||
-            (askExistence && existence === "pending") ||
-            undefined
-          }
-          className="flex h-9 min-w-0 items-center gap-2 rounded-md border border-input bg-muted/40 px-3 text-sm"
-        >
-          {view.slug === "" ? (
-            <span className="text-muted-foreground">No collection</span>
-          ) : (
+    <div
+      role="textbox"
+      aria-readonly="true"
+      // The wrapper's label is not tied to a plugin editor's control, so
+      // the value carries its own name.
+      aria-label={label}
+      aria-describedby={describedBy}
+      aria-busy={busy || undefined}
+      className="flex h-9 min-w-0 items-center gap-2 rounded-md border border-input bg-muted/40 px-3 text-sm"
+    >
+      {view.slug === "" ? (
+        <span className="text-muted-foreground">No collection</span>
+      ) : (
+        <>
+          <span className="min-w-0 truncate text-foreground">
+            {view.label ?? view.slug}
+          </span>
+          {/* The slug beside the name, as the API and code name it, with
+              a space between for a screen reader. */}
+          {view.label === null || view.label === view.slug ? null : (
             <>
-              <span className="min-w-0 truncate text-foreground">
-                {view.label ?? view.slug}
+              {" "}
+              <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                {view.slug}
               </span>
-              {/* The slug beside the name, as the API and code name it, with
-                  a space between for a screen reader. */}
-              {view.label === null || view.label === view.slug ? null : (
-                <>
-                  {" "}
-                  <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                    {view.slug}
-                  </span>
-                </>
-              )}
             </>
           )}
-        </div>
-      ) : view.kind === "choose" ? (
-        <Select
-          // A value none of the options holds, as a removed collection's slug,
-          // shows the placeholder rather than an empty trigger.
-          value={
-            view.options.some(option => option.slug === value)
-              ? value
-              : undefined
-          }
-          onValueChange={next => field.onChange(next)}
-          disabled={disabled || view.loading}
-        >
-          <SelectTrigger
-            ref={field.ref}
-            aria-label={label}
-            aria-describedby={describedBy}
-            aria-invalid={fieldState.invalid || undefined}
-            aria-busy={view.loading || undefined}
-            onBlur={field.onBlur}
-            className="[&>span]:min-w-0 [&>span]:truncate [&>span]:text-left"
-          >
-            <SelectValue
-              placeholder={
-                view.loading
-                  ? "Loading collections…"
-                  : view.options.length === 0
-                    ? "No collection can have a template"
-                    : "Choose a collection"
-              }
-            />
-          </SelectTrigger>
-          <SelectContent>
-            {view.options.map(option => (
-              <SelectItem key={option.slug} value={option.slug}>
-                {/* A space between, so the option reads "Posts posts". */}
-                {option.label}{" "}
-                <span className="font-mono text-xs text-muted-foreground">
-                  {option.slug}
-                </span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      ) : (
-        <Input
-          ref={field.ref}
-          type="text"
-          aria-label={label}
-          aria-describedby={describedBy}
-          aria-invalid={fieldState.invalid || undefined}
-          value={value}
-          onChange={event => field.onChange(event.target.value)}
-          onBlur={field.onBlur}
-          disabled={disabled}
-          spellCheck={false}
-          autoComplete="off"
-          className="font-mono"
-        />
-      )}
-      {note === null ? null : (
-        <p id={noteId} className="text-xs text-muted-foreground">
-          {note}
-        </p>
+        </>
       )}
     </div>
+  );
+}
+
+/** What the choice says while it has nothing chosen. */
+function choosePlaceholder(
+  view: Extract<CollectionFieldView, { kind: "choose" }>
+): string {
+  if (view.loading) return "Loading collections…";
+  return view.options.length === 0
+    ? "No collection can have a template"
+    : "Choose a collection";
+}
+
+/** The collections offered by name, to choose one. */
+function ChooseCollection({
+  view,
+  label,
+  describedBy,
+  value,
+  invalid,
+  disabled,
+  onChange,
+  onBlur,
+  inputRef,
+}: CollectionControlProps & {
+  readonly view: Extract<CollectionFieldView, { kind: "choose" }>;
+}): JSX.Element {
+  return (
+    <Select
+      // A value none of the options holds, as a removed collection's slug,
+      // shows the placeholder rather than an empty trigger.
+      value={
+        view.options.some(option => option.slug === value) ? value : undefined
+      }
+      onValueChange={onChange}
+      disabled={disabled || view.loading}
+    >
+      <SelectTrigger
+        ref={inputRef}
+        aria-label={label}
+        aria-describedby={describedBy}
+        aria-invalid={invalid || undefined}
+        aria-busy={view.loading || undefined}
+        onBlur={onBlur}
+        className="[&>span]:min-w-0 [&>span]:truncate [&>span]:text-left"
+      >
+        <SelectValue placeholder={choosePlaceholder(view)} />
+      </SelectTrigger>
+      <SelectContent>
+        {view.options.map(option => (
+          <SelectItem key={option.slug} value={option.slug}>
+            {/* A space between, so the option reads "Posts posts". */}
+            {option.label}{" "}
+            <span className="font-mono text-xs text-muted-foreground">
+              {option.slug}
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+/** The slug typed, where the collections could not be listed. */
+function TypedCollection({
+  label,
+  describedBy,
+  value,
+  invalid,
+  disabled,
+  onChange,
+  onBlur,
+  inputRef,
+}: CollectionControlProps): JSX.Element {
+  return (
+    <Input
+      ref={inputRef}
+      type="text"
+      aria-label={label}
+      aria-describedby={describedBy}
+      aria-invalid={invalid || undefined}
+      value={value}
+      onChange={event => onChange(event.target.value)}
+      onBlur={onBlur}
+      disabled={disabled}
+      spellCheck={false}
+      autoComplete="off"
+      className="font-mono"
+    />
   );
 }
