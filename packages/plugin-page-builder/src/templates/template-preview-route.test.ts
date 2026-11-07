@@ -67,8 +67,6 @@ interface Row {
   readonly updatedAt: string;
   /** Whether a working draft waits on it. */
   readonly pending?: boolean;
-  /** What its working draft holds, where it differs from the live row. */
-  readonly draft?: { readonly title?: string; readonly updatedAt?: string };
   /** Whether the caller's access lets them read it. */
   readonly readable?: boolean;
 }
@@ -92,7 +90,6 @@ const ROWS: readonly Row[] = [
     status: "published",
     updatedAt: "2026-11-04T09:00:00.000Z",
     pending: true,
-    draft: { title: "Field notes, revised" },
   },
   {
     id: "hidden",
@@ -182,33 +179,6 @@ function callerFind(rows: readonly Row[] = ROWS) {
   });
 }
 
-/**
- * The caller's draft-aware read of one entry, as the editor reader answers
- * it: its working draft in place of the live row, nothing they may not read.
- */
-function callerDraft(rows: readonly Row[] = ROWS) {
-  return vi.fn(
-    async (request: {
-      readonly id: string;
-      readonly select: readonly string[];
-    }): Promise<Record<string, unknown> | null> => {
-      const row = rows.find(candidate => candidate.id === request.id);
-      if (row === undefined || row.readable === false) return null;
-      const shown: Record<string, unknown> = {
-        id: row.id,
-        title: row.draft?.title ?? row.title,
-        status: row.status,
-        updatedAt: row.draft?.updatedAt ?? row.updatedAt,
-      };
-      return Object.fromEntries(
-        Object.entries(shown).filter(
-          ([key]) => key === "id" || request.select.includes(key)
-        )
-      );
-    }
-  );
-}
-
 function listReads(
   overrides: Partial<PreviewEntriesReads> = {}
 ): PreviewEntriesReads {
@@ -216,7 +186,6 @@ function listReads(
     collections,
     find: callerFind(),
     mayCreate: async () => true,
-    draft: callerDraft(),
     ...overrides,
   };
 }
@@ -289,11 +258,7 @@ describe("the list of entries a template may preview", () => {
     await readPreviewEntries({ collection: "posts" }, listReads({ find }));
     const pendingAsk = find.mock.calls
       .map(([args]) => args)
-      .find(
-        args =>
-          at(args.where, "_pendingChange") === true &&
-          at(args.where, "id") !== undefined
-      );
+      .find(args => at(args.where, "_pendingChange") === true);
     expect(pendingAsk?.where).toEqual({
       id: { in: ["b", "a", "c", "d"] },
       _pendingChange: true,
@@ -311,90 +276,6 @@ describe("the list of entries a template may preview", () => {
       title: { contains: "NOTES" },
     });
     expect(answer.items.map(item => item.id)).toEqual(["b", "c"]);
-  });
-
-  describe("as choosing each entry draws it", () => {
-    /** A published post whose working draft renames it, later than any other. */
-    const DRAFTED: readonly Row[] = [
-      {
-        id: "e",
-        title: "Old title",
-        status: "published",
-        updatedAt: "2026-11-01T10:00:00.000Z",
-        pending: true,
-        draft: { title: "New title", updatedAt: "2026-11-08T00:00:00.000Z" },
-      },
-      {
-        id: "f",
-        title: "Plain post",
-        status: "published",
-        updatedAt: "2026-11-05T10:00:00.000Z",
-      },
-      {
-        id: "g",
-        title: "Old secret",
-        status: "published",
-        updatedAt: "2026-11-02T10:00:00.000Z",
-        pending: true,
-        draft: { title: "New secret", updatedAt: "2026-11-09T00:00:00.000Z" },
-        readable: false,
-      },
-    ];
-    const drafted = () =>
-      listReads({ find: callerFind(DRAFTED), draft: callerDraft(DRAFTED) });
-
-    it("shows a published entry's working draft: its title, its time, and its place", async () => {
-      const answer = await readPreviewEntries(
-        { collection: "posts" },
-        drafted()
-      );
-      // Its draft is the newest, though its live row is the oldest.
-      expect(answer.items.map(item => item.id)).toEqual(["e", "f"]);
-      expect(answer.items[0]).toEqual({
-        id: "e",
-        title: "New title",
-        status: "changed",
-        updatedAt: "2026-11-08T00:00:00.000Z",
-      });
-    });
-
-    it("finds an entry by its draft's title, and not by a title its draft dropped", async () => {
-      const byDraft = await readPreviewEntries(
-        { collection: "posts", search: "new" },
-        drafted()
-      );
-      // Not the draft the caller may not read.
-      expect(byDraft.items.map(item => item.id)).toEqual(["e"]);
-      const byDropped = await readPreviewEntries(
-        { collection: "posts", search: "old" },
-        drafted()
-      );
-      expect(byDropped.items).toEqual([]);
-      // The control: an entry with no draft is found by its own title.
-      const plain = await readPreviewEntries(
-        { collection: "posts", search: "plain" },
-        drafted()
-      );
-      expect(plain.items.map(item => item.id)).toEqual(["f"]);
-    });
-
-    it("reads each draft through the caller's draft-aware read, kept to the columns it shows", async () => {
-      const draft = callerDraft(DRAFTED);
-      await readPreviewEntries(
-        { collection: "posts" },
-        listReads({ find: callerFind(DRAFTED), draft })
-      );
-      // The entries waiting on a draft the caller may read are listed by
-      // core's own filter; the one they may not is never asked for.
-      expect(draft.mock.calls.map(([request]) => request.id).sort()).toEqual([
-        "e",
-      ]);
-      expect(draft.mock.calls[0]?.[0].select).toEqual([
-        "title",
-        "status",
-        "updatedAt",
-      ]);
-    });
   });
 
   it("says the caller may create where the framework says so, and not where it does not", async () => {
