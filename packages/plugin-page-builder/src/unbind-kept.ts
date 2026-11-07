@@ -43,6 +43,7 @@ import type { KeptProps, UnbindKeep } from "@nextlyhq/builder/ops";
 import { getCachedNextly } from "@nextlyhq/plugin-sdk";
 
 import type { UnbindAnswer } from "./composition-actions-contract";
+import { publicSourceReader } from "./entry-reads";
 
 /** What a visitor sees of one bound prop, as the published page fills it. */
 export interface VisitorView {
@@ -312,21 +313,6 @@ export function listOf(
   return found;
 }
 
-/** The public reader, as the published page reads with it. */
-export async function publicReader(locale: string | undefined) {
-  const [runtime, nextly] = await Promise.all([
-    import("nextly/runtime"),
-    getCachedNextly(),
-  ]);
-  return runtime.createPublicReader(
-    {
-      find: args => nextly.find(args),
-      findSingle: args => nextly.findSingle(args),
-    },
-    locale === undefined ? {} : { locale }
-  );
-}
-
 /** Where the node's bindings read: its entry, and its list item when it has one. */
 function readsOf(
   source: UnbindSource,
@@ -385,9 +371,11 @@ async function drawnFor(
   const record: unknown = await nextly.media
     .findByID({ id: String(value), disableErrors: true })
     .catch(() => null);
-  return (
-    isPlainRecord(record) && typeof record.url === "string" && record.url !== ""
-  );
+  if (!isPlainRecord(record)) return false;
+  // Drawn only where the renderer's own address filter lets its url be
+  // requested; no host image rules, which are a page route's own.
+  const { fetchableUrl } = await import("@nextlyhq/blocks-react");
+  return fetchableUrl(record.url, undefined) !== undefined;
 }
 
 /** Where a node's bindings read, as {@link readsOf} names it. */
@@ -405,7 +393,7 @@ async function visitorRun(
 ): Promise<
   | {
       readonly run: BindingRun;
-      readonly reader: Awaited<ReturnType<typeof publicReader>>;
+      readonly reader: Awaited<ReturnType<typeof publicSourceReader>>;
       readonly alone: BlockDocument;
     }
   | undefined
@@ -413,7 +401,7 @@ async function visitorRun(
   const [next, react, reader] = await Promise.all([
     import("@nextlyhq/blocks-react/next"),
     import("@nextlyhq/blocks-react"),
-    publicReader(source.locale),
+    publicSourceReader(source.locale),
   ]);
   const alone: BlockDocument = {
     formatVersion: DOCUMENT_FORMAT_VERSION,

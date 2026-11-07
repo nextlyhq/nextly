@@ -53,7 +53,8 @@ import {
   type PageReadReport,
 } from "./context";
 import { createPublicBlocksPage, readBindingSources } from "./next";
-import { countPageReads } from "./page-read-count";
+import { countPageReads, type CountedRegion } from "./page-read-count";
+import type { RouteMedia } from "./page-read-stages";
 import type { PageRendererProps } from "./page-renderer";
 import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
@@ -171,6 +172,10 @@ function site(
   });
   const findByID = vi.fn(async () => null);
   const mediaById = vi.fn(async () => null);
+  // The media library's batch read, answering from the same images.
+  const mediaByIds = vi.fn(async (args: { ids: readonly string[] }) =>
+    (stored.images ?? []).filter(row => args.ids.includes(String(row.id)))
+  );
   const publicSiteSettings = vi.fn(async () => ({
     siteName: "Journal",
     timezone: "UTC",
@@ -179,7 +184,7 @@ function site(
     find,
     findByID,
     publicSiteSettings,
-    media: { findByID: mediaById },
+    media: { findByID: mediaById, findByIDs: mediaByIds },
     stored,
   };
 }
@@ -190,7 +195,8 @@ function readsSoFar(nextly: Site): number {
     nextly.find.mock.calls.length +
     nextly.findByID.mock.calls.length +
     nextly.publicSiteSettings.mock.calls.length +
-    nextly.media.findByID.mock.calls.length
+    nextly.media.findByID.mock.calls.length +
+    nextly.media.findByIDs.mock.calls.length
   );
 }
 
@@ -306,6 +312,8 @@ async function journal(
     timeZone?: string;
     /** The address visited, `/journal` by default. */
     path?: string[];
+    mediaLibrary?: boolean;
+    cacheScope?: string;
   } = {}
 ): Promise<{ html: string; reads: Row[]; total: number }> {
   return await rendered(nextly, {
@@ -333,14 +341,17 @@ async function rendered(
     namedQueries?: NamedQueryLookup;
     timeZone?: string;
     path?: string[];
+    /** Read images from the media library, not a named collection. */
+    mediaLibrary?: boolean;
+    cacheScope?: string;
     /** Draw without the lists' read-ahead, as each entry read one by one. */
     oneByOne?: boolean;
   }
 ): Promise<{ html: string; reads: Row[]; total: number }> {
-  const { slug, oneByOne, path, ...route } = config;
+  const { slug, oneByOne, path, mediaLibrary, ...route } = config;
   const page = createPublicBlocksPage({
     blocks,
-    mediaCollection: "images",
+    ...(mediaLibrary === true ? {} : { mediaCollection: "images" }),
     ...route,
     nextly: nextly as never,
   });
@@ -433,17 +444,18 @@ describe("a list's reads", () => {
     expect(html.split("/media/1.jpg")).toHaveLength(51);
     expect(html).toContain("Writer 3");
     expect(html).not.toContain("None");
-    // The list's entries; its authors by id; its links: their rows by id,
-    // then the three ownership checks as counts over all of them (the pair
-    // stored, no lower id, no earlier collection); then its one image.
+    // In page order: the list's entries; its authors by id; its image by
+    // id; its links: their rows by id, then the three ownership checks as
+    // counts over all of them (the pair stored, no lower id, no earlier
+    // collection).
     expect(described(reads)).toEqual([
       "posts: query",
       "authors: by ids",
+      "images: by ids",
       "posts: by ids",
       "posts: count of pairs",
       "posts: count of pairs",
       "pages: by slugs",
-      "images: query",
     ]);
     expect(fifty.media.findByID).not.toHaveBeenCalled();
     expect(total).toBe(7);
@@ -889,6 +901,53 @@ describe("a list's read-ahead, in the order the page draws", () => {
   });
 });
 
+describe("a list's images, read ahead", () => {
+  it("reads a hundred entries' own images in one read through the media library", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    // The posts' picture is an upload to the media library, the collection
+    // a route without a media collection of its own reads images from.
+    runtime.shapes.set("collection:posts", [
+      { name: "title", type: "text" },
+      { name: "slug", type: "text" },
+      { name: "author", type: "relationship", relationTo: "authors" },
+      { name: "featuredImage", type: "upload", relationTo: "media" },
+    ]);
+    const nextly = site(100, listing(100, { boundImage: true }));
+    const { html, total } = await journal(nextly, { mediaLibrary: true });
+    expect(html).toContain("/media/1.jpg");
+    expect(html).toContain("/media/100.jpg");
+    expect(nextly.media.findByIDs).toHaveBeenCalledOnce();
+    expect(nextly.media.findByID).not.toHaveBeenCalled();
+    // The entries, the authors, the images and the links' four.
+    expect(total).toBe(7);
+  });
+
+  it("keeps the first block's link its address when the cap covers exactly that link", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const nextly = site(
+      5,
+      pageOf([
+        postsList("list", 1, [
+          {
+            id: "more",
+            type: "core/button",
+            version: 1,
+            props: { label: "Read", entryCollection: "posts" },
+            bindings: { entryId: { $bind: "id", source: "item" } },
+          },
+          // After the link on the page: its relation is not read first.
+          itemHeading("author", "author.name", "No author"),
+        ]),
+      ])
+    );
+    // The entries, then exactly the link's own reads: its row, the two
+    // checks in its collection and one for the collection before it.
+    const { html } = await journal(nextly, { maxQueries: 1 + 4 });
+    expect(html).toContain('href="/post-1"');
+    expect(html).toContain(">No author<");
+  });
+});
+
 describe("a page drawn inside its Layout", () => {
   it("hands each region the blocks kept for its own conditions, not the page's", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -962,6 +1021,18 @@ describe("the overrun line", () => {
     await quiet();
     expect(warn).toHaveBeenCalledTimes(2);
     expect(String(warn.mock.calls[1]?.[0])).toContain('"pages" page "journal"');
+  });
+
+  it("says each cache scope of a page apart", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const nextly = site(5, listing(5));
+    await journal(nextly, { maxQueries: 0, cacheScope: "site-a" });
+    await quiet();
+    await journal(nextly, { maxQueries: 0, cacheScope: "site-b" });
+    await quiet();
+    await journal(nextly, { maxQueries: 0, cacheScope: "site-b" });
+    await quiet();
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 
   it("says each language of a page apart", async () => {
@@ -1068,11 +1139,11 @@ describe("what a page costs to read, measured", () => {
     expect(post.html).toContain("reads");
 
     const ahead = await journal(site(100, listing(100)));
-    // Each entry's own picture, bound: one read per distinct image.
+    // Each entry's own picture, bound: read in one batch, with the others.
     const bound = await journal(site(100, listing(100, { boundImage: true })));
     expect(bound.html).toContain("/media/100.jpg");
-    // The six fixed reads, then one per distinct image.
-    expect(bound.total).toBe(106);
+    // The same seven reads as one image: the hundred are one batch.
+    expect(bound.total).toBe(7);
     const oneByOne = await rendered(site(100, listing(100)), {
       collections: ["pages", "posts"],
       field: "content",
@@ -1132,6 +1203,14 @@ function everyStage(): {
       ...postsList("posts", 3, [
         itemHeading("title", "title", "None"),
         itemHeading("author", "author.name", "No author"),
+        // Each entry's own picture, read ahead with the others in a batch.
+        {
+          id: "cover",
+          type: "core/image",
+          version: 1,
+          props: { alt: "" },
+          bindings: { mediaId: { $bind: "featuredImage", source: "item" } },
+        },
         {
           id: "more",
           type: "core/button",
@@ -1198,6 +1277,77 @@ function reportIn(element: unknown): PageReadReport | undefined {
 }
 
 /**
+ * The editor's count of the page at `/journal`, made from the same site the
+ * route reads: lists through the public's reader, the bindings and
+ * conditions read as the route reads them under the reads left (as the
+ * canvas bindings route does), images from the stored rows.
+ */
+async function editorCount(
+  nextly: Site,
+  options: {
+    readonly cap: number;
+    readonly media: RouteMedia;
+    readonly definitions?: Map<string, BlockDocument>;
+    readonly regions?: CountedRegion[];
+  }
+): Promise<PageReadReport> {
+  const reader = createPublicReader(
+    { find: async args => (await nextly.find({ ...args })) as never },
+    {}
+  );
+  const images = nextly.stored.images ?? [];
+  return await countPageReads({
+    drawnWith: {
+      blocks,
+      definitions: options.definitions ?? new Map(),
+      context: createStandaloneContext({
+        entry: { id: "p1" },
+        entryCollection: "pages",
+        data: createDefaultDataProvider(reader as never),
+        resolveMedia: id => {
+          const image = images.find(row => row.id === id);
+          return Promise.resolve(
+            image === undefined ? null : { url: String(image.url) }
+          );
+        },
+      }),
+    },
+    document: (nextly.stored.pages?.[0]?.content ??
+      pageOf([])) as BlockDocument,
+    regions: options.regions ?? [],
+    entrySource: "collection",
+    where: {
+      collection: "pages",
+      slug: "journal",
+      page: 1,
+      listPagePath: page => `/journal/page/${String(page)}`,
+    },
+    readBindings: async (ask, allowance) => {
+      const budget = createQueryBudget(allowance);
+      const bindings = await readBindingSources({
+        documents: ask.documents,
+        ...(ask.conditions === undefined ? {} : { conditions: ask.conditions }),
+        entrySource: "collection",
+        slug: "pages",
+        entryId: "p1",
+        page: "journal",
+        reader: reader as never,
+        budget,
+        siteSettings: nextly as never,
+      });
+      return bindings === undefined
+        ? undefined
+        : { bindings, reads: budget.report() };
+    },
+    draw: async element => {
+      await renderToHtml(element);
+    },
+    cap: options.cap,
+    media: options.media,
+  });
+}
+
+/**
  * What a count reports, as two counts are compared: the reads made, by kind,
  * the blocks named unread, and whether any read was refused. How many were
  * refused is a lower bound on what the page needs (a read refused never asks
@@ -1221,6 +1371,7 @@ describe("the editor's count of a page's reads", () => {
       { name: "slug", type: "text" },
       { name: "publishedAt", type: "date" },
       { name: "author", type: "relationship", relationTo: "authors" },
+      { name: "featuredImage", type: "upload", relationTo: "images" },
     ]);
     const published = async (cap: number) => {
       const { nextly } = everyStage();
@@ -1244,30 +1395,9 @@ describe("the editor's count of a page's reads", () => {
     };
     const counted = async (cap: number) => {
       const { nextly, definitions } = everyStage();
-      // The public's reader, as the route's lists and bindings read.
-      const reader = createPublicReader(
-        { find: async args => (await nextly.find({ ...args })) as never },
-        {}
-      );
-      const images = nextly.stored.images ?? [];
-      return await countPageReads({
-        drawnWith: {
-          blocks,
-          definitions,
-          context: createStandaloneContext({
-            entry: { id: "p1" },
-            entryCollection: "pages",
-            data: createDefaultDataProvider(reader as never),
-            resolveMedia: id => {
-              const image = images.find(row => row.id === id);
-              return Promise.resolve(
-                image === undefined ? null : { url: String(image.url) }
-              );
-            },
-          }),
-        },
-        document: (nextly.stored.pages?.[0]?.content ??
-          pageOf([])) as BlockDocument,
+      return await editorCount(nextly, {
+        cap,
+        definitions,
         regions: [
           {
             area: "header",
@@ -1282,38 +1412,7 @@ describe("the editor's count of a page's reads", () => {
             definitions,
           },
         ],
-        entrySource: "collection",
-        where: {
-          collection: "pages",
-          slug: "journal",
-          page: 1,
-          listPagePath: page => `/journal/page/${String(page)}`,
-        },
-        // The bindings and conditions read as the route reads them, under
-        // the reads the page has left, as the canvas bindings route does.
-        readBindings: async (ask, allowance) => {
-          const budget = createQueryBudget(allowance);
-          const bindings = await readBindingSources({
-            documents: ask.documents,
-            ...(ask.conditions === undefined
-              ? {}
-              : { conditions: ask.conditions }),
-            entrySource: "collection",
-            slug: "pages",
-            entryId: "p1",
-            page: "journal",
-            reader: reader as never,
-            budget,
-            siteSettings: nextly as never,
-          });
-          return bindings === undefined
-            ? undefined
-            : { bindings, reads: budget.report() };
-        },
-        draw: async element => {
-          await renderToHtml(element);
-        },
-        cap,
+        media: { mediaCollection: "images" },
       });
     };
     const full = await published(500);
@@ -1323,6 +1422,8 @@ describe("the editor's count of a page's reads", () => {
     expect(full.html).toContain("/media/2.jpg");
     expect(full.html).toContain("Writer ");
     expect(full.html).toContain('href="/post-1"');
+    // The entries' own pictures, read ahead in one batch.
+    expect(full.html).toContain("/media/3.jpg");
     const most = full.report?.used ?? 0;
     expect(most).toBeGreaterThan(8);
     // Each allowance from none to past the page's need, both ways, compared
@@ -1335,5 +1436,275 @@ describe("the editor's count of a page's reads", () => {
       editor.push({ cap, ...comparable(await counted(cap)) });
     }
     expect(editor).toEqual(route);
+  });
+});
+
+describe("a component read refused for want of reads", () => {
+  it("names the placements asking for it, as the blocks drawn without it", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { nextly } = everyStage();
+    // Room for the outer component's read alone: the inner one's, asked by
+    // the block it is placed in, is refused.
+    const route = createPublicBlocksPage({
+      collections: ["pages", "posts"],
+      field: "content",
+      blocks,
+      maxQueries: 1,
+      nextly: nextly as never,
+    });
+    const element = await throughBoundary<{ children?: unknown }>(
+      route.ContentPage({ params: { slug: ["journal"] } })
+    );
+    const report = reportIn(element);
+    expect(report?.byKind).toEqual({ component: 1 });
+    // The page's own placement, which the inner component is drawn inside:
+    // the block an author placed and can select.
+    expect(report?.unread).toContainEqual({
+      nodeId: "outer-placed",
+      what: "component",
+    });
+  });
+});
+
+describe("a list's images, counted as the route reads them", () => {
+  it("counts one read per batch where the route batches, and one per image where it cannot", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const imagesRead = async (route: {
+      readonly media: RouteMedia;
+      readonly config: Record<string, unknown>;
+    }) => {
+      const nextly = site(3, listing(3, { boundImage: true }));
+      const page = createPublicBlocksPage({
+        collections: ["pages", "posts"],
+        field: "content",
+        blocks,
+        mediaCollection: "images",
+        ...route.config,
+        nextly: nextly as never,
+      });
+      const element = await throughBoundary<{ children?: unknown }>(
+        page.ContentPage({ params: { slug: ["journal"] } })
+      );
+      await renderToHtml(element);
+      const counted = await editorCount(
+        site(3, listing(3, { boundImage: true })),
+        {
+          cap: 500,
+          media: route.media,
+        }
+      );
+      return {
+        route: reportIn(element)?.byKind.image,
+        count: counted.byKind.image,
+      };
+    };
+    // A named media collection: one read for the list's three images.
+    expect(
+      await imagesRead({ media: { mediaCollection: "images" }, config: {} })
+    ).toEqual({ route: 1, count: 1 });
+    // The site's own resolver takes one id: one read per image, both ways.
+    expect(
+      await imagesRead({
+        media: { mediaCollection: "images", ownResolver: true },
+        config: {
+          resolveMedia: (id: string) =>
+            Promise.resolve({ url: `/media/${id.slice(6)}.jpg` }),
+        },
+      })
+    ).toEqual({ route: 3, count: 3 });
+  });
+
+  it("counts one read per image for a media library that reads one id at a time", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    // The posts' pictures are uploads to the media library.
+    runtime.shapes.set("collection:posts", [
+      { name: "title", type: "text" },
+      { name: "slug", type: "text" },
+      { name: "author", type: "relationship", relationTo: "authors" },
+      { name: "featuredImage", type: "upload", relationTo: "media" },
+    ]);
+    const nextly = site(3, listing(3, { boundImage: true }));
+    // A media library with no read of many ids.
+    Reflect.deleteProperty(nextly.media, "findByIDs");
+    const page = createPublicBlocksPage({
+      collections: ["pages", "posts"],
+      field: "content",
+      blocks,
+      nextly: nextly as never,
+    });
+    const element = await throughBoundary<{ children?: unknown }>(
+      page.ContentPage({ params: { slug: ["journal"] } })
+    );
+    await renderToHtml(element);
+    const counted = await editorCount(
+      site(3, listing(3, { boundImage: true })),
+      { cap: 500, media: { libraryReadsMany: false } }
+    );
+    expect({
+      route: reportIn(element)?.byKind.image,
+      count: counted.byKind.image,
+    }).toEqual({ route: 3, count: 3 });
+    // CONTROL: the same count, for a library that reads many, batches.
+    const batched = await editorCount(
+      site(3, listing(3, { boundImage: true })),
+      { cap: 500, media: {} }
+    );
+    expect(batched.byKind.image).toBe(1);
+  });
+});
+
+describe("a list's image batch that cannot be used", () => {
+  it("stops the reads ahead, so the images it fell back to keep their reads", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    // Each entry's own picture, then its author through a relation.
+    const nextly = site(
+      2,
+      pageOf([
+        postsList("list", 2, [
+          {
+            id: "cover",
+            type: "core/image",
+            version: 1,
+            props: { alt: "" },
+            bindings: { mediaId: { $bind: "featuredImage", source: "item" } },
+          },
+          itemHeading("author", "author.name", "No author"),
+        ]),
+      ]),
+      // A batch read by `id in` whose count the route cannot trust.
+      { distrustBatches: true }
+    );
+    // The entries, the batch it could not use, and each image's own read.
+    const { html } = await journal(nextly, { maxQueries: 1 + 1 + 2 });
+    expect(html).toContain("/media/1.jpg");
+    expect(html).toContain("/media/2.jpg");
+  });
+});
+
+describe("a list's reads ahead, in the order the list first draws its blocks", () => {
+  it("reads the link the first entry draws before the relation only a later entry draws", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const only = (title: string) => ({
+      conditions: [[{ field: "title", op: "equals", value: title }]],
+    });
+    // The author, through a relation, comes first in the template, but only
+    // the second entry draws it; the link comes later, and only the first
+    // entry draws it. Ranked by place within each entry, the relation would
+    // be read ahead first and leave the link short of its reads.
+    const nextly = site(
+      2,
+      pageOf([
+        postsList("list", 2, [
+          {
+            ...itemHeading("author", "author.name", "No author"),
+            visibility: only("Post number 2"),
+          },
+          itemHeading("title", "title", "None"),
+          {
+            id: "more",
+            type: "core/button",
+            version: 1,
+            props: { label: "Read", entryCollection: "posts" },
+            bindings: { entryId: { $bind: "id", source: "item" } },
+            visibility: only("Post number 1"),
+          },
+        ]),
+      ])
+    );
+    // The entries, then exactly the link's own reads.
+    const { html } = await journal(nextly, { maxQueries: 1 + 4 });
+    expect(html).toContain('href="/post-1"');
+  });
+});
+
+describe("a list's images, on a route that reads each by its own id", () => {
+  it("stops the reads ahead at the images, so each keeps its own read", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    // Each entry's own picture, then its author through a relation.
+    const nextly = site(
+      2,
+      pageOf([
+        postsList("list", 2, [
+          {
+            id: "cover",
+            type: "core/image",
+            version: 1,
+            props: { alt: "" },
+            bindings: { mediaId: { $bind: "featuredImage", source: "item" } },
+          },
+          itemHeading("author", "author.name", "No author"),
+        ]),
+      ])
+    );
+    const route = createPublicBlocksPage({
+      collections: ["pages", "posts"],
+      field: "content",
+      blocks,
+      mediaCollection: "images",
+      // The site's own resolver, which takes one id.
+      resolveMedia: (id: string) => Promise.resolve({ url: `/own/${id}.jpg` }),
+      maxQueries: 1 + 2,
+      nextly: nextly as never,
+    });
+    const element = await throughBoundary<{ children?: unknown }>(
+      route.ContentPage({ params: { slug: ["journal"] } })
+    );
+    const html = await renderToHtml(element);
+    // The entries, then each image's own read: the relation is not read
+    // ahead of them.
+    expect(html).toContain("/own/image-1.jpg");
+    expect(html).toContain("/own/image-2.jpg");
+  });
+});
+
+describe("a list's reads ahead, stopped where a step reads nothing ahead", () => {
+  const linkThenAuthor = () =>
+    pageOf([
+      postsList("list", 1, [
+        {
+          id: "more",
+          type: "core/button",
+          version: 1,
+          props: { label: "Read", entryCollection: "posts" },
+          bindings: { entryId: { $bind: "id", source: "item" } },
+        },
+        // After the link on the page, through a relation.
+        itemHeading("author", "author.name", "No author"),
+      ]),
+    ]);
+
+  it("on a route with its own entry paths, the link keeps its read before the relation", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const nextly = site(5, linkThenAuthor());
+    const route = createPublicBlocksPage({
+      collections: ["pages", "posts"],
+      field: "content",
+      blocks,
+      mediaCollection: "images",
+      // The site's own resolver, which takes one reference and reads none
+      // ahead.
+      resolveEntryPath: (_collection: string, id: string) =>
+        Promise.resolve(`/own/${id}`),
+      // The entries, then the link's one read.
+      maxQueries: 1 + 1,
+      nextly: nextly as never,
+    });
+    const element = await throughBoundary<{ children?: unknown }>(
+      route.ContentPage({ params: { slug: ["journal"] } })
+    );
+    const html = await renderToHtml(element);
+    expect(html).toContain('href="/own/post-1"');
+    expect(html).toContain(">No author<");
+  });
+
+  it("in the editor's count, a link batch it cannot afford stops the reads ahead", async () => {
+    // The entries, then exactly the link's own three reads: too few for its
+    // batch, which keeps each link's reads after it.
+    const counted = await editorCount(site(5, linkThenAuthor()), {
+      cap: 1 + 3,
+      media: {},
+    });
+    expect(counted.byKind).toEqual({ entries: 1, link: 3 });
+    expect(counted.unread).toEqual([]);
   });
 });

@@ -94,6 +94,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     slug: "pages",
     documentId: "p1",
   }),
+  // The field's address as the admin gives it outside repeaters: its form
+  // path. No case here draws a field inside a repeater's row.
+  useFieldAddress: (_control: unknown, path: string) => ({ address: path }),
   // Recorded, so a case can tell a plain click handled within the admin from
   // one left to the browser.
   navigateTo: (href: string) => {

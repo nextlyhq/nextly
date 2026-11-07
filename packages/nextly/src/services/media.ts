@@ -29,7 +29,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { count, desc, asc, sql } from "drizzle-orm";
+import { count, desc, asc, inArray, sql } from "drizzle-orm";
 
 import {
   getMediaStorage,
@@ -70,6 +70,7 @@ import {
 import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
+import { NEXTLY_ERROR_STATUS } from "../errors/error-codes";
 import { keysToSnakeCase } from "../lib/case-conversion";
 import { withoutStoredSizes } from "../lib/media-variant";
 import { inPluginTransaction } from "../shared/lib/plugin-transaction-scope";
@@ -80,6 +81,7 @@ import type {
   MediaParams,
   MediaListResponse,
   MediaResponse,
+  MediaManyResponse,
   DeleteMediaResponse,
   UploadMediaInput,
   UpdateMediaInput,
@@ -471,6 +473,45 @@ export class MediaService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
+        message: "Failed to retrieve media",
+        data: null,
+      };
+    }
+  }
+
+  /**
+   * Several media files by id, in one query: what `getMediaById` answers for
+   * each, without the ids that have no file. The caller bounds how many ids
+   * one call asks for.
+   */
+  async getMediaByIds(mediaIds: readonly string[]): Promise<MediaManyResponse> {
+    if (mediaIds.length === 0) {
+      return {
+        success: true,
+        statusCode: 200,
+        message: "Media retrieved successfully",
+        data: [],
+      };
+    }
+    try {
+      const { media } = this.tables;
+      const rows = await this.db
+        .select()
+        .from(media)
+        .where(inArray(media.id, [...mediaIds]));
+      return {
+        success: true,
+        statusCode: 200,
+        message: "Media retrieved successfully",
+        data: rows.map((row: StoredMediaRow) => withoutStoredSizes(row)),
+      };
+    } catch (error) {
+      this.logger.error("[MediaService] Get media by ids error", { error });
+      return {
+        success: false,
+        // The canonical table's status for the code, never one of its own.
+        statusCode: NEXTLY_ERROR_STATUS.INTERNAL_ERROR,
         code: "INTERNAL_ERROR",
         message: "Failed to retrieve media",
         data: null,
