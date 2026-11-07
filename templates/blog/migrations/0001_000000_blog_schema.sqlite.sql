@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS "dc_authors" (
   "name" TEXT NOT NULL,
   "slug" TEXT NOT NULL UNIQUE,
   "bio" TEXT,
+  "avatar" TEXT,
   "account" TEXT,
   "status" TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   "first_published_at" INTEGER,

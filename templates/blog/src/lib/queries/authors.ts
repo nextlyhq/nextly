@@ -37,13 +37,14 @@ export async function getAuthorBySlug(slug: string): Promise<Author | null> {
           collection: "authors",
           where: { slug: { equals: slug } },
           limit: 1,
-          depth: 0,
+          // One level, so the avatar arrives as its media record.
+          depth: 1,
         });
         const match = result.items[0];
         return match ? toAuthor(match) : null;
       },
       {
-        tags: nextlyTags("authors"),
+        tags: [...nextlyTags("authors"), ...nextlyTags("media")],
         keyParts: ["authors", "detail", slug],
         revalidate: AUTHOR_REVALIDATE_SECONDS,
       }

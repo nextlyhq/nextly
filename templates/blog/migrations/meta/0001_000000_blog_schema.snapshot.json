@@ -233,6 +233,11 @@
           "type": "textarea"
         },
         {
+          "name": "avatar",
+          "type": "upload",
+          "relationTo": "media"
+        },
+        {
           "name": "account",
           "type": "relationship",
           "relationTo": "users",
@@ -443,6 +448,12 @@
       "to": "authors",
       "type": "many-to-one",
       "field": "byline"
+    },
+    {
+      "from": "authors",
+      "to": "media",
+      "type": "many-to-one",
+      "field": "avatar"
     },
     {
       "from": "authors",

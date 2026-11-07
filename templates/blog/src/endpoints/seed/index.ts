@@ -659,12 +659,17 @@ export async function seed({
     }
   };
 
-  // Post cover images go through the media upload path.
-  // User avatars are text URLs (resolved below) so they don't get
-  // uploaded here; they stay as raw URLs in the `avatarUrl` user field.
+  // Post cover images go through the media upload path, and so do the
+  // avatars the author profiles show. The users' own `avatarUrl` stays a
+  // text address (resolved below), which no page reads.
   for (const post of seedData.posts) {
     if (post.featuredImage) {
       await uploadAndTrack(post.featuredImage, post.title);
+    }
+  }
+  for (const user of seedData.users) {
+    if (user.avatarUrl && !/^https?:\/\//i.test(user.avatarUrl)) {
+      await uploadAndTrack(user.avatarUrl, user.name);
     }
   }
 
@@ -765,6 +770,9 @@ export async function seed({
         authorIdMap[user.slug] = existing.items[0].id as string;
         continue;
       }
+      const avatarId = user.avatarUrl
+        ? mediaIdByUpload.get(uploadKey(user.avatarUrl, user.name))
+        : undefined;
       const createdAuthor = await nextly.create({
         collection: "authors",
         data: {
@@ -772,6 +780,7 @@ export async function seed({
           name: user.name,
           slug: user.slug,
           bio: user.bio,
+          ...(avatarId ? { avatar: avatarId } : {}),
           ...(userIdMap[user.slug] ? { account: userIdMap[user.slug] } : {}),
         },
       });

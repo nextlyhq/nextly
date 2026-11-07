@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS `dc_authors` (
   `name` varchar(255) NOT NULL,
   `slug` varchar(255) NOT NULL,
   `bio` text,
+  `avatar` varchar(36),
   `account` varchar(191),
   `status` varchar(20) NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   `first_published_at` timestamp NULL DEFAULT NULL,

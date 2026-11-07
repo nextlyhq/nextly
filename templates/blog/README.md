@@ -35,9 +35,9 @@ A post has two people fields, kept apart on purpose:
 - `author` (relationship to `users`): the account that owns the post. The Author role may edit only the posts whose `author` is them, and a new post's `author` is the account that creates it.
 - `byline` (relationship to `authors`, labelled **Byline**): the public author a reader is shown, with their name, page at `/authors/[slug]` and bio. A new post is credited to the profile of the account that writes it, when that account has one.
 
-The **Authors** collection holds those public profiles: `name`, `slug` (unique, used by `/authors/[slug]`), `bio`, and `account`, the account the profile belongs to. Accounts stay private; profiles are readable by anyone, which is what lets a page show them.
+The **Authors** collection holds those public profiles: `name`, `slug` (unique, used by `/authors/[slug]`), `bio`, `avatar` (an image in the media library), and `account`, the account the profile belongs to. Accounts stay private; profiles are readable by anyone, which is what lets a page show them.
 
-The demo seed creates one author profile per seeded user, in order, and credits each post to its author's profile. The users keep their `bio`, `avatarUrl` and `slug` fields, which no page reads.
+The demo seed creates one author profile per seeded user, in order, with its avatar uploaded to the media library, and credits each post to its author's profile. The users keep their `bio`, `avatarUrl` and `slug` fields, which no page reads.
 
 ### Roles
 

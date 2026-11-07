@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS "dc_authors" (
   "name" text NOT NULL,
   "slug" text NOT NULL UNIQUE,
   "bio" text,
+  "avatar" text,
   "account" text,
   "status" text NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   "first_published_at" timestamp with time zone,

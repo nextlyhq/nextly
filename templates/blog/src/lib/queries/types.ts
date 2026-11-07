@@ -27,7 +27,8 @@ export interface Media {
  * `byline`. It is public by design: the `users` account that owns a post is
  * private, and none of its fields reach the frontend.
  *
- * `avatarUrl` is the address the avatar is drawn from, or null for none.
+ * `avatarUrl` is the address of the profile's avatar in the media library, or
+ * null when it has none or its address is not one an image can be drawn from.
  */
 export interface Author {
   id: string;
