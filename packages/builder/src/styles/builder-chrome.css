@@ -11404,9 +11404,17 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /* The picker: the fields by source, each with its value as the author reads it. */
-.nx-binding-popover {
+/* Two classes, to outrank the popover's own width and padding. */
+[data-slot="popover-content"].nx-binding-popover {
   inline-size: min(20rem, calc(100vw - 2rem));
   padding: 0;
+}
+
+/* A long list scrolls inside the picker, its hint kept in view below it. */
+.nx-binding-picker {
+  display: flex;
+  flex-direction: column;
+  max-block-size: 24rem;
 }
 
 .nx-binding-picker__hint,

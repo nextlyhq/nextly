@@ -210,6 +210,10 @@ describe("a bound prop", () => {
         })
       )
     );
+    // Said as the page changed, not in the API's words.
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "Unbound. The badge keeps what visitors saw: “Spring sale”."
+    );
   });
 });
 

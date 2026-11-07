@@ -41,6 +41,7 @@ import type {
   BindingFieldSource,
 } from "./binding-services";
 import { ChoiceList, type ListedChoice } from "./choice-list";
+import type { UnbindAnswer } from "./composition-actions";
 import type { ContentServices } from "./content-controls";
 import { fieldLabel, propLabel, type EditableProp } from "./inspector";
 
@@ -226,6 +227,9 @@ function BindingPicker({
     );
   }
   const options = fittingOptions(sources, prop);
+  // A source with nothing to offer this prop is not listed: an empty group
+  // only lengthens the list.
+  const offering = new Set(options.map(option => option.group));
   return (
     <div className="nx-binding-picker">
       <ChoiceList
@@ -235,10 +239,11 @@ function BindingPicker({
         label={`Fields for ${name}`}
         searchLabel="Find a field"
         noMatch="No field matches."
-        groups={sources.map((source, index) => ({
-          group: String(index),
-          heading: sourceName(source),
-        }))}
+        groups={sources.flatMap((source, index) =>
+          offering.has(String(index))
+            ? [{ group: String(index), heading: sourceName(source) }]
+            : []
+        )}
         renderChoice={choice => <OptionRow option={choice} />}
         choiceTitle={choice =>
           choice.field.preview === undefined
@@ -385,6 +390,35 @@ function UnboundNote({ note }: { note: UnbindNote }): React.JSX.Element {
   );
 }
 
+/**
+ * What an unbind kept, said as the author reads it: the block keeps what
+ * visitors saw, the fallback, or its own value. The answer's own reason
+ * says more, for an API client; the note says what changed on the page.
+ */
+function noteFor(
+  answer: UnbindAnswer,
+  blockLabel: string,
+  propName: string
+): string {
+  const block = `The ${blockLabel.toLowerCase()}`;
+  const value =
+    typeof answer.value === "string" && answer.value !== ""
+      ? `: “${answer.value}”`
+      : "";
+  switch (answer.kept) {
+    case "visitor":
+      return answer.into === undefined
+        ? `${block} keeps what visitors saw${value}.`
+        : `${block} keeps the image visitors saw, by its address.`;
+    case "fallback":
+      return `Visitors saw the fallback, so ${block.toLowerCase()} keeps it${value}.`;
+    case "own":
+      return `${block} keeps its own ${propName.toLowerCase()}.`;
+    default:
+      return `${block} keeps the value given${value}.`;
+  }
+}
+
 /** The field a binding reads, named, and its source, once the sources are read. */
 function boundNames(
   binding: Binding,
@@ -446,7 +480,7 @@ function BoundField({
     const op = unbindOp(document, nodeId, prop.name, plan.kept);
     if (op === null) return;
     onApply(op);
-    onUnbound({ text: plan.answer.reason, refused: false });
+    onUnbound({ text: noteFor(plan.answer, blockLabel, name), refused: false });
   };
   const fallback =
     "fallback" in binding && typeof binding.fallback === "string"
@@ -480,7 +514,9 @@ function BoundField({
                     </span>
                     {names.source === undefined ? null : (
                       <span className="nx-binding-chip__source">
-                        {" · "}
+                        {/* A no-break space: a flex item drops a
+                            leading plain one. */}
+                        {"\u00a0· "}
                         {names.source}
                       </span>
                     )}
