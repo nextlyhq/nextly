@@ -39,7 +39,11 @@ import {
   type DocumentLimits,
   type NodeVisibility,
 } from "@nextlyhq/blocks-engine";
-import { sanitizeDocument, type ItemHiddenAs } from "@nextlyhq/blocks-react";
+import {
+  sanitizeDocument,
+  type HidingItem,
+  type ItemHiddenAs,
+} from "@nextlyhq/blocks-react";
 
 import { storedGroups } from "./condition-checks";
 import { gatedAsStored } from "./condition-gate";
@@ -273,26 +277,7 @@ export interface ItemMarkerSources {
  */
 export function itemHiddenAsOf(sources: ItemMarkerSources): ItemHiddenAs {
   return (node, item) => {
-    const readable =
-      item.collection === undefined
-        ? undefined
-        : sources.fieldsOf(item.collection);
-    const labelled =
-      item.collection === undefined
-        ? undefined
-        : sources.labelledOf?.(item.collection);
-    const preview: ConditionsPreview = {
-      subject: {
-        fields: {
-          declared: new Set((readable ?? []).map(field => field.name)),
-          readable: readable ?? [],
-        },
-        values: item.values,
-      },
-      noun: "entry",
-      fields: labelled ?? conditionFieldsOfShapes(readable ?? []),
-      ...(sources.dayStart === undefined ? {} : { dayStart: sources.dayStart }),
-    };
+    const preview = itemPreviewOf(sources, item);
     const verdict = evaluateConditions(storedGate(node), inputOf(preview));
     // The renderer asks only about a block the item hides; a verdict that
     // says otherwise draws the block's place empty rather than a false mark.
@@ -305,6 +290,37 @@ export function itemHiddenAsOf(sources: ItemMarkerSources): ItemHiddenAs {
       },
       node
     );
+  };
+}
+
+/**
+ * The list item as a visitor reads it: its values, and the fields a visitor
+ * may read of its collection's entries, none where those are not known.
+ */
+function itemPreviewOf(
+  sources: ItemMarkerSources,
+  item: HidingItem
+): ConditionsPreview {
+  const { collection } = item;
+  const known =
+    collection === undefined
+      ? {}
+      : {
+          readable: sources.fieldsOf(collection),
+          labelled: sources.labelledOf?.(collection),
+        };
+  const readable = known.readable ?? [];
+  return {
+    subject: {
+      fields: {
+        declared: new Set(readable.map(field => field.name)),
+        readable,
+      },
+      values: item.values,
+    },
+    noun: "entry",
+    fields: known.labelled ?? conditionFieldsOfShapes(readable),
+    ...(sources.dayStart === undefined ? {} : { dayStart: sources.dayStart }),
   };
 }
 
