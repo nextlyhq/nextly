@@ -1981,6 +1981,15 @@ export const pageBuilder = (
             );
           },
         }),
+        // What a page's bindings may read: each source's declared fields,
+        // whoever may read them, since binding a field the public may not read
+        // is allowed. Read per write, so a field renamed a moment ago is judged
+        // at the next save.
+        bindingShapes: async ref => {
+          // Imported at call time, for the reason the readers above give.
+          const { declaredFieldShapes } = await import("nextly/runtime");
+          return declaredFieldShapes(ref);
+        },
         siteDefinitions: async () => {
           const style = await siteStyleNow();
           return {
@@ -2036,6 +2045,16 @@ export const pageBuilder = (
             }
           ),
         onLayersLockUnjudged: warnLayersLockUnjudged,
+        onBindingsUnjudged: found =>
+          ctx.logger.warn(
+            `[page-builder] a save kept ${String(found.bindings)} binding problem(s) the schema refuses, because the stored value they may already be part of could not be read; repair them in the editor`,
+            {
+              field: found.field,
+              kind: found.kind,
+              slug: found.slug,
+              id: found.id,
+            }
+          ),
         // The components being deleted, read from the plugin's own table on
         // each write that places a component. A table that cannot be read
         // refuses only writes adding a component, and says so here.

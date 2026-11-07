@@ -227,6 +227,31 @@ one warning per report, naming the page.
 Image bindings are checked but not filled yet: a bound image keeps its own
 value.
 
+#### Bindings checked when a document is saved
+
+With the Page Builder plugin, saving a document checks its bindings by the
+same rules, on its blocks and in its own metadata (`settings.seo`), through
+the API as in the editor, and refuses one that breaks them, naming the
+binding and the code. The fields are read as the source declares them, not as
+a visitor may read them: a binding to a field visitors may not read is saved,
+and the published page renders its fallback. `createdAt` and `updatedAt` are
+dates where the source's entries carry them. Only the sources the document
+binds are read: the page's own entry, each Single it names, and the
+collection a path's one relation leads into, through any group on the way.
+
+A binding a schema change broke after the document was saved is kept: a field
+renamed or removed, a Single's field renamed, a bound prop's type changed, or a
+bound prop removed. The document still saves, with the binding as it was, and
+renders it as the list above says. The same binding added to another block is
+refused, since that one is the save's own.
+
+Not checked at save: a binding to a list item, whose fields depend on the list
+around it; a binding to the site settings, whose fields are a fixed set; and
+any binding in a write made inside a transaction (a batch or an import), whose
+schema read could wait behind the transaction's own connection. A
+component's own document has no entry, so its bindings to the entry are checked
+on each page that places it, when that page renders.
+
 #### The document's own metadata
 
 `settings.seo` holds the title, description and social image a document states

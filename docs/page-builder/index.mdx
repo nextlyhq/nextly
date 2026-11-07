@@ -566,7 +566,7 @@ read. It never creates the Single's document. `select` keeps the id and the fiel
 read takes no other option, and refuses `status`, `draft`, `depth`, `populate` and the rest by
 name, as a list's read does.
 
-Two more reads sit beside it in `nextly/runtime`, both `@experimental`:
+Three more reads sit beside it in `nextly/runtime`, each `@experimental`:
 
 - `readPublicSiteSettings()` answers the site's `applicationName`, `siteUrl`, `logoUrl` and
   `timezone` from the General Settings, each `null` until it is set. Nothing else in the settings
@@ -581,6 +581,11 @@ Two more reads sit beside it in `nextly/runtime`, both `@experimental`:
   A field the visitor's field rules hide is left out, and so is one whose rule needs an entry to
   decide. A source the visitor may not read, or one that does not exist, has no shapes
   (`undefined`).
+- `declaredFieldShapes({ collection })` or `declaredFieldShapes({ single })` answers the same
+  shapes for every field the source declares, whoever may read it: what a save checks a
+  binding against (see [Bindings checked when a document is
+  saved](/docs/api-reference/block-document-format#bindings-checked-when-a-document-is-saved)).
+  A source that does not exist has no shapes (`undefined`).
 
 The shapes, and the settings when no instance is given, read the process's running instance,
 as `requireNextly` does.
