@@ -77,6 +77,11 @@ export interface PageBuilderContentProvider {
     limit: number
   ) => Promise<readonly (readonly string[])[]>;
   readonly addressCollections: () => Promise<readonly string[]>;
+  readonly entryPath: (
+    collection: string,
+    id: string,
+    locale: string | undefined
+  ) => Promise<string | null>;
   readonly templates: {
     readonly collection: string;
     readonly read: (
@@ -143,6 +148,8 @@ export function pageBuilderContent(
       return paths;
     },
     addressCollections: async () => (await service()).collections(),
+    entryPath: async (collection, id, locale) =>
+      (await service()).pathHeldBy(locale, collection, id),
     templates: {
       collection: templates,
       read: async (collection, locale) => {

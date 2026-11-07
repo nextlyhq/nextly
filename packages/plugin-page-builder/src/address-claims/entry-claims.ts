@@ -17,16 +17,22 @@ export const ENTRY_SLUG_FIELD = "slug";
 export const NO_ADDRESS = "no-address";
 
 /**
- * Whether a document as stored is published. A collection without a
- * Draft/Published lifecycle stores no status, and every entry of it is live.
+ * Whether a document as stored is published. Every entry of a collection
+ * without a Draft/Published lifecycle is live, whatever an ordinary field of
+ * its named `status` holds, so the collection's lifecycle is asked, never
+ * read off the row.
  */
-export function isPublished(data: Readonly<Record<string, unknown>>): boolean {
-  return data.status === undefined || data.status === "published";
+export function isPublished(
+  data: Readonly<Record<string, unknown>>,
+  lifecycle: boolean
+): boolean {
+  return !lifecycle || data.status === "published";
 }
 
 /**
  * The addresses the entry `data` holds under `address` (the collection's
- * address segments), one per language in `locales`: none while it is not
+ * address segments), one per language in `locales`, in a collection with a
+ * Draft/Published `lifecycle` or without one: none while it is not
  * published, and {@link NO_ADDRESS} when it is published with a slug that
  * names no address (missing, empty, or holding a `/` or a character the
  * route refuses), so the caller can refuse or report it.
@@ -34,14 +40,22 @@ export function isPublished(data: Readonly<Record<string, unknown>>): boolean {
 export function entryAddresses(
   data: Readonly<Record<string, unknown>>,
   address: readonly string[],
-  locales: readonly string[]
+  locales: readonly string[],
+  lifecycle: boolean
 ): readonly ServedAddress[] | typeof NO_ADDRESS {
-  if (!isPublished(data)) return [];
+  if (!isPublished(data, lifecycle)) return [];
   const slug = data[ENTRY_SLUG_FIELD];
   if (typeof slug !== "string" || slug === "") return NO_ADDRESS;
   // Each segment encoded as a request carries it, so a slug holding `/` is
-  // one segment that the store refuses, never two that land elsewhere.
-  const path = `/${[...address, slug].map(encodeURIComponent).join("/")}`;
+  // one segment that the store refuses, never two that land elsewhere. Text
+  // that is not well-formed Unicode (a lone surrogate) cannot be encoded,
+  // and names no address either.
+  let path: string;
+  try {
+    path = `/${[...address, slug].map(encodeURIComponent).join("/")}`;
+  } catch {
+    return NO_ADDRESS;
+  }
   const addresses: ServedAddress[] = [];
   for (const locale of locales) {
     const served = servedAddress(locale, path);

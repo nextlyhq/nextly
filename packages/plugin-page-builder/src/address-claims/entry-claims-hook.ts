@@ -23,7 +23,11 @@
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
+import { claimKey, type ServedAddress } from "./claim-key";
 import {
+  claimAddress,
+  claimOrWait,
+  committedClaims,
   holdLocks,
   reconcileHolder,
   releaseClaims,
@@ -57,6 +61,23 @@ export interface EntryClaimsDeps {
   readonly locales: () => readonly string[];
   /** Whether `collection`'s template is published, as last committed. */
   readonly templatePublished: (collection: string) => Promise<boolean>;
+  /**
+   * Whether `collection` has a Draft/Published lifecycle: without one,
+   * every entry is live, whatever a field named `status` holds.
+   */
+  readonly lifecycle: (collection: string) => Promise<boolean>;
+  /** The Pages collection's slug, as the host named it. */
+  readonly pages: string;
+  /** Whether the start-up pass has claimed every existing page. */
+  readonly pagesBackfilled: () => boolean;
+  /**
+   * The published pages whose slug is one of `slugs`, as committed, with
+   * the addresses each holds: the pages an entry's address could fall on
+   * before the start-up pass has claimed them.
+   */
+  readonly pagesWithSlugs: (
+    slugs: readonly string[]
+  ) => Promise<readonly { id: string; addresses: readonly ServedAddress[] }[]>;
   /**
    * One page (from 1) of `collection`'s published entries, as last
    * committed, oldest first, `size` to a page.
@@ -154,7 +175,7 @@ async function holdEntryClaims(
     collectionLock(address, locales)
   );
   const wanted = (await deps.templatePublished(collection))
-    ? entryAddresses(data, address, locales)
+    ? entryAddresses(data, address, locales, await deps.lifecycle(collection))
     : [];
   if (wanted === NO_ADDRESS) {
     throw NextlyError.validation({
@@ -168,6 +189,7 @@ async function holdEntryClaims(
       logContext: { reason: "entry-without-address", collection },
     });
   }
+  await claimPagesAt(deps, write.transaction, wanted, "refuse");
   await reconcileHolder(
     deps.claims,
     write.transaction,
@@ -175,6 +197,42 @@ async function holdEntryClaims(
     { addresses: wanted, spaces: [] },
     deps.describe
   );
+}
+
+/**
+ * Until the start-up pass has claimed every existing page, a page already
+ * published at one of `addresses` may hold no claim yet, and an entry
+ * taking the address would push the page out of it. So such pages claim
+ * their addresses first, in this transaction, and the entry is then refused
+ * naming them, or waits for them.
+ */
+async function claimPagesAt(
+  deps: EntryClaimsDeps,
+  tx: Tx,
+  addresses: readonly ServedAddress[],
+  mode: "refuse" | "wait"
+): Promise<void> {
+  if (deps.pagesBackfilled() || addresses.length === 0) return;
+  const wanted = new Set(addresses.map(at => claimKey("address", at)));
+  // A page's slug is its served path, or the end of it under a prefix the
+  // host serves pages at, so the candidates are the path's endings.
+  const segments = addresses[0]?.segments ?? [];
+  const slugs = segments.map((_, at) => segments.slice(at).join("/"));
+  for (const page of await deps.pagesWithSlugs(slugs)) {
+    const holder: Holder = { collection: deps.pages, id: page.id };
+    for (const address of page.addresses) {
+      if (!wanted.has(claimKey("address", address))) continue;
+      if (mode === "wait") {
+        await claimOrWait(deps.claims, tx, { address, holder });
+      } else {
+        await claimAddress(deps.claims, tx, {
+          address,
+          holder,
+          describe: deps.describe,
+        });
+      }
+    }
+  }
 }
 
 /**
@@ -224,10 +282,14 @@ async function settleEntries(
   if (address === undefined) return;
   const locales = deps.locales();
   await holdLocks(deps.claims, tx, collectionLock(address, locales));
+  const lifecycle = await deps.lifecycle(collection);
   for (let page = 1; ; page += 1) {
     const rows = await deps.publishedEntries(collection, page, BATCH);
     for (const row of rows) {
-      await settleEntry(deps, tx, collection, address, locales, row, served);
+      await settleEntry(deps, tx, collection, address, locales, row, {
+        served,
+        lifecycle,
+      });
     }
     if (rows.length < BATCH) return;
   }
@@ -241,19 +303,23 @@ async function settleEntry(
   address: readonly string[],
   locales: readonly string[],
   row: Row,
-  served: boolean
+  state: { readonly served: boolean; readonly lifecycle: boolean }
 ): Promise<void> {
   const id = row.id;
   if (typeof id !== "string" && typeof id !== "number") return;
-  const wanted =
-    served && isPublished(row) ? entryAddresses(row, address, locales) : [];
+  const found =
+    state.served && isPublished(row, state.lifecycle)
+      ? entryAddresses(row, address, locales, state.lifecycle)
+      : [];
+  // An entry with no address holds nothing; its next save is refused,
+  // which tells its author.
+  const wanted = found === NO_ADDRESS ? [] : found;
+  await claimPagesAt(deps, tx, wanted, "wait");
   await reconcileHolder(
     deps.claims,
     tx,
     { collection, id: String(id) },
-    // An entry with no address holds nothing; its next save is refused,
-    // which tells its author.
-    { addresses: wanted === NO_ADDRESS ? [] : wanted, spaces: [] },
+    { addresses: wanted, spaces: [] },
     deps.describe,
     { wait: true }
   );
@@ -277,6 +343,7 @@ export interface EntryClaimsPassDeps extends EntryClaimsDeps {
 export async function settleEntryClaimsAtStart(
   deps: EntryClaimsPassDeps
 ): Promise<void> {
+  await releaseUndeclared(deps);
   for (const collection of deps.addresses.keys()) {
     try {
       await deps.withTransaction(async tx => {
@@ -296,6 +363,52 @@ export async function settleEntryClaimsAtStart(
     } catch (error) {
       deps.warn("Could not settle the addresses of a collection's entries.", {
         collection,
+        error: String(error),
+      });
+    }
+  }
+}
+
+/** How many claims one read of the undeclared sweep takes. */
+const SWEEP_PAGE = 500;
+
+/**
+ * Give up every address and wait held by an entry of a collection no longer
+ * given a template address in code (removed since the last start), so its
+ * entries stop being served there and pages may take the paths. Never
+ * throws: what it cannot release is warned about and left for the next
+ * start.
+ */
+async function releaseUndeclared(deps: EntryClaimsPassDeps): Promise<void> {
+  const known = new Set([deps.pages, ...deps.addresses.keys()]);
+  const stale = new Map<string, Holder>();
+  try {
+    for (let page = 1; ; page += 1) {
+      const { rows, total } = await committedClaims(
+        deps.claims,
+        { kind: { in: ["address", "waiting"] } },
+        { limit: SWEEP_PAGE, page }
+      );
+      for (const row of rows) {
+        const holder = row.holder;
+        if (holder === null || known.has(holder.collection)) continue;
+        stale.set(`${holder.collection}\u0000${holder.id}`, holder);
+      }
+      if (rows.length === 0 || page * SWEEP_PAGE >= total) break;
+    }
+  } catch (error) {
+    deps.warn("Could not read the address claims to sweep.", {
+      error: String(error),
+    });
+    return;
+  }
+  for (const holder of stale.values()) {
+    try {
+      await deps.withTransaction(tx => releaseClaims(deps.claims, tx, holder));
+    } catch (error) {
+      deps.warn("Could not release an undeclared collection's address.", {
+        collection: holder.collection,
+        id: holder.id,
         error: String(error),
       });
     }

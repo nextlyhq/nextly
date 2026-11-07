@@ -44,7 +44,7 @@ import {
   settleEntryClaimsAtStart,
   type EntryClaimsDeps,
 } from "./address-claims/entry-claims-hook";
-import { claimLocales } from "./address-claims/page-claims";
+import { claimLocales, pageClaims } from "./address-claims/page-claims";
 import {
   describeFor,
   registerPageAddressClaims,
@@ -2095,12 +2095,61 @@ export const pageBuilder = (
         collection: slug =>
           ctx.services.collections.getCollection(slug, undefined as never),
       });
+      // A collection's record as the registry answers it, or null.
+      const collectionRecord = async (
+        slug: string
+      ): Promise<Record<string, unknown> | null> => {
+        try {
+          return (await ctx.services.collections.getCollection(
+            slug,
+            undefined as never
+          )) as unknown as Record<string, unknown>;
+        } catch (error) {
+          if (NextlyError.isNotFound(error)) return null;
+          throw error;
+        }
+      };
       const claimsDeps: EntryClaimsDeps = {
         claims: claimsStore,
         addresses: templateAddresses,
         templates: templatesSlug,
         locales: siteLocales,
         describe: describeHolder,
+        pages: pagesSlug,
+        pagesBackfilled: () => pageClaimsBackfilled,
+        // The registry's record says whether the collection's entries carry
+        // a Draft/Published status, which a field named `status` does not.
+        lifecycle: async collection =>
+          (await collectionRecord(collection))?.status === true,
+        pagesWithSlugs: async slugs => {
+          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+          const nextly = (await getCachedNextly()) as unknown as PagesReader;
+          const found = await nextly.find({
+            collection: pagesSlug,
+            where: {
+              status: { equals: "published" },
+              slug: { in: [...slugs] },
+            },
+            limit: slugs.length,
+            overrideAccess: true,
+            depth: 0,
+          });
+          return (found.items as Readonly<Record<string, unknown>>[]).flatMap(
+            row =>
+              typeof row.id === "string" || typeof row.id === "number"
+                ? [
+                    {
+                      id: String(row.id),
+                      addresses: pageClaims(
+                        row,
+                        siteLocales(),
+                        opts.pagePreviewPath
+                      ).addresses,
+                    },
+                  ]
+                : []
+          );
+        },
         // Hook-free and as the system, as the template guard reads it, so a
         // read hook cannot hide a template that serves entries.
         templatePublished: async collection => {
@@ -2152,20 +2201,21 @@ export const pageBuilder = (
         for (const collection of templateAddresses.keys()) {
           const problem = await templateCollectionProblem(
             collection,
-            async slug => {
-              try {
-                return (await ctx.services.collections.getCollection(
-                  slug,
-                  undefined as never
-                )) as unknown as Record<string, unknown>;
-              } catch (error) {
-                if (NextlyError.isNotFound(error)) return null;
-                throw error;
-              }
-            },
+            collectionRecord,
             own
           );
-          if (problem !== null) problems.push(problem);
+          if (problem !== null) {
+            problems.push(problem);
+            continue;
+          }
+          // One slug serves an entry in every language, as a page's does: a
+          // localized collection's entries have a slug and a state in each,
+          // which an address per language would have to follow.
+          if ((await collectionRecord(collection))?.localized === true) {
+            problems.push(
+              `The collection "${collection}" is localized, and a localized collection's entries cannot be served under a template address yet.`
+            );
+          }
         }
         if (problems.length > 0) {
           throw new Error(
@@ -2179,6 +2229,7 @@ export const pageBuilder = (
         defaultLocale: () =>
           ctx.config.localization?.defaultLocale || siteLocales()[0] || "en",
         collections: [pagesSlug, templatesSlug, ...templateAddresses.keys()],
+        holders: [pagesSlug, ...templateAddresses.keys()],
       });
       // A page published naming a Layout that is not: it is served inside the
       // site's default until its own is published, and the author is told.

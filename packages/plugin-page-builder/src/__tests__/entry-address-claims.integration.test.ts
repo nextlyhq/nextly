@@ -65,7 +65,9 @@ describe.each(getConfiguredTestDialects())(
       current = await createTestNextly({
         dialect,
         plugins: [
-          pageBuilder({ templates: { addresses: { posts: "/blog" } } }),
+          pageBuilder({
+            templates: { addresses: { posts: "/blog", events: "/events" } },
+          }),
         ],
         collections: [
           defineCollection({
@@ -75,6 +77,17 @@ describe.each(getConfiguredTestDialects())(
             fields: [
               text({ name: "title" }),
               text({ name: "slug", unique: true }),
+            ],
+          }),
+          // No Draft/Published lifecycle, and an ordinary field named
+          // `status`: every entry is live, whatever that field holds.
+          defineCollection({
+            slug: "events",
+            labels: { singular: "Event", plural: "Events" },
+            fields: [
+              text({ name: "title" }),
+              text({ name: "slug", unique: true }),
+              text({ name: "status" }),
             ],
           }),
         ],
@@ -249,6 +262,47 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(await content.resolveAddress(undefined, "/blog/none")).toBeNull();
       expect(await content.resolveAddress(undefined, "/admin")).toBeNull();
+    });
+
+    it("holds the address of every entry of a collection without a lifecycle, whatever its status field holds", async () => {
+      const t = await boot();
+      await t.nextly.create({
+        collection: TEMPLATES_SLUG,
+        data: {
+          title: "Events",
+          collection: "events",
+          content: TEMPLATE,
+          status: "published",
+        },
+        overrideAccess: true,
+      });
+      const archived = idOf(
+        await t.nextly.create({
+          collection: "events",
+          data: { title: "Old", slug: "old", status: "archived" },
+          overrideAccess: true,
+        })
+      );
+      expect(await held(t)).toEqual([`address /events/old events:${archived}`]);
+    });
+
+    it("refuses to start when a localized collection is given an address, naming it", async () => {
+      await expect(
+        createTestNextly({
+          dialect,
+          localization: { locales: ["en", "de"], defaultLocale: "en" },
+          plugins: [
+            pageBuilder({ templates: { addresses: { stories: "/stories" } } }),
+          ],
+          collections: [
+            defineCollection({
+              slug: "stories",
+              localized: true,
+              fields: [text({ name: "title" }), text({ name: "slug" })],
+            }),
+          ],
+        })
+      ).rejects.toThrow(/"stories" is localized/);
     });
 
     it("refuses to start when a collection given an address cannot have a template, naming it", async () => {

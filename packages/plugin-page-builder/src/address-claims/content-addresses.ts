@@ -8,9 +8,10 @@
  *
  * @module address-claims/content-addresses
  */
-import { servedAddress } from "./claim-key";
+import { pathOf, servedAddress } from "./claim-key";
 import {
   committedAddresses,
+  committedClaims,
   committedHolderAt,
   type Claims,
 } from "./claim-store";
@@ -43,6 +44,16 @@ export interface ContentAddressService {
     path: string
   ): Promise<ContentAddressHolder | null>;
   /**
+   * The path the document `id` of `collection` is served at in `locale`
+   * (the default language when absent), as last committed, or null when it
+   * holds none: where a link to it points.
+   */
+  pathHeldBy(
+    locale: string | undefined,
+    collection: string,
+    id: string
+  ): Promise<string | null>;
+  /**
    * Up to `limit` of the addresses held in `locale`, as path segments, from
    * `page` (1 first), with how many there are in all.
    */
@@ -64,6 +75,12 @@ export interface ContentAddressSetup {
   /** The language a lookup naming none is made in. */
   readonly defaultLocale: () => string;
   readonly collections: readonly string[];
+  /**
+   * The collections whose documents the site serves: the pages and every
+   * collection given a template address now. A claim held by any other (a
+   * collection whose address was removed, not yet swept) serves nothing.
+   */
+  readonly holders: readonly string[];
 }
 
 /** The service over the installed store. */
@@ -75,13 +92,36 @@ export function contentAddressService(
       const address = servedAddress(locale ?? setup.defaultLocale(), path);
       if (address === null) return null;
       const held = await committedHolderAt(setup.claims, address);
-      return held === null
+      return held === null || !setup.holders.includes(held.holder.collection)
         ? null
         : {
             collection: held.holder.collection,
             id: held.holder.id,
             kind: held.kind,
           };
+    },
+    pathHeldBy: async (locale, collection, id) => {
+      if (!setup.holders.includes(collection)) return null;
+      const language = locale ?? setup.defaultLocale();
+      const { rows } = await committedClaims(
+        setup.claims,
+        {
+          kind: { equals: "address" },
+          holderCollection: { equals: collection },
+          holderId: { equals: id },
+          locale: { equals: language },
+        },
+        { limit: 1 }
+      );
+      // Matched again exactly, as every read of the store is.
+      const row = rows.find(
+        found =>
+          found.kind === "address" &&
+          found.holder?.collection === collection &&
+          found.holder.id === id &&
+          found.address?.locale === language
+      );
+      return row?.address ? pathOf(row.address) : null;
     },
     addresses: async (locale, { limit, page = 1 }) => {
       const { addresses, total } = await committedAddresses(

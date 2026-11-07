@@ -3687,6 +3687,18 @@ export interface ContentPageConfig {
    * The pages and the templates are always among them.
    */
   readonly addressCollections?: () => Promise<readonly string[]>;
+  /**
+   * The path the document `id` of `collection` is served at in `locale`, or
+   * null when it is served nowhere: where a block's link to it points, on a
+   * page and on an entry's page alike, unless `pages.resolveEntryPath` says
+   * otherwise. Absent, a link is the target's slug, as a pages route makes
+   * it.
+   */
+  readonly entryPath?: (
+    collection: string,
+    id: string,
+    locale: string | undefined
+  ) => Promise<string | null>;
 }
 
 /**
@@ -3716,7 +3728,36 @@ function buildContentRoute(
   config: ContentPageConfig,
   isPublic: boolean
 ): StaticContentRoute<ReactElement> {
-  const { pages, templates } = config;
+  const { templates } = config;
+  const entryPath = config.entryPath;
+  // A link to a page or an entry names the address it is served at, from the
+  // same store that routes, so a post's link to another post carries its
+  // collection's address. Cached on a public route, tagged with the target's
+  // collection, whose writes move it.
+  const pages: BlocksPageConfig =
+    config.pages.resolveEntryPath !== undefined || entryPath === undefined
+      ? config.pages
+      : {
+          ...config.pages,
+          resolveEntryPath: async (collection, id) => {
+            const locale = config.pages.locale;
+            const read = () => entryPath(collection, id, locale);
+            if (!isPublic) return await read();
+            return await cachedFind(read, {
+              tags: nextlyTags(collection, id),
+              keyParts: [
+                "nextly-content-entry-path",
+                config.pages.cacheScope ?? "",
+                locale ?? "",
+                collection,
+                id,
+              ],
+              revalidate: await releaseBoundedRevalidate(
+                config.pages.revalidate
+              ),
+            });
+          },
+        };
   // A page is served by the pages route itself, so it is drawn exactly as
   // `createBlocksPage` draws it: its draft gate, its list's later pages, its
   // tags and metadata.
@@ -3725,6 +3766,7 @@ function buildContentRoute(
     : createContentRoute<ReactElement>(blocksRouteConfig(pages, false));
   const pageCollections = new Set(pages.collections);
   const mountPath = pages.mountPath ?? "";
+  const mountSegments = mountPath.split("/").filter(part => part !== "");
   const window = pages.revalidate;
   // An entry is drawn by the same render as a page, over its collection, with
   // the template as the document. A page's stored sheet is not an entry's.
@@ -3838,16 +3880,22 @@ function buildContentRoute(
     segments: readonly string[]
   ): Promise<ContentAnswer | null> {
     const slug = segments.join("/");
-    // The route's own answer to which paths it serves: a reserved path, or a
+    // The address store's own answer to which paths it holds, asked of the
+    // whole path a visitor requested, mount included: a reserved path, or a
     // segment URL resolution removes, is never looked up.
-    if (slugToPath(slug) === null) return null;
+    const served = [...mountSegments, ...segments].join("/");
+    if (slugToPath(served) === null) return null;
     const own = segments.map(encodeURIComponent).join("/");
     const path = own === "" ? mountPath || "/" : `${mountPath}/${own}`;
     const holder = await holderOf(path);
-    if (holder === null) {
-      return (await draftGranted(slug)) ? { kind: "page" } : null;
+    if (holder !== null && pageCollections.has(holder.collection)) {
+      return { kind: "page" };
     }
-    if (pageCollections.has(holder.collection)) return { kind: "page" };
+    // A page's draft holds no address, so a preview of one is asked of the
+    // pages route's gate before any other holder is served: the preview
+    // shows the page, and its publish is what a clash refuses.
+    if (await draftGranted(slug)) return { kind: "page" };
+    if (holder === null) return null;
     // An entry's own address only: an entry's list does not page yet.
     if (holder.kind === "space") return null;
     const template = await templateOf(holder.collection);
@@ -3897,12 +3945,11 @@ function buildContentRoute(
   async function generateStaticParams(): Promise<Array<{ slug: string[] }>> {
     const limit = pages.staticParamsLimit ?? 1000;
     if (config.addresses === undefined || limit <= 0) return [];
-    const mount = mountPath.split("/").filter(part => part !== "");
     const held = await config.addresses(pages.locale, limit);
     // Only the addresses under this route's mount, as the route serves them.
     return held.flatMap(segments =>
-      mount.every((part, at) => segments[at] === part)
-        ? [{ slug: segments.slice(mount.length) }]
+      mountSegments.every((part, at) => segments[at] === part)
+        ? [{ slug: segments.slice(mountSegments.length) }]
         : []
     );
   }

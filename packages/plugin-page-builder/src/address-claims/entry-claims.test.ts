@@ -18,21 +18,29 @@ describe("an entry's addresses", () => {
         entryAddresses(
           { status: "published", slug: "hello" },
           ["blog"],
-          ["en", "fr"]
+          ["en", "fr"],
+          true
         )
       )
     ).toEqual(["addr:en|/blog/hello", "addr:fr|/blog/hello"]);
   });
 
-  it("are held for a collection without a lifecycle, whose entries are all live", () => {
-    expect(keys(entryAddresses({ slug: "hello" }, ["blog"], ["en"]))).toEqual([
-      "addr:en|/blog/hello",
-    ]);
+  it("are held for a collection without a lifecycle, whatever a field of it named status holds", () => {
+    expect(
+      keys(
+        entryAddresses(
+          { status: "archived", slug: "hello" },
+          ["blog"],
+          ["en"],
+          false
+        )
+      )
+    ).toEqual(["addr:en|/blog/hello"]);
   });
 
   it("are none while it is a draft", () => {
     expect(
-      entryAddresses({ status: "draft", slug: "hello" }, ["blog"], ["en"])
+      entryAddresses({ status: "draft", slug: "hello" }, ["blog"], ["en"], true)
     ).toEqual([]);
   });
 
@@ -42,7 +50,8 @@ describe("an entry's addresses", () => {
         entryAddresses(
           { status: "published", slug: "café 2" },
           ["news", "2026"],
-          ["en"]
+          ["en"],
+          true
         )
       )
     ).toEqual(["addr:en|/news/2026/caf%C3%A9%202"]);
@@ -54,9 +63,10 @@ describe("an entry's addresses", () => {
     ["holding a slash", "a/b"],
     ["a dot segment", ".."],
     ["not text", 7],
+    ["not well-formed Unicode", "\ud800"],
   ])("are refused when the slug is %s", (_why, slug) => {
     expect(
-      entryAddresses({ status: "published", slug }, ["blog"], ["en"])
+      entryAddresses({ status: "published", slug }, ["blog"], ["en"], true)
     ).toBe(NO_ADDRESS);
   });
 });

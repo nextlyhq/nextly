@@ -299,6 +299,62 @@ describe("the content route", () => {
     expect(draft).toHaveBeenCalled();
   });
 
+  it("serves a page's draft over an entry holding its address, where the gate grants it", async () => {
+    const options = config();
+    const route = createContentPage({
+      ...options,
+      pages: { ...options.pages, draft: async () => true },
+      resolveAddress: async () => HELD["/blog/hello"],
+    });
+    const html = await served(route, ["about"]);
+    expect(html).toContain("The about page");
+    expect(html).not.toContain("Hello world");
+  });
+
+  it("serves the entry where the gate grants nothing", async () => {
+    const options = config();
+    const route = createContentPage({
+      ...options,
+      pages: { ...options.pages, draft: async () => false },
+    });
+    expect(await served(route, ["blog", "hello"])).toContain("Hello world");
+  });
+
+  it("links to a page or an entry at the address the store says it is served at", async () => {
+    const asked: [string, string, string | undefined][] = [];
+    const route = createContentPage(
+      config({
+        entryPath: async (collection, id, locale) => {
+          asked.push([collection, id, locale]);
+          return collection === "posts" ? `/blog/${id}` : null;
+        },
+      })
+    );
+    for (const slug of [["blog", "hello"], ["about"]]) {
+      const element = await throughBoundary<PageRendererProps>(
+        route.ContentPage({ params: { slug } })
+      );
+      expect(
+        await element.props.context?.resolveEntryPath("posts", "other")
+      ).toBe("/blog/other");
+      expect(
+        await element.props.context?.resolveEntryPath("news", "n1")
+      ).toBeNull();
+    }
+    expect(asked).toContainEqual(["posts", "other", undefined]);
+  });
+
+  it("looks up a path under a mount by the whole path, so only the runtime's own paths are refused", async () => {
+    const options = config();
+    await createContentPage({
+      ...options,
+      pages: { ...options.pages, mountPath: "/site" },
+    })
+      .ContentPage({ params: { slug: ["admin"] } })
+      .catch(() => undefined);
+    expect(options.lookups).toEqual([[undefined, "/site/admin"]]);
+  });
+
   it("asks the store for the path under the route's mount, in the route's language", async () => {
     const options = config();
     await createContentPage({
