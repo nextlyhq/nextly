@@ -309,16 +309,16 @@ describe("the list of entries a template may preview", () => {
   });
 
   it("names the collection's top-level blocks fields, for Entry content's Field menu", async () => {
-    // Body and a blocks field inside a row (presentation only, stored on the
-    // entry itself) count; one inside a named group is stored under the
-    // group and does not, nor does any other kind of field.
+    // Body and a blocks field inside an unnamed group (presentation only,
+    // stored on the entry itself) count; one inside a named group is stored
+    // under the group and does not, nor does any other kind of field.
     const withBlocks = {
       ...POSTS,
       fields: [
         ...POSTS.fields,
         { name: "body", type: "blocks", label: "Body" },
         {
-          type: "row",
+          type: "group",
           fields: [{ name: "sidebar", type: "blocks" }],
         },
         {

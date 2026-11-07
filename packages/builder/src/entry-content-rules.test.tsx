@@ -34,6 +34,7 @@ import {
   type PreviewedCollection,
 } from "./previewed-entry";
 import { EMPTY_SELECTION } from "./selection";
+import { toolbarActions, type ToolbarAction } from "./toolbar-actions";
 
 beforeAll(() => {
   globalThis.ResizeObserver ??= class {
@@ -260,5 +261,66 @@ describe("Entry content in the Add panel", () => {
     expect(screen.queryByRole("option", { name: "Entry content" })).toBeNull();
     // The control: the rest of the library is.
     expect(screen.getByRole("option", { name: "Heading" })).toBeTruthy();
+  });
+});
+
+describe("making a pattern or a component of a selection holding Entry content", () => {
+  const anyParent = { parentsOf: () => undefined };
+  const offer = { mayCreate: true, mayUpdatePattern: true };
+  const PATTERN =
+    "Entry content belongs in its template, so it can’t be saved in a pattern.";
+  const COMPONENT =
+    "Entry content belongs in its template, so it can’t be saved in a component.";
+  const box = {
+    id: "box",
+    type: "acme/box",
+    version: 1,
+    props: {},
+    slots: { children: [entryContent] },
+  };
+  const document = documentOf("template", [box, heading]);
+
+  /** The verb `id` the menu offers for the selection `ids`. */
+  function verb(ids: readonly string[], id: string): ToolbarAction | undefined {
+    return toolbarActions(
+      document,
+      ids[0] ?? null,
+      ids,
+      anyParent,
+      true,
+      undefined,
+      offer
+    ).find(action => action.id === id);
+  }
+
+  it("dims Save as pattern, Update a pattern and Turn into component, saying why", () => {
+    // The block holding it, and the two of them selected together.
+    for (const ids of [["box"], ["ec"], ["box", "h"]]) {
+      expect(verb(ids, "save-as-pattern"), ids.join()).toMatchObject({
+        enabled: false,
+        reason: PATTERN,
+      });
+      expect(verb(ids, "update-pattern"), ids.join()).toMatchObject({
+        enabled: false,
+        reason: PATTERN,
+      });
+      expect(verb(ids, "turn-into-component"), ids.join()).toMatchObject({
+        enabled: false,
+        reason: COMPONENT,
+      });
+    }
+  });
+
+  it("says nothing of Entry content for a selection without it (the control)", () => {
+    for (const id of [
+      "save-as-pattern",
+      "update-pattern",
+      "turn-into-component",
+    ]) {
+      const action = verb(["h"], id);
+      expect(action, id).toBeDefined();
+      expect(action?.reason, id).not.toBe(PATTERN);
+      expect(action?.reason, id).not.toBe(COMPONENT);
+    }
   });
 });

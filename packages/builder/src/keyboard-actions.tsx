@@ -22,7 +22,6 @@
 
 import {
   registryNestingSource,
-  saveAsPatternRefusal,
   type ComponentLookup,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
@@ -31,7 +30,6 @@ import * as React from "react";
 
 import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ESCAPE_PRIORITY, escapeOutcome } from "./canvas-escape";
-import { compositionRefusalReason } from "./composition-refusal";
 import type { EditorState } from "./editor-state";
 import { lockViewOf } from "./inspector";
 import { placedComponentId } from "./instance-inspector";
@@ -58,6 +56,7 @@ import {
 import type { SharedStyleOffer } from "./shared-style-target";
 import {
   depthMoveActions,
+  patternSaveRefusal,
   SAVE_PATTERN_GRANT_REFUSAL,
   toolbarActions,
   turnIntoChoice,
@@ -1145,13 +1144,14 @@ export function useBlockKeyboardActions({
       announce(SAVE_PATTERN_GRANT_REFUSAL);
       return;
     }
-    const refusal = saveAsPatternRefusal(
+    // The words the menu dims the verb with, Entry content's among them.
+    const refusal = patternSaveRefusal(
       editor.document,
       editor.selection.ids,
       nestingSource
     );
     if (refusal !== undefined) {
-      announce(compositionRefusalReason(refusal));
+      announce(refusal);
       return;
     }
     onSaveAsPattern();

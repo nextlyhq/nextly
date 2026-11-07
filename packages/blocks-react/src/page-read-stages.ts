@@ -234,6 +234,11 @@ function drawn(
 
 /** What a page render, and its metadata, work from. */
 export interface PageInputs {
+  /**
+   * The page's document as read and drawn: the one asked for, or, where the
+   * caller fits it to the components it places (`fit`), that.
+   */
+  readonly document: BlockDocument;
   readonly definitions: DefinitionsById;
   readonly page: DrawnDocument;
   readonly regions: readonly DrawnRegion[];
@@ -269,14 +274,21 @@ export async function readPageInputs(args: {
   onIssues: BindingIssuesHandler;
   /** For metadata, which reads the Layout only when the page binds anything. */
   regionsOnlyWhenBound?: boolean;
+  /**
+   * The document fitted to the definitions read for it, where what it holds
+   * depends on them: a template's entry content is cut to the room its
+   * components leave once expanded. It may only drop what `document` holds,
+   * so the definitions read for `document` are all it needs.
+   */
+  fit?: (definitions: DefinitionsById) => BlockDocument;
 }): Promise<PageInputs> {
-  const { terms, sources, document } = args;
+  const { terms, sources } = args;
   // Read BEFORE the element is created, because the renderer's pipeline is
   // synchronous: composition is a pass of it, and a pass cannot await. The
   // route is the layer that can, which is why the fetch lives here and not
   // in the renderer.
   const definitions = await definitionsFor(
-    document,
+    args.document,
     sources.components,
     // The SAME caps the pipeline will read this document under, resolved
     // once. `prepareDocumentReadStages` falls back to the style context's
@@ -286,6 +298,7 @@ export async function readPageInputs(args: {
     // every instance after them.
     effectiveLimits(terms)
   );
+  const document = args.fit?.(definitions) ?? args.document;
   const page = drawn(terms, document, definitions);
   // Whether the page's conditions have an entry to judge. A Single's page has
   // none, as the editor and the save say, so its entry-scoped conditions fail
@@ -345,6 +358,7 @@ export async function readPageInputs(args: {
     : parts;
   const [decidedPage, ...decidedRegions] = decided;
   return {
+    document,
     definitions,
     page: decidedPage ?? page,
     regions: drawnRegions.map((region, index) => ({
@@ -885,6 +899,8 @@ export async function readPageStages(args: {
   terms: PageReadTerms;
   sources: PageReadSources;
   document: BlockDocument;
+  /** The document fitted to its definitions (`readPageInputs`' `fit`). */
+  fit?: (definitions: DefinitionsById) => BlockDocument;
   entrySource: EntrySource;
   where: PageWhere;
   budget: QueryBudget;
@@ -902,7 +918,8 @@ export async function readPageStages(args: {
     where,
   });
   const pagedList = pagedListOf(
-    args.document,
+    // The document as read and drawn, fitted where the caller fits it.
+    inputs.document,
     inputs.page,
     effectiveLimits(terms).maxNodes,
     inputs.bindings === undefined

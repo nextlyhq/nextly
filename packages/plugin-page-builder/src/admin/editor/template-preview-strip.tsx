@@ -29,6 +29,7 @@ import {
   PREVIEWED_ENTRY_KEYS,
   PreviewedEntryProvider,
   useComposedEntryContent,
+  type EntryContentLimits,
   type PreviewedCollection,
   type PreviewedEntry,
 } from "@nextlyhq/builder/shell";
@@ -142,14 +143,14 @@ const EntryAsRead = createContext<PreviewedEntry | undefined>(undefined);
  */
 export function useDrawnTemplate(
   document: BlockDocument,
-  /** The limits the canvas draws under; their node cap bounds the walk. */
-  limits?: { readonly maxNodes?: number }
+  /**
+   * The limits the canvas draws under, which bound the entry's walk, and
+   * the definitions of the components the page places, whose expansion the
+   * entry leaves room for.
+   */
+  limits?: EntryContentLimits
 ): BlockDocument {
-  return useComposedEntryContent(
-    document,
-    useContext(EntryAsRead),
-    limits?.maxNodes
-  );
+  return useComposedEntryContent(document, useContext(EntryAsRead), limits);
 }
 
 /**
@@ -244,7 +245,7 @@ export function TemplatePreviewScope<TFieldValues extends FieldValues>({
   const previewedCollection = usePreviewedCollectionOf(collection, preview);
   return (
     <TemplatePreviewState.Provider value={preview}>
-      <EntryAsRead.Provider value={read.previewed}>
+      <EntryAsRead.Provider value={read.latest}>
         <CanvasEntryProvider
           identity={canvasIdentity}
           retry={retry}
