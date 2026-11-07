@@ -119,6 +119,23 @@ beforeAll(() => {
           className: string;
         }) => createElement("a", { className, href: "#top" }, node.props.text),
       },
+      {
+        // A canvas drawn inside the page's, as a component's own view
+        // draws one: the inner template, with its own Entry content.
+        name: "acme/nested",
+        version: 1,
+        description: "A canvas inside the canvas.",
+        example: { props: {} },
+        render: ({ className }: { className: string }) =>
+          createElement(
+            "div",
+            { className },
+            createElement(Canvas, {
+              document: PLAIN,
+              siteStyles: { breakpoints: { viewport: [], container: [] } },
+            })
+          ),
+      },
     ] as never,
     { source: "canvas-entry-content-test" }
   );
@@ -355,5 +372,54 @@ describe("the entry's blocks drawn on the canvas", () => {
     const block = container.querySelector('[data-nx-node="ec"]');
     expect(block?.hasAttribute("inert")).toBe(false);
     expect(block?.closest("[inert]")).toBeNull();
+  });
+});
+
+describe("a conditioned block inside the entry's Body, the switch off", () => {
+  it("is badged as conditional on the page as drawn", async () => {
+    const container = await drawn(undefined, PLAIN, GATED_ARTICLE);
+    const marked = Array.from(
+      container.querySelectorAll('[data-nx-conditioned="conditional"]')
+    );
+    expect(marked.map(element => element.textContent)).toEqual([
+      "Members' worksheet",
+    ]);
+  });
+
+  it("leaves a Body with no conditions unbadged (the control)", async () => {
+    const container = await drawn(undefined, PLAIN, ARTICLE);
+    expect(container.textContent).toContain(BODY_WORDS);
+    expect(container.querySelector("[data-nx-conditioned]")).toBeNull();
+  });
+});
+
+describe("a canvas drawn inside another", () => {
+  it("keeps its entry's blocks inert when the outer canvas marks again", async () => {
+    const outer: BlockDocument = {
+      formatVersion: 1,
+      kind: "template",
+      nodes: [{ id: "n", type: "acme/nested", version: 1, props: {} }],
+    };
+    const tree = (selectedId: string | null) => (
+      <PreviewedEntryProvider value={GATED_ARTICLE} collection={ARTICLES}>
+        <Canvas
+          document={outer}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          selectedId={selectedId}
+        />
+      </PreviewedEntryProvider>
+    );
+    const { container, rerender } = render(tree(null));
+    await act(async () => undefined);
+    const bodyLink = () =>
+      Array.from(container.querySelectorAll("a")).find(
+        link => link.textContent === "Body link"
+      );
+    // The control: the inner canvas made its entry's blocks inert.
+    expect(bodyLink()?.closest("[inert]")).not.toBeNull();
+    // A selection on the outer canvas marks it again.
+    rerender(tree("n"));
+    await act(async () => undefined);
+    expect(bodyLink()?.closest("[inert]")).not.toBeNull();
   });
 });

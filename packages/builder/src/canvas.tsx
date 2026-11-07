@@ -402,7 +402,10 @@ function markEntryContentInert(container: HTMLElement): void {
   container
     .querySelectorAll(`[${ENTRY_CONTENT_INERT_ATTRIBUTE}]`)
     .forEach(element => {
-      if (wanted.has(element)) return;
+      // Another canvas's marks are that canvas's to clear, as they were its
+      // to set: a canvas drawn inside this one (a component's own view) keeps
+      // its entry's blocks inert whatever this one re-marks.
+      if (wanted.has(element) || !ownedByCanvas(element, container)) return;
       element.removeAttribute(ENTRY_CONTENT_INERT_ATTRIBUTE);
       element.removeAttribute("inert");
     });
@@ -2406,18 +2409,18 @@ export function Canvas({
   const shownDocument = conditionsApplied?.document ?? document;
   // A template draws its previewed entry's own blocks in its Entry content
   // block; only the drawn page carries them, never the document edited.
-  // Composed once: by the host where it hands the page as drawn (with the
-  // conditions applied to it, or as `composed`), else here.
-  const entryDrawing = useEntryContentDrawing(
-    document,
-    render,
-    conditionsApplied?.document ?? composed
-  );
+  // Composed once: by the host where it hands the page as drawn
+  // (`composed`), else here. Conditions applied, the host's page as they
+  // leave it is drawn instead, the entry's blocks composed in already.
+  const entryDrawing = useEntryContentDrawing(document, render, composed);
+  // The page as composed, before any conditions are applied: what its
+  // conditioned blocks, the entry's among them, are badged on.
+  const composedPage = entryDrawing.document;
   const { drawn, page } = useDrawnPage({
     regions,
     rendered: entryDrawing.render,
     sheet: siteStyles,
-    document: entryDrawing.document,
+    document: conditionsApplied?.document ?? composedPage,
     environment,
     applied: conditionsApplied,
   });
@@ -2432,7 +2435,7 @@ export function Canvas({
   const conditionMarks = useMemo(
     () =>
       conditionMarksOf(
-        document,
+        composedPage,
         conditionsUnchecked,
         {
           ...(render?.definitions === undefined
@@ -2443,7 +2446,7 @@ export function Canvas({
         conditionsApplied
       ),
     [
-      document,
+      composedPage,
       conditionsUnchecked,
       render?.definitions,
       render?.limits,
