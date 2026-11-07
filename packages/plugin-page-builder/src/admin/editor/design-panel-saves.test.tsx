@@ -60,9 +60,9 @@ vi.mock("../site-style-read", () => ({
 }));
 
 /**
- * What the Single was asked to store, in order. The stubbed read gives no
- * version, so each write is the section alone, written as a server that
- * issues none takes it, which the expectations state.
+ * What the Single was asked to store, in order. Each write is saved over
+ * whatever the style holds and says so with `_overwrite: true`, which the
+ * expectations state.
  */
 const writes: Record<string, unknown>[] = [];
 /**
@@ -451,7 +451,7 @@ describe("the Design panel's writes", () => {
     // Written, then taken back; the read has not moved on, and the canvas
     // shows what the section holds again.
     expect(writes).toHaveLength(2);
-    expect(writes[1]).toEqual({ tokens: null });
+    expect(writes[1]).toEqual({ _overwrite: true, tokens: null });
     expect(canvas()).toBe("none");
   });
   it("sends a write released while the page is visible so it outlives the page", async () => {

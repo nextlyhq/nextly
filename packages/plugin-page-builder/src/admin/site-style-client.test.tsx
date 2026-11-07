@@ -558,6 +558,104 @@ describe("a save merged onto the newest stored copy", () => {
     ]);
   });
 
+  /** A history keeping each step it is handed, and the provider around it. */
+  function keptSteps() {
+    const steps: {
+      undo: () => Promise<unknown>;
+      redo: () => Promise<unknown>;
+    }[] = [];
+    const history = {
+      record: (step: (typeof steps)[number]) => {
+        steps.push(step);
+        return () => {};
+      },
+      settled: new Map(),
+    };
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <SiteStyleHistoryContext.Provider value={history}>
+        {children}
+      </SiteStyleHistoryContext.Provider>
+    );
+    return { steps, wrapper };
+  }
+
+  it("undoes from the step's own record when another author's save was read in first", async () => {
+    // Mine renamed card; another author then renamed hero, and the read has
+    // already brought that in when Undo starts. Undo takes back card alone.
+    const { steps, wrapper } = keptSteps();
+    readAnswer = {
+      data: { classes: [card, hero], _rev: "5" },
+      isPending: false,
+      error: null,
+    };
+    let rev = 5;
+    writeBehaviour = async () => {
+      rev += 1;
+      return { id: "1", _rev: String(rev) };
+    };
+    const mine = { ...card, label: "My card" };
+    const theirHero = { ...hero, label: "Their hero" };
+    const { result, rerender } = renderHook(() => useSaveSiteStyle(), {
+      wrapper,
+    });
+    await act(async () => {
+      await result.current.save("classes", [mine, hero], {
+        base: [card, hero],
+      });
+    });
+    readAnswer = {
+      data: { classes: [mine, theirHero], _rev: "7" },
+      isPending: false,
+      error: null,
+    };
+    rev = 7;
+    rerender();
+    await act(async () => {
+      await steps[0]?.undo();
+    });
+    expect(writes.at(-1)).toEqual({ classes: [card, theirHero], _rev: "7" });
+  });
+
+  it("redoes from the step's own record when another author's save was read in first", async () => {
+    const { steps, wrapper } = keptSteps();
+    readAnswer = {
+      data: { classes: [card, hero], _rev: "5" },
+      isPending: false,
+      error: null,
+    };
+    let rev = 5;
+    writeBehaviour = async () => {
+      rev += 1;
+      return { id: "1", _rev: String(rev) };
+    };
+    const mine = { ...card, label: "My card" };
+    const theirHero = { ...hero, label: "Their hero" };
+    const { result, rerender } = renderHook(() => useSaveSiteStyle(), {
+      wrapper,
+    });
+    await act(async () => {
+      await result.current.save("classes", [mine, hero], {
+        base: [card, hero],
+      });
+    });
+    await act(async () => {
+      await steps[0]?.undo();
+    });
+    expect(writes.at(-1)).toEqual({ classes: [card, hero], _rev: "6" });
+    // Another author renames hero after the undo; the read brings it in.
+    readAnswer = {
+      data: { classes: [card, theirHero], _rev: "9" },
+      isPending: false,
+      error: null,
+    };
+    rev = 9;
+    rerender();
+    await act(async () => {
+      await steps[0]?.redo();
+    });
+    expect(writes.at(-1)).toEqual({ classes: [mine, theirHero], _rev: "9" });
+  });
+
   it("writes the section alone, unmerged, when the read gives no version", async () => {
     // A server that issues no versions: the write is made as it always was.
     readAnswer = {
@@ -571,6 +669,9 @@ describe("a save merged onto the newest stored copy", () => {
       verdict = await result.current.save("classes", [promo], { base: [card] });
     });
     expect(writes).toEqual([{ classes: [promo] }]);
+    // Said to be made over whatever is stored: a write naming neither a
+    // version nor an overwrite is refused by the Single.
+    expect(overwrites).toEqual([true]);
     expect(verdict).toEqual({ saved: true, issues: {} });
   });
 });
