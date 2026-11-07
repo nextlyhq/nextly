@@ -61,6 +61,12 @@ const ownTxList: Promise<PaginatedResult<unknown>> =
   own.listEntriesInTransaction(tx, "ledger", q, { locale: "fr" });
 const ownTxSingle: Promise<Record<string, unknown>> =
   own.getSingleInTransaction(tx, "settings");
+// The host reads take the same arguments, of content holding the plugin's
+// field type, and answer the same.
+const hostTxList: Promise<PaginatedResult<unknown>> =
+  own.listHostEntriesInTransaction(tx, "pages", q, { lock: "update" });
+const hostTxSingle: Promise<Record<string, unknown>> =
+  own.getHostSingleInTransaction(tx, "home");
 
 // Exported so eslint does not flag the assertions as unused.
 export const __d56TypeCheck = {
@@ -73,4 +79,6 @@ export const __d56TypeCheck = {
   ownBuckets,
   ownTxList,
   ownTxSingle,
+  hostTxList,
+  hostTxSingle,
 };

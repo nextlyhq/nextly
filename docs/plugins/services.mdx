@@ -471,6 +471,28 @@ locked `FOR UPDATE`, so a second transaction doing the same waits for yours, rat
 both holding a shared lock that the other's write then waits on, which the database ends by
 refusing one of them.
 
+#### Reading host content that holds your field type
+
+A plugin that registers a field type (`contributes.fieldTypes`) may need to read the host
+content that uses it, inside the same transaction: the site's own collections and Singles,
+which it did not declare. Three more `@experimental` reads do that, with the same
+arguments, answers, locking and `lock` option as the reads above:
+
+- `listHostEntriesInTransaction(tx, slug, options?, opts?)`
+- `findHostEntryByIdInTransaction(tx, slug, id, opts?)`
+- `getHostSingleInTransaction(tx, slug, opts?)`
+
+A collection or Single is readable this way only when it holds a field of a type your plugin
+registered, at any depth: at the top level, inside groups and repeaters, or inside a
+component it uses. That is decided at each call, from the schema as it stands on the
+transaction, so a collection the Schema Builder created or changed after your plugin
+started is judged as it is now. Anything else is refused with `INVALID_INPUT`
+(`logContext.reason` is `host-collection-read-not-eligible` or
+`host-single-read-not-eligible`) before its rows are read. They run as the system and skip
+the content's read hooks, for that one collection or Single and that one call; a related
+row keeps its own hooks. The same warning applies: never return what they read to a
+person.
+
 ## When to drop to `ctx.db`
 
 `ctx.db` is the **`@experimental`** database surface — unmanaged: it bypasses
