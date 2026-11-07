@@ -14,7 +14,7 @@
  *
  * @module binding-schema-issues
  */
-import type { BindingIssueCode } from "./binding-issues";
+import type { BindingIssue, BindingIssueCode } from "./binding-issues";
 import {
   checkBinding,
   type BindingSchemaRef,
@@ -141,6 +141,40 @@ function declaredProps(
   return definition === undefined ? undefined : (definition.props ?? {});
 }
 
+/** The schema and the entry's ref a check of one binding is given. */
+function schemaOf(judgement: BindingSchemaJudgement): {
+  readonly schema: BindingSchemaSource;
+  readonly refs?: { readonly entry: BindingSchemaRef };
+} {
+  return {
+    schema: judgement.schema,
+    ...(judgement.entry === undefined
+      ? {}
+      : { refs: { entry: judgement.entry } }),
+  };
+}
+
+/** One binding's check, as findings at `path` on block `nodeId`. */
+function findingsOf(
+  issues: readonly BindingIssue[],
+  path: string,
+  nodeId: string,
+  identity: string
+): BindingFinding[] {
+  return (
+    issues
+      // A malformed binding is the shape check's to report, once.
+      .filter(issue => issue.code !== "binding-malformed")
+      .map(issue => ({
+        path,
+        nodeId,
+        code: issue.code,
+        message: issue.message,
+        identity,
+      }))
+  );
+}
+
 /** One bound prop's problems, where it sits. */
 function propFindings(
   bound: {
@@ -157,22 +191,13 @@ function propFindings(
     prop: bound.prop,
     binding: bound.binding,
     ...(bound.props === undefined ? {} : { props: bound.props }),
-    schema: judgement.schema,
-    ...(judgement.entry === undefined
-      ? {}
-      : { refs: { entry: judgement.entry } }),
+    ...schemaOf(judgement),
   });
-  return (
-    check.issues
-      // A malformed binding is the shape check's to report, once.
-      .filter(issue => issue.code !== "binding-malformed")
-      .map(issue => ({
-        path,
-        nodeId: bound.id,
-        code: issue.code,
-        message: issue.message,
-        identity: `${bound.prop}\u0000${bindingIdentity(bound.binding)}`,
-      }))
+  return findingsOf(
+    check.issues,
+    path,
+    bound.id,
+    `${bound.prop}\u0000${bindingIdentity(bound.binding)}`
   );
 }
 
@@ -260,20 +285,14 @@ function seoBindingFindings(
     binding,
     place,
     id: path,
-    schema: judgement.schema,
-    ...(judgement.entry === undefined
-      ? {}
-      : { refs: { entry: judgement.entry } }),
+    ...schemaOf(judgement),
   });
-  return check.issues
-    .filter(issue => issue.code !== "binding-malformed")
-    .map(issue => ({
-      path,
-      nodeId: "",
-      code: issue.code,
-      message: issue.message,
-      identity: `seo:${field}\u0000${bindingIdentity(binding)}`,
-    }));
+  return findingsOf(
+    check.issues,
+    path,
+    "",
+    `seo:${field}\u0000${bindingIdentity(binding)}`
+  );
 }
 
 /**

@@ -9,6 +9,10 @@
  * Builder reaches one the same way a collection declared in code does, which
  * a template declared in a collection's code configuration could not.
  *
+ * A collection created at runtime is served at the address its template
+ * stores (`address`), set in the admin by someone allowed to change routing;
+ * see `templates/template-routing`.
+ *
  * @module collections/templates
  */
 import { defineCollection, text, type CollectionConfig } from "nextly/config";
@@ -19,6 +23,10 @@ import {
   TEMPLATE_ENTRY_COLLECTION_FIELD,
   TEMPLATE_ENTRY_ID_FIELD,
 } from "../templates/template-preview-contract";
+import {
+  mayManageTemplateRouting,
+  TEMPLATE_ADDRESS_FIELD,
+} from "../templates/template-routing";
 
 /** The slug templates are stored under, before any rename a host applies. */
 export const TEMPLATES_SLUG = "templates";
@@ -57,6 +65,13 @@ export const TEMPLATE_FORKED_FROM_FIELD = "forkedFrom";
 export function entryDesignKey(collection: string, id: string): string {
   return `${encodeURIComponent(collection)}/${encodeURIComponent(id)}`;
 }
+
+/**
+ * The control the template form draws the address with: editable by someone
+ * allowed to change routing, read-only to anyone else.
+ */
+export const TEMPLATE_ADDRESS_FIELD_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#TemplateAddressField";
 
 export function templatesCollection(): CollectionConfig {
   return defineCollection({
@@ -104,6 +119,33 @@ export function templatesCollection(): CollectionConfig {
         label: "Copied from",
         index: true,
       }),
+      text({
+        name: TEMPLATE_ADDRESS_FIELD,
+        label: "Address",
+        // One collection per address on every dialect and under concurrent
+        // writes; the guard names the collection holding one before the
+        // database is asked. Many templates store none (null).
+        unique: true,
+        // Bounded on every write path, as the title is, to what the column
+        // holds on every dialect.
+        maxLength: 255,
+        // Setting or changing it moves every entry's live address, so it is
+        // its own permission, apart from updating templates: anyone else's
+        // value is taken out of the write and the stored one kept.
+        access: {
+          create: mayManageTemplateRouting,
+          update: mayManageTemplateRouting,
+        },
+        admin: {
+          component: TEMPLATE_ADDRESS_FIELD_COMPONENT,
+          // A collection's template only: an entry's own design is drawn at
+          // its entry's address and has none of its own.
+          condition: { field: TEMPLATE_ENTRY_FIELD, equals: "" },
+          placeholder: "/blog",
+          description:
+            "Where this collection's entries are served: with /blog, the entry hello is served at /blog/hello once the template is published. Changing it moves every entry to the new address and frees the old ones.",
+        },
+      }),
       blocks({
         name: TEMPLATE_CONTENT_FIELD,
         label: "Template",
@@ -122,9 +164,17 @@ export function templatesCollection(): CollectionConfig {
     versions: { drafts: true },
     admin: {
       useAsTitle: "title",
-      // Not offered in the admin's navigation until it has screens of its
-      // own; the builder and the API reach it meanwhile.
+      // Kept out of the Collections listing and offered from the page
+      // builder's own menu instead, beside Patterns, Components and Layouts.
       hidden: true,
+      // Which collection each template draws, and where its entries are
+      // served.
+      defaultColumns: [
+        "title",
+        TEMPLATE_COLLECTION_FIELD,
+        TEMPLATE_ADDRESS_FIELD,
+        "status",
+      ],
     },
   });
 }

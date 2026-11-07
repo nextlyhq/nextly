@@ -240,6 +240,12 @@ collection ([Editing a template](/docs/page-builder/editor#editing-a-template)).
 entry is previewed is the editor's own state and is not stored, so there is no action for
 it.
 
+Deleting a collection deletes its template and its entries' own designs with it, in the
+same transaction. The Schema Builder's delete dialog lists them first, under the page builder's name, so
+you see what goes before you confirm. The page builder's own collections are not
+affected. A template created while its collection is being deleted waits for the delete
+and is then refused, as for a collection that does not exist.
+
 ### An entry's own design
 
 One entry can be drawn with a design of its own instead of its collection's template.

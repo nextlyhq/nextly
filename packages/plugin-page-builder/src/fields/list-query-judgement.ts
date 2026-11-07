@@ -644,6 +644,19 @@ export function composedConditionIssues(
   });
 }
 
+/** The component each of a page's placements places, by the placement's id. */
+export function placedComponents(
+  host: BlockDocument,
+  maxNodes: number | undefined
+): Map<string, string> {
+  const componentOf = new Map<string, string>();
+  for (const placement of componentPlacementsIn(host, maxNodes).placements) {
+    const id = isPlainRecord(placement.node) ? placement.node.id : undefined;
+    if (typeof id === "string") componentOf.set(id, placement.target);
+  }
+  return componentOf;
+}
+
 /** What one composed judgement reads, and how its findings are said. */
 interface ComposedJudge<Issue extends ForestIssue> {
   readonly judge: (
@@ -692,12 +705,7 @@ async function composedIssues<Issue extends ForestIssue>(
     issue => placedNodes.has(issue.nodeId) && by.counts(issue)
   );
   if (found.length === 0) return [];
-  const componentOf = new Map<string, string>();
-  for (const placement of componentPlacementsIn(host, site.maxNodes)
-    .placements) {
-    const id = isPlainRecord(placement.node) ? placement.node.id : undefined;
-    if (typeof id === "string") componentOf.set(id, placement.target);
-  }
+  const componentOf = placedComponents(host, site.maxNodes);
   return found.map(issue => {
     const placement = placedNodes.get(issue.nodeId) ?? "";
     const component = componentOf.get(placement);
