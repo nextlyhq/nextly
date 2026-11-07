@@ -23,6 +23,14 @@
  *   an entry, three reads (its row and two ownership checks), or three per
  *   list for a list's links: counted as the published page counts them,
  *   without the read, since the canvas draws neither.
+ * - the components the page and its Layout place, by the published
+ *   pipeline's own walk (`definitionsFor`) in the route's batches
+ *   (`componentBatches`), and the Layout's row;
+ * - and the page is drawn inside its Layout, the header and footer under
+ *   the same budget, as the published page draws them.
+ *
+ * It is counted as the person editing sees the page: lists read their
+ * drafts too, where a visitor's read may hold fewer entries.
  *
  * The blocks that went unread are named by that draw's budget, so the panel
  * can select them.
@@ -31,13 +39,18 @@
  */
 import {
   bindingKindOf,
+  DEFAULT_LIMITS,
   type BindingFieldShape,
   type BlockDocument,
+  type DefinitionsById,
+  type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import {
+  componentBatches,
   createQueryBudget,
   createStandaloneContext,
   DEFAULT_MAX_QUERIES,
+  definitionsFor,
   PageRenderer,
   READ_KINDS,
   type ListBatchReads,
@@ -53,7 +66,13 @@ import {
   ReadBudgetMeter,
   type ReadBudgetMeterProps,
 } from "@nextlyhq/builder/shell";
-import { createElement, useEffect, useState, type ReactElement } from "react";
+import {
+  createElement,
+  Fragment,
+  useEffect,
+  useState,
+  type ReactElement,
+} from "react";
 
 import { bindingReadsOf } from "../canvas-bindings-client";
 
@@ -216,13 +235,50 @@ async function drawOnce(element: ReactElement): Promise<void> {
   await stream.cancel();
 }
 
+/** A Layout region the page is drawn inside, as the canvas draws it. */
+interface DrawnRegion {
+  readonly area: string;
+  readonly document: BlockDocument;
+  readonly definitions?: DefinitionsById;
+}
+
+/**
+ * The component reads the published page makes for `document`: its own
+ * pipeline's walk (`definitionsFor`, one ask per nesting level) over the
+ * definitions the canvas holds, each ask claimed in the batches the route's
+ * reads take (`componentBatches`).
+ */
+async function countComponentReads(
+  document: BlockDocument,
+  known: DefinitionsById | undefined,
+  budget: QueryBudget,
+  limits: DocumentLimits
+): Promise<void> {
+  await definitionsFor(
+    document,
+    ids => {
+      const wanted = [...new Set(ids)].filter(id => id.trim() !== "");
+      const found = new Map<string, BlockDocument>();
+      for (const batch of componentBatches(wanted, budget)) {
+        for (const id of batch) {
+          const definition = known?.get(id);
+          if (definition !== undefined) found.set(id, definition);
+        }
+      }
+      return Promise.resolve(found);
+    },
+    limits
+  );
+}
+
 /**
  * What the page reads when published: drawn once, off screen, under a
  * budget of what the binding reads left, then added to those reads.
  */
-async function countPageReads(
+export async function countPageReads(
   drawnWith: DrawnWith,
-  document: BlockDocument
+  document: BlockDocument,
+  regions: readonly DrawnRegion[]
 ): Promise<PageReadReport> {
   const bindings =
     drawnWith.bindings === undefined
@@ -230,9 +286,46 @@ async function countPageReads(
       : bindingReadsOf(drawnWith.bindings);
   const spent = bindings?.used ?? 0;
   const budget = createQueryBudget(Math.max(0, DEFAULT_MAX_QUERIES - spent));
+  const limits = drawnWith.limits ?? DEFAULT_LIMITS;
+  // What the published page reads before it draws, in its order: the
+  // components the page places, then its Layout's row and the components
+  // its regions place.
+  await countComponentReads(document, drawnWith.definitions, budget, limits);
+  if (regions.length > 0) {
+    budget.take({ kind: "component" });
+    await countComponentReads(
+      {
+        formatVersion: document.formatVersion,
+        kind: "page",
+        nodes: regions.flatMap(region => region.document.nodes),
+      },
+      new Map(
+        regions.flatMap(region => [...(region.definitions ?? new Map())])
+      ),
+      budget,
+      limits
+    );
+  }
   const context = countingContext(drawnWith, budget);
+  // The page inside its Layout, as the published page draws it: the
+  // header, the page and the footer under the one budget.
+  const part = (drawnPart: BlockDocument, definitions?: DefinitionsById) =>
+    createElement(PageRenderer, {
+      ...drawnWith,
+      document: drawnPart,
+      context,
+      ...(definitions === undefined ? {} : { definitions }),
+    });
+  const header = regions.find(region => region.area === "header");
+  const footer = regions.find(region => region.area === "footer");
   await drawOnce(
-    createElement(PageRenderer, { ...drawnWith, document, context })
+    createElement(
+      Fragment,
+      null,
+      header === undefined ? null : part(header.document, header.definitions),
+      part(document),
+      footer === undefined ? null : part(footer.document, footer.definitions)
+    )
   );
   const drawn = budget.report();
   return {
@@ -251,13 +344,14 @@ async function countPageReads(
  */
 function usePageReads(
   drawnWith: DrawnWith,
-  document: BlockDocument
+  document: BlockDocument,
+  regions: readonly DrawnRegion[]
 ): PageReadReport | undefined {
   const [report, setReport] = useState<PageReadReport | undefined>(undefined);
   useEffect(() => {
     let current = true;
     const timer = setTimeout(() => {
-      countPageReads(drawnWith, document).then(
+      countPageReads(drawnWith, document, regions).then(
         counted => {
           if (current) setReport(counted);
         },
@@ -269,19 +363,22 @@ function usePageReads(
       current = false;
       clearTimeout(timer);
     };
-  }, [drawnWith, document]);
+  }, [drawnWith, document, regions]);
   return report;
 }
 
 export function PageReadMeter({
   editor,
   drawnWith,
+  regions,
   componentTitle,
 }: Pick<ReadBudgetMeterProps, "editor" | "componentTitle"> & {
   /** What the canvas draws the page with. */
   readonly drawnWith: DrawnWith;
+  /** The Layout regions the page is drawn inside. */
+  readonly regions: readonly DrawnRegion[];
 }): React.JSX.Element {
-  const report = usePageReads(drawnWith, editor.document);
+  const report = usePageReads(drawnWith, editor.document, regions);
   return (
     <ReadBudgetMeter
       report={report}

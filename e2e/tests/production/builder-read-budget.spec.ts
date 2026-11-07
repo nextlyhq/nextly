@@ -11,8 +11,11 @@
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
-import { gotoAdmin } from "./support/admin";
-import { test } from "./support/test";
+import { gotoAdmin } from "../support/admin";
+import { test } from "../support/visible";
+
+/** The seeded user the production suite signs in as. */
+const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 
 const PAGES = "/admin/api/collections/pages/entries";
 const POSTS = "/admin/api/collections/posts/entries";
@@ -78,6 +81,18 @@ async function seed(
   return ((await response.json()) as { item: { id: string } }).item.id;
 }
 
+/** Sign in through the real form; dev auto-login is blocked here. */
+async function signIn(page: Page): Promise<void> {
+  await page.goto("/admin");
+  await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
+  // By role, not label: "Show password" also matches a password label.
+  await page
+    .getByRole("textbox", { name: /password/i })
+    .fill(DEV_USER.password);
+  await page.getByRole("button", { name: /sign in|log in/i }).click();
+  await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+}
+
 async function openBuilder(page: Page, id: string): Promise<void> {
   await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
   await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
@@ -87,7 +102,9 @@ async function openBuilder(page: Page, id: string): Promise<void> {
 
 /** The meter in the top bar, once it has counted. */
 function meter(page: Page) {
-  return page.getByRole("button", { name: /^Page reads: (?!counting)/ });
+  return page.getByRole("button", {
+    name: /^(\d+ of 500 reads|Over the limit of 500 reads)/,
+  });
 }
 
 test.describe("the page reads meter", () => {
@@ -96,21 +113,28 @@ test.describe("the page reads meter", () => {
   test("counts a page's reads, and warns from 80% of the allowance", async ({
     page,
   }) => {
-    await gotoAdmin(page, "/");
+    await signIn(page);
     const mark = `R${Date.now().toString(36)}`;
     await ensurePosts(page.request, mark);
     await openBuilder(page, await seed(page.request, mark, 40));
     // One read for the posts, and one for each of the forty inner lists of
     // each of the 10 posts.
     await expect(meter(page)).toHaveAccessibleName(
-      "Page reads: 401 of 500, near the limit",
+      "401 of 500 reads, near the limit",
       { timeout: 60_000 }
+    );
+    // Its tooltip says the same, for the short form a crowded bar draws.
+    await expect(meter(page)).toHaveAttribute(
+      "title",
+      "401 of 500 reads, near the limit"
     );
     await meter(page).click();
     const panel = page.getByRole("dialog", { name: "Page reads" });
     await expect(panel).toBeVisible();
     await expect(panel.getByText("Near the limit")).toBeVisible();
     await expect(panel.getByText("Warns from 400")).toBeVisible();
+    // The editor counts against the default limit, and says so.
+    await expect(panel.getByText("Limit 500 (the default)")).toBeVisible();
     await expect(panel.getByText("List entries")).toBeVisible();
     // CONTROL: within the limit, nothing is named as unread.
     await expect(panel.getByText(/not read/)).toHaveCount(0);
@@ -119,12 +143,12 @@ test.describe("the page reads meter", () => {
   test("over the allowance, names each block that went unread, and selects it", async ({
     page,
   }) => {
-    await gotoAdmin(page, "/");
+    await signIn(page);
     const mark = `R${Date.now().toString(36)}`;
     await ensurePosts(page.request, mark);
     await openBuilder(page, await seed(page.request, mark, 50));
     await expect(meter(page)).toHaveAccessibleName(
-      /^Page reads: over the limit of 500, \d+ blocks? not read$/,
+      /^Over the limit of 500 reads, \d+ blocks? not read$/,
       { timeout: 60_000 }
     );
     await meter(page).click();

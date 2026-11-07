@@ -10721,8 +10721,12 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
+  /* A page can leave many blocks unread: the list scrolls inside the panel,
+     never past the window. */
+  max-height: min(18rem, 40vh);
   margin: 0;
   padding: 0;
+  overflow: auto;
   list-style: none;
 }
 

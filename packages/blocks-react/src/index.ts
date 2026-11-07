@@ -57,6 +57,7 @@ export {
   createStandaloneContext,
   DEFAULT_MAX_QUERIES,
   defineBlock,
+  componentBatches,
   READ_KINDS,
   emptyDataProvider,
 } from "./context";

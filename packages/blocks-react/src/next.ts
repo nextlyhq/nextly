@@ -114,6 +114,7 @@ import {
   type ComponentSource,
 } from "./component-source";
 import {
+  componentBatches,
   createDefaultDataProvider,
   createQueryBudget,
   createStandaloneContext,
@@ -1557,12 +1558,10 @@ function componentSource(
         budget,
       });
     }
-    for (const chunk of chunked(wanted, COMPONENT_BATCH_SIZE)) {
-      // One claim per QUERY. A page embedding twenty components spends one
-      // read because that is what it costs; charging per definition would
-      // refuse a page for an allowance it never spent, and charging nothing
-      // would leave the read on this path that grows with the page unbounded.
-      if (!budget.take(COMPONENT_CLAIM)) break;
+    // One claim per query, by the batches every count of component reads
+    // takes (`componentBatches`); charging nothing would leave the read on
+    // this path that grows with the page unbounded.
+    for (const chunk of componentBatches(wanted, budget)) {
       const page = await readRowsChunk(chunk, {
         reader,
         collection,
@@ -1699,7 +1698,6 @@ function layoutRowReader(
  * 128 satisfies both. A page embedding more components than that costs one
  * extra query per 128, which is the honest price of staying invalidatable.
  */
-const COMPONENT_BATCH_SIZE = 128;
 
 /** What a read of components or Layout rows claims as. */
 const COMPONENT_CLAIM: ReadClaim = { kind: "component" };

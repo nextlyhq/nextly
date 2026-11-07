@@ -32,6 +32,7 @@ import { conditionAllows } from "../visibility";
 
 import { ICON_TYPE, iconMayDraw } from "./icon";
 import { IMAGE_TYPE, imageMayDraw } from "./image";
+import { readClaimOf } from "./props";
 
 /** Where a prop's value comes from: as set, or a list item's field path. */
 type ValueSource =
@@ -224,7 +225,12 @@ export async function withReadAhead<
     read.outcome.items,
     list.slots?.[LIST_ENTRY_SLOT] ?? [],
     ctx,
-    { nodeId: list.id, collection, contextOf: read.itemContext }
+    {
+      // Named as the list's own reads are: by its placement, inside one.
+      nodeId: readClaimOf(list)?.nodeId ?? list.id,
+      collection,
+      contextOf: read.itemContext,
+    }
   );
   return {
     ...read,

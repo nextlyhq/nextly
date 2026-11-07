@@ -18,6 +18,7 @@
  * @experimental Settles with the canvas's read count.
  */
 
+import { DEFAULT_MAX_QUERIES } from "@nextlyhq/blocks-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import {
   CircleAlert,
@@ -40,6 +41,7 @@ import {
   readBudgetName,
   readBudgetStanding,
   readCount,
+  unreadBlocks,
   readShare,
   warningAt,
   type PageReadReport,
@@ -106,6 +108,9 @@ export function ReadBudgetMeter({
           className="nx-read-meter"
           data-standing={standing}
           aria-label={readBudgetName(report)}
+          // The same words as a tooltip, for the short form a crowded bar
+          // draws: its mark and a number alone.
+          title={readBudgetName(report)}
           // Busy while counting, so a reader is not told a stale number.
           aria-busy={standing === "counting" ? true : undefined}
         >
@@ -164,7 +169,8 @@ function MeterWords({
     return (
       <>
         <span className="nx-read-meter__full">
-          Over {readCount(report.cap)} · {String(report.unread.length)} unread
+          Over {readCount(report.cap)} · {String(unreadBlocks(report).length)}{" "}
+          unread
         </span>
         <span className="nx-read-meter__short">{readCount(report.cap)}+</span>
       </>
@@ -260,7 +266,7 @@ function ReadFigure({
   report: PageReadReport;
   standing: ReadBudgetStanding;
 }): React.JSX.Element {
-  const blocks = report.unread.length;
+  const blocks = unreadBlocks(report).length;
   return (
     <p className="nx-read-panel__figure">
       <span className="nx-read-panel__used">{readCount(report.used)}</span> of{" "}
@@ -287,7 +293,12 @@ function ReadBar({ report }: { report: PageReadReport }): React.JSX.Element {
       {limited ? (
         <p className="nx-read-panel__scale">
           <span>Warns from {readCount(warningAt(report.cap))}</span>
-          <span>Limit {readCount(report.cap)}</span>
+          <span>
+            Limit {readCount(report.cap)}
+            {/* The editor counts against the default: a site's own limit is
+                set in its front end's code, which the admin cannot read. */}
+            {report.cap === DEFAULT_MAX_QUERIES ? " (the default)" : ""}
+          </span>
         </p>
       ) : null}
     </div>
@@ -331,7 +342,8 @@ function UnreadBlocks({
   onPicked: () => void;
 }): React.JSX.Element {
   const headingId = React.useId();
-  const blocks = report.unread.length;
+  const rows = unreadBlocks(report);
+  const blocks = rows.length;
   return (
     <section className="nx-read-panel__unread" aria-labelledby={headingId}>
       <p className="nx-read-panel__unread-title" id={headingId}>
@@ -342,13 +354,13 @@ function UnreadBlocks({
         these blocks as if their data were missing:
       </p>
       <ul className="nx-read-panel__list">
-        {report.unread.map(({ nodeId, what }) => {
-          const Mark = KIND_MARK[what];
+        {rows.map(({ nodeId, what }) => {
+          const Mark = KIND_MARK[what[0] ?? "page"];
           // A block the document no longer holds (an undo since the draw)
           // is named by what it missed alone, and cannot be selected.
           const name = blockNameOf(editor.document, nodeId, componentTitle);
           return (
-            <li key={`${nodeId}:${what}`}>
+            <li key={nodeId}>
               <button
                 type="button"
                 className="nx-read-panel__block"
@@ -363,7 +375,7 @@ function UnreadBlocks({
                   {name ?? "A removed block"}
                 </span>
                 <span className="nx-read-panel__block-what">
-                  {READ_KIND_WORDS[what].unread}
+                  {what.map(kind => READ_KIND_WORDS[kind].unread).join(" · ")}
                 </span>
               </button>
             </li>

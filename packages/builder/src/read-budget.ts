@@ -89,14 +89,34 @@ export function readCount(value: number): string {
 export function readBudgetName(report: PageReadReport | undefined): string {
   const standing = readBudgetStanding(report);
   if (report === undefined || standing === "counting") {
-    return "Page reads: counting";
+    return "Counting page reads";
   }
-  const count = `${readCount(report.used)} of ${readCount(report.cap)}`;
+  const count = `${readCount(report.used)} of ${readCount(report.cap)} reads`;
   if (standing === "over") {
-    const blocks = report.unread.length;
-    return `Page reads: over the limit of ${readCount(report.cap)}, ${String(blocks)} ${blocks === 1 ? "block" : "blocks"} not read`;
+    const blocks = unreadBlocks(report).length;
+    return `Over the limit of ${readCount(report.cap)} reads, ${String(blocks)} ${blocks === 1 ? "block" : "blocks"} not read`;
   }
-  return standing === "near"
-    ? `Page reads: ${count}, near the limit`
-    : `Page reads: ${count}`;
+  return standing === "near" ? `${count}, near the limit` : count;
+}
+
+/** One block drawn without its data, with every read it went without. */
+export interface UnreadRow {
+  readonly nodeId: string;
+  readonly what: readonly ReadKind[];
+}
+
+/**
+ * The blocks a report names as unread, each once in the order it first
+ * asked, with every kind of read it missed: what the panel lists and every
+ * count of unread blocks says, so a block that missed its image and its link
+ * is one block, not two.
+ */
+export function unreadBlocks(report: PageReadReport): readonly UnreadRow[] {
+  const rows = new Map<string, ReadKind[]>();
+  for (const { nodeId, what } of report.unread) {
+    const missed = rows.get(nodeId) ?? [];
+    if (!missed.includes(what)) missed.push(what);
+    rows.set(nodeId, missed);
+  }
+  return [...rows].map(([nodeId, what]) => ({ nodeId, what }));
 }

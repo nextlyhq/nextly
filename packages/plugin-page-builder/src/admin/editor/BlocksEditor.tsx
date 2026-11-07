@@ -319,8 +319,15 @@ function editorTopBar(
         />
         <DocumentStatusPill isDirty={documentDirty} />
         <HistoryButtons editor={editor} inline={inline} />
-        {/* What the page costs to read, against its allowance. */}
-        <PageReadMeter editor={editor} drawnWith={view.canvasRender} />
+        {/* What the page costs to read, against its allowance: a page's
+            alone, since a component is read as part of each page placing it. */}
+        {view.initialDocument.kind === "page" ? (
+          <PageReadMeter
+            editor={editor}
+            drawnWith={view.canvasRender}
+            regions={view.canvasRegions}
+          />
+        ) : null}
       </>
     ),
     topBarCenter: (
