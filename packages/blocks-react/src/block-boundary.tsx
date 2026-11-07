@@ -2,7 +2,6 @@ import {
   blockPartClassName,
   blockTypeClassName,
   renderedDomId,
-  resolveNodeBindings,
   type BindingRun,
   type BlockNode,
   type BoundValues,
@@ -19,7 +18,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { itemBindingPasses } from "./blocks/list-batch";
+import { fillItemBindings } from "./blocks/list-batch";
 import type { BlockHostPolicy, PageContext, PageIssue } from "./context";
 import {
   editorMarkers,
@@ -149,19 +148,6 @@ function itemRulesFor(
   );
 }
 
-/** The schema the item being drawn binds against, where one is known. */
-function itemRefOf(context: PageContext): {
-  readonly itemRef?: { collection: string } | { query: string };
-} {
-  const itemSource = context.itemSource;
-  return typeof itemSource === "string" && itemSource !== ""
-    ? { itemRef: { collection: itemSource } }
-    : // A named query's rows with their own schema bind as the query's.
-      typeof context.itemQuery === "string"
-      ? { itemRef: { query: context.itemQuery } }
-      : {};
-}
-
 /**
  * A node with its list item's bindings filled, and what every bound prop of
  * it holds.
@@ -177,29 +163,15 @@ function withItemBindings(
 ): { node: ResolvedBlockNode; bound: BoundValues | undefined } {
   if (bindings === undefined) return { node, bound: undefined };
   const fromPage = bindings.bound.get(node.id);
-  const itemRef = itemRefOf(context);
-  // One pass, against the item as stored, unless its list read relations
-  // ahead: then a binding through one reads the entry read for it, while a
-  // binding to the field itself still reads the id the item stores.
-  let props = node.props;
-  let bound: BoundValues | undefined;
-  for (const pass of itemBindingPasses(
-    node,
-    context.item,
-    context.itemFollowed
-  )) {
-    const result = resolveNodeBindings({ ...pass.node, props }, bindings.run, {
-      phase: "item",
-      ...(pass.item === undefined ? {} : { item: pass.item }),
-      ...itemRef,
-    });
-    if (result.issues.length > 0) bindings.report(result.issues);
-    if (result.bound === undefined) continue;
-    props = result.props;
-    bound = { ...bound, ...result.bound };
-  }
-  if (bound === undefined) return { node, bound: fromPage };
-  return { node: { ...node, props }, bound: { ...fromPage, ...bound } };
+  // The one fill a list's read-ahead also asks, so it reads ahead for the
+  // props each entry draws with.
+  const filled = fillItemBindings(node, context, bindings.run);
+  if (filled.issues.length > 0) bindings.report(filled.issues);
+  if (filled.bound === undefined) return { node, bound: fromPage };
+  return {
+    node: { ...node, props: filled.props },
+    bound: { ...fromPage, ...filled.bound },
+  };
 }
 
 /**
