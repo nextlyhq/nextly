@@ -8,6 +8,7 @@
 import type {
   DocumentIdentity,
   DocumentLocale,
+  FieldAddress,
 } from "@nextlyhq/plugin-sdk/admin";
 
 import { BUILDER_VIEW_PATH } from "../../builder-view";
@@ -44,24 +45,17 @@ export function showsAnotherLanguage(
 }
 
 /**
- * Whether a form path runs through a repeater's row. A row is addressed by its
- * position (`sections.0.body`), and a position names a different row once the
- * rows are reordered, so an address carrying one could open the wrong row's
- * field. Only a repeater's rows are numbered; a group step is always a name.
- */
-function insideRepeater(path: string): boolean {
-  return path.split(".").some(step => /^\d+$/.test(step));
-}
-
-/**
  * The builder's address for `fieldName` on the document the form holds.
  *
- * `fieldName` is the field's form path: `layout` at the top level,
- * `hero.body` inside a named group, which the view reaches by the same path.
+ * `fieldName` is the field's address from the document's root: `layout` at
+ * the top level, `hero.body` inside a named group, and inside a repeater's
+ * row the row's saved id in place of its position (`sections.<rowId>.body`),
+ * which `useFieldAddress` gives a field and the view resolves by. A position
+ * names another row once the rows are reordered, so it is never put here: the
+ * view refuses an address that names a row by one.
  *
  * Withheld, with the sentence the card shows, where there is no address to
- * open: outside a document, on an entry that has never been saved, and for a
- * field inside a repeater, which the view does not reach.
+ * open: outside a document, and on an entry that has never been saved.
  */
 export function builderAddress(
   identity: DocumentIdentity | null,
@@ -73,12 +67,6 @@ export function builderAddress(
     : {};
   if (identity === null) {
     return { unavailable: "The Page Builder opens from a saved page." };
-  }
-  if (insideRepeater(fieldName)) {
-    return {
-      unavailable:
-        "The Page Builder doesn't open for a field inside a repeater. Move this field out of the repeater to edit it visually.",
-    };
   }
   const query = `?field=${encodeURIComponent(fieldName)}`;
   if (identity.kind === "single") {
@@ -94,6 +82,59 @@ export function builderAddress(
     href: `${documentBuilderPath(identity.slug, identity.documentId)}${query}`,
     ...elsewhere,
   };
+}
+
+/**
+ * Why a field inside a repeater's row has no way in yet, as the card says it
+ * beneath the same button, drawn disabled.
+ */
+const ROW_UNAVAILABLE: Record<
+  Extract<FieldAddress, { unavailable: unknown }>["unavailable"],
+  string
+> = {
+  // A row added since the last save has an id only in this form; the
+  // builder's address must still find it after a reload.
+  unsavedRow: "Save the entry once to design this row.",
+  ownIds:
+    "This repeater's rows set their own id field, so a row has no saved identity to open in the Page Builder.",
+  unaddressable:
+    "The Page Builder can't open this field: the row it sits in has no address it can open.",
+};
+
+/**
+ * Why a row's field has no way in while the form shows another language. The
+ * builder edits the default language's document, and a translated repeater
+ * keeps its own rows, with their own ids, in each language: an address read
+ * from this language's rows would name a row the default language may not
+ * have, which the builder refuses as gone, or one it has under another
+ * content. So the way in is withheld rather than offered to fail.
+ */
+const ROW_IN_ANOTHER_LANGUAGE =
+  "Switch to the default language to design this row: the Page Builder edits the default language's rows.";
+
+/**
+ * The builder's address for a field, from the address its form gives it
+ * (`useFieldAddress`): the same as {@link builderAddress}, or, for a field in
+ * a repeater's row that has no address yet, or that the form shows in another
+ * language, why. A document that cannot open the builder at all is said
+ * first, since saving it is the first step either way.
+ */
+export function fieldBuilderAddress(
+  identity: DocumentIdentity | null,
+  field: FieldAddress,
+  locale?: Pick<DocumentLocale, "documentLocalized" | "isDefaultLocale"> | null
+): BuilderAddress {
+  const document = builderAddress(identity, "", locale);
+  if ("address" in field) {
+    // Whether the field is in a row is said by the form, never inferred.
+    if (field.throughRow !== true || !showsAnotherLanguage(locale)) {
+      return builderAddress(identity, field.address, locale);
+    }
+    if ("unavailable" in document) return document;
+    return { unavailable: ROW_IN_ANOTHER_LANGUAGE };
+  }
+  if ("unavailable" in document) return document;
+  return { unavailable: ROW_UNAVAILABLE[field.unavailable] };
 }
 
 /**

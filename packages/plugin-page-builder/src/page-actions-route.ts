@@ -15,6 +15,12 @@
  * - **place-entry-content** places a template's Entry content block, and
  *   **set-entry-content-field** chooses the blocks field it draws, as the
  *   Add panel and the block's Field menu do.
+ * - **bind-prop** binds a block's prop to a field, as the inspector's bind
+ *   button does.
+ * - **unbind-prop** unbinds it, keeping in its place what a visitor sees now,
+ *   resolved here on the server (`unbind-kept`), or the value of a named
+ *   entry or list item, or a value given; the answer says what was kept and
+ *   why.
  *
  * Each is read, planned and written as the caller. The stored page is read as
  * its working draft, as the editor opens it, and written back as a draft
@@ -52,9 +58,11 @@ import {
   type OpPosition,
 } from "@nextlyhq/blocks-engine";
 import {
+  bindOp,
   conditionsOp,
   pageActionJsonSchema,
   pageActionSchema,
+  unbindOp,
 } from "@nextlyhq/builder/ops";
 import {
   getCachedNextly,
@@ -73,6 +81,7 @@ import {
   type PageAction,
   type PageActionRequest,
   type PageActionResult,
+  type UnbindAnswer,
 } from "./composition-actions-contract";
 import {
   actingCaller,
@@ -101,6 +110,7 @@ import {
   templateTargetOf,
   type TemplateTarget,
 } from "./templates/template-target";
+import { planUnbind, unboundAsWritten, type UnbindSource } from "./unbind-kept";
 
 /** The blocks field a page action edits when the address names none. */
 const DEFAULT_FIELD = "content";
@@ -192,6 +202,8 @@ interface PlannedWrite {
   readonly document?: BlockDocument;
   readonly layout?: { layout: string | null; noHeaderFooter: boolean };
   readonly insertedId?: string;
+  /** For an unbind: what was kept in the prop's place, and why. */
+  readonly unbound?: UnbindAnswer;
 }
 
 /**
@@ -227,10 +239,15 @@ export async function runPageAction(
     body.action,
     read.page,
     field,
-    page.collection,
-    setup,
-    // The collection the template draws: an own design's is its entry's.
-    read.templateTarget?.collection
+    {
+      collection: page.collection,
+      id: page.id,
+      ...(page.locale === undefined ? {} : { locale: page.locale }),
+      ...(read.templateTarget === undefined
+        ? {}
+        : { templateTarget: read.templateTarget.collection }),
+    },
+    setup
   );
   // A template's collection with it, read with the page, so the write is
   // judged against it inside the transaction below.
@@ -269,6 +286,14 @@ export async function runPageAction(
       ...(planned.insertedId === undefined
         ? {}
         : { insertedId: planned.insertedId }),
+      ...(planned.unbound === undefined || body.action.kind !== "unbind-prop"
+        ? {}
+        : unboundAsWritten(
+            planned.unbound,
+            shown.document,
+            body.action.nodeId,
+            body.action.prop
+          )),
       refusals,
       fingerprint: read.fingerprint,
       by,
@@ -411,12 +436,12 @@ async function planAction(
   action: PageAction,
   stored: StoredPage,
   field: string,
-  collection: string,
-  setup: PageActionsSetup,
-  /** The collection the row names, where it is a template's. */
-  templateTarget: string | undefined
+  source: UnbindSource,
+  setup: PageActionsSetup
 ): Promise<PlannedWrite> {
-  if (action.kind === "set-layout") return planLayout(ctx, action, collection);
+  if (action.kind === "set-layout") {
+    return planLayout(ctx, action, source.collection);
+  }
   const document = stored.document;
   if (document === null) {
     throw refusedAction([`This entry has no "${field}" blocks to change.`]);
@@ -427,7 +452,7 @@ async function planAction(
     action,
     document,
     storeOf(ctx, setup).collection,
-    templateTarget
+    source
   );
   let next: BlockDocument;
   try {
@@ -441,6 +466,7 @@ async function planAction(
     ops: ops.ops,
     document: next,
     ...(ops.insertedId === undefined ? {} : { insertedId: ops.insertedId }),
+    ...(ops.unbound === undefined ? {} : { unbound: ops.unbound }),
   };
 }
 
@@ -450,11 +476,15 @@ async function opsFor(
   action: Exclude<PageAction, { kind: "set-layout" }>,
   document: BlockDocument,
   components: string,
-  templateTarget: string | undefined
-): Promise<{ ops: readonly BuilderOp[]; insertedId?: string }> {
+  source: UnbindSource
+): Promise<{
+  ops: readonly BuilderOp[];
+  insertedId?: string;
+  unbound?: UnbindAnswer;
+}> {
   switch (action.kind) {
     case "place-entry-content":
-      return placeEntryContentOps(ctx, action, document, templateTarget);
+      return placeEntryContentOps(ctx, action, document, source.templateTarget);
     case "set-entry-content-field":
       return {
         ops: [entryContentFieldUpdate(document, action.nodeId, action.field)],
@@ -479,6 +509,10 @@ async function opsFor(
       return {
         ops: [conditionsUpdate(document, action.nodeId, action.conditions)],
       };
+    case "bind-prop":
+      return { ops: [bindUpdate(document, action)] };
+    case "unbind-prop":
+      return unbindOps(document, action, source);
     case "choose-variant":
       return {
         ops: [
@@ -755,6 +789,48 @@ function conditionsUpdate(
     throw refusedAction([`There is no block "${nodeId}" on this page.`]);
   }
   return op;
+}
+
+/**
+ * The op binding a block's prop, through the editor's own writer. Whether the
+ * binding fits is the blocks field's to judge on the write, as for an editor
+ * save.
+ */
+function bindUpdate(
+  document: BlockDocument,
+  action: Extract<PageAction, { kind: "bind-prop" }>
+): BuilderOp {
+  const op = bindOp(document, action.nodeId, action.prop, action.binding);
+  if (op === null) {
+    throw refusedAction([`There is no block "${action.nodeId}" on this page.`]);
+  }
+  return op;
+}
+
+/**
+ * The op unbinding a block's prop, keeping in its place what the one
+ * server-side decision says (`unbind-kept`): what a visitor sees now, read as
+ * the published page reads it, unless the caller named an entry or item, or
+ * gave the value. The answer says what was kept and why.
+ */
+async function unbindOps(
+  document: BlockDocument,
+  action: Extract<PageAction, { kind: "unbind-prop" }>,
+  source: UnbindSource
+): Promise<{ ops: readonly BuilderOp[]; unbound: UnbindAnswer }> {
+  const plan = await planUnbind(
+    source,
+    document,
+    action.nodeId,
+    action.prop,
+    action.keep ?? "visitor"
+  );
+  if ("refusal" in plan) throw refusedAction([plan.refusal]);
+  const op = unbindOp(document, action.nodeId, action.prop, plan.kept);
+  if (op === null) {
+    throw refusedAction([`There is no block "${action.nodeId}" on this page.`]);
+  }
+  return { ops: [op], unbound: plan.answer };
 }
 
 /** A placement's props with values set and some fields reset to what they inherit. */

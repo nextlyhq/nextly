@@ -394,6 +394,8 @@ const ANY_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
  * A value written like an address that is not an image address (another
  * scheme, a host-relative `//host`, a control character) is neither, so it is
  * never handed to a host's media lookup as an id.
+ *
+ * @experimental Settles with the editor's binding controls.
  */
 export function imageValueOf(value: unknown): ImageValue | undefined {
   if (typeof value !== "string") return undefined;

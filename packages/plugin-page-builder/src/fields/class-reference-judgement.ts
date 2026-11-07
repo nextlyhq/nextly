@@ -25,8 +25,7 @@ import { classUsageOf } from "../class-usage";
 
 import {
   addedUndefinedIds,
-  storedFormsFor,
-  storedReadReaches,
+  referenceBaseline,
   type JudgedField,
   type StoredForms,
 } from "./added-undefined-ids";
@@ -45,13 +44,15 @@ const NAMED_AT_MOST = 5;
  * The site's classes are read only when the value references a class, and
  * the stored forms only when one of those is undefined, so an ordinary save
  * pays nothing. A value with no entry write behind it, and a field whose
- * stored value cannot be read (in a repeater's rows, or a language not
- * ready), are not judged: nothing tells a new reference from an old one.
+ * stored value cannot be read (a language not ready) are not judged: nothing
+ * tells a new reference from an old one.
  *
  * A blocks field inside named groups (`hero.body`) is judged as the variable
  * check judges it (`token-reference-judgement`), with the same reach and the
  * same answer where the group is kept per language: the editor opens it, so
  * a fence that skipped it would let a page apply a shared style just removed.
+ * A field in a repeater's row is judged against nothing held
+ * (`referenceBaseline`), for the same reason.
  */
 export async function newClassReferenceIssues(
   value: unknown,
@@ -66,7 +67,7 @@ export async function newClassReferenceIssues(
     readonly storedForms?: () => Promise<StoredForms>;
   }
 ): Promise<PluginFieldIssue[]> {
-  if (args.write === undefined || !storedReadReaches(args.path)) return [];
+  if (args.write === undefined) return [];
   const limits = site.limits ?? DEFAULT_LIMITS;
   // Every node the compiler reads, gated and hidden ones included: a class
   // there is applied whenever the node shows.
@@ -75,10 +76,7 @@ export async function newClassReferenceIssues(
     classUsageOf(value, limits).ids,
     site.classIds,
     form => classUsageOf(form, limits).ids,
-    closedWhenUnreachable(
-      site.storedForms ?? (() => storedFormsFor(args)),
-      args.path
-    )
+    closedWhenUnreachable(referenceBaseline(args, site.storedForms), args.path)
   );
   if (added.length === 0) return [];
   const named = added

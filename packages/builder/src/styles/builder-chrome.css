@@ -10965,7 +10965,9 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   );
 }
 
-.nx-read-meter__fill {
+/* The share of the allowance used, in the trigger's bar and the panel's. */
+.nx-read-meter__fill,
+.nx-read-panel__fill {
   position: absolute;
   inset-block: 0;
   inset-inline-start: 0;
@@ -10983,8 +10985,8 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   color: var(--nx-builder-warning-text);
 }
 
-.nx-read-meter[data-standing="near"]
-  :is(.nx-read-meter__count, .nx-read-meter__of, .nx-read-meter__unit) {
+/* The trigger's words (`nx-read-meter__words`) take the standing's colour. */
+.nx-read-meter[data-standing="near"] .nx-read-meter__words {
   color: var(--nx-builder-warning-text);
 }
 
@@ -10998,8 +11000,7 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   color: var(--nx-builder-destructive-text);
 }
 
-.nx-read-meter[data-standing="over"]
-  :is(.nx-read-meter__count, .nx-read-meter__unit) {
+.nx-read-meter[data-standing="over"] .nx-read-meter__words {
   color: var(--nx-builder-destructive-text);
 }
 
@@ -11115,14 +11116,6 @@ label[data-named-above] .nx-style-inspector__field-label-text {
     var(--nx-builder-text-muted) 20%,
     transparent
   );
-}
-
-.nx-read-panel__fill {
-  position: absolute;
-  inset-block: 0;
-  inset-inline-start: 0;
-  border-radius: inherit;
-  background: var(--nx-builder-text-muted);
 }
 
 .nx-read-panel__body[data-standing="near"] .nx-read-panel__fill {

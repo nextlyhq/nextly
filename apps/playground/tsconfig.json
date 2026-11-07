@@ -46,6 +46,11 @@
       "nextly/field-label": [
         "../../packages/nextly/src/collections/fields/field-label.ts"
       ],
+      // And again: the page builder reads which repeaters give their rows a
+      // saved id from the field catalog, and the seed loads it through tsx.
+      "nextly/field-catalog": [
+        "../../packages/nextly/src/collections/fields/catalog.ts"
+      ],
       "nextly/*": ["../../packages/nextly/src/*"],
       "@nextlyhq/adapter-drizzle": [
         "../../packages/adapter-drizzle/src/index.ts"

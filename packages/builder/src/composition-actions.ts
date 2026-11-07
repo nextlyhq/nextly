@@ -35,8 +35,12 @@ import {
   type ExposureEditResult,
   type ExposureSources,
   type ExposureTarget,
+  BINDING_SOURCES,
   CONDITION_MAX,
   CONDITION_OPS,
+  isPlainRecord,
+  type Binding,
+  type BindingFormat,
   LIST_FILTER_OPS,
   type ConditionOp,
   type ListFilter,
@@ -114,6 +118,33 @@ export type PageAction =
       readonly conditions: readonly (readonly ConditionInput[])[] | null;
     }
   /**
+   * Bind a block's prop to a field: `binding` as a block stores it (`$bind`,
+   * its `source`, a Single's `sourceKey`, and a `fallback` or `format`). The
+   * write is judged as an editor save is, so a prop the block lacks, a field
+   * its source lacks, a type that does not fit and a fallback the prop can't
+   * hold are refused.
+   */
+  | {
+      readonly kind: "bind-prop";
+      readonly nodeId: string;
+      readonly prop: string;
+      readonly binding: Binding;
+    }
+  /**
+   * Unbind a block's prop, keeping a value in its place. By default the value
+   * a visitor sees now, resolved on the server from the published page with
+   * the public's access; `{ entry }` or `{ item }` names the entry or list
+   * item whose value to keep, read the same way; `{ value }` supplies it. A
+   * value a visitor can't see is never copied in: the fallback, or the prop's
+   * own value, is kept instead, and the answer says which and why.
+   */
+  | {
+      readonly kind: "unbind-prop";
+      readonly nodeId: string;
+      readonly prop: string;
+      readonly keep?: UnbindKeep;
+    }
+  /**
    * Choose the page's Layout: a Layout's id, or `null` for the site's default.
    * `noHeaderFooter: true` switches the Layout off for this page; absent, it
    * is turned back on, as choosing a Layout in the editor does.
@@ -149,6 +180,19 @@ export type PageAction =
       readonly nodeId: string;
       readonly field: string;
     };
+
+/**
+ * Which value an `unbind-prop` action keeps: the visitor's, as the page shows
+ * it now (the default); that of a named entry or list item, read as a visitor
+ * reads it; or a value the caller supplies.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export type UnbindKeep =
+  | "visitor"
+  | { readonly entry: string }
+  | { readonly item: string }
+  | { readonly value: unknown };
 
 /**
  * The parts of a collection list's query a `set-list-query` action changes:
@@ -242,6 +286,42 @@ export type DefinitionAction =
     };
 
 const id = z.string().min(1).max(512);
+
+/** A binding as a block stores it; whether it fits is the write's to judge. */
+const bindingShape = {
+  $bind: z.string().min(1).max(512),
+  fallback: z.unknown().optional(),
+  format: z.custom<BindingFormat>(value => isPlainRecord(value)).optional(),
+};
+const bindingSchema: z.ZodType<Binding> = z.union([
+  z.strictObject({
+    ...bindingShape,
+    source: z
+      .enum(
+        BINDING_SOURCES.filter(source => source !== "single") as [
+          "entry",
+          "item",
+          "site",
+        ]
+      )
+      .optional(),
+  }),
+  z.strictObject({
+    ...bindingShape,
+    source: z.literal("single"),
+    sourceKey: id,
+  }),
+]);
+
+const unbindKeepSchema: z.ZodType<UnbindKeep> = z.union([
+  z.literal("visitor"),
+  z.strictObject({ entry: id }),
+  z.strictObject({ item: id }),
+  // A value given, never an empty object read as "keep nothing".
+  z.strictObject({
+    value: z.custom<unknown>(value => value !== undefined),
+  }),
+]);
 const label = z.string().max(200);
 const position = z.union([
   z.strictObject({ index: z.number().int().nonnegative() }),
@@ -344,6 +424,18 @@ const pageActionOptions = [
       )
       .max(CONDITION_MAX)
       .nullable(),
+  }),
+  z.strictObject({
+    kind: z.literal("bind-prop"),
+    nodeId: id,
+    prop: id,
+    binding: bindingSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("unbind-prop"),
+    nodeId: id,
+    prop: id,
+    keep: unbindKeepSchema.optional(),
   }),
   z.strictObject({
     kind: z.literal("set-layout"),

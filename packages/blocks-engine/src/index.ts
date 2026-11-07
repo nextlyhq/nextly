@@ -659,6 +659,9 @@ export type {
 } from "./validation";
 
 export {
+  // The prop an image kept by its address goes to, as a block declares it;
+  // public for the editor's unbind and the image renderer alike.
+  addressPropOf,
   BLOCK_ICONS,
   defineBlock,
   ITEM_SCHEMA_MAX_DEPTH,
@@ -1273,6 +1276,7 @@ export {
   bindablePropKind,
   checkBinding,
   fieldFitsProp,
+  imageValueOf,
   isBindPath,
   isEmptyBoundValue,
   isValidPropValue,
@@ -1313,10 +1317,12 @@ export type {
 export {
   bindDocument,
   bindingDemand,
+  bindingRefsFor,
   createBindingRun,
   DEFAULT_BINDING_LOCALE,
   hasItemBindings,
   resolveNodeBindings,
+  runDrawsImageField,
 } from "./resolve-bindings";
 export type {
   BindingDemand,

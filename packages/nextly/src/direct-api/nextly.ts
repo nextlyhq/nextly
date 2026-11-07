@@ -200,6 +200,7 @@ import type {
   FindFormsArgs,
   FindMediaArgs,
   FindMediaByIDArgs,
+  FindMediaByIDsArgs,
   FindOneUserArgs,
   FindPermissionByIDArgs,
   FindPermissionsArgs,
@@ -1046,6 +1047,8 @@ export const nextly = {
     upload: (args: UploadMediaArgs) => requireNextly().media.upload(args),
     find: (args?: FindMediaArgs) => requireNextly().media.find(args),
     findByID: (args: FindMediaByIDArgs) => requireNextly().media.findByID(args),
+    findByIDs: (args: FindMediaByIDsArgs) =>
+      requireNextly().media.findByIDs(args),
     update: (args: UpdateMediaArgs) => requireNextly().media.update(args),
     delete: (args: DeleteMediaArgs) => requireNextly().media.delete(args),
     bulkDelete: (args: BulkDeleteMediaArgs) =>

@@ -66,6 +66,7 @@ import {
   editorReaderAsCaller,
   findAsCaller,
   idsKeptByWorkflowKey,
+  publicSourceReader,
   type AsCallerFindArgs,
   type AsCallerPage,
 } from "../entry-reads";
@@ -508,14 +509,7 @@ function directEntryReads(
         await editorReaderAsCaller(ctx, request.locale)
       ).findById({ collection: request.collection, id: request.id }),
     publicEntry: async request => {
-      const { createPublicReader, requireNextly } = await import(
-        "nextly/runtime"
-      );
-      const nextly = requireNextly();
-      const reader = createPublicReader(
-        { find: async args => await nextly.find(args) },
-        request.locale === undefined ? {} : { locale: request.locale }
-      );
+      const reader = await publicSourceReader(request.locale);
       const { items } = await reader.find({
         collection: request.collection,
         filters: [{ field: "id", op: "equals", value: request.id }],

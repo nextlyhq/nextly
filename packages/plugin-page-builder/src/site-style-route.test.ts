@@ -120,6 +120,40 @@ describe("who may read the site style through the editor's route", () => {
     ).toBe(true);
   });
 
+  it("admits an author who may update a collection whose only blocks field is in a repeater's rows", async () => {
+    // The builder opens that field row by row, so its editors need the site
+    // style as much as an editor of a top-level field does.
+    const collections = [
+      {
+        slug: "landing",
+        fields: [
+          { name: "sections", type: "repeater", fields: [blocks("body")] },
+        ],
+      },
+    ];
+    expect(
+      await mayReadSiteStyle(context(["update-landing"], { collections }), {})
+    ).toBe(true);
+  });
+
+  it("refuses for a repeater whose rows declare their own id, which the builder cannot open", async () => {
+    const collections = [
+      {
+        slug: "landing",
+        fields: [
+          {
+            name: "sections",
+            type: "repeater",
+            fields: [{ name: "id", type: "text" }, blocks("body")],
+          },
+        ],
+      },
+    ];
+    expect(
+      await mayReadSiteStyle(context(["update-landing"], { collections }), {})
+    ).toBe(false);
+  });
+
   it("admits an author who may update a Single holding a blocks field", async () => {
     const singles = [{ slug: "homepage", fields: [blocks("content")] }];
     expect(

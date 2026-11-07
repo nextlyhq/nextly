@@ -432,6 +432,34 @@ export const READ_KINDS: readonly ReadKind[] = [
 export interface ReadClaim {
   readonly kind?: ReadKind;
   readonly nodeId?: string;
+  /**
+   * Every block one read serves, where it serves several (a batch of
+   * component definitions, for the placements asking for them): each is
+   * named unread when the read is refused.
+   *
+   * @experimental
+   */
+  readonly nodeIds?: readonly string[];
+}
+
+/**
+ * The placements asking for each component a read loads, by its id: the
+ * blocks an author placed, named unread when that read is refused.
+ *
+ * @experimental
+ */
+export type ComponentPlacements = ReadonlyMap<string, readonly string[]>;
+
+/** The placements asking for any of `ids`, each once. */
+export function placementsOf(
+  ids: readonly string[],
+  placements: ComponentPlacements | undefined
+): string[] {
+  const found = new Set<string>();
+  for (const id of ids) {
+    for (const placement of placements?.get(id) ?? []) found.add(placement);
+  }
+  return [...found];
 }
 
 /**
@@ -453,11 +481,19 @@ export const COMPONENT_BATCH_SIZE = 128;
  */
 export function componentBatches(
   ids: readonly string[],
-  budget: QueryBudget
+  budget: QueryBudget,
+  /** Who asks for each id, so a refused batch names them unread. */
+  placements?: ComponentPlacements
 ): string[][] {
   const batches: string[][] = [];
   for (let at = 0; at < ids.length; at += COMPONENT_BATCH_SIZE) {
-    if (!budget.take({ kind: "component" })) break;
+    // A refused batch ends the reads, so it names every placement still
+    // waiting: its own and the later batches' it stops.
+    const claim: ReadClaim = {
+      kind: "component",
+      nodeIds: placementsOf(ids.slice(at), placements),
+    };
+    if (!budget.take(claim)) break;
     batches.push(ids.slice(at, at + COMPONENT_BATCH_SIZE));
   }
   return batches;
@@ -526,6 +562,15 @@ export interface ListBatchReads {
     refs: readonly { readonly collection: string; readonly id: string }[],
     claim: ReadClaim
   ): Promise<void>;
+  /**
+   * Read these media records ahead, for `resolveMedia` to answer from.
+   * Optional: a host without it reads each image as it is drawn, and the
+   * list reads nothing more ahead once it reaches its images, so each
+   * image's own read comes before a later block's.
+   *
+   * @experimental
+   */
+  media?(ids: readonly string[], claim: ReadClaim): Promise<void>;
 }
 
 /**
@@ -1141,6 +1186,9 @@ export function createQueryBudget(
       if (remaining <= 0) {
         refused += 1;
         noteUnread(unread, claim.nodeId, kind);
+        for (const nodeId of claim.nodeIds ?? []) {
+          noteUnread(unread, nodeId, kind);
+        }
         options.onRefused?.(claim);
         return false;
       }

@@ -155,6 +155,16 @@ export {
   type DocumentLocale,
 } from "./components/features/entries/EntryForm/EntryFormContext";
 /**
+ * A field's address in its document, with a repeater's row named by its saved
+ * id rather than its position. Exported for the plugin surface: a field that
+ * links to a view of itself names itself by this, so the link opens the same
+ * row however the rows are reordered.
+ */
+export {
+  useFieldAddress,
+  type FieldAddress,
+} from "./components/features/entries/EntryForm/useFieldAddress";
+/**
  * How the surrounding document stands, for a field that covers the editor's own
  * chrome. Separate from the identity deliberately: which document this is does
  * not change with the language, and how it stands does.
