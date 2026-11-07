@@ -15,10 +15,10 @@ export const BINDINGS_TO_FIX_ROUTE_PATH = "/bindings-to-fix";
  * line links as given and the menu, the card and the editor link from the
  * admin's root.
  */
-export const BINDINGS_TO_FIX_ADMIN_PATH = `plugins/nextlyhq-plugin-page-builder${BINDINGS_TO_FIX_ROUTE_PATH}`;
+export const BINDINGS_TO_FIX_ADMIN_PATH: string = `plugins/nextlyhq-plugin-page-builder${BINDINGS_TO_FIX_ROUTE_PATH}`;
 
 /** The page's address from the admin's root. */
-export const BINDINGS_TO_FIX_PAGE_HREF = `/admin/${BINDINGS_TO_FIX_ADMIN_PATH}`;
+export const BINDINGS_TO_FIX_PAGE_HREF: string = `/admin/${BINDINGS_TO_FIX_ADMIN_PATH}`;
 
 /** How many documents one page of the answer lists. */
 export const BINDINGS_TO_FIX_PAGE_SIZE = 100;
