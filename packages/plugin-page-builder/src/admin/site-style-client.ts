@@ -579,7 +579,12 @@ export type SiteStyleReplayed =
  * entry is undone at that entry, so a change made to another since is kept.
  */
 export interface SiteStyleInverse {
-  readonly undo: (held: unknown) => SiteStyleReplayed;
+  /**
+   * `replaced` is the section as the change's write found it stored, set only
+   * where that write was merged onto another author's newer save: what Undo
+   * puts back is then their value, not the one this editor started from.
+   */
+  readonly undo: (held: unknown, replaced?: unknown) => SiteStyleReplayed;
   readonly redo: (held: unknown) => SiteStyleReplayed;
 }
 
@@ -986,7 +991,9 @@ export function useSaveSiteStyle(): SiteStyleWrite {
           async (known, held) =>
             known.inverse === undefined
               ? replacedBy(await known.done, known.before)
-              : replayedValue(known.inverse.undo(held)),
+              : replayedValue(
+                  known.inverse.undo(held, (await known.done).replaced)
+                ),
           async known => (await known.done).holds
         ),
         // What the change stored: the merge, not the studio's value alone.

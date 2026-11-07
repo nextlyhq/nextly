@@ -1187,6 +1187,19 @@ function useWriteClassStyles(
          */
         const undo = change.invert(entry.styles);
         /*
+         * Where the write was merged onto another author's newer save, the
+         * styles it replaced are theirs, not the ones this edit started from:
+         * Undo inverts against those, so it puts their value back rather than
+         * the value from before both edits.
+         */
+        const undoOf = (replaced: unknown): SharedStyleChange => {
+          if (replaced === undefined) return undo;
+          const theirs = classesFromStored(configured, replaced).find(
+            each => each.id === classId
+          );
+          return theirs === undefined ? undo : change.invert(theirs.styles);
+        };
+        /*
          * The code the stored entry was last rebased onto: the code this
          * edit was made against, then whatever each replay rebased it onto,
          * so a second change to the code between undo and redo is told
@@ -1203,7 +1216,10 @@ function useWriteClassStyles(
           };
         const result = await slot.save(
           classOverrideOf(configured, next),
-          { undo: replay(undo), redo: replay(change) },
+          {
+            undo: (held, replaced) => replay(undoOf(replaced))(held),
+            redo: replay(change),
+          },
           { base: classOverrideOf(configured, existing) }
         );
         toastSaveConflicts("classes", result, reread);

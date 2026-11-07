@@ -616,6 +616,48 @@ describe("a save merged onto the newest stored copy", () => {
     expect(writes.at(-1)).toEqual({ classes: [card, theirHero], _rev: "7" });
   });
 
+  it("hands a composed undo the section its merged write replaced", async () => {
+    // Mine set card's color while another author set it too: my write was
+    // refused as stale, merged onto theirs, and kept mine. A step composed
+    // against the section is handed theirs, the value it replaced, to undo
+    // to, rather than the color both edits started from.
+    const { steps, wrapper } = keptSteps();
+    const red = { ...card, styles: { color: "red" } };
+    const blue = { ...card, styles: { color: "blue" } };
+    const green = { ...card, styles: { color: "green" } };
+    readAnswer = {
+      data: { classes: [red], _rev: "5" },
+      isPending: false,
+      error: null,
+    };
+    let calls = 0;
+    writeBehaviour = async () => {
+      calls += 1;
+      if (calls === 1) throw staleRefusal("6", "Sam");
+      return { id: "1", _rev: String(5 + calls) };
+    };
+    freshAnswer = () => ({ classes: [green], _rev: "6" });
+    const handed: unknown[][] = [];
+    const inverse = {
+      undo: (held: unknown, replaced?: unknown) => {
+        handed.push([held, replaced]);
+        return { kind: "write" as const, value: replaced };
+      },
+      redo: () => ({ kind: "unchanged" as const }),
+    };
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    await act(async () => {
+      await result.current
+        .reserve("classes")
+        .save([blue], inverse, { base: [red] });
+    });
+    await act(async () => {
+      await steps[0]?.undo();
+    });
+    expect(handed).toEqual([[[blue], [green]]]);
+    expect(writes.at(-1)).toMatchObject({ classes: [green] });
+  });
+
   it("redoes from the step's own record when another author's save was read in first", async () => {
     const { steps, wrapper } = keptSteps();
     readAnswer = {

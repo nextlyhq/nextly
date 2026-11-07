@@ -12,7 +12,10 @@
  */
 import { act, cleanup, render, renderHook } from "@testing-library/react";
 import type { NamedClass } from "@nextlyhq/blocks-engine";
-import type { FontsPanelProps } from "@nextlyhq/builder/shell";
+import type {
+  FontsPanelProps,
+  SharedStyleChange,
+} from "@nextlyhq/builder/shell";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /** Each section save, and what the next one answers. */
@@ -25,6 +28,13 @@ const saves = vi.hoisted(() => ({
   answer: (): unknown => ({ saved: true, issues: {} }),
   /** How many times a surface asked for the site style to be read again. */
   rereads: 0,
+  /** The inverse the last reserved save was handed. */
+  inverse: undefined as
+    | undefined
+    | {
+        undo: (held: unknown, replaced?: unknown) => unknown;
+        redo: (held: unknown) => unknown;
+      },
 }));
 
 /** The warnings toasted, with their options. */
@@ -77,8 +87,10 @@ vi.mock("../site-style-client", () => {
   };
   // A place in the history saves as a section save does.
   const reserve = (section: string) => ({
-    save: (value: unknown, _inverse: unknown, options?: object) =>
-      save(section, value, options),
+    save: (value: unknown, inverse: typeof saves.inverse, options?: object) => {
+      saves.inverse = inverse;
+      return save(section, value, options);
+    },
     cancel: () => {},
   });
   return {
@@ -132,6 +144,23 @@ const other = {
 const names = (set: { tokens: { name: string }[] } | undefined) =>
   (set?.tokens ?? []).map(each => each.name);
 
+/**
+ * A shared-style change that sets the color, and whose inverse sets back
+ * the color the styles it is handed hold: the shape the builder's controls
+ * make, without their style addressing.
+ */
+function setColor(color: unknown): SharedStyleChange {
+  return Object.assign(
+    (styles: object) => ({
+      kind: "write" as const,
+      styles: { ...styles, color },
+    }),
+    {
+      invert: (before: { color?: unknown }) => setColor(before.color),
+    }
+  ) as unknown as SharedStyleChange;
+}
+
 /** Conflicts after one refusal naming Sam, exactly one save between. */
 const bySam = (entries: unknown[]) => ({
   entries,
@@ -153,6 +182,7 @@ beforeEach(() => {
   saves.calls.length = 0;
   saves.answer = () => ({ saved: true, issues: {} });
   saves.rereads = 0;
+  saves.inverse = undefined;
   toasts.warning.length = 0;
   panels.tokens = undefined;
   panels.fonts = undefined;
@@ -379,6 +409,30 @@ describe("a save stored over someone else's change", () => {
     expect(toasts.warning[0]?.options?.action?.label).toBe("Reload");
     toasts.warning[0]?.options?.action?.onClick();
     expect(saves.rereads).toBe(1);
+  });
+
+  it("undoes a style change merged over theirs back to their value", async () => {
+    // Both authors set card's color: mine was kept. Undo puts theirs back,
+    // not the color both edits started from.
+    const red = { ...card, styles: { color: "red" } };
+    const read = { classes: [red] as unknown as NamedClass[] };
+    const { result } = renderHook(() =>
+      useClassSurface(read, false, null, undefined)
+    );
+    await act(async () => {
+      await result.current.writeStyles("c1", setColor("blue"));
+    });
+    const held = [{ ...card, styles: { color: "blue" } }];
+    const theirs = [{ ...card, styles: { color: "green" } }];
+    expect(saves.inverse?.undo(held, theirs)).toMatchObject({
+      kind: "write",
+      value: [{ id: "c1", styles: { color: "green" } }],
+    });
+    // A save that met no other author's undoes to where it started.
+    expect(saves.inverse?.undo(held)).toMatchObject({
+      kind: "write",
+      value: [{ id: "c1", styles: { color: "red" } }],
+    });
   });
 
   it("toasts nothing for a shared style merged cleanly", async () => {
