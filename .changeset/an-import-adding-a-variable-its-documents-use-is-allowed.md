@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-Importing a transfer file that adds a design variable its documents use is no longer refused. Since pages were stopped from adding a reference to a variable the site does not define, an import's preview judged its documents before the variables it brings were in the site style, so any file whose blocks used one of its own variables was refused as it stood. The preview now judges those documents without the styles that name the incoming variables, and the import still checks them in full once the variables are stored.
+Importing a transfer file that adds a design variable its documents use is no longer refused. Since pages were stopped from adding a reference to a variable the site does not define, an import's preview judged its documents before the variables it brings were in the site style, so any file whose blocks used one of its own variables was refused as it stood. The preview now judges the file's documents as if the variables it brings were already on the site, with every style kept, so a document that also uses a variable neither the site nor the file defines is still refused in the preview rather than partway through the import.

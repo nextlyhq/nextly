@@ -531,10 +531,12 @@ function publishes(
  * adds are not in the site style until it applies, and a write may only add
  * a class the site holds, so the judging writes leave those classes off; the
  * documents written for real carry them, after the site style does. The
- * variables it adds are the same: a write may only add a reference to a
- * variable the site defines (`token-reference-judgement`), so the judging
- * writes leave off each style property naming one, and the real writes,
- * judged again once the site style holds them, carry it.
+ * variables it adds are not in the site style yet either, and a write may only
+ * add a reference to a variable the site defines (`token-reference-judgement`).
+ * The documents are judged whole, every reference kept, with the import's new
+ * variables counted as defined for these writes only
+ * (`provisional-variables`), so any other variable a value names is still
+ * refused here rather than when the import applies.
  */
 async function judgeWrites(
   ctx: ImportContext,
@@ -554,16 +556,12 @@ async function judgeWrites(
       map: new Map([...plan.classes.map].filter(([, to]) => !added.has(to))),
     },
   };
-  const withheldTokens = new Set(plan.tokens.create.map(tokenIdentity));
+  // Loaded at call time: it imports `node:async_hooks`, and this route is in
+  // the graph of the package root, which a browser bundle reaches.
+  const { withProvisionalVariables } = await import("./provisional-variables");
   try {
-    await writeDocuments(
-      ctx,
-      file,
-      judged,
-      slugs,
-      media,
-      false,
-      withheldTokens
+    await withProvisionalVariables(plan.tokens.create.map(tokenIdentity), () =>
+      writeDocuments(ctx, file, judged, slugs, media)
     );
   } catch (error) {
     const verdict = verdictOf(error);
@@ -589,8 +587,7 @@ interface Written {
 /**
  * The file's components, patterns and Layouts written in one transaction,
  * with every reference mapped. With no `commit`, the transaction is rolled
- * back once every write has answered (see {@link judgeWrites}), and a style
- * property naming one of `withheldTokens` is left out of what is written.
+ * back once every write has answered (see {@link judgeWrites}).
  */
 async function writeDocuments(
   ctx: ImportContext,
@@ -598,8 +595,7 @@ async function writeDocuments(
   plan: ImportPlan,
   slugs: Collections,
   media: ReadonlyMap<string, string>,
-  commit = false,
-  withheldTokens?: ReadonlySet<string>
+  commit = false
 ): Promise<Written> {
   const collections = ctx.services.collections;
   await collections.warmLocalizedReadiness(slugs.component);
@@ -624,7 +620,6 @@ async function writeDocuments(
       tokens: plan.tokens.map,
       breakpoints: plan.breakpoints,
       media,
-      ...(withheldTokens === undefined ? {} : { withheldTokens }),
     });
     const lookups = {
       mediaProps: registryMediaProps,

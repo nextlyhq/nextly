@@ -129,60 +129,6 @@ describe("rewriteDocument", () => {
     });
     expect(rewritten.exposed).toEqual(definition.exposed);
   });
-
-  it("leaves out each property naming a withheld variable, after mapping, and keeps the rest", () => {
-    const document: BlockDocument = {
-      formatVersion: 1,
-      kind: "pattern",
-      settings: {
-        styles: { base: { base: { color: { $token: "color.src" } } } },
-      },
-      nodes: [
-        {
-          id: "box",
-          type: "core/box",
-          version: 1,
-          props: {},
-          styles: {
-            base: {
-              base: {
-                // Named inside a structured value: the whole value goes.
-                padding: { top: { $token: "color.src" }, left: "4px" },
-                margin: { top: { $token: "space.kept" } },
-                color: "red",
-              },
-              // Every property withheld: the breakpoint goes with them.
-              tablet: { color: { $token: "color.src" } },
-            },
-          },
-        },
-      ],
-    };
-
-    const judged = rewriteDocument(
-      document,
-      { ...maps, withheldTokens: new Set(["color.dst"]) },
-      lookups
-    );
-
-    expect(judged.nodes[0]?.styles).toEqual({
-      base: {
-        base: { margin: { top: { $token: "space.kept" } }, color: "red" },
-      },
-    });
-    expect(judged.settings).toEqual({});
-    // CONTROL: unset, the same document keeps every reference, mapped.
-    expect(rewriteDocument(document, maps, lookups).nodes[0]?.styles).toEqual({
-      base: {
-        base: {
-          padding: { top: { $token: "color.dst" }, left: "4px" },
-          margin: { top: { $token: "space.kept" } },
-          color: "red",
-        },
-        md: { color: { $token: "color.dst" } },
-      },
-    });
-  });
 });
 
 describe("rewriteClass", () => {
