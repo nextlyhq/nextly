@@ -35,7 +35,8 @@ import type { TemplateGuardSetup } from "./templates/template-guard";
 const RECORDS: Record<string, Record<string, unknown>> = {
   pages: {
     slug: "pages",
-    labels: { singular: "Page", plural: "Pages" },
+    label: "Page",
+    labels: { plural: "Pages" },
     fields: [
       { name: "title", type: "text" },
       { name: "content", type: "blocks" },
@@ -43,7 +44,8 @@ const RECORDS: Record<string, Record<string, unknown>> = {
   },
   authors: {
     slug: "authors",
-    labels: { singular: "Author", plural: "Authors" },
+    label: "Author",
+    labels: { plural: "Authors" },
     fields: [{ name: "name", type: "text" }],
   },
 };

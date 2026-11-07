@@ -2,8 +2,8 @@
 
 /**
  * What a visitor reads of the page being edited, read for applying its
- * visibility conditions: asked the first time the author applies them, and
- * again when they are applied to another page or in another language.
+ * visibility conditions: asked each time the author applies them, so the page
+ * is checked as it is published now.
  *
  * @module admin/editor/page-conditions-read
  */
@@ -37,7 +37,7 @@ export interface PageConditionsRead {
   readonly failed: boolean;
 }
 
-/** The read's answer for one page in one language. */
+/** The read's answer for one page in one language, on one attempt. */
 interface Answer {
   readonly key: string;
   readonly previewed: PreviewedEntry;
@@ -45,8 +45,9 @@ interface Answer {
 }
 
 /**
- * What a visitor reads of the page, once `wanted` (the author applies the
- * conditions). Only a visitor's values are ever read: the route answers the
+ * What a visitor reads of the page, read each time the author applies the
+ * conditions (`wanted` and a new `attempt`), so the page as published since
+ * is what they are checked against. Only a visitor's values are ever read: the route answers the
  * page's published values and public fields, nothing the editor alone reads.
  */
 export function usePageConditionsRead(
@@ -68,7 +69,7 @@ export function usePageConditionsRead(
   const tried = `${key}#${String(attempt)}`;
   useEffect(() => {
     if (!wanted || collection === undefined || id === undefined) return;
-    if (answer?.key === key || failure === tried) return;
+    if (answer?.key === tried || failure === tried) return;
     let live = true;
     readConditionsPreview({
       collection,
@@ -78,7 +79,7 @@ export function usePageConditionsRead(
       read => {
         if (!live) return;
         setAnswer({
-          key,
+          key: tried,
           noun: read.noun.toLowerCase(),
           previewed: {
             kind: "entry",
@@ -100,10 +101,19 @@ export function usePageConditionsRead(
       live = false;
     };
   }, [wanted, key, tried, answer?.key, failure, collection, id, locale]);
-  const current = answer?.key === key ? answer : undefined;
+  // An answer stands for the attempt that read it: applying the conditions
+  // again reads the page again, so a publish or a changed field since shows.
+  // Until the new answer lands, the last one for this page stands in, unless
+  // the new read failed, which is said instead.
+  const fresh = answer?.key === tried;
+  const failed = wanted && !fresh && failure === tried;
+  const current =
+    !failed && (fresh || answer?.key.startsWith(`${key}#`) === true)
+      ? answer
+      : undefined;
   return {
     previewed: current?.previewed,
     noun: current?.noun ?? "page",
-    failed: wanted && current === undefined && failure === tried,
+    failed,
   };
 }
