@@ -41,8 +41,25 @@ const GONE_CLAIM = {
 function harness(options: {
   mayHaveTemplate: boolean;
   template?: { published: boolean; address: readonly string[] | null };
+  /**
+   * The template each read answers with, in order, in place of `template`:
+   * a template created or published between the save's first read and its
+   * second appears only on the second.
+   */
+  reads?: readonly ({
+    published: boolean;
+    address: readonly string[] | null;
+  } | null)[];
 }) {
   const steps: string[] = [];
+  let read = 0;
+  // The claims the store holds: one for an entry of a collection renamed away.
+  const storedClaims = (read: {
+    where?: Record<string, { equals?: unknown }>;
+  }) =>
+    read.where?.holderCollection?.equals === "gone"
+      ? { data: [GONE_CLAIM], pagination: { total: 1 } }
+      : { data: [], pagination: { total: 0 } };
   const lockKey = storedKey(collectionLockKey("events"));
   const claims = {
     slug: "address-claims",
@@ -53,10 +70,13 @@ function harness(options: {
         listEntries: async (
           _slug: string,
           read: { where?: Record<string, { equals?: unknown }> }
-        ) =>
-          read.where?.holderCollection?.equals === "gone"
-            ? { data: [GONE_CLAIM], pagination: { total: 1 } }
-            : { data: [], pagination: { total: 0 } },
+        ) => storedClaims(read),
+        // The store reads its claims on the save's transaction.
+        listEntriesInTransaction: async (
+          _tx: unknown,
+          _slug: string,
+          read: { where?: Record<string, { equals?: unknown }> }
+        ) => storedClaims(read),
       },
       collections: {
         createEntryInTransaction: async (
@@ -65,6 +85,9 @@ function harness(options: {
           data: Record<string, unknown>
         ) => {
           if (data.claimKey === lockKey) steps.push("lock events");
+          // An address claimed for an entry, so a test sees what the save
+          // took, not only the reads it made.
+          else if (data.kind === "address") steps.push(`claim ${data.path}`);
           return { id: "lock-1", ...data };
         },
         updateEntryInTransaction: async () => ({ item: {} }),
@@ -89,7 +112,12 @@ function harness(options: {
       steps.push(
         `read template of ${collection}${tx === undefined ? " (pool)" : ""}`
       );
-      return options.template ?? null;
+      const answer =
+        options.reads === undefined
+          ? (options.template ?? null)
+          : (options.reads[read] ?? null);
+      read += 1;
+      return answer;
     },
     storedAddresses: async () => new Map(),
     neverServed: collection => collection === "pages",
@@ -142,6 +170,20 @@ describe("an entry's save in a collection not given an address in code", () => {
       "read template of events",
       "lock events",
       "read template of events",
+    ]);
+  });
+
+  it("claims the entry's address from a template that appears only on the read under the lock", async () => {
+    const { steps, save } = harness({
+      mayHaveTemplate: true,
+      reads: [null, { published: true, address: ["events"] }],
+    });
+    await save("events");
+    expect(steps).toEqual([
+      "read template of events",
+      "lock events",
+      "read template of events",
+      "claim /events/launch",
     ]);
   });
 
