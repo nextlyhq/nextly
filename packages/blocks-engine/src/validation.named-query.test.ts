@@ -41,9 +41,21 @@ const events = defineNamedQuery({
   run: () => Promise.resolve({ rows: [] }),
 });
 
+/** The same query, declared to count its rows, as a paginated list needs. */
+const countedEvents = defineNamedQuery({
+  ...events,
+  name: "events.counted",
+  label: "Counted events",
+  total: true,
+});
+
 const queries: NamedQuerySource = {
   declarationOf: name =>
-    name === events.name ? namedQueryDeclaration(events) : undefined,
+    name === events.name
+      ? namedQueryDeclaration(events)
+      : name === countedEvents.name
+        ? namedQueryDeclaration(countedEvents)
+        : undefined,
 };
 
 /** Public fields, or none for a collection visitors cannot read. */
@@ -295,32 +307,6 @@ describe("a custom source at save", () => {
     ).toEqual([]);
   });
 
-  it("refuses a custom source's list split into pages, and keeps one a stored page holds", () => {
-    const document = page(
-      list("l", { ...named({ city: "lahore" }), paginate: true })
-    );
-    expect(judged(document)).toEqual([
-      ["list-paginate-named", "error", "/nodes/0/props/paginate"],
-    ]);
-    // Judged by its shape alone too, as the editor's save is.
-    expect(judged(document, { namedQueries: undefined })).toEqual([
-      ["list-paginate-named", "error", "/nodes/0/props/paginate"],
-    ]);
-    expect(judged(document, { stored: [document] })).toEqual([
-      ["list-paginate-named", "warning", "/nodes/0/props/paginate"],
-    ]);
-    const [refused] = validate(document, ctx).filter(
-      issue => issue.code === "list-paginate-named"
-    );
-    expect(refused?.message).toBe(
-      "A custom source's list can't be split into pages yet. Turn off Split into pages, or choose a collection."
-    );
-    // Not split into pages, the same list saves.
-    expect(
-      judged(page(list("l", { ...named({ city: "lahore" }), paginate: false })))
-    ).toEqual([]);
-  });
-
   it("refuses a related list inside a custom source's list", () => {
     const inner = list("inner", {
       collection: "events",
@@ -351,10 +337,66 @@ describe("a custom source at save", () => {
       "list-named-query-param-unknown",
       "list-named-query-reads-hidden",
       "list-named-query-rows-hidden",
+      "list-named-query-uncounted",
     ]) {
       expect(ISSUE_CODES).toHaveProperty(code);
     }
     expect(LIST_FIELD_CODES.has("list-named-query-unknown")).toBe(true);
+    // Decided by the site's queries, so a caller judging twice reports it
+    // with the host's judgement rather than the shape's.
+    expect(LIST_FIELD_CODES.has("list-named-query-uncounted")).toBe(true);
     expect(LIST_FIELD_CODES.has("list-source-conflict")).toBe(false);
+  });
+});
+
+describe("a custom source split into pages", () => {
+  const paged = (name: string) => ({
+    ...named({ city: "lahore" }, name),
+    limit: 5,
+    paginate: true,
+  });
+
+  it("refuses a query that does not count its rows, at the list's split into pages", () => {
+    expect(judged(page(list("l", paged(events.name))))).toEqual([
+      ["list-named-query-uncounted", "error", "/nodes/0/props/paginate"],
+    ]);
+    const [uncounted] = validate(page(list("l", paged(events.name))), ctx);
+    expect(uncounted?.message).toBe(
+      "Upcoming events doesn't count its entries, so this list can't be split into pages. Turn this off, or ask a developer to make it return a total."
+    );
+  });
+
+  it("accepts a query declared to count its rows", () => {
+    expect(judged(page(list("l", paged(countedEvents.name))))).toEqual([]);
+  });
+
+  it("accepts the uncounted query on a list that shows one page", () => {
+    // The positive control: the refusal is the split into pages, not the
+    // query, so the same source without it saves.
+    expect(
+      judged(page(list("l", { ...paged(events.name), paginate: false })))
+    ).toEqual([]);
+  });
+
+  it("keeps a stored page that already held it, as a warning", () => {
+    const document = page(list("l", paged(events.name)));
+    expect(judged(document, { stored: [document] })).toEqual([
+      ["list-named-query-uncounted", "warning", "/nodes/0/props/paginate"],
+    ]);
+  });
+
+  it("says only that a query nobody registers is unknown", () => {
+    // No declaration, so nothing says whether it counts: the existing
+    // warning for a stored page, never a guess at its total.
+    const document = page(list("l", paged("gone.query")));
+    expect(judged(document, { stored: [document] })).toEqual([
+      ["list-named-query-unknown", "warning", "/nodes/0/props/namedQuery"],
+    ]);
+  });
+
+  it("judges the split by its shape alone without the site's queries", () => {
+    expect(
+      judged(page(list("l", paged(events.name))), { namedQueries: undefined })
+    ).toEqual([]);
   });
 });

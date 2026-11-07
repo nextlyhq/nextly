@@ -151,7 +151,9 @@ whole rather than merged. It is the list's whole source, so setting it removes
 `collection`, `relation`, `filters` and `sort` in the same write, and a change that sets
 both is refused. Setting `collection` or `relation` removes it. A missing required input,
 a value an input does not take and a query the site does not register are refused, for
-example `Choose a city. Upcoming events needs one to run.` A plugin makes the same change
+example `Choose a city. Upcoming events needs one to run.` So is `paginate: true` on a list
+whose query is not declared with `total: true`, since its pages are counted from that total.
+A plugin makes the same change
 through the `composition` service's `pageAction`.
 
 `set-conditions` sets the visibility conditions of the block whose id is `nodeId`.

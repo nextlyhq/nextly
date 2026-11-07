@@ -118,6 +118,29 @@ describe("a named query's declaration", () => {
       'entries of "posts"',
     ],
     [
+      "rows naming both a collection and fields",
+      {
+        rows: {
+          collection: "events",
+          key: "id",
+          fields: [{ name: "id", type: "text" }],
+        },
+      },
+      "both a collection and fields",
+    ],
+    [
+      // Read as its consumers read it: `fields` decides, so fields that are
+      // not a list are refused even beside a collection the query reads.
+      "fields that are not a list, beside a collection",
+      { rows: { collection: "events", fields: "bad" } },
+      "both a collection and fields",
+    ],
+    [
+      "rows with fields but no key",
+      { rows: { fields: [{ name: "id", type: "text" }] } },
+      "key",
+    ],
+    [
       "a row field a binding could not address",
       {
         rows: {
@@ -310,6 +333,44 @@ describe("a named query's declaration", () => {
               { value: "b", label: "  " },
             ],
           }),
+        },
+      },
+      "no options of { value, label }",
+    ],
+    [
+      "a total flag that is not true or false",
+      { total: "yes" },
+      "total is not true or false",
+    ],
+    [
+      // Under the cap as a set of slugs, over it as written: every element
+      // is served and expanded into the page's cache tags.
+      "one collection repeated past the read cap",
+      {
+        reads: { collections: Array.from({ length: 65 }, () => "events") },
+        rows: { collection: "events" },
+        params: {},
+      },
+      "65 reads; at most 64",
+    ],
+    [
+      "a reads list with a hole in it",
+      {
+        // Slots 0 and 2 set, slot 1 a hole that `every` alone would skip.
+        reads: {
+          collections: Object.assign(new Array<unknown>(3), {
+            0: "events",
+            2: "venues",
+          }),
+        },
+      },
+      "reads.collections is not a list",
+    ],
+    [
+      "a choice whose options have a hole",
+      {
+        params: {
+          c: { type: "choice", label: "C", options: new Array<unknown>(1) },
         },
       },
       "no options of { value, label }",

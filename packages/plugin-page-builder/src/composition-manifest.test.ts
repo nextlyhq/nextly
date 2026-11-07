@@ -20,6 +20,7 @@ import {
   componentFacts,
   compositionManifestSchema,
   manifestActions,
+  manifestNamedQuery,
   MANIFEST_FORMAT_VERSION,
   type CompositionManifest,
 } from "./composition-manifest";
@@ -145,6 +146,69 @@ describe("the manifest's named queries", () => {
         ],
       }).success
     ).toBe(true);
+  });
+
+  it("lists a group's own row fields, however deep, and accepts them", () => {
+    const listed = manifestNamedQuery({
+      name: "pages.seo",
+      label: "Pages with SEO",
+      reads: { collections: ["pages"] },
+      rows: {
+        key: "id",
+        fields: [
+          { name: "id", type: "text" },
+          {
+            name: "seo",
+            type: "group",
+            fields: [
+              {
+                name: "image",
+                type: "group",
+                fields: [{ name: "alt", type: "text" }],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(listed.rows).toEqual({
+      key: "id",
+      fields: [
+        { name: "id", type: "text" },
+        {
+          name: "seo",
+          type: "group",
+          fields: [
+            {
+              name: "image",
+              type: "group",
+              fields: [{ name: "alt", type: "text" }],
+            },
+          ],
+        },
+      ],
+    });
+    expect(
+      compositionManifestSchema.safeParse({
+        ...manifestWith(card),
+        namedQueries: [listed],
+      }).success
+    ).toBe(true);
+    // A nested field is held to the same shape as a top-level one.
+    expect(
+      compositionManifestSchema.safeParse({
+        ...manifestWith(card),
+        namedQueries: [
+          {
+            ...query,
+            rows: {
+              key: "id",
+              fields: [{ name: "seo", type: "group", fields: [{ name: "" }] }],
+            },
+          },
+        ],
+      }).success
+    ).toBe(false);
   });
 
   it("refuses a query carrying anything but its declaration, such as its run function", () => {
