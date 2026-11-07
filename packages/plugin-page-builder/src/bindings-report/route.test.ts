@@ -129,4 +129,23 @@ describe("the bindings to fix route", () => {
     expect(second.items).toHaveLength(20);
     expect(second.meta).toMatchObject({ hasNext: false, hasPrev: true });
   });
+
+  it("refuses a malformed query rather than reading it as something else", async () => {
+    const route = routeOver([stored("a", "pages", ["content"])], {
+      a: ["content"],
+    });
+    // A page with junk after its number was read as page 2.
+    await expect(answer(route, "?page=2junk")).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+    await expect(answer(route, "?page=0")).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+    await expect(answer(route, "?place=everywhere")).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+    // The control: a well-formed query is answered.
+    const { meta } = await answer(route, "?place=pages&page=1");
+    expect(meta).toMatchObject({ total: 1 });
+  });
 });
