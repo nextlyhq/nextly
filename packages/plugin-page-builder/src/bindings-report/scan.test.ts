@@ -128,7 +128,7 @@ function site(contents: Record<string, unknown>, fingerprint: () => string) {
   const documents = Object.keys(contents).map(
     (id): HostDocument => ({
       key: `collection:pages:${id}`,
-      hosts: [{ host: host(id), access: "scan" }],
+      hosts: [{ host: host(id), access: "write" }],
     })
   );
   const read: string[] = [];
@@ -147,7 +147,7 @@ function site(contents: Record<string, unknown>, fingerprint: () => string) {
     },
     reading: {
       hostsOf: async (at: { id?: string }) => [
-        { host: host(at.id ?? ""), access: "scan" as const },
+        { host: host(at.id ?? ""), access: "write" as const },
       ],
       read: async (address: HostAddress) => {
         read.push(address.id ?? "");
@@ -274,6 +274,31 @@ describe("the check of every document", () => {
     expect((await memory.store.list()).map(row => row.documentKey)).toEqual([
       "collection:pages:a",
     ]);
+  });
+
+  it("keeps a document whose stored value could not be read marked, with its last rows", async () => {
+    const memory = memoryStore();
+    const pages = site({ a: pageBinding("headline") }, () => "v1");
+    await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER());
+    const key = "collection:pages:a";
+    expect(memory.rows.get(key)?.rows).toHaveLength(1);
+    await memory.store.markDirty({
+      documentKey: key,
+      kind: "collection",
+      slug: "pages",
+      documentId: "a",
+      place: "pages",
+    });
+    const unreadable = {
+      ...pages.reading,
+      read: async () => {
+        throw new Error("database unavailable");
+      },
+    };
+    await runFullCheck(pages.walk, deps(memory.store, unreadable), LATER());
+    // Not recorded clean: still marked, and the binding it had still listed.
+    expect(memory.rows.get(key)?.dirty).not.toBeNull();
+    expect(memory.rows.get(key)?.rows).toHaveLength(1);
   });
 
   it("drops a document's row once a complete check no longer finds it", async () => {

@@ -1,6 +1,8 @@
 /**
- * The fingerprint of what bindings are judged against: every collection's and
- * every Single's fields, as the registry's schema hash for each says, whether
+ * The fingerprint of what bindings are judged against: every collection's,
+ * every Single's and every field group's fields, as the registry's schema hash
+ * for each says (a field group's fields are judged where a collection or a
+ * Single places it), whether
  * a collection's entries carry timestamps, and every registered block's
  * props.
  *
@@ -33,6 +35,8 @@ interface BlockRow {
 export interface FingerprintSources {
   readonly collections: () => Promise<readonly unknown[]>;
   readonly singles: () => Promise<readonly unknown[]>;
+  /** Every field group, whose fields a binding reaches where one is placed. */
+  readonly fieldGroups?: () => Promise<readonly unknown[]>;
   readonly blocks: () => readonly BlockRow[];
   /**
    * When a component or a Layout was last saved: a placed component's, or a
@@ -65,14 +69,16 @@ function recordPart(kind: string, row: unknown): string {
 export async function schemaFingerprint(
   sources: FingerprintSources
 ): Promise<string> {
-  const [collections, singles, designs] = await Promise.all([
+  const [collections, singles, fieldGroups, designs] = await Promise.all([
     sources.collections(),
     sources.singles(),
+    sources.fieldGroups?.() ?? Promise.resolve([]),
     sources.designs?.() ?? Promise.resolve(""),
   ]);
   const parts = [
     ...collections.map(row => recordPart("c", row)),
     ...singles.map(row => recordPart("s", row)),
+    ...fieldGroups.map(row => recordPart("g", row)),
     ...sources
       .blocks()
       .map(block => `b:${block.name}:${JSON.stringify(block.props ?? {})}`),

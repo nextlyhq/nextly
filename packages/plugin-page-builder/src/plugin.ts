@@ -904,6 +904,29 @@ async function singleRegistryRows(
   return rows;
 }
 
+/** How many field groups one read of the registry asks for. */
+const FIELD_GROUP_PAGE_SIZE = 100;
+
+/**
+ * Every field group's registry record, for the same fingerprint: a binding
+ * reaches a field group's fields where a collection or a Single places it, so
+ * a change to one changes what those bindings are judged against.
+ */
+async function fieldGroupRows(): Promise<unknown[]> {
+  const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+  const nextly = await getCachedNextly();
+  const rows: unknown[] = [];
+  for (let offset = 0; ; offset += FIELD_GROUP_PAGE_SIZE) {
+    const page = await nextly.fieldGroups.find({
+      limit: FIELD_GROUP_PAGE_SIZE,
+      offset,
+    });
+    rows.push(...page.items);
+    // Bounded by a short page, so an empty one ends the read.
+    if (page.items.length < FIELD_GROUP_PAGE_SIZE) return rows;
+  }
+}
+
 /** How often a read of the bindings report may start a check, at most. */
 const BINDINGS_REFRESH_MS = 60_000;
 
@@ -1566,7 +1589,11 @@ export const pageBuilder = (
       const own = bindingReportCtx?.self.collections ?? {};
       const named = (slug: string) => own[slug] ?? slug;
       if (at.slug === named(PAGES_SLUG)) return "pages";
-      if (at.slug === named(COMPONENTS_SLUG)) return "components";
+      // The component store the composition reads, a configured one included.
+      if (
+        at.slug === (rewriteInstall?.store.collection ?? named(COMPONENTS_SLUG))
+      )
+        return "components";
       if (at.slug === named(PATTERNS_SLUG)) return "patterns";
       if (at.slug === named(LAYOUTS_SLUG)) return "layouts";
       return "entries";
@@ -1609,6 +1636,7 @@ export const pageBuilder = (
           schemaFingerprint({
             collections: () => collectionRegistryRows(ctx),
             singles: () => singleRegistryRows(ctx),
+            fieldGroups: () => fieldGroupRows(),
             blocks: () => allBlocks(),
             designs: async () => {
               const saves = await latestSave([
