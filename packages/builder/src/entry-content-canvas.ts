@@ -108,7 +108,9 @@ export function useEntryContentDrawing(
   const collection = usePreviewedCollection();
   const maxNodes = render?.limits?.maxNodes;
   const holds = useHoldsEntryContent(document, maxNodes);
-  const drawn = useComposedEntryContent(document, maxNodes);
+  // Drawn from the entry the seam names, which a host names only once the
+  // canvas's own read of it has answered, so bound values never blink in.
+  const drawn = useComposedEntryContent(document, previewed, maxNodes);
   const context = render?.context;
   const drawnRender = useMemo((): CanvasRender | undefined => {
     if (previewed === undefined || !holds) return render;
@@ -133,22 +135,28 @@ function useHoldsEntryContent(
 }
 
 /**
- * `document` with the previewed entry's own blocks composed into its Entry
- * content block, as the canvas draws it; `document` itself, by identity,
- * where nothing is previewed or it holds no such block.
+ * `document` with `previewed`'s own blocks composed into its Entry content
+ * block, as the canvas draws it; `document` itself, by identity, where no
+ * entry is given or it holds no such block.
  *
  * The one composition everything about the canvas's template is asked of:
  * the canvas draws it, and the host asks for the sources its bindings and
  * lists read from it, so a bound block inside the entry's content reads its
  * source on the canvas as the published page, which composes first, does.
  *
+ * The entry is given rather than read from the seam: a host asking for those
+ * sources composes from the entry as its own read has it, since the seam
+ * names the entry only once the canvas's read of it has answered, and that
+ * read is asked of this composition. Composed from the seam, the read would
+ * change its own ask each time it answered, and never settle.
+ *
  * @experimental Settles when collection templates ship.
  */
 export function useComposedEntryContent(
   document: BlockDocument,
+  previewed: PreviewedEntry | undefined,
   maxNodes?: number
 ): BlockDocument {
-  const previewed = usePreviewedEntry();
   const holds = useHoldsEntryContent(document, maxNodes);
   return useMemo(
     () =>

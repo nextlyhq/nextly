@@ -303,6 +303,12 @@ export function useTemplatePreview(args: TemplatePreviewArgs): TemplatePreview {
 }
 
 /**
+ * What the seam says while the canvas's read of the entry is on its way: one
+ * value, so a render while it waits hands the seam's readers nothing new.
+ */
+const CANVAS_LOADING: PreviewedEntry = { kind: "none", reason: "loading" };
+
+/**
  * The preview as the strip and the seam say it: an entry is named as the
  * one previewed only once both its own read and the canvas's read of it
  * have answered, so neither claims an entry the canvas is not drawing. A
@@ -335,7 +341,7 @@ export function followingCanvas(
       ...preview,
       chip: { ...chip, loading: true },
       ...(preview.previewed.kind === "entry"
-        ? { previewed: { kind: "none", reason: "loading" } as const }
+        ? { previewed: CANVAS_LOADING }
         : {}),
       refresh,
     };

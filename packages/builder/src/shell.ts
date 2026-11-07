@@ -400,16 +400,16 @@ export { VisitorUnreadableBadges } from "./visitor-unreadable-badges";
 export type { VisitorUnreadableBadgesProps } from "./visitor-unreadable-badges";
 export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
 /**
+ * @experimental A template's document with an entry's own blocks composed
+ * into its Entry content block, as the canvas draws it, for a host asking
+ * for the sources the drawn page's bindings read.
+ */
+export { useComposedEntryContent } from "./entry-content-canvas";
+/**
  * @experimental The entry a template is previewed with: the host provides it
  * around a template's editor, and anything inside reads it. `undefined`
  * outside a template.
  */
-/**
- * @experimental A template's document with the previewed entry's own blocks
- * composed into its Entry content block, as the canvas draws it, for a host
- * asking for the sources the drawn page's bindings read.
- */
-export { useComposedEntryContent } from "./entry-content-canvas";
 export {
   PREVIEWED_ENTRY_KEYS,
   PreviewedEntryProvider,

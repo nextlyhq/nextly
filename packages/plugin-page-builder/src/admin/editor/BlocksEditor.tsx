@@ -38,7 +38,6 @@ import {
   SpacingOverlay,
   VisitorUnreadableBadges,
   VisitorUnreadableProvider,
-  useComposedEntryContent,
   type ComponentFieldsHost,
   type ComponentVariantsHost,
   type OpenPassages,
@@ -135,6 +134,7 @@ import { documentFrom } from "./stored-document";
 import {
   TemplatePreviewScope,
   TemplatePreviewStrip,
+  useDrawnTemplate,
   useTemplatePreviewState,
 } from "./template-preview-strip";
 import { useComponentView, type ComponentView } from "./use-component-view";
@@ -1205,7 +1205,8 @@ function EditorBody<TFieldValues extends FieldValues>({
   // Asked of the document as the canvas draws it: a template's with the
   // previewed entry's own blocks composed in, so a binding inside them reads
   // its source here as the published page, which composes first, reads it.
-  const drawnDocument = useComposedEntryContent(
+  // Composed from the entry's own read, not the seam's, which waits on this.
+  const drawnDocument = useDrawnTemplate(
     componentView.preview.document,
     canvas.canvasRender.limits?.maxNodes
   );

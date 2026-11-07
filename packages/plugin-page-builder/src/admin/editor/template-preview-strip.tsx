@@ -23,10 +23,12 @@
  *
  * @module template-preview-strip
  */
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { keyHint } from "@nextlyhq/builder";
 import {
   PREVIEWED_ENTRY_KEYS,
   PreviewedEntryProvider,
+  useComposedEntryContent,
   type PreviewedCollection,
   type PreviewedEntry,
 } from "@nextlyhq/builder/shell";
@@ -116,6 +118,29 @@ const TemplatePreviewState = createContext<TemplatePreview | undefined>(
  */
 export function useTemplatePreviewState(): TemplatePreview | undefined {
   return useContext(TemplatePreviewState);
+}
+
+/**
+ * The entry as its own read has it, before the canvas's read of it answers:
+ * what the canvas's reads are asked of. `undefined` for any other document.
+ */
+const EntryAsRead = createContext<PreviewedEntry | undefined>(undefined);
+
+/**
+ * `document` as the canvas's reads are asked of it: a template's with the
+ * entry it is previewed with composed into its Entry content block, as soon
+ * as that entry's own read has answered; any other document as it is.
+ *
+ * Composed from the entry's own read, never from the entry the seam names:
+ * the seam names it only once the canvas's read of this very document has
+ * answered, so composing from the seam would change that read's ask each
+ * time it answered, and ask again, and never settle.
+ */
+export function useDrawnTemplate(
+  document: BlockDocument,
+  maxNodes?: number
+): BlockDocument {
+  return useComposedEntryContent(document, useContext(EntryAsRead), maxNodes);
 }
 
 /**
@@ -210,18 +235,20 @@ export function TemplatePreviewScope<TFieldValues extends FieldValues>({
   const previewedCollection = usePreviewedCollectionOf(collection, preview);
   return (
     <TemplatePreviewState.Provider value={preview}>
-      <CanvasEntryProvider
-        identity={canvasIdentity}
-        retry={retry}
-        onRead={setCanvasRead}
-      >
-        <PreviewedEntryProvider
-          value={preview.previewed}
-          collection={previewedCollection}
+      <EntryAsRead.Provider value={read.previewed}>
+        <CanvasEntryProvider
+          identity={canvasIdentity}
+          retry={retry}
+          onRead={setCanvasRead}
         >
-          {children}
-        </PreviewedEntryProvider>
-      </CanvasEntryProvider>
+          <PreviewedEntryProvider
+            value={preview.previewed}
+            collection={previewedCollection}
+          >
+            {children}
+          </PreviewedEntryProvider>
+        </CanvasEntryProvider>
+      </EntryAsRead.Provider>
     </TemplatePreviewState.Provider>
   );
 }

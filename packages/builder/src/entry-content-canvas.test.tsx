@@ -143,9 +143,9 @@ describe("the composed template a host asks its sources of", () => {
 
   it("is the one the canvas draws: the previewed entry's blocks composed in", () => {
     const previewed = entry({ body });
-    const composed = renderHook(() => useComposedEntryContent(template), {
-      wrapper: wrapper(previewed),
-    }).result.current;
+    const composed = renderHook(() =>
+      useComposedEntryContent(template, previewed)
+    ).result.current;
     const drawn = renderHook(
       () => useEntryContentDrawing(template, undefined),
       { wrapper: wrapper(previewed) }
@@ -158,10 +158,25 @@ describe("the composed template a host asks its sources of", () => {
     ).toEqual(["Hello"]);
   });
 
+  it("is composed from the entry given, whatever the seam names meanwhile", () => {
+    // The seam names no entry while the canvas's read of it is on its way;
+    // the host's ask of that read is composed from the entry's own read, or
+    // it would change with every answer it is waiting on.
+    const composed = renderHook(
+      () => useComposedEntryContent(template, entry({ body })),
+      { wrapper: wrapper({ kind: "none", reason: "loading" }) }
+    ).result.current;
+    expect(
+      composed.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT]?.map(
+        node => node.props.text
+      )
+    ).toEqual(["Hello"]);
+  });
+
   it("is the template itself while no entry is previewed (the control)", () => {
-    const composed = renderHook(() => useComposedEntryContent(template), {
-      wrapper: wrapper({ kind: "none", reason: "empty" }),
-    }).result.current;
+    const composed = renderHook(() =>
+      useComposedEntryContent(template, { kind: "none", reason: "empty" })
+    ).result.current;
     expect(composed).toBe(template);
   });
 });
