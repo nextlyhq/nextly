@@ -31,11 +31,16 @@ import {
 } from "@nextlyhq/plugin-sdk/admin";
 
 import {
+  BINDINGS_TO_FIX_CARD_COMPONENT,
+  BINDINGS_TO_FIX_PAGE_COMPONENT,
   BUILDER_VIEW_COMPONENT,
   COMPONENT_STORE_DELETE_HOST_COMPONENT,
   COMPONENT_LIST_TOOLS_COMPONENT,
   DELETE_COMPONENT_REPLACEMENT_COMPONENT,
+  ENTRY_DESIGN_SECTION_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
+  TEMPLATE_DELETE_COMPONENT,
+  TEMPLATE_OWN_DESIGNS_COMPONENT,
 } from "../builder-view";
 import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
 /*
@@ -54,6 +59,8 @@ import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
  */
 import "../styles/editor.css";
 
+import { BindingsToFixCard } from "./bindings-report/BindingsToFixCard";
+import { BindingsToFixPage } from "./bindings-report/BindingsToFixPage";
 import { BlocksField } from "./BlocksField";
 import { BlocksSummary } from "./BlocksSummary";
 import {
@@ -62,7 +69,11 @@ import {
   DeleteComponentReplacement,
 } from "./DeleteComponentAction";
 import { PageBuilderView } from "./editor/PageBuilderView";
+import { registerEntryDesignColumn } from "./entry-design-column";
+import { EntryDesignSection } from "./EntryDesignSection";
 import { RemoveLayoutToolbarSlot } from "./RemoveLayoutAction";
+import { TemplateDeleteAction } from "./TemplateDeleteAction";
+import { TemplateOwnDesigns } from "./TemplateOwnDesigns";
 import { TemplateAddressField } from "./TemplateAddressField";
 import { registerExportActions } from "./transfer-export-action";
 import { TransferImport } from "./transfer-import";
@@ -105,6 +116,9 @@ const COMPONENTS = {
   [BUILDER_VIEW_COMPONENT]: PageBuilderView,
   // "Remove Layout…" in a Layout's document bar.
   [REMOVE_LAYOUT_ACTION_COMPONENT]: RemoveLayoutToolbarSlot,
+  // The "Bindings to fix" page and its dashboard card.
+  [BINDINGS_TO_FIX_PAGE_COMPONENT]: BindingsToFixPage,
+  [BINDINGS_TO_FIX_CARD_COMPONENT]: BindingsToFixCard,
   // Above the Components list: Import from file, and the row action's
   // Delete component dialog; for a host's component store, the same tools
   // drawn through the header slot.
@@ -112,6 +126,11 @@ const COMPONENTS = {
   [COMPONENT_STORE_DELETE_HOST_COMPONENT]: ComponentStoreDeleteHost,
   // The component store's own Delete, opening Delete component instead.
   [DELETE_COMPONENT_REPLACEMENT_COMPONENT]: DeleteComponentReplacement,
+  // An entry's own design: the Design section of every entry's side panel,
+  // a template's own designs, and the delete that says what it means.
+  [ENTRY_DESIGN_SECTION_COMPONENT]: EntryDesignSection,
+  [TEMPLATE_OWN_DESIGNS_COMPONENT]: TemplateOwnDesigns,
+  [TEMPLATE_DELETE_COMPONENT]: TemplateDeleteAction,
   // The template's address, editable under the routing permission.
   [TEMPLATE_ADDRESS_FIELD_PATH]: TemplateAddressField,
 };
@@ -123,21 +142,30 @@ registerExportActions();
 // "Delete component…" on the component store's list is registered by the
 // list's own tools, under the slug the site resolved.
 
+// The Design column on the lists of collections that have a template.
+registerEntryDesignColumn();
+
 // Lazy fallback: the host can trigger registration on demand by package prefix.
 registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
   registerComponents(COMPONENTS);
   registerExportActions();
+  registerEntryDesignColumn();
   return Promise.resolve();
 });
 
 export {
+  BindingsToFixCard,
+  BindingsToFixPage,
   BlocksField,
   BlocksSummary,
   ComponentListTools,
   ComponentStoreDeleteHost,
   DeleteComponentReplacement,
+  EntryDesignSection,
   PageBuilderView,
   RemoveLayoutToolbarSlot,
+  TemplateDeleteAction,
+  TemplateOwnDesigns,
   TemplateAddressField,
   TransferImport,
 };

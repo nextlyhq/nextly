@@ -25,6 +25,7 @@ import type {
 import { createElement, type ReactElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import {
+  afterAll,
   afterEach,
   beforeEach,
   describe,
@@ -126,6 +127,7 @@ vi.mock("@nextlyhq/blocks-engine", async importOriginal => {
 
 import { nextlySingleTags, nextlySiteSettingsTags } from "nextly/runtime";
 
+import { afterOverrunLines } from "./__tests__/overrun-quiet";
 import { throughBoundary } from "./__tests__/through-boundary";
 import { coreBlocks } from "./blocks";
 import type {
@@ -1647,3 +1649,6 @@ describe("the route's log of conditions it can't check", () => {
     expect(said).toContain("condition-field-unknown x2");
   });
 });
+
+// Pages here outrun their caps, and a route logs that after a short quiet.
+afterAll(afterOverrunLines);

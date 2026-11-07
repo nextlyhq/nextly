@@ -2,7 +2,6 @@ import {
   blockPartClassName,
   blockTypeClassName,
   renderedDomId,
-  resolveNodeBindings,
   type BindingRun,
   type BlockNode,
   type BoundValues,
@@ -19,6 +18,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { fillItemBindings } from "./blocks/list-batch";
 import type { BlockHostPolicy, PageContext, PageIssue } from "./context";
 import {
   editorMarkers,
@@ -163,22 +163,14 @@ function withItemBindings(
 ): { node: ResolvedBlockNode; bound: BoundValues | undefined } {
   if (bindings === undefined) return { node, bound: undefined };
   const fromPage = bindings.bound.get(node.id);
-  const itemSource = context.itemSource;
-  const result = resolveNodeBindings(node, bindings.run, {
-    phase: "item",
-    ...(context.item === undefined ? {} : { item: context.item }),
-    ...(typeof itemSource === "string" && itemSource !== ""
-      ? { itemRef: { collection: itemSource } }
-      : // A named query's rows with their own schema bind as the query's.
-        typeof context.itemQuery === "string"
-        ? { itemRef: { query: context.itemQuery } }
-        : {}),
-  });
-  if (result.issues.length > 0) bindings.report(result.issues);
-  if (result.bound === undefined) return { node, bound: fromPage };
+  // The one fill a list's read-ahead also asks, so it reads ahead for the
+  // props each entry draws with.
+  const filled = fillItemBindings(node, context, bindings.run);
+  if (filled.issues.length > 0) bindings.report(filled.issues);
+  if (filled.bound === undefined) return { node, bound: fromPage };
   return {
-    node: { ...node, props: result.props },
-    bound: { ...fromPage, ...result.bound },
+    node: { ...node, props: filled.props },
+    bound: { ...fromPage, ...filled.bound },
   };
 }
 

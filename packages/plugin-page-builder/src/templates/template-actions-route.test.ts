@@ -233,6 +233,32 @@ describe("set-template-address", () => {
   });
 });
 
+describe("set-template-address's answer", () => {
+  it("still reports a committed write when counting the waiting entries fails", async () => {
+    const { ctx, updateEntry } = contextFor([
+      "manage-template-routing",
+      ...EVERY_TEMPLATE_RIGHT,
+    ]);
+    const { setup } = setupWith();
+    const answered = await runTemplateAction(
+      ctx,
+      {
+        action: { kind: "set-template-address", id: "t1", address: "/events" },
+      },
+      {
+        ...setup,
+        waitingEntries: async () => {
+          throw new Error("connection lost");
+        },
+      }
+    );
+    expect(updateEntry).toHaveBeenCalledOnce();
+    const item = answered.item as TemplateActionResult;
+    expect(item.dryRun).toBe(false);
+    expect(item.waiting).toBeUndefined();
+  });
+});
+
 describe("the routing question", () => {
   it("answers whether the caller holds the routing permission", async () => {
     const ask = (granted: boolean) =>

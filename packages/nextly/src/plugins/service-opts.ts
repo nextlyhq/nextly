@@ -641,6 +641,23 @@ export type PluginCollectionService = Pick<
     collectionName: string,
     entryId: string
   ): Promise<boolean>;
+  /**
+   * @experimental Collection `collectionName`'s record, as `getCollection`
+   * answers it, read on the transaction `tx` stands for: what the
+   * transaction sees, its own uncommitted changes included. `getCollection`
+   * takes a pooled connection, which inside a transaction on a pool of one
+   * waits for the connection the transaction holds; this reads on that
+   * connection. Like `getCollection`, it asks nothing of the caller's access
+   * and is refused with `NOT_FOUND` for a collection there is no record of.
+   * It reads the registry only, never an entry, and takes no row lock: hold
+   * the row with `holdCollectionInTransaction` where a write must not
+   * outlive the collection. A settled token is refused before anything is
+   * read.
+   */
+  getCollectionInTransaction(
+    tx: PluginCollectionTransaction,
+    collectionName: string
+  ): Promise<Collection>;
 };
 
 /**
@@ -803,6 +820,23 @@ export function wrapCollectionsForPlugin(
       scope.assertOpen();
       return scope.track(
         collections.holdEntryInTransaction(tx, collectionName, entryId),
+        "read"
+      );
+    },
+    // The facade's own `getCollection`, so both answer alike, with every
+    // read the services make inside it routed to the transaction's
+    // connection (`runReadsInTransaction`). Its context is unused there, as
+    // it is when a plugin calls `getCollection`.
+    getCollectionInTransaction: async (
+      token: unknown,
+      collectionName: string
+    ): Promise<Collection> => {
+      const { tx, scope } = transactionOf(token);
+      scope.assertOpen();
+      return scope.track(
+        runReadsInTransaction(tx, () =>
+          facade.getCollection(collectionName, {})
+        ),
         "read"
       );
     },

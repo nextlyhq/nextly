@@ -20,7 +20,12 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
-import type { BlockRenderArgs, PageContext, ResolvedMedia } from "../context";
+import type {
+  BlockRenderArgs,
+  PageContext,
+  ReadClaim,
+  ResolvedMedia,
+} from "../context";
 
 import { MEDIA } from "./categories";
 import { imageLooks } from "./looks";
@@ -34,6 +39,7 @@ import {
   LINK_PROPS,
   linkFor,
   oneOf,
+  readClaimOf,
   text,
   url,
   type LinkAttributes,
@@ -58,14 +64,31 @@ export interface ImageProps extends LinkProps {
   caption?: string;
 }
 
+/**
+ * Whether an image may have anything to draw, and so a link to follow: a
+ * media id or an address, the two props its picture candidates are drawn
+ * from (`pictureCandidates`; a bound image fills `mediaId`). `has` says
+ * whether a prop holds a value or, for a list reading its links ahead, is
+ * bound to one. A list asks it before it reads this image's link ahead, so
+ * an image with neither, which the render draws as nothing and links
+ * nowhere, reads no link.
+ */
+export function imageMayDraw(has: (prop: string) => boolean): boolean {
+  return has("mediaId") || has("src");
+}
+
 export async function renderImage({
   props,
   className,
   ctx,
+  node,
   hostPolicy,
   partClass,
   bound,
 }: BlockRenderArgs<ImageProps>): Promise<ReactElement | null> {
+  // Each read this block makes is claimed as its own, so a page past its
+  // allowance names it among the blocks drawn without their data.
+  const claim = readClaimOf(node);
   const mediaId = text(props.mediaId);
 
   // A candidate has to clear BOTH filters, and both are asked before the two are
@@ -91,7 +114,8 @@ export async function renderImage({
   const picture = await firstDrawable(
     pictureCandidates(mediaId, props.src, boundImage(bound?.mediaId)),
     ctx,
-    fetchable
+    fetchable,
+    claim
   );
   // Nothing to show. An `<img>` with no `src` still requests the current page
   // in some browsers, so render nothing rather than a broken element.
@@ -120,7 +144,7 @@ export async function renderImage({
   // Where the picture links, read as the button reads it; the alt text is
   // what names the link.
   const link = await linkFor(props, (collection, id) =>
-    ctx.resolveEntryPath(collection, id)
+    ctx.resolveEntryPath(collection, id, claim)
   );
 
   const image = (
@@ -206,7 +230,8 @@ function pictureCandidates(
 async function firstDrawable(
   candidates: readonly PictureCandidate[],
   ctx: PageContext,
-  fetchable: (value: unknown) => string | undefined
+  fetchable: (value: unknown) => string | undefined,
+  claim: ReadClaim | undefined
 ): Promise<Picture | undefined> {
   for (const candidate of candidates) {
     if (candidate.holds === "address") {
@@ -217,7 +242,9 @@ async function firstDrawable(
     // A resolver that throws must not take the page with it: media lives
     // behind a network call for a signed-URL host, and one unreachable image
     // is not a reason to lose the article around it.
-    const record = await ctx.resolveMedia(candidate.value).catch(() => null);
+    const record = await ctx
+      .resolveMedia(candidate.value, claim)
+      .catch(() => null);
     const src = fetchable(record?.url);
     if (record !== null && src !== undefined) return { src, record };
   }
@@ -322,7 +349,9 @@ function wrapPicture(
  * definition below registers under it. Two literals would be one contract with
  * two spellings, and the rule that missed would simply not apply.
  */
-const IMAGE_BLOCK = "core/image";
+/** The image block's type, which a list reading its links ahead asks by. */
+export const IMAGE_TYPE = "core/image";
+const IMAGE_BLOCK = IMAGE_TYPE;
 
 const IMAGE_BASE_STYLES = {
   base: {
