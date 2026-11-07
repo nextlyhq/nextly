@@ -266,6 +266,18 @@ describe("what the editor's route answers", () => {
     expect(reads).toEqual([{ slug: SITE_STYLE_SLUG, overrideAccess: true }]);
   });
 
+  it("answers the Single's version as the same read gave it", async () => {
+    // What the editor's saves send back, so a save made in between refuses
+    // them rather than being overwritten.
+    const answer = await readSiteStyleForEditor(
+      context([`update-${PAGES_SLUG}`]),
+      { findSingle: async () => ({ tokens: { tokens: [] }, _rev: "7" }) },
+      {}
+    );
+    expect(answer._rev).toBe("7");
+    expect(answer.tokens).toEqual({ tokens: [] });
+  });
+
   it("answers the site's recorded spacing model beside the sections", async () => {
     const answer = await readSiteStyleForEditor(
       context([`update-${PAGES_SLUG}`]),

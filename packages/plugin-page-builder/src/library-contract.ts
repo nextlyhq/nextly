@@ -786,7 +786,8 @@ export const SITE_STYLE_ROUTE_PATH = "/site/style";
 
 /**
  * The stored site style as the route answers it: the Single's four sections
- * exactly as stored, each `null` where nothing is stored, and nothing else.
+ * exactly as stored, each `null` where nothing is stored, the version the
+ * read gave, and nothing else.
  *
  * Raw rather than narrowed, so the editor narrows a stored record with the
  * same reader the published render does and can still say which stored font
@@ -804,6 +805,12 @@ export interface StoredSiteStyle {
    * nothing recorded.
    */
   readonly spacingMode?: unknown;
+  /**
+   * The Single's version, as the same read gave it: what a save of a section
+   * made from this read sends back, so a save made in between refuses it
+   * rather than being overwritten. Absent where the server gives none.
+   */
+  readonly _rev?: string;
 }
 
 /**
