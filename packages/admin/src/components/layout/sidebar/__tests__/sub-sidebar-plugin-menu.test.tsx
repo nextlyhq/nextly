@@ -18,6 +18,11 @@ const branding: AdminBranding = {
       menu: [
         { label: "Patterns", to: "/admin/collections/patterns" },
         { label: "Components", to: "/admin/collections/components" },
+        {
+          label: "Reports",
+          to: "/admin/plugins/r/reports",
+          children: [{ label: "Weekly", to: "/admin/plugins/r/weekly" }],
+        },
       ],
     },
   ],
@@ -69,7 +74,7 @@ function renderPlugins(search: string) {
         canAccessWebhooks
         pluginCollectionsForSection={[]}
         showBuilder
-        isFolderTreeVisible
+        hasPanel={() => true}
       />
     </SidebarProvider>
   );
@@ -90,5 +95,12 @@ describe("the desktop Plugins panel", () => {
     renderPlugins("comp");
     expect(screen.getByRole("link", { name: "Components" })).toBeDefined();
     expect(screen.queryByRole("link", { name: "Patterns" })).toBeNull();
+  });
+
+  it("opens a branch on the child a search matched", () => {
+    // Only the child matches: closed, the branch would show its parent's
+    // label alone and hide the result.
+    renderPlugins("week");
+    expect(screen.getByRole("link", { name: "Weekly" })).toBeDefined();
   });
 });

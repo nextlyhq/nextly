@@ -15,7 +15,6 @@ import type { ApiCollection } from "@admin/types/entities";
 
 import { ContentPanel } from "./ContentPanel";
 import { isContentSection } from "./lib/content-rail";
-import { isSubSidebarCategory } from "./lib/has-sub-sidebar";
 import { visibleSettingsNav } from "./lib/settings-nav";
 import { MediaSidebarContent } from "./MediaSidebarContent";
 import type { MainMenuCategory } from "./sidebar-types";
@@ -44,8 +43,11 @@ interface SubSidebarContentProps {
   pluginCollectionsForSection: ApiCollection[];
   // Branding
   showBuilder: boolean;
-  /** Whether the media panel shows its folder tree, and so is drawn at all. */
-  isFolderTreeVisible: boolean;
+  /**
+   * Whether a section draws a panel this reader can open; the plugin menu
+   * items of one that does not are listed under Plugins.
+   */
+  hasPanel: (section: string) => boolean;
 }
 
 export function SubSidebarContent({
@@ -62,12 +64,8 @@ export function SubSidebarContent({
   canAccessApiKeys,
   canAccessWebhooks,
   pluginCollectionsForSection,
-  isFolderTreeVisible,
+  hasPanel,
 }: SubSidebarContentProps): JSX.Element | null {
-  // Which sections draw a panel, for the plugin menu items whose own section
-  // draws none: those are listed under Plugins.
-  const hasPanel = (section: string): boolean =>
-    isSubSidebarCategory(section, isFolderTreeVisible);
   if (selectedMain === "media") {
     return (
       <>

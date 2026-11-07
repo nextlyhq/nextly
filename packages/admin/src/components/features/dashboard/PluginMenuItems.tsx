@@ -117,7 +117,9 @@ export function PluginMenuItems({
 
   if (items.length === 0) return null;
 
-  const drawn = <MenuEntries items={items} isActive={isActive} />;
+  const drawn = (
+    <MenuEntries items={items} isActive={isActive} searching={search !== ""} />
+  );
   return asMenu ? <SidebarMenu>{drawn}</SidebarMenu> : drawn;
 }
 
@@ -125,15 +127,25 @@ export function PluginMenuItems({
 function MenuEntries({
   items,
   isActive,
+  searching,
 }: {
   items: readonly PluginMenuItemMeta[];
   isActive: (href?: string) => boolean;
+  /** Whether a search is filtering them: a branch then shows what matched. */
+  searching: boolean;
 }): React.JSX.Element {
   return (
     <>
       {items.map(item =>
         item.children && item.children.length > 0 ? (
-          <PluginMenuBranch key={item.to} item={item} isActive={isActive} />
+          <PluginMenuBranch
+            // Drawn afresh as a search starts or ends, so it opens on the
+            // children a search kept and closes again after.
+            key={`${item.to}:${String(searching)}`}
+            item={item}
+            isActive={isActive}
+            open={searching}
+          />
         ) : (
           <PluginMenuLeaf key={item.to} item={item} isActive={isActive} />
         )
@@ -172,7 +184,11 @@ export function PluginMenuGroups({
             {pluginDisplayName(plugin)}
           </p>
           <SidebarMenu>
-            <MenuEntries items={items} isActive={isActive} />
+            <MenuEntries
+              items={items}
+              isActive={isActive}
+              searching={search !== ""}
+            />
           </SidebarMenu>
         </div>
       ))}
@@ -206,9 +222,12 @@ function PluginMenuLeaf({
 function PluginMenuBranch({
   item,
   isActive,
+  open,
 }: {
   item: PluginMenuItemMeta;
   isActive: (href?: string) => boolean;
+  /** Opened by a search, whatever is active. */
+  open: boolean;
 }) {
   const Icon = iconFor(item.icon);
   const children = item.children ?? [];
@@ -216,7 +235,7 @@ function PluginMenuBranch({
   const active = isActive(item.to) || anyChildActive;
 
   return (
-    <Collapsible asChild defaultOpen={anyChildActive}>
+    <Collapsible asChild defaultOpen={anyChildActive || open}>
       <SidebarMenuItem>
         <CollapsibleTrigger asChild>
           <SidebarMenuButton
