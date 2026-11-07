@@ -379,6 +379,8 @@ function originOf(value: unknown): string | undefined {
  *
  * `undefined` where either filter refuses, so a caller decides what to draw in
  * its place rather than being handed a URL it must not request.
+ *
+ * @experimental Settles with the editor's binding controls.
  */
 export function fetchableUrl(
   value: unknown,
