@@ -395,6 +395,8 @@ describe("a bound prop's Open source", () => {
     mount({ label: { $bind: "title" } });
     await openMenu();
     expect(screen.queryByRole("menuitem", { name: /source$/ })).toBeNull();
+  });
+});
 
 describe("an unbind of a field visitors can't read", () => {
   it("says the field's value wasn't copied in, and what was kept instead", async () => {
