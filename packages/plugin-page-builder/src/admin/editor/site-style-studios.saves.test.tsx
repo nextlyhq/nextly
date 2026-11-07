@@ -435,6 +435,29 @@ describe("a save stored over someone else's change", () => {
     });
   });
 
+  it("undoes a style change kept over their removal by removing it again", async () => {
+    // Another author removed card while mine changed its color: the merge
+    // kept card, with mine. Undo removes it again, as the notice says.
+    const hero = { id: "c2", slug: "hero", orderIndex: 1, styles: {} };
+    const red = { ...card, styles: { color: "red" } };
+    const read = { classes: [red, hero] as unknown as NamedClass[] };
+    const { result } = renderHook(() =>
+      useClassSurface(read, false, null, undefined)
+    );
+    await act(async () => {
+      await result.current.writeStyles("c1", setColor("blue"));
+    });
+    const held = [{ ...card, styles: { color: "blue" } }, hero];
+    expect(saves.inverse?.undo(held, [hero])).toEqual({
+      kind: "write",
+      value: [hero],
+    });
+    // Already gone again by the time Undo runs: nothing to write.
+    expect(saves.inverse?.undo([hero], [hero])).toEqual({
+      kind: "unchanged",
+    });
+  });
+
   it("toasts nothing for a shared style merged cleanly", async () => {
     const read = { classes: [card] as unknown as NamedClass[] };
     const { result } = renderHook(() =>

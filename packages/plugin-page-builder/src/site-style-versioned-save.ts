@@ -198,7 +198,7 @@ function conflictIdentity(conflict: EntryConflict): string {
  * refusal's author is named, and exactly one save said to have come
  * between, only when it is the save that brought every conflict about: one
  * refusal sent the save back, the version it named is the one after the
- * version first sent, and the first try, made on the copy before that save,
+ * version first sent, the retry was merged onto that version, and the first try, made on the copy before that save,
  * met none of the conflicts. A conflict already there at the first try came
  * from a save made before, by whoever made it.
  */
@@ -217,6 +217,10 @@ function describeConflicts(
     first !== undefined &&
     now !== undefined &&
     now === first + 1 &&
+    // The retry was merged onto exactly the version the refusal named: a
+    // save landing after the refusal, before the retry's read, brought its
+    // own changes into the merge, and its author is not the one named.
+    revisionNumber(sent.at(-1)) === now &&
     entries.every(entry => earlier?.has(conflictIdentity(entry)) !== true);
   return {
     entries,

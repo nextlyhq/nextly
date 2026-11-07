@@ -978,6 +978,34 @@ function useHeldWhileReplaying<Args extends unknown[], Outcome>(
   );
 }
 
+/** An undo's answer when what it takes back was kept over another's removal. */
+const REMOVED_BY_THEM = Symbol("removed-by-them");
+
+/**
+ * The stored classes as a replay finds them, with one style taken out: the
+ * undo of an edit that kept a style another author had removed meanwhile.
+ * Nothing to write once the style is no longer stored.
+ */
+function classRemovedFrom(
+  held: unknown,
+  configured: readonly NamedClass[] | undefined,
+  classId: string
+): SiteStyleReplayed {
+  const entries = (Array.isArray(held) ? held : []).filter(
+    (entry): entry is NamedClass => typeof entry === "object" && entry !== null
+  );
+  if (!entries.some(entry => entry.id === classId)) {
+    return { kind: "unchanged" };
+  }
+  return {
+    kind: "write",
+    value: classOverrideOf(
+      configured,
+      entries.filter(entry => entry.id !== classId)
+    ),
+  };
+}
+
 /**
  * One style's change applied to the stored classes as a replay finds them:
  * the stored tier with that style changed, nothing to write, or nothing it
@@ -1192,12 +1220,18 @@ function useWriteClassStyles(
          * Undo inverts against those, so it puts their value back rather than
          * the value from before both edits.
          */
-        const undoOf = (replaced: unknown): SharedStyleChange => {
+        const undoOf = (
+          replaced: unknown
+        ): SharedStyleChange | typeof REMOVED_BY_THEM => {
           if (replaced === undefined) return undo;
           const theirs = classesFromStored(configured, replaced).find(
             each => each.id === classId
           );
-          return theirs === undefined ? undo : change.invert(theirs.styles);
+          // Gone from what the write replaced: another author removed the
+          // style, and this edit kept it. Undo removes it again.
+          return theirs === undefined
+            ? REMOVED_BY_THEM
+            : change.invert(theirs.styles);
         };
         /*
          * The code the stored entry was last rebased onto: the code this
@@ -1217,7 +1251,12 @@ function useWriteClassStyles(
         const result = await slot.save(
           classOverrideOf(configured, next),
           {
-            undo: (held, replaced) => replay(undoOf(replaced))(held),
+            undo: (held, replaced) => {
+              const step = undoOf(replaced);
+              return step === REMOVED_BY_THEM
+                ? classRemovedFrom(held, configuredNow.current, classId)
+                : replay(step)(held);
+            },
             redo: replay(change),
           },
           { base: classOverrideOf(configured, existing) }

@@ -213,16 +213,48 @@ interface EntryRules {
   readonly goneWithMine?: (theirs: unknown) => boolean;
 }
 
-/** A list's keyed entries, the first under each identity. */
+/** An entry's place in the merge: its identity, and which entry of that identity it is. */
+interface Placed {
+  /** The identity, as conflicts name the entry. */
+  readonly key: string;
+  /** The identity and the occurrence together, which the sides are matched by. */
+  readonly at: string;
+}
+
+/**
+ * Each entry's place, or `undefined` for one that cannot be keyed.
+ *
+ * A list may hold two entries of one identity (a second file uploaded for a
+ * face already there), so the sides are matched by identity AND occurrence:
+ * the second entry of an identity meets the other sides' second, rather than
+ * being passed over as a duplicate of the first and dropped from the merge.
+ * The first keeps its identity alone as its place.
+ */
+function placesOf(
+  list: readonly unknown[],
+  keyOf: EntryRules["keyOf"]
+): (Placed | undefined)[] {
+  const counts = new Map<string, number>();
+  return list.map(entry => {
+    const key = keyOf(entry);
+    if (key === undefined) return undefined;
+    const n = counts.get(key) ?? 0;
+    counts.set(key, n + 1);
+    return { key, at: n === 0 ? key : `${key}\u0000${String(n)}` };
+  });
+}
+
+/** A list's keyed entries, by place, each with its identity. */
 function keyed(
   list: readonly unknown[],
   keyOf: EntryRules["keyOf"]
-): Map<string, unknown> {
-  const out = new Map<string, unknown>();
-  for (const entry of list) {
-    const key = keyOf(entry);
-    if (key !== undefined && !out.has(key)) out.set(key, entry);
-  }
+): Map<string, { readonly key: string; readonly entry: unknown }> {
+  const out = new Map<string, { key: string; entry: unknown }>();
+  placesOf(list, keyOf).forEach((place, index) => {
+    if (place !== undefined) {
+      out.set(place.at, { key: place.key, entry: list[index] });
+    }
+  });
   return out;
 }
 
@@ -332,19 +364,24 @@ function mergedEntries(
     if (merged.conflict !== undefined) conflicts.push(merged.conflict);
     if (merged.value !== undefined) out.push(merged.value);
   };
-  for (const entry of theirs) {
-    const key = rules.keyOf(entry);
-    if (key === undefined || seen.has(key)) {
+  const theirPlaces = placesOf(theirs, rules.keyOf);
+  theirs.forEach((entry, index) => {
+    const at = theirPlaces[index];
+    if (at === undefined) {
       out.push(entry);
-      continue;
+      return;
     }
-    seen.add(key);
-    place(key, { base: bases.get(key), mine: mines.get(key), theirs: entry });
-  }
-  for (const [key, entry] of mines) {
-    if (seen.has(key)) continue;
-    seen.add(key);
-    place(key, { base: bases.get(key), mine: entry, theirs: undefined });
+    seen.add(at.at);
+    place(at.key, {
+      base: bases.get(at.at)?.entry,
+      mine: mines.get(at.at)?.entry,
+      theirs: entry,
+    });
+  });
+  for (const [at, { key, entry }] of mines) {
+    if (seen.has(at)) continue;
+    seen.add(at);
+    place(key, { base: bases.get(at)?.entry, mine: entry, theirs: undefined });
   }
   return out;
 }

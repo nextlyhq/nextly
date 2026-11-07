@@ -382,6 +382,22 @@ describe("merging fonts", () => {
     ]);
   });
 
+  it("keeps a second file mine added for a face already there", () => {
+    // Same family, weight and style as the stored face: a second entry of
+    // one identity, merged while they changed another family.
+    const secondFile = face("Lora", "400", "/api/media/m7/raw");
+    const interMoved = face("Inter", "400", "/api/media/m6/raw");
+    const merged = mergeSiteStyleSection(
+      "fonts",
+      [loraRegular, interRegular],
+      [loraRegular, interRegular, secondFile],
+      [loraRegular, interMoved],
+      "mine"
+    );
+    expect(merged.value).toEqual([loraRegular, interMoved, secondFile]);
+    expect(merged.conflicts).toEqual([]);
+  });
+
   it("keeps a face that cannot be keyed exactly as stored", () => {
     const unreadable = { family: 7, src: [] };
     const merged = mergeSiteStyleSection(

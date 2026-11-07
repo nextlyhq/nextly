@@ -146,6 +146,32 @@ describe("saving a section merged onto the newest copy", () => {
     expect(saved.conflicts?.refusal?.oneSaveBetween).toBe(false);
   });
 
+  it("names no one when a later save landed before the retry's read", async () => {
+    // Refused by Sam's save at 6, but the retry read 7: the conflict may be
+    // the later save's, whose author is not Sam.
+    const write = vi
+      .fn<(data: Record<string, unknown>) => Promise<VersionedSiteStyle>>()
+      .mockRejectedValueOnce(
+        new Stale({
+          currentVersion: "6",
+          changedBy: { kind: "person", name: "Sam" },
+        })
+      )
+      .mockImplementation(async data => at(data.classes, "8"));
+    const saved = await saveSectionMerged({
+      section: "classes",
+      base: [card],
+      mine: [{ ...card, label: "Mine" }],
+      prefer: "mine",
+      latest: at([card], "5"),
+      read: async () => at([{ ...card, label: "Theirs" }], "7"),
+      write,
+      staleOf,
+    });
+    expect(write.mock.calls.at(-1)?.[0]).toMatchObject({ _rev: "7" });
+    expect(saved.conflicts?.refusal).toEqual({ oneSaveBetween: false });
+  });
+
   it("names no one for a conflict the first copy already held, whatever save refused it", async () => {
     // The newest copy already differs from the base on card when the save
     // starts; the one save that refuses it changes hero, not card. Sam did
