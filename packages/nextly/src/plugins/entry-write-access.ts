@@ -16,8 +16,12 @@
  * - the update gate: the person's grant, and a rule's row filter matched
  *   against this entry (`canUpdateEntry`, the update's own check; for a
  *   Single, its update gate on the stored row);
- * - where the write would put the document live, the publish gate the same
- *   way (`canPublishEntry`; for a Single, its publish gate);
+ * - where the status the write names moves the document into or out of
+ *   published, the publish or unpublish gate the same way, and only then:
+ *   core's update asks it on that condition alone, as
+ *   `resolvePublishTransition` classifies the stored status against the named
+ *   one (`canMoveEntryStatus`; for a Single, its own lifecycle gate). A write
+ *   keeping the document's status asks nothing more, as the update does;
  * - for each field named, the field's own update rule, which an update
  *   applies by leaving out a field the person may not set: a field it would
  *   leave out answers no.
@@ -39,7 +43,7 @@ import {
 import { getService } from "../di";
 import {
   singleDocumentEditable,
-  singleDocumentPublishable,
+  singleDocumentStatusMoveAllowed,
 } from "../domains/singles/services/single-document-access";
 import { NextlyError } from "../errors";
 import type { CollectionsHandler } from "../services/collections-handler";
@@ -60,8 +64,11 @@ export type PluginWriteCheck = (
       readonly id?: never;
     }
 ) & {
-  /** Whether the write puts the document live, so the publish gate applies. */
-  readonly publish?: boolean;
+  /**
+   * The status the write names, if it names one: its lifecycle gate is asked
+   * only where it moves the document into or out of published.
+   */
+  readonly status?: string;
   /** The top-level fields the write sets, each judged by its update rule. */
   readonly fields?: readonly string[];
   /** The language the write is made in. */
@@ -76,7 +83,7 @@ const PERSON = z.looseObject({
 
 const NAME = z.string().min(1).max(255);
 const PARTS = {
-  publish: z.boolean().optional(),
+  status: NAME.optional(),
   fields: z.array(NAME).max(64).optional(),
   locale: NAME.optional(),
 };
@@ -110,11 +117,11 @@ export async function mayWriteEntry(
   return withRuleLanguage(registeredWriteLanguagesFor(locale), async () => {
     const gates =
       "single" in asked && asked.single !== undefined
-        ? await singleGates(identity, asked.single, asked.publish, locale)
+        ? await singleGates(identity, asked.single, asked.status, locale)
         : await entryGates(
             identity,
             asked as { collection: string; id: string },
-            asked.publish,
+            asked.status,
             locale
           );
     if (!gates) return false;
@@ -122,11 +129,11 @@ export async function mayWriteEntry(
   });
 }
 
-/** An entry's update gate, and its publish gate where the write publishes. */
+/** An entry's update gate, and its lifecycle gate where the status moves. */
 async function entryGates(
   identity: PluginRouteIdentity,
   entry: { readonly collection: string; readonly id: string },
-  publish: boolean | undefined,
+  status: string | undefined,
   locale: string | undefined
 ): Promise<boolean> {
   const handler: CollectionsHandler = getService("collectionsHandler");
@@ -140,14 +147,17 @@ async function entryGates(
     ...(locale === undefined ? {} : { locale }),
   };
   if (!(await handler.canUpdateEntry(asked))) return false;
-  return publish !== true || handler.canPublishEntry(asked);
+  return (
+    status === undefined ||
+    handler.canMoveEntryStatus({ ...asked, nextStatus: status })
+  );
 }
 
-/** A Single's update gate, and its publish gate where the write publishes. */
+/** A Single's update gate, and its lifecycle gate where the status moves. */
 async function singleGates(
   identity: PluginRouteIdentity,
   slug: string,
-  publish: boolean | undefined,
+  status: string | undefined,
   locale: string | undefined
 ): Promise<boolean> {
   const subject = {
@@ -159,7 +169,10 @@ async function singleGates(
     ...(locale === undefined ? {} : { locale }),
   };
   if (!(await singleDocumentEditable(slug, subject))) return false;
-  return publish !== true || singleDocumentPublishable(slug, subject);
+  return (
+    status === undefined ||
+    singleDocumentStatusMoveAllowed(slug, status, subject)
+  );
 }
 
 /**
@@ -198,4 +211,4 @@ const IDENTITY_REFUSAL =
   "A write check is made as a route's caller, as `ctx.caller.identity()` resolved them.";
 
 const CHECK_REFUSAL =
-  "A write check names one document (a collection and an entry id, or a Single, and not both), and may name whether the write publishes, the fields it sets, and its language.";
+  "A write check names one document (a collection and an entry id, or a Single, and not both), and may name the status the write names, the fields it sets, and its language.";

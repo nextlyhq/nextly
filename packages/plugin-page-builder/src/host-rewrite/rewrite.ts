@@ -215,7 +215,7 @@ type HostResult =
 /** The report being built over one call. */
 interface Tally {
   rewritten: HostAddress[];
-  publishing: HostAddress[];
+  statuses: { host: HostAddress; status: string }[];
   unchanged: HostAddress[];
   left: LeftHost[];
   caught: HostAddress[];
@@ -248,7 +248,7 @@ export async function rewriteHosts(
   }
   const tally: Tally = {
     rewritten: [],
-    publishing: [],
+    statuses: [],
     unchanged: [],
     left: [],
     caught: [],
@@ -274,7 +274,7 @@ function report(walk: Walk, finished: boolean): RewriteReport {
     unchanged: walk.tally.unchanged,
     left: walk.tally.left,
     caughtByFinalWalk: walk.tally.caught,
-    publishing: walk.tally.publishing,
+    statuses: walk.tally.statuses,
     finished,
   };
 }
@@ -468,8 +468,11 @@ async function attemptHost(
   if (candidate.access !== "write") {
     return { kind: "left", reason: "unaddressable" };
   }
-  if (decision.write.mode === "publish") {
-    walk.tally.publishing.push(candidate.host);
+  if (decision.write.publishAs !== undefined) {
+    walk.tally.statuses.push({
+      host: candidate.host,
+      status: decision.write.publishAs,
+    });
   }
   if (!writes) return written(decision);
   return writtenBy(await walk.deps.write(decision.write), decision);

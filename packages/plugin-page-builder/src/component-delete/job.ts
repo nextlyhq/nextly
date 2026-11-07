@@ -62,7 +62,11 @@ import {
   type RewriteCaller,
 } from "../host-rewrite/service";
 
-import type { ComponentDeleteResult, DeleteProgress } from "./contract";
+import {
+  DELETE_BUSY_REASON,
+  type ComponentDeleteResult,
+  type DeleteProgress,
+} from "./contract";
 import { MOST_NAMED, type NamingDeps } from "./hosts";
 import {
   judge,
@@ -454,11 +458,25 @@ function runInfo(
   return run === null ? null : { yours: isMine(deps, run), step: run.phase };
 }
 
-/** The refusal for a second person. */
+/**
+ * The refusal for a second person: a conflict whose one issue carries
+ * {@link DELETE_BUSY_REASON} as its code, so a client can tell it from any
+ * other conflict without reading the words.
+ */
 function someoneElse(deps: ComponentDeleteDeps): NextlyError {
-  return NextlyError.conflict({
-    reason: "state",
-    message: SOMEONE_ELSE_IS_DELETING,
+  return new NextlyError({
+    code: "CONFLICT",
+    publicMessage: SOMEONE_ELSE_IS_DELETING,
+    publicData: {
+      errors: [
+        {
+          path: "component",
+          code: DELETE_BUSY_REASON,
+          message: SOMEONE_ELSE_IS_DELETING,
+        },
+      ],
+    },
+    logMessage: "Refused a component delete another person is running",
     logContext: {
       reason: "component-delete-busy",
       componentId: deps.componentId,

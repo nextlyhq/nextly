@@ -49,7 +49,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { asDocument } from "../component-store-source";
-import type { ComponentDeleteResult } from "../component-delete/contract";
+import {
+  DELETE_BUSY_REASON,
+  type ComponentDeleteResult,
+} from "../component-delete/contract";
 import { BLOCKS_TYPE } from "../fields/blocksField";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
@@ -799,6 +802,10 @@ describe.each(getConfiguredTestDialects())(
 
       expect(started.item.status, JSON.stringify(started.body)).toBe("running");
       expect(refused.status).toBe(409);
+      // Told apart from any other conflict by its code, not its words.
+      expect(refused.body).toMatchObject({
+        error: { data: { errors: [{ code: DELETE_BUSY_REASON }] } },
+      });
       expect(seen.item).toMatchObject({
         status: "running",
         run: { yours: false },
@@ -1298,7 +1305,7 @@ describe.each(getConfiguredTestDialects())(
       expect((await deleteToTheEnd(cookie, cardId)).item.status).toBe("done");
     });
 
-    it("stops before changing anything for a person who may update but not publish one collection", async () => {
+    it("lets a person who may update but not publish a collection convert its published documents, as the writes do", async () => {
       const { t, anAuthor } = await boot({}, { briefs: true });
       const cardId = await card(t);
       const page = await t.nextly.create({
@@ -1320,6 +1327,8 @@ describe.each(getConfiguredTestDialects())(
         },
         overrideAccess: true,
       });
+      // Update on both, publish on pages only: a write that keeps a published
+      // row published asks no publish gate, so the check asks none either.
       const editor = await anAuthor("editor", [
         "read-components",
         "delete-components",
@@ -1328,6 +1337,48 @@ describe.each(getConfiguredTestDialects())(
         "publish-pages",
         `read-${BRIEFS}`,
         `update-${BRIEFS}`,
+      ]);
+
+      const done = await deleteToTheEnd(editor, cardId);
+
+      expect(done.item.status, JSON.stringify(done.body)).toBe("done");
+      const pageId = String(page.item.id);
+      const briefId = String(brief.item.id);
+      expect(copies(await nodesOf(t, "pages", pageId), cardId)).toBe(0);
+      expect(copies(await nodesOf(t, BRIEFS, briefId), cardId)).toBe(0);
+      expect(await exists(t, cardId)).toBe(false);
+    });
+
+    it("stops before changing anything for a person who may not update one of the documents", async () => {
+      const { t, anAuthor } = await boot({}, { briefs: true });
+      const cardId = await card(t);
+      const page = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Live",
+          slug: `live-${String(Math.random()).slice(2, 10)}`,
+          status: "published",
+          content: pageDoc([copyOf("p1", cardId)]),
+        },
+        overrideAccess: true,
+      });
+      await t.nextly.create({
+        collection: BRIEFS,
+        data: {
+          title: "Brief",
+          status: "published",
+          content: pageDoc([copyOf("b1", cardId)]),
+        },
+        overrideAccess: true,
+      });
+      // May read the briefs, and change none of them.
+      const editor = await anAuthor("editor", [
+        "read-components",
+        "delete-components",
+        "read-pages",
+        "update-pages",
+        "publish-pages",
+        `read-${BRIEFS}`,
       ]);
 
       const started = await deleteToTheEnd(editor, cardId);
@@ -1339,11 +1390,9 @@ describe.each(getConfiguredTestDialects())(
           reason: "not-permitted",
         }),
       ]);
-      // Neither document changed, the one they may publish included.
+      // The page they may change kept its copy too: nothing changed.
       const pageId = String(page.item.id);
-      const briefId = String(brief.item.id);
       expect(copies(await nodesOf(t, "pages", pageId), cardId)).toBe(1);
-      expect(copies(await nodesOf(t, BRIEFS, briefId), cardId)).toBe(1);
       expect(await exists(t, cardId)).toBe(true);
     });
 

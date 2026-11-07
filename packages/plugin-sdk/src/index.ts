@@ -722,9 +722,10 @@ export type {
  *   a rule's row filter matched against this entry, in every language it
  *   holds. No hook runs, nothing is written, and an entry that does not exist
  *   answers `false`, as one the person may not delete. `mayWriteEntry` asks
- *   the same of a write: the update gate, the publish gate where the write
- *   puts the document live, and each named field's update rule, for an entry
- *   or a Single.
+ *   the same of a write: the update gate, the lifecycle gate only where the
+ *   status the write names moves the document into or out of published (as
+ *   core's update decides it), and each named field's update rule, for an
+ *   entry or a Single.
  */
 export { mayDeleteEntry, mayWriteEntry } from "nextly";
 export type { PluginDeleteCheck, PluginWriteCheck } from "nextly";

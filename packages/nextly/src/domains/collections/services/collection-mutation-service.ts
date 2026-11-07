@@ -11249,20 +11249,24 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Whether this user may publish the entry, decided without writing: the
-   * gate an update that puts it live asks (`publish`, a rule's filter matched
-   * against this entry), with no hook run. A collection with no lifecycle has
-   * no publish gate, so the answer there is yes; an entry that is not there
+   * Whether this user may make a write naming `nextStatus` of the entry,
+   * decided without writing: the lifecycle gate an update asks, and only where
+   * that update asks it. Core asks a publish or unpublish gate only for a write
+   * that moves the row into or out of published, as {@link
+   * resolvePublishTransition} classifies it against the stored status, so a
+   * write that keeps the row's status asks nothing more than its update gate.
+   * A collection with no lifecycle asks none; an entry that is not there
    * answers as a refusal, as {@link canUpdateEntry} does.
    *
    * @experimental
    */
-  async canPublishEntry(params: {
+  async canMoveEntryStatus(params: {
     collectionName: string;
     entryId: string;
+    nextStatus: string;
     user?: UserContext;
     authenticatedScope?: AuthenticatedScope;
-    /** The language the publish acts in, which a rule's filter is matched in. */
+    /** The language the write acts in, which a rule's filter is matched in. */
     locale?: string;
   }): Promise<boolean> {
     const existingEntry = await this.storedEntry(
@@ -11275,14 +11279,20 @@ export class CollectionMutationService extends BaseService {
     );
     // As `resolveTransitionAuthorization` reads it: no lifecycle, no gate.
     if ((collection as { status?: boolean }).status !== true) return true;
+    const stored = existingEntry.status;
+    const move = resolvePublishTransition(
+      typeof stored === "string" ? stored : null,
+      params.nextStatus
+    );
+    if (move === null) return true;
     const denied = await this.refusalOfStoredUpdate(
       {
         collectionName: params.collectionName,
-        operation: "publish",
+        operation: move,
         entryId: params.entryId,
         user: params.user,
         // Never overridden, and never route-authorized: a route attests
-        // update, never publish.
+        // update, never publish or unpublish.
         overrideAccess: false,
         routeAuthorized: false,
         authenticatedScope: params.authenticatedScope,

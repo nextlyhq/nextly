@@ -51,6 +51,14 @@
 /** Where the routes answer, under the plugin's namespace. */
 export const COMPONENT_DELETE_ROUTE_PATH = "/components/:id/delete";
 
+/**
+ * Why starting or stepping a delete is refused with 409 while somebody else's
+ * delete of the component is open: the code of the refusal's one issue, at
+ * `error.data.errors[0].code`, so a client matches on it rather than on the
+ * message's words.
+ */
+export const DELETE_BUSY_REASON = "someone-else-deleting";
+
 /** The status a call answers with. */
 export type ComponentDeleteStatus =
   | "none"

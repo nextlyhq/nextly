@@ -38,7 +38,7 @@ expectTypeOf(mayWriteEntry).returns.toEqualTypeOf<Promise<boolean>>();
 expectTypeOf({
   collection: "pages",
   id: "1",
-  publish: true,
+  status: "published",
   fields: ["content"],
 }).toMatchTypeOf<PluginWriteCheck>();
 expectTypeOf({ single: "home" }).toMatchTypeOf<PluginWriteCheck>();

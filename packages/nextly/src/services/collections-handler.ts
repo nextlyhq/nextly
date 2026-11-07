@@ -375,20 +375,21 @@ export class CollectionsHandler {
   }
 
   /**
-   * Whether this caller may publish the entry, judged by the publish gate an
-   * update asks, without writing, on the instance that serves collection
-   * writes.
+   * Whether this caller may make a write naming `nextStatus` of the entry: the
+   * lifecycle gate an update asks, only where it moves the row into or out of
+   * published, judged without writing. See the mutation service.
    *
    * @experimental
    */
-  async canPublishEntry(params: {
+  async canMoveEntryStatus(params: {
     collectionName: string;
     entryId: string;
+    nextStatus: string;
     user?: UserContext;
     authenticatedScope?: AuthenticatedScope;
     locale?: string;
   }): Promise<boolean> {
-    return this.entryService.canPublishEntry(params);
+    return this.entryService.canMoveEntryStatus(params);
   }
 
   /**
