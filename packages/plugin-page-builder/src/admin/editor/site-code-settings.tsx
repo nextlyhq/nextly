@@ -556,7 +556,7 @@ function PlaceEditor({
           id={refusedId}
           className="rounded-md border border-l-4 border-l-destructive bg-destructive-50 p-3 text-sm dark:bg-destructive-950"
         >
-          <p className="mb-1 font-medium text-destructive">
+          <p className="mb-1 font-medium text-destructive-900 dark:text-destructive-100">
             {"This can't be saved yet"}
           </p>
           <ul className="list-disc space-y-0.5 pl-5">
@@ -665,12 +665,17 @@ function allowGroupsOf(checked: SiteCodeChecked): AllowGroup[] {
   if (first === undefined || second === undefined || rest.length > 0) {
     return groups;
   }
-  const same =
-    first.part === second.part &&
-    first.lines.join("\n") === second.lines.join("\n");
-  return same
+  return sameAdvice(first, second)
     ? [{ label: `the site's policy${first.part}`, lines: first.lines }]
     : groups;
+}
+
+/** Whether two groups give the same advice, to the same part of a header. */
+function sameAdvice(first: PartGroup, second: PartGroup): boolean {
+  return (
+    first.part === second.part &&
+    first.lines.join("\n") === second.lines.join("\n")
+  );
 }
 
 /**
@@ -954,7 +959,8 @@ function StatusRow({
  * The buttons, with a hint before them and why a save failed: a footer held to
  * the bottom of the tab as its content scrolls, so a long check never leaves
  * Save out of view or apart from what it saves. It spans the tab's padding,
- * with the dialog's own spacing below it.
+ * with the dialog's own spacing below it; a sticky box keeps inside its
+ * scroller's padding, so it is held that padding lower to sit on the edge.
  */
 function Actions({
   hint,
@@ -968,7 +974,7 @@ function Actions({
   children: ReactNode;
 }): JSX.Element {
   return (
-    <div className="sticky bottom-0 z-10 -mx-6 -mb-6 space-y-2 border-t bg-background px-6 pb-6 pt-4">
+    <div className="sticky -bottom-6 z-10 -mx-6 -mb-6 space-y-2 border-t bg-background px-6 pb-6 pt-4">
       {/* The hint takes what room is left and wraps; the buttons stay
           together on its line. */}
       <div className="flex items-center gap-4">
