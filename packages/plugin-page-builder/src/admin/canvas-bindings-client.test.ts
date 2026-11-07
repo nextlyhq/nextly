@@ -400,6 +400,52 @@ describe("the canvas's entry, for a template", () => {
   });
 });
 
+describe("a retry the editor asks for", () => {
+  it("is pending while its read is on its way, not answered by the read before it", async () => {
+    editing.identity = {
+      kind: "collection",
+      slug: "templates",
+      documentId: "t2",
+    };
+    writePluginRoute.mockReset();
+    writePluginRoute.mockResolvedValueOnce(answer("Old title"));
+    const heard: { entryId: string | undefined; state: string }[] = [];
+    const onRead = (read: { entryId: string | undefined; state: string }) =>
+      heard.push(read);
+    let retry = 0;
+    const drawn = [page({ text: { $bind: "title" } })];
+    const { rerender } = renderHook(() => useCanvasBindings(drawn, "es"), {
+      wrapper: ({ children }) =>
+        CanvasEntryProvider({
+          identity: { kind: "collection", slug: "posts", documentId: "p8" },
+          retry,
+          onRead,
+          children,
+        }),
+    });
+    // The control: the first read is answered.
+    await waitFor(() =>
+      expect(heard.at(-1)).toEqual({ entryId: "p8", state: "answered" })
+    );
+
+    // The window back in focus: a retry, whose read has not answered yet.
+    let release: (value: unknown) => void = () => {};
+    writePluginRoute.mockImplementationOnce(
+      () => new Promise(resolve => (release = resolve))
+    );
+    retry = 1;
+    rerender();
+    await waitFor(() =>
+      expect(heard.at(-1)).toEqual({ entryId: "p8", state: "pending" })
+    );
+    release(answer("New title"));
+    await waitFor(() =>
+      expect(heard.at(-1)).toEqual({ entryId: "p8", state: "answered" })
+    );
+    editing.identity = null;
+  });
+});
+
 describe("a binding inside a template's Entry content", () => {
   it("is asked for once the previewed entry's blocks are composed in, as the published page asks", () => {
     // The template holds no binding of its own; the entry's Body holds a

@@ -264,12 +264,25 @@ export function canvasBindingsFor(
  */
 function readStateOf(
   key: string,
-  answer: { readonly key: string; readonly userId: string } | null,
+  answer: {
+    readonly key: string;
+    readonly userId: string;
+    readonly retry: number;
+  } | null,
   failed: string | null,
-  userId: string | null
+  userId: string | null,
+  retry: number
 ): CanvasEntryRead["state"] {
   if (key === "") return "none";
-  if (answer !== null && answer.key === key && answer.userId === userId) {
+  // Answered for THIS ask and this retry: a retry the editor asks for (the
+  // window back in focus) is pending until its own answer arrives, so the
+  // strip never names a refreshed entry over the bindings read before it.
+  if (
+    answer !== null &&
+    answer.key === key &&
+    answer.userId === userId &&
+    answer.retry === retry
+  ) {
     return "answered";
   }
   return failed === key ? "failed" : "pending";
@@ -311,6 +324,8 @@ export function useCanvasBindings(
     readonly key: string;
     readonly userId: string;
     readonly bindings: PageBindings;
+    /** The retry this answer is for. */
+    readonly retry: number;
   } | null>(null);
   // The ask that failed last, so its failure is told rather than taken for
   // an answer on its way.
@@ -354,7 +369,7 @@ export function useCanvasBindings(
     ).then(
       bindings => {
         if (!current) return;
-        setAnswer({ key, userId, bindings });
+        setAnswer({ key, userId, bindings, retry });
         setFailed(null);
         stale = setTimeout(askAgain, KEPT_FOR_MS);
       },
@@ -376,7 +391,7 @@ export function useCanvasBindings(
   }, [key, userId, round, retry]);
   // Where this read stands, told to the editor that gave the entry, so what
   // it says the canvas shows is what the canvas shows.
-  const state = readStateOf(key, answer, failed, userId);
+  const state = readStateOf(key, answer, failed, userId, retry);
   const entryId = identity?.documentId;
   useEffect(() => {
     onRead?.({ entryId, state });
