@@ -2149,11 +2149,7 @@ export const pageBuilder = (
                 ? [
                     {
                       id: String(row.id),
-                      addresses: pageClaims(
-                        row,
-                        siteLocales(),
-                        opts.pagePreviewPath
-                      ).addresses,
+                      ...pageClaims(row, siteLocales(), opts.pagePreviewPath),
                     },
                   ]
                 : []

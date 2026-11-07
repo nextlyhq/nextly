@@ -23,10 +23,11 @@
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
-import { claimKey, type ServedAddress } from "./claim-key";
+import { claimKey, spaceHolding, type ServedAddress } from "./claim-key";
 import {
   claimAddress,
   claimOrWait,
+  claimSpace,
   committedClaims,
   holdLocks,
   reconcileHolder,
@@ -72,12 +73,16 @@ export interface EntryClaimsDeps {
   readonly pagesBackfilled: () => boolean;
   /**
    * The published pages whose slug is one of `slugs`, as committed, with
-   * the addresses each holds: the pages an entry's address could fall on
-   * before the start-up pass has claimed them.
+   * the addresses and list spaces each holds: the pages an entry's address
+   * could fall on before the start-up pass has claimed them.
    */
-  readonly pagesWithSlugs: (
-    slugs: readonly string[]
-  ) => Promise<readonly { id: string; addresses: readonly ServedAddress[] }[]>;
+  readonly pagesWithSlugs: (slugs: readonly string[]) => Promise<
+    readonly {
+      id: string;
+      addresses: readonly ServedAddress[];
+      spaces: readonly ServedAddress[];
+    }[]
+  >;
   /**
    * One page (from 1) of `collection`'s published entries, as last
    * committed, oldest first, `size` to a page.
@@ -161,6 +166,13 @@ async function holdEntryClaims(
     sharePending(write.transaction, write.transactionKey);
   }
   if (write.operation === "delete") {
+    // Under the collection's lock, so a template's walk that read this entry
+    // before the delete committed cannot claim for it afterwards.
+    await holdLocks(
+      deps.claims,
+      write.transaction,
+      collectionLock(address, deps.locales())
+    );
     await releaseClaims(deps.claims, write.transaction, holder);
     return;
   }
@@ -214,12 +226,32 @@ async function claimPagesAt(
 ): Promise<void> {
   if (deps.pagesBackfilled() || addresses.length === 0) return;
   const wanted = new Set(addresses.map(at => claimKey("address", at)));
+  // The paginated lists whose later pages the address would be one of
+  // (`/blog/page/2` is in the space of the page at `/blog`).
+  const lists = addresses.flatMap(at => {
+    const list = spaceHolding(at);
+    return list === null ? [] : [list];
+  });
+  const wantedLists = new Set(lists.map(at => claimKey("space", at)));
   // A page's slug is its served path, or the end of it under a prefix the
-  // host serves pages at, so the candidates are the path's endings.
-  const segments = addresses[0]?.segments ?? [];
-  const slugs = segments.map((_, at) => segments.slice(at).join("/"));
+  // host serves pages at, so the candidates are the path's endings, and
+  // those of the list's page.
+  const endings = (segments: readonly string[]) =>
+    segments.map((_, at) => segments.slice(at).join("/"));
+  const slugs = [
+    ...endings(addresses[0]?.segments ?? []),
+    ...endings(lists[0]?.segments ?? []),
+  ];
   for (const page of await deps.pagesWithSlugs(slugs)) {
     const holder: Holder = { collection: deps.pages, id: page.id };
+    for (const list of page.spaces) {
+      if (!wantedLists.has(claimKey("space", list))) continue;
+      await claimSpace(deps.claims, tx, {
+        list,
+        holder,
+        describe: deps.describe,
+      });
+    }
     for (const address of page.addresses) {
       if (!wanted.has(claimKey("address", address))) continue;
       if (mode === "wait") {
