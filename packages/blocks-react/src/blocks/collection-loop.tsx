@@ -37,7 +37,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
-import type { BlockRenderArgs, PageContext } from "../context";
+import type { BlockRenderArgs, ListPageContext, PageContext } from "../context";
 import { LIST_ACTION_ATTRIBUTE, LIST_REF_ATTRIBUTE } from "../editor-markers";
 
 import { CONTENT } from "./categories";
@@ -45,6 +45,7 @@ import { CONTAINER_CHILD_GAP } from "./container";
 import { ListPages } from "./list-pages";
 import {
   listPagesOf,
+  listPageWindow,
   namedListBase,
   readList,
   wholeCount,
@@ -224,6 +225,22 @@ function emptyMarks(
 }
 
 /**
+ * The context a list's template is drawn with when the list reads nothing:
+ * with NO item, not the item of a list around this one. What this list's
+ * item decides inside it would otherwise be judged, and shown, by an
+ * unrelated entry; with none, it fails closed instead.
+ */
+function withoutItem(ctx: PageContext): PageContext {
+  const {
+    item: _outerItem,
+    itemSource: _outerSource,
+    itemQuery: _outerQuery,
+    ...rest
+  } = ctx;
+  return rest;
+}
+
+/**
  * The entries a list draws, and the context each is drawn with: the list's
  * read for a collection or a relation, or its named query's run.
  */
@@ -232,16 +249,36 @@ interface ListRead {
   readonly itemContext: (item: Record<string, unknown>) => PageContext;
   /** The field each row is keyed by; an entry's id when absent. */
   readonly rowKey?: string;
+  /** How many entries match before the window, where the read says. */
+  readonly matching?: number;
+}
+
+/**
+ * The page this render draws of the list `nodeId`, when the route pages it:
+ * the one list it names, so no other list on the page is paged by its
+ * address.
+ */
+function pagingOf(
+  props: CollectionLoopProps,
+  ctx: PageContext,
+  nodeId: string
+): ListPageContext | undefined {
+  return props.paginate === true && ctx.listPage?.nodeId === nodeId
+    ? ctx.listPage
+    : undefined;
 }
 
 /**
  * A list whose source is a named query, read; `undefined` for any other
  * list. Claims nothing up front: each read the query makes claims its own.
+ * Where the route pages the list, its run is asked for the page drawn, and
+ * must say how many rows match, which its links are counted from.
  */
 async function readNamedSource(
   props: CollectionLoopProps,
   ctx: PageContext,
-  nodeId: string
+  nodeId: string,
+  paging: ListPageContext | undefined
 ): Promise<ListRead | "template" | undefined> {
   const base = namedListBase(props);
   if (base === undefined) return undefined;
@@ -271,15 +308,52 @@ async function readNamedSource(
   }
   const outcome = await readNamedList(
     base.named,
-    { limit: base.limit, offset: base.offset },
+    listPageWindow(
+      { limit: base.limit, offset: base.offset },
+      paging?.page ?? 1
+    ),
     { ...ctx, namedQueries: ctx.namedQueries },
-    nodeId
+    nodeId,
+    { counted: paging !== undefined }
   );
   return {
     outcome,
     itemContext: itemOf(outcome.rowsCollection, base.named.name),
     ...(outcome.rowKey === undefined ? {} : { rowKey: outcome.rowKey }),
+    ...(outcome.total === undefined ? {} : { matching: outcome.total }),
   };
+}
+
+/**
+ * The links between a list's pages, under its entries, when the route pages
+ * it and its read succeeded: counted by the route where it served this page
+ * by a count, and otherwise from the read's own count of matching entries.
+ */
+function pageLinks(
+  paging: ListPageContext | undefined,
+  read: Pick<ListRead, "outcome" | "matching">,
+  props: CollectionLoopProps,
+  partClass: BlockRenderArgs<CollectionLoopProps>["partClass"]
+): ReactElement | null {
+  if (paging === undefined || read.outcome.failed) return null;
+  return (
+    <ListPages
+      page={paging.page}
+      pages={
+        // The route's own count where it served this page by one, so the
+        // links never depend on a total this read may not report.
+        paging.pages ??
+        (read.matching === undefined ? 1 : listPagesOf(props, read.matching))
+      }
+      href={paging.href}
+      parts={{
+        nav: partClass("pages"),
+        link: partClass("page-link"),
+        current: partClass("current-page"),
+        gap: partClass("page-gap"),
+      }}
+    />
+  );
 }
 
 export async function renderCollectionLoop({
@@ -307,26 +381,27 @@ export async function renderCollectionLoop({
       </div>
     );
   }
+  // The page this render draws, when the route pages this list.
+  const paging = pagingOf(props, ctx, node.id);
   // A custom source runs the developer's named query, as the page builder
   // registered it, with a reader limited to what it declares.
-  const named = await readNamedSource(props, ctx, node.id);
+  const named = await readNamedSource(props, ctx, node.id, paging);
   if (named === "template") {
     // No host runs named queries here, as no data source answers a
-    // collection: the template, once, so an author still sees it.
+    // collection: the template, once, so an author still sees it, with no
+    // item, as an unconfigured list draws it.
     return (
       <div className={className} {...stillMarks(ctx, node.id)}>
-        {renderSlot("children")}
+        {renderSlot("children", withoutItem(ctx))}
       </div>
     );
   }
   if (named !== undefined) {
-    return drawList(named, {
-      className,
-      renderSlot,
-      spacingMode,
-      ctx,
-      nodeId: node.id,
-    });
+    return drawList(
+      named,
+      { className, renderSlot, spacingMode, ctx, nodeId: node.id },
+      pageLinks(paging, named, props, partClass)
+    );
   }
   // A cleared text field persists as an empty string, which is a collection
   // nobody named rather than a collection called "". Querying for it fails, the
@@ -340,27 +415,13 @@ export async function renderCollectionLoop({
   if (collection === undefined || data === undefined) {
     // Nothing to query against, so the block renders its template once rather
     // than vanishing: an author placing a loop before choosing a collection
-    // still sees what they are building. Drawn with NO item, not the item of
-    // a list around this one: what this list's item decides inside it would
-    // otherwise be judged by an unrelated entry, and fails closed instead.
-    const {
-      item: _outerItem,
-      itemSource: _outerSource,
-      itemQuery: _outerQuery,
-      ...withoutItem
-    } = ctx;
+    // still sees what they are building.
     return (
       <div className={className} {...stillMarks(ctx, node.id)}>
-        {renderSlot("children", withoutItem)}
+        {renderSlot("children", withoutItem(ctx))}
       </div>
     );
   }
-  // The page this render draws, when the route pages this list: the one
-  // list it names, so no other list on the page is paged by its address.
-  const paging =
-    props.paginate === true && ctx.listPage?.nodeId === node.id
-      ? ctx.listPage
-      : undefined;
   // A loop inside a loop runs once per entry of the outer one, so depth in a
   // document becomes multiplication in queries. Claiming from a shared
   // allowance before reading is what keeps a page bounded; without one the
@@ -393,25 +454,12 @@ export async function renderCollectionLoop({
   );
   // The links between pages, under the entries, when the route pages this
   // list and its read said how many entries it matches.
-  const pages =
-    paging === undefined || outcome.failed ? null : (
-      <ListPages
-        page={paging.page}
-        pages={
-          // The route's own count where it served this page by one, so the
-          // links never depend on a total this read may not report.
-          paging.pages ??
-          (matching === undefined ? 1 : listPagesOf(props, matching))
-        }
-        href={paging.href}
-        parts={{
-          nav: partClass("pages"),
-          link: partClass("page-link"),
-          current: partClass("current-page"),
-          gap: partClass("page-gap"),
-        }}
-      />
-    );
+  const pages = pageLinks(
+    paging,
+    { outcome, ...(matching === undefined ? {} : { matching }) },
+    props,
+    partClass
+  );
   return drawList(
     {
       outcome,

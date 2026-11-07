@@ -28,7 +28,6 @@ import {
   type ComponentDocument,
   type DocumentLimits,
   type RegionArea,
-  namedQueryDeclaration,
   type NamedQueryDeclaration,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -63,7 +62,8 @@ import {
   readPatternLibrary,
   type ComponentStore,
 } from "./library-route";
-import { namedQueryParamsSchema } from "./named-queries";
+import { namedQueryItem, namedQueryParamsSchema } from "./named-queries";
+import type { NamedQueryRowField } from "./named-queries-contract";
 import { pageActionRequestJsonSchema } from "./page-actions-route";
 import { TEMPLATE_ACTIONS_ROUTE_PATH } from "./templates/template-actions-contract";
 import { templateActionRequestJsonSchema } from "./templates/template-actions-route";
@@ -171,10 +171,7 @@ export interface ManifestNamedQuery {
     | { readonly collection: string }
     | {
         readonly key: string;
-        readonly fields: readonly {
-          readonly name: string;
-          readonly type: string;
-        }[];
+        readonly fields: readonly ManifestRowField[];
       };
   /** Whether it returns how many rows match before the window. */
   readonly total: boolean;
@@ -203,8 +200,30 @@ export interface CompositionManifest {
   readonly namedQueries: readonly ManifestNamedQuery[];
 }
 
+/**
+ * One field of a named query's rows as the manifest lists it: its name and
+ * type, and a group's own fields, however deep, so a client can address
+ * every path a row's bindings may name (`seo.title`).
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export interface ManifestRowField {
+  readonly name: string;
+  readonly type: string;
+  readonly fields?: readonly ManifestRowField[];
+}
+
 const text = z.string();
 const id = z.string().min(1);
+
+/** A row field's schema, a group's own fields held to the same one. */
+const rowFieldSchema: z.ZodType<ManifestRowField> = z.lazy(() =>
+  z.strictObject({
+    name: id,
+    type: text,
+    fields: z.array(rowFieldSchema).optional(),
+  })
+);
 
 function tier<T extends z.ZodType>(item: T) {
   return z.strictObject({
@@ -292,7 +311,7 @@ export const compositionManifestSchema: z.ZodType<CompositionManifest> =
           z.strictObject({ collection: id }),
           z.strictObject({
             key: id,
-            fields: z.array(z.strictObject({ name: id, type: text })),
+            fields: z.array(rowFieldSchema),
           }),
         ]),
         total: z.boolean(),
@@ -357,30 +376,41 @@ export async function readCompositionManifest(
   };
 }
 
-/** One registered query as the manifest lists it, without its run function. */
-function manifestNamedQuery(
+/** A row field as the manifest lists it: the editor's, without its kind. */
+function manifestRowField(field: NamedQueryRowField): ManifestRowField {
+  return {
+    name: field.name,
+    type: field.type,
+    ...(field.fields === undefined
+      ? {}
+      : { fields: field.fields.map(manifestRowField) }),
+  };
+}
+
+/**
+ * One registered query as the manifest lists it, without its run function:
+ * read off the declaration as the editor's route reads it
+ * (`namedQueryItem`), so the two never list different rows.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export function manifestNamedQuery(
   definition: NamedQueryDeclaration
 ): ManifestNamedQuery {
-  const declaration = namedQueryDeclaration(definition);
-  const rows = declaration.rows;
+  const item = namedQueryItem(definition);
+  const rows = item.rows;
   return {
-    name: declaration.name,
-    label: declaration.label,
-    ...(declaration.description === undefined
+    name: item.name,
+    label: item.label,
+    ...(item.description === undefined
       ? {}
-      : { description: declaration.description }),
-    params: namedQueryParamsSchema(declaration),
+      : { description: item.description }),
+    params: namedQueryParamsSchema(definition),
     rows:
       "fields" in rows
-        ? {
-            key: rows.key,
-            fields: rows.fields.map(field => ({
-              name: field.name,
-              type: field.type,
-            })),
-          }
+        ? { key: rows.key, fields: rows.fields.map(manifestRowField) }
         : { collection: rows.collection },
-    total: declaration.total === true,
+    total: item.total,
   };
 }
 

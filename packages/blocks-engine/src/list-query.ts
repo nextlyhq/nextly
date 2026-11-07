@@ -225,7 +225,8 @@ export type ListFieldCode =
   | "list-named-query-param-invalid"
   | "list-named-query-param-unknown"
   | "list-named-query-reads-hidden"
-  | "list-named-query-rows-hidden";
+  | "list-named-query-rows-hidden"
+  | "list-named-query-uncounted";
 
 /**
  * The codes a split into pages is refused with, by where the list sits: a
@@ -235,8 +236,7 @@ export type ListPageCode =
   | "list-paginate-twice"
   | "list-paginate-nested"
   | "list-paginate-related"
-  | "list-paginate-shared"
-  | "list-paginate-named";
+  | "list-paginate-shared";
 
 /** Every code a list query is judged with, each described for authors. */
 export const LIST_ISSUE_CODES: {
@@ -283,6 +283,8 @@ export const LIST_ISSUE_CODES: {
     "A list's custom source reads a collection visitors cannot read.",
   "list-named-query-rows-hidden":
     "A list's custom source lists entries of a collection visitors cannot read.",
+  "list-named-query-uncounted":
+    "A list split into pages has a custom source that does not count its entries.",
   "list-paginate-invalid":
     "A list's split into pages is not stored as on or off.",
   "list-paginate-twice": "More than one list on a page is split into pages.",
@@ -291,8 +293,6 @@ export const LIST_ISSUE_CODES: {
     "A list split into pages shows related entries, which have no count of pages.",
   "list-paginate-shared":
     "A list split into pages sits in a component or a Layout region, which shows on many pages.",
-  "list-paginate-named":
-    "A list split into pages takes its entries from a custom source, which can't be split into pages yet.",
 };
 
 /**
@@ -1561,8 +1561,9 @@ export function namedQueryHiddenReads(
 /**
  * The judgement of a list's custom source against its query's declaration:
  * a name nothing registers, each input missing, not fitting or no longer
- * declared, and, where the schema is known, a query whose rows visitors can
- * never read or that reads a collection they cannot.
+ * declared, a list split into pages whose query does not count its rows,
+ * and, where the schema is known, a query whose rows visitors can never read
+ * or that reads a collection they cannot.
  */
 function namedFindings(
   query: ListQuery,
@@ -1604,6 +1605,18 @@ function namedFindings(
       message: NAMED_QUERY_TEXT.paramUnknown(declaration.label, key),
     })),
   ];
+  // A list split into pages counts its pages from its query's total, so a
+  // query declared without one gives the route nothing to count by. Judged
+  // here, against the declaration, so the save, the editor and the API all
+  // refuse it with the same words.
+  if (query.paginate === true && declaration.total !== true) {
+    found.push({
+      path: at("paginate"),
+      nodeId,
+      code: "list-named-query-uncounted",
+      message: NAMED_QUERY_TEXT.uncounted(declaration.label),
+    });
+  }
   const rows = declaration.rows;
   const rowsCollection = "collection" in rows ? rows.collection : undefined;
   if (rowsCollection !== undefined && unreadable(judgement, rowsCollection)) {
@@ -1674,12 +1687,6 @@ function pageFindings(
       "list-paginate-nested",
       "This list is split into pages, but it sits inside another list, which repeats it for each entry with no address of its own. Turn off Split into pages, or move this list out of that list."
     );
-  }
-  // A custom source's rows have no page count a route can serve yet, so a
-  // list of them pages nothing: refused rather than left on one page with
-  // no word why.
-  if (query.namedQuery !== undefined) {
-    return refused("list-paginate-named", NAMED_QUERY_TEXT.paginated);
   }
   if (query.relation !== undefined) {
     return refused(
@@ -1827,7 +1834,8 @@ function walkFindings(
  * key, and a related source that is not a to-many relation to the list's
  * collection. Each is an error, except one a stored form already held on
  * the same block, which is a warning. A custom source's name and inputs are
- * judged when `judgement.namedQueries` is given; an input the query no
+ * judged when `judgement.namedQueries` is given, and so is whether its query
+ * counts its rows where the list is split into pages; an input the query no
  * longer takes, and a declared read visitors cannot read, are always
  * warnings.
  */
@@ -1881,4 +1889,5 @@ export const LIST_FIELD_CODES: ReadonlySet<string> = new Set<ListFieldCode>([
   "list-named-query-param-unknown",
   "list-named-query-reads-hidden",
   "list-named-query-rows-hidden",
+  "list-named-query-uncounted",
 ]);
