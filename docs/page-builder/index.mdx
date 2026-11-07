@@ -476,8 +476,9 @@ export default ContentPage;
 A page is served as `createBlocksPage` serves it. An entry is drawn with its
 collection's published template, reading the entry as a visitor would, and takes
 its title, description and image from the template's SEO settings. A path nobody
-holds is not found, and so is an entry whose collection has no published template.
-`createPublicContentPage` is the cached, pre-rendered form.
+holds is not found, and so is an entry with neither a published template nor a
+published own design (below). `createPublicContentPage` is the cached, pre-rendered
+form.
 
 An entry with its own design ([An entry's own design](/docs/page-builder/compose-through-the-api#an-entrys-own-design))
 is drawn with that design instead, and takes its SEO settings from it, once the design
@@ -490,6 +491,16 @@ does. The design is read with the template in one query, through
 draws every entry with its collection's template. A design that splits a list into
 pages draws its first page only, as a template does, since an entry's list does not
 page yet.
+
+An entry keeps its address while its own design is published, even when its
+collection's template is unpublished or deleted: those entries stay served, and
+every other entry of the collection gives its address up. Unpublishing or removing
+the own design then gives the entry's address up too, unless the template is
+published. Publishing an own design claims the entry's address without the entry
+being saved; where another document holds it, the entry waits for it. The address
+itself still comes from the collection: an address declared in code, or the one
+stored on its template. A collection made in the Schema Builder whose template is
+deleted has no address left, so none of its entries is served, own design or not.
 
 #### Collections made in the Schema Builder
 
@@ -505,9 +516,10 @@ until the declaration takes over at the next start.
 Setting or changing an address needs the **Manage template routing** permission
 (`manage-template-routing`), apart from updating templates, since it moves every
 entry's live address. Anyone else sees the address read-only, and an address they
-send through the API is left out of their save. Changing a published template's
-address frees every entry's old address and serves it at the new one; an entry
-whose new address another document holds waits for it. API clients use the
+send through the API is left out of their save. Changing a template's address frees
+the old address of every entry it serves (all of them while it is published, those
+with a published own design while it is not) and serves each at the new one; an
+entry whose new address another document holds waits for it. API clients use the
 `set-template-address` template action, which has a dry run.
 
 ## Reading content into a page

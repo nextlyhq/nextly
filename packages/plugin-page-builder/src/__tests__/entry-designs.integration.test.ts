@@ -2,8 +2,10 @@
  * An entry's own design against a real instance: giving one through the
  * template actions route as a draft copy of the collection's published
  * template, the unique key and the entry's lock that keep one per entry when
- * two gives run at once, removing it, its deletion with its entry, and the
- * site drawing the entry with it once it is published.
+ * two gives run at once, removing it, its deletion with its entry, the site
+ * drawing the entry with it once it is published, and the entry keeping its
+ * address while its own design is published though the collection's
+ * template is not.
  *
  * @module __tests__/entry-designs.integration.test
  */
@@ -22,6 +24,7 @@ import {
 import { defineCollection, text } from "nextly/config";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { ADDRESS_CLAIMS_SLUG } from "../collections/address-claims";
 import { TEMPLATES_SLUG } from "../collections/templates";
 import { pageBuilderContent } from "../page-content";
 import { pageBuilder } from "../plugin";
@@ -65,10 +68,17 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
     });
 
-    async function boot(): Promise<TestNextly> {
+    /** An instance, its collections given `addresses` in code, if any. */
+    async function boot(
+      addresses?: Record<string, string>
+    ): Promise<TestNextly> {
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder()],
+        plugins: [
+          addresses === undefined
+            ? pageBuilder()
+            : pageBuilder({ templates: { addresses } }),
+        ],
         collections: [
           defineCollection({
             slug: "posts",
@@ -99,6 +109,51 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
       return String((made as { item: { id: unknown } }).item.id);
+    }
+
+    /** A published entry, its slug made from its title. */
+    async function publishedEntry(
+      t: TestNextly,
+      title: string
+    ): Promise<string> {
+      const made = await t.nextly.create({
+        collection: "posts",
+        data: {
+          title,
+          slug: title.toLowerCase().replaceAll(" ", "-"),
+          status: "published",
+        },
+        overrideAccess: true,
+      });
+      return String((made as { item: { id: unknown } }).item.id);
+    }
+
+    /** The claims an entry of posts holds or waits for, as `kind path`. */
+    async function claimsOf(t: TestNextly, id: string): Promise<string[]> {
+      const found = await t.nextly.find({
+        collection: ADDRESS_CLAIMS_SLUG,
+        overrideAccess: true,
+        depth: 0,
+        limit: 200,
+      });
+      return (found.items as Record<string, unknown>[])
+        .filter(row => row.holderCollection === "posts" && row.holderId === id)
+        .map(row => `${String(row.kind)} ${String(row.path)}`)
+        .sort();
+    }
+
+    /** Set a templates row's status, as the system: a publish or unpublish. */
+    async function setStatus(
+      t: TestNextly,
+      id: string,
+      status: "published" | "draft"
+    ): Promise<void> {
+      await t.nextly.update({
+        collection: TEMPLATES_SLUG,
+        id,
+        data: { status },
+        overrideAccess: true,
+      });
     }
 
     /** The collection's template, published, with one block to copy. */
@@ -469,6 +524,127 @@ describe.each(getConfiguredTestDialects())(
       });
 
       expect((await designs(t)).map(row => row.entryId)).toEqual([kept]);
+    });
+
+    it("keeps serving an entry whose own design is published when its collection's template is unpublished, and stops once the design is unpublished", async () => {
+      const t = await boot({ posts: "/blog" });
+      const { cookie } = await holding(t, DESIGNER);
+      const template = await publishedTemplate(t, cookie);
+      const hello = await publishedEntry(t, "Hello");
+      const other = await publishedEntry(t, "Other");
+      const content = pageBuilderContent({ nextly: t.nextly as never });
+      const holderAt = (path: string) =>
+        content.resolveAddress(undefined, path);
+      expect(await holderAt("/blog/other")).toEqual({
+        collection: "posts",
+        id: other,
+        kind: "address",
+      });
+
+      const given = await act(cookie, {
+        kind: "give-entry-design",
+        collection: "posts",
+        entry: hello,
+      });
+      const own = (given.body.item as TemplateActionResult).template?.id ?? "";
+      expect(
+        (await act(cookie, { kind: "publish-template", id: own })).status
+      ).toBe(200);
+
+      await setStatus(t, template, "draft");
+
+      // The entry with its own published design is still served, drawn with
+      // that design; its neighbour, drawn by the template alone, is not.
+      expect(await holderAt("/blog/hello")).toEqual({
+        collection: "posts",
+        id: hello,
+        kind: "address",
+      });
+      expect(
+        (await content.templates.readFor("posts", hello, undefined))?.id
+      ).toBe(own);
+      expect(await holderAt("/blog/other")).toBeNull();
+
+      // Unpublished, the design draws it no more, and the address is free.
+      await setStatus(t, own, "draft");
+      expect(await holderAt("/blog/hello")).toBeNull();
+      expect(await claimsOf(t, hello)).toEqual([]);
+
+      // Published again, it is served again, without the entry being saved.
+      await setStatus(t, own, "published");
+      expect(await holderAt("/blog/hello")).toEqual({
+        collection: "posts",
+        id: hello,
+        kind: "address",
+      });
+
+      // And it outlives the template's delete, the address being declared
+      // in code.
+      await t.nextly.delete({
+        collection: TEMPLATES_SLUG,
+        id: template,
+        overrideAccess: true,
+      });
+      expect(await holderAt("/blog/hello")).toEqual({
+        collection: "posts",
+        id: hello,
+        kind: "address",
+      });
+    });
+
+    it("serves no entry of a runtime collection once the template that stored its address is deleted, own design or not, and fails no later write", async () => {
+      const t = await boot();
+      const { cookie } = await holding(t, DESIGNER);
+      const made = await t.nextly.create({
+        collection: TEMPLATES_SLUG,
+        data: {
+          title: "Posts",
+          collection: "posts",
+          content: templateDocument("template-heading"),
+          status: "published",
+          address: "/stories",
+        },
+        overrideAccess: true,
+      });
+      const template = String((made as { item: { id: unknown } }).item.id);
+      const hello = await publishedEntry(t, "Hello");
+      const content = pageBuilderContent({ nextly: t.nextly as never });
+      const given = await act(cookie, {
+        kind: "give-entry-design",
+        collection: "posts",
+        entry: hello,
+      });
+      const own = (given.body.item as TemplateActionResult).template?.id ?? "";
+      await setStatus(t, own, "published");
+      expect(await content.resolveAddress(undefined, "/stories/hello")).toEqual(
+        { collection: "posts", id: hello, kind: "address" }
+      );
+
+      await t.nextly.delete({
+        collection: TEMPLATES_SLUG,
+        id: template,
+        overrideAccess: true,
+      });
+
+      // The address lived on the template alone: nothing is left to serve
+      // the entry at, though its own design is still published, and the
+      // claim is given up rather than left behind.
+      expect(
+        await content.resolveAddress(undefined, "/stories/hello")
+      ).toBeNull();
+      expect(await claimsOf(t, hello)).toEqual([]);
+      await setStatus(t, own, "draft");
+      await setStatus(t, own, "published");
+      await t.nextly.update({
+        collection: "posts",
+        id: hello,
+        data: { title: "Hello again" },
+        overrideAccess: true,
+      });
+      expect(
+        await content.resolveAddress(undefined, "/stories/hello")
+      ).toBeNull();
+      expect(await claimsOf(t, hello)).toEqual([]);
     });
   }
 );

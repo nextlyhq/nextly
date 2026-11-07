@@ -138,7 +138,10 @@ import type { PagesCollectionOptions } from "./collections/pages";
 import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import {
+  entryDesignKey,
   TEMPLATE_ENTRY_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_FIELD,
+  TEMPLATE_ENTRY_ID_FIELD,
   TEMPLATE_FORKED_FROM_FIELD,
   templatesCollection,
   TEMPLATES_SLUG,
@@ -2989,6 +2992,80 @@ export const pageBuilder = (
             published: row.status === "published",
             address: address === null ? null : addressSegments(address),
           };
+        },
+        // Hook-free and as the system, as the template is read: the routing
+        // columns of the entry's own design alone.
+        ownDesignPublished: async (collection, id) => {
+          const key = entryDesignKey(collection, id);
+          const found = await ctx.services.ownCollections.listEntries(
+            templatesSlug,
+            {
+              where: { [TEMPLATE_ENTRY_FIELD]: { equals: key } },
+              pagination: { limit: 1 },
+              select: { id: true, [TEMPLATE_ENTRY_FIELD]: true, status: true },
+              depth: 0,
+            }
+          );
+          const row = found.data[0] as Record<string, unknown> | undefined;
+          // Compared again exactly: a database may compare text loosely.
+          return (
+            row?.[TEMPLATE_ENTRY_FIELD] === key && row.status === "published"
+          );
+        },
+        publishedDesigns: async collection => {
+          const ids = new Set<string>();
+          for (let page = 1; ; page += 1) {
+            const found = await ctx.services.ownCollections.listEntries(
+              templatesSlug,
+              {
+                where: {
+                  [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection },
+                },
+                pagination: { limit: 500, page },
+                // A unique order, so no design moves between pages.
+                sort: { field: "id", direction: "asc" },
+                select: {
+                  id: true,
+                  [TEMPLATE_ENTRY_FIELD]: true,
+                  [TEMPLATE_ENTRY_ID_FIELD]: true,
+                  status: true,
+                },
+                depth: 0,
+              }
+            );
+            for (const value of found.data) {
+              const row = value as Record<string, unknown>;
+              const id = row[TEMPLATE_ENTRY_ID_FIELD];
+              // The key its entry makes, compared exactly, so a design
+              // matched loosely by collection is never counted.
+              if (
+                typeof id === "string" &&
+                row[TEMPLATE_ENTRY_FIELD] === entryDesignKey(collection, id) &&
+                row.status === "published"
+              ) {
+                ids.add(id);
+              }
+            }
+            if (found.data.length < 500) return ids;
+          }
+        },
+        publishedEntry: async (collection, id) => {
+          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+          const nextly = (await getCachedNextly()) as unknown as PagesReader;
+          const found = await nextly.find({
+            collection,
+            where: { id: { equals: id } },
+            // Published only, and a no-op on a collection without a
+            // Draft/Published lifecycle, whose entries are all live.
+            status: "published",
+            limit: 1,
+            overrideAccess: true,
+            depth: 0,
+          });
+          const row = found.items[0] as
+            | Readonly<Record<string, unknown>>
+            | undefined;
+          return row !== undefined && String(row.id) === id ? row : null;
         },
         storedAddresses: async () =>
           new Map(
