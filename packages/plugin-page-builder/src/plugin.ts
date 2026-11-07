@@ -104,7 +104,10 @@ import {
   BUILDER_VIEW_PATH,
   COMPONENT_STORE_DELETE_HOST_COMPONENT,
   DELETE_COMPONENT_REPLACEMENT_COMPONENT,
+  ENTRY_DESIGN_SECTION_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
+  TEMPLATE_DELETE_COMPONENT,
+  TEMPLATE_OWN_DESIGNS_COMPONENT,
 } from "./builder-view";
 import { canvasBindingsRoute } from "./canvas-bindings-route";
 import { canvasPathOption } from "./canvas-path";
@@ -340,6 +343,7 @@ import {
   designUnderWhere,
   registerEntryDesignCascade,
 } from "./templates/entry-design-cascade";
+import { entryDesignsRoute } from "./templates/entry-designs-route";
 import {
   templateActionsRoute,
   templateRoutingRoute,
@@ -3673,7 +3677,8 @@ export const pageBuilder = (
           limits: () => opts.limits ?? DEFAULT_LIMITS,
           readRetired: readRetiredFor,
         }),
-        // Give a collection its template and publish it, each with a dry run.
+        // Give a collection its template, publish or delete it, set its address,
+        // and give an entry its own design or take it away, each with a dry run.
         templateActionsRoute(templateActions),
         // A template's preview in the editor: the entries of its collection
         // the author may preview, and the one being previewed, read as the
@@ -3684,6 +3689,10 @@ export const pageBuilder = (
         // template form asks before it offers the address for editing. Not a
         // security boundary: the field's rules and the action decide.
         templateRoutingRoute(),
+        // A collection's own designs, its template and its names, read as
+        // the caller: what the admin's Design section, Design column and the
+        // template's own designs list draw from.
+        entryDesignsRoute({ guard: requireTemplateGuard }),
         // What an API client or an agent reads before composing: the
         // patterns, components (fields, slots, variants) and Layouts it may
         // read, and the actions above with their request schemas.
@@ -3970,6 +3979,28 @@ export const pageBuilder = (
         // delete and unpublish are refused. The slot is offered to every entry
         // form; the component draws only on a saved Layout's own.
         entryFormToolbarSlot: REMOVE_LAYOUT_ACTION_COMPONENT,
+        // An entry's own design, where an author meets it.
+        //
+        // The Design section of an entry's side panel, first, before Status:
+        // which design the entry is shown with, and its own design. Declared
+        // at the `collection.edit` place with no collections named, so it is
+        // offered on every collection's entries, a collection the Schema
+        // Builder adds later included; it draws nothing for an entry whose
+        // collection cannot have a template, which leaves no section.
+        contributions: [
+          {
+            id: "nextlyhq-plugin-page-builder.entry-design",
+            kind: "sidebarSection",
+            place: "collection.edit",
+            label: "Design",
+            component: ENTRY_DESIGN_SECTION_COMPONENT,
+            before: "status",
+            // On a phone the panel opens only from the document's menu, so
+            // the section sits above the form there, where an author meets
+            // which design the entry is shown with before its fields.
+            narrow: "above-form",
+          },
+        ],
         // Delete component on the component store, wherever it is: the
         // plugin's own collection (followed through a rename, as every view
         // key is), or the host's store named by `componentReadiness`. The
@@ -3978,7 +4009,24 @@ export const pageBuilder = (
         // run (a past version on screen, a colleague's claim). A host's store
         // also gets the delete tools above its list, for the row action; the
         // plugin's own collection declares them itself.
-        views: deleteComponentViews(componentStoreOf(opts)),
+        //
+        // On a template's own document screen: the entries with their own
+        // design, in its panel, and a Delete that says what deleting the
+        // template, or an own design, does to the site before it happens.
+        views: {
+          ...deleteComponentViews(componentStoreOf(opts)),
+          [TEMPLATES_SLUG]: {
+            documentActions: {
+              delete: { component: TEMPLATE_DELETE_COMPONENT },
+            },
+            panelSections: [
+              {
+                title: "Own designs",
+                component: TEMPLATE_OWN_DESIGNS_COMPONENT,
+              },
+            ],
+          },
+        },
         // A host's own store's list gets Delete component on each row through
         // tools drawn in the header, which is on every page: the slot above a
         // list is the host's own to fill, and a second one there would be

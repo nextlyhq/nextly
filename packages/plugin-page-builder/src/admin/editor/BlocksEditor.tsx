@@ -85,6 +85,7 @@ import {
   SiteStylePreviewContext,
 } from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
+import { OwnDesignsChip } from "../TemplateOwnDesigns";
 
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
@@ -324,6 +325,9 @@ function editorTopBar(
           onAllPages={() => view.requestPanel("pages")}
         />
         <DocumentStatusPill isDirty={documentDirty} />
+        {/* On a collection's template, how many of its entries have their
+            own design, opening the list; nothing on any other document. */}
+        <OwnDesignsChip />
         <HistoryButtons editor={editor} inline={inline} />
       </>
     ),
