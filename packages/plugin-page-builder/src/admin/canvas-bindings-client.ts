@@ -19,14 +19,19 @@
  */
 import {
   bindingDemand,
+  isPlainRecord,
   type BindingDemand,
   type BlockDocument,
+  type ConditionDemand,
 } from "@nextlyhq/blocks-engine";
 import {
   bindingsFromWire,
   listCollections,
+  READ_KINDS,
   type NamedQueryLookup,
   type PageBindings,
+  type PageReadReport,
+  type ReadKind,
 } from "@nextlyhq/blocks-react";
 import {
   useCurrentUserId,
@@ -37,6 +42,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   CANVAS_BINDINGS_ROUTE_PATH,
+  conditionsToWire,
   demandToWire,
   type CanvasBindingsRequest,
   type CanvasBindingsResponse,
@@ -48,6 +54,63 @@ import {
   useCanvasEntryRead,
   type CanvasEntryRead,
 } from "./editor/canvas-entry";
+/**
+ * What each answer's reads cost the page's allowance, by the bindings it
+ * gave, so the editor's read meter adds the binding reads as the route made
+ * them. Kept beside the answer rather than in it, so every reader of the
+ * bindings keeps the shape it always had.
+ */
+const READS = new WeakMap<PageBindings, PageReadReport>();
+
+/** What reading these bindings cost, when the route said; none for none read. */
+export function bindingReadsOf(
+  bindings: PageBindings
+): PageReadReport | undefined {
+  return READS.get(bindings);
+}
+
+const KNOWN_KINDS: ReadonlySet<string> = new Set<ReadKind>(READ_KINDS);
+
+/** Whether a name is one of the kinds a budget counts. */
+function isReadKind(name: string): name is ReadKind {
+  return KNOWN_KINDS.has(name);
+}
+
+/** A count the route sent: a whole number, not below zero. */
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * The reads an answer reports, when they are what a budget reports: checked
+ * here, at the boundary, since the answer arrives over the network. An answer
+ * without them, or with anything else in their place, reports none.
+ */
+function readsIn(answer: unknown): PageReadReport | undefined {
+  const reads = isPlainRecord(answer) ? answer.reads : undefined;
+  if (!isPlainRecord(reads)) return undefined;
+  const { cap, used, refused, unread } = reads;
+  if (!isCount(used) || !isCount(refused)) return undefined;
+  if (typeof cap !== "number" || !Array.isArray(unread)) return undefined;
+  const byKind = kindsIn(reads.byKind);
+  // The route reads no block's data, so it names none.
+  return byKind === undefined
+    ? undefined
+    : { cap, used, refused, byKind, unread: [] };
+}
+
+/** A report's reads by kind, when each is a kind with a count. */
+function kindsIn(
+  byKind: unknown
+): Partial<Record<ReadKind, number>> | undefined {
+  if (!isPlainRecord(byKind)) return undefined;
+  const kinds: Partial<Record<ReadKind, number>> = {};
+  for (const [kind, count] of Object.entries(byKind)) {
+    if (!isReadKind(kind) || !isCount(count)) return undefined;
+    kinds[kind] = count;
+  }
+  return kinds;
+}
 
 /** No source read: what the canvas draws with until an answer arrives. */
 const NONE: PageBindings = Object.freeze({});
@@ -89,10 +152,22 @@ export function canvasBindingsRequest(
    * collection's entries asks for that collection's field shapes too, as
    * the published page does.
    */
-  namedQueries?: NamedQueryLookup
+  namedQueries?: NamedQueryLookup,
+  /**
+   * For the editor's read meter, which reads as the published page does:
+   * what the page's conditions read, and the reads the page has left.
+   */
+  reads: {
+    readonly conditions?: ConditionDemand;
+    readonly allowance?: number;
+  } = {}
 ): CanvasBindingsRequest | undefined {
   if (identity === null || drawn.length === 0) return undefined;
   const found = bindingDemand(drawn);
+  // Conditions that restrict anybody read for the page as its bindings do,
+  // as the published page's read takes them in.
+  const conditions =
+    reads.conditions?.any === true ? reads.conditions : undefined;
   const demand: BindingDemand = component
     ? {
         any: found.any,
@@ -108,8 +183,9 @@ export function canvasBindingsRequest(
     Object.keys(wire.singles).length > 0 ||
     wire.site ||
     wire.formatsDates ||
-    lists.length > 0;
-  if (!found.any || !asks) return undefined;
+    lists.length > 0 ||
+    conditions !== undefined;
+  if (!(found.any || conditions !== undefined) || !asks) return undefined;
   return {
     source: {
       kind: identity.kind,
@@ -119,6 +195,13 @@ export function canvasBindingsRequest(
     demand: wire,
     lists,
     ...(locale === undefined ? {} : { locale }),
+    ...(conditions === undefined
+      ? {}
+      : { conditions: conditionsToWire(conditions) }),
+    // A whole number of reads the route can be asked for; none past it.
+    ...(reads.allowance === undefined || !Number.isFinite(reads.allowance)
+      ? {}
+      : { allowance: Math.max(0, Math.floor(reads.allowance)) }),
   };
 }
 
@@ -161,7 +244,12 @@ export function canvasBindingsFor(
   if (!fresh && kept !== undefined && Date.now() - kept.at < KEPT_FOR_MS) {
     return kept.read;
   }
-  const reading = ask(request).then(bindingsFromWire);
+  const reading = ask(request).then(answer => {
+    const bindings = bindingsFromWire(answer);
+    const reads = readsIn(answer);
+    if (reads !== undefined) READS.set(bindings, reads);
+    return bindings;
+  });
   KEPT.set(key, { at: Date.now(), read: reading });
   // A failed ask is not kept, so the next draw asks again.
   reading.catch(() => {
