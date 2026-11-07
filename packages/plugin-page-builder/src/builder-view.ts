@@ -23,7 +23,6 @@ export const REMOVE_LAYOUT_ACTION_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#RemoveLayoutToolbarSlot";
 
 /**
-<<<<<<< HEAD
  * The Design section of every entry's side panel, declared at the
  * `collection.edit` place: which design the entry is shown with, and its own
  * design. Here, beside the others, for the same reason.
@@ -38,7 +37,8 @@ export const TEMPLATE_OWN_DESIGNS_COMPONENT =
 /** The delete on a template's document screen, which says what it means. */
 export const TEMPLATE_DELETE_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#TemplateDeleteAction";
-=======
+
+/**
  * The tools above the Components list: Import from file, and the dialog its
  * row action "Delete component…" opens. Declared here for the same reason.
  */
@@ -60,4 +60,3 @@ export const COMPONENT_STORE_DELETE_HOST_COMPONENT =
  */
 export const DELETE_COMPONENT_REPLACEMENT_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#DeleteComponentReplacement";
->>>>>>> origin/entry-own-design
