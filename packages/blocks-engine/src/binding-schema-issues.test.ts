@@ -212,4 +212,107 @@ describe("bindings judged against the schema at save", () => {
     );
     expect(issues.map(issue => issue.nodeId)).toEqual(["h0", "h1", "h2"]);
   });
+
+  describe("a list's item bindings", () => {
+    /** A heading binding `path` on the item of the list it is drawn in. */
+    const itemHeading = (id: string, path: string) => ({
+      ...heading(id, path),
+      bindings: { text: { $bind: path, source: "item" } },
+    });
+
+    /** A list of `props`' source, its entries drawn with `children`. */
+    const list = (
+      props: Record<string, unknown>,
+      children: unknown[],
+      empty: unknown[] = []
+    ) => ({
+      id: "list",
+      type: "core/collection-loop",
+      version: 1,
+      props: { limit: 3, ...props },
+      slots: { children, empty },
+    });
+
+    /** Posts as above, and a named query whose rows declare `price` alone. */
+    const withQuery: BindingSchemaSource = {
+      fieldsOf: ref =>
+        "query" in ref && ref.query === "deals"
+          ? [{ name: "price", type: "number" }]
+          : schema.fieldsOf(ref),
+    };
+
+    it("judges an entry's binding against the list's collection", () => {
+      const issues = judged([
+        list({ collection: "posts" }, [
+          itemHeading("missing", "headline"),
+          itemHeading("present", "title"),
+        ]),
+      ]);
+      expect(issues.map(issue => [issue.nodeId, issue.code])).toEqual([
+        ["missing", "binding-field-missing"],
+      ]);
+    });
+
+    it("keeps an item binding the stored page already held as a warning", () => {
+      // Renamed after the page was saved: the page still saves.
+      const page = [
+        list({ collection: "posts" }, [itemHeading("h", "headline")]),
+      ];
+      const issues = judged(page, [{ nodes: page }]);
+      expect(issues.map(issue => issue.severity)).toEqual(["warning"]);
+    });
+
+    it("judges a named query's rows against the query's declared fields", () => {
+      const issues = judged(
+        [
+          list({ namedQuery: { name: "deals", params: {} } }, [
+            itemHeading("gone", "title"),
+            itemHeading("kept", "price"),
+          ]),
+        ],
+        undefined,
+        undefined,
+        withQuery
+      );
+      expect(issues.map(issue => [issue.nodeId, issue.code])).toEqual([
+        ["gone", "binding-field-missing"],
+      ]);
+    });
+
+    it("judges a named query's entries of a collection against that collection", () => {
+      // Rows declared as posts' entries bind as posts, as the render draws them.
+      const issues = bindingSchemaIssues(
+        {
+          nodes: [
+            list({ namedQuery: { name: "recent", params: {} } }, [
+              itemHeading("missing", "headline"),
+              itemHeading("present", "title"),
+            ]),
+          ],
+        },
+        {
+          schema,
+          entry: { collection: "posts" },
+          namedQueries: {
+            declarationOf: name =>
+              name === "recent"
+                ? ({ rows: { collection: "posts" } } as never)
+                : undefined,
+          },
+        }
+      );
+      expect(issues.map(issue => [issue.nodeId, issue.code])).toEqual([
+        ["missing", "binding-field-missing"],
+      ]);
+    });
+
+    it("judges nothing against an item in the empty state, which draws none", () => {
+      const issues = judged([
+        list({ collection: "posts" }, [], [itemHeading("empty", "headline")]),
+      ]);
+      expect(
+        issues.filter(issue => issue.code === "binding-field-missing")
+      ).toEqual([]);
+    });
+  });
 });

@@ -47,17 +47,13 @@ import {
   publishedPages,
   type PagesReader,
 } from "./address-claims/backfill";
-import {
-  committedClaims,
-  lockHolder,
-  releaseHolderLock,
-  type Tx,
-} from "./address-claims/claim-store";
+import { committedClaims, type Tx } from "./address-claims/claim-store";
 import {
   CONTENT_ADDRESS_SERVICE,
   contentAddressService,
   type ContentAddressService,
 } from "./address-claims/content-addresses";
+import { ENTRY_SLUG_FIELD } from "./address-claims/entry-claims";
 import {
   registerEntryAddressClaims,
   releaseUndeclared,
@@ -150,8 +146,10 @@ import type { PagesCollectionOptions } from "./collections/pages";
 import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import {
+  entryDesignKey,
   TEMPLATE_ENTRY_COLLECTION_FIELD,
-  TEMPLATE_FORKED_FROM_FIELD,
+  TEMPLATE_ENTRY_FIELD,
+  TEMPLATE_ENTRY_ID_FIELD,
   templatesCollection,
   TEMPLATES_SLUG,
 } from "./collections/templates";
@@ -199,7 +197,6 @@ import {
 } from "./default-layout/settings-single";
 import { readLayoutSettings } from "./default-layout/store";
 import { definitionActionsRoute } from "./definition-actions-route";
-import { asOverwrite } from "./document-version";
 import { entriesRoute, titleFieldIn } from "./entries-route";
 import type {
   CompositionSetup,
@@ -355,6 +352,7 @@ import {
   designUnderWhere,
   registerEntryDesignCascade,
 } from "./templates/entry-design-cascade";
+import { judgeTemplateInTransaction } from "./templates/entry-design-write";
 import { entryDesignsRoute } from "./templates/entry-designs-route";
 import {
   templateActionsRoute,
@@ -384,6 +382,7 @@ import {
   storedAddressProblem,
   TEMPLATE_ADDRESS_FIELD,
 } from "./templates/template-routing";
+import { unlinkCopies } from "./templates/unlink-copies";
 import { tokenUsageIndex } from "./token-usage";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
@@ -1832,6 +1831,8 @@ export const pageBuilder = (
       const { declaredFieldShapes } = await import("nextly/runtime");
       return declaredFieldShapes(ref);
     },
+    // And a list's item bindings, against the rows its named query declares.
+    namedQueries: namedQuerySource,
     // Documents read as the walk reads them, and the components they place as
     // visitors are served them.
     reading: () => {
@@ -1965,6 +1966,7 @@ export const pageBuilder = (
             collections: () => collectionRegistryRows(ctx),
             singles: () => singleRegistryRows(ctx),
             fieldGroups: () => fieldGroupRows(),
+            namedQueries: () => namedQueryDeclarations(),
             blocks: () => allBlocks(),
             designs: async () => {
               const saves = await latestSave([
@@ -2355,8 +2357,7 @@ export const pageBuilder = (
       // place and names the template already holding it. RESOLVED slugs, for
       // the reason the guard above takes them.
       const templates = ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG;
-      // The address store's collection, as the address claims and the lock an
-      // entry's own design is given and deleted under both reach it.
+      // The address store's collection, as the address claims reach it.
       const addressClaims = {
         services: ctx.services,
         slug: ctx.self.collections[ADDRESS_CLAIMS_SLUG] ?? ADDRESS_CLAIMS_SLUG,
@@ -2377,8 +2378,8 @@ export const pageBuilder = (
           }
         },
         holderOf: templateHolderReader(ctx.services.ownCollections, templates),
-        lockEntry: (tx, collection, id) =>
-          lockHolder(addressClaims, tx, { collection, id }),
+        holdEntry: (tx, collection, id) =>
+          ctx.services.collections.holdEntryInTransaction(tx, collection, id),
         // Read as the system and in any state: whether the entry exists is
         // the question, and who may see it is the action's to ask.
         entryExists: async (collection, id) => {
@@ -2409,95 +2410,57 @@ export const pageBuilder = (
       };
       registerTemplateGuard(ctx, templateGuard);
       // An entry's own design is deleted with its entry, in the delete's
-      // transaction.
-      // The id of the own design held under `key`, read on the transaction
-      // `tx` stands for, with the lock asked for.
-      const designIdUnder = async (
-        tx: PluginCollectionTransaction,
-        key: string,
-        lock: "share" | "update"
-      ): Promise<string | null> => {
-        const found =
-          await ctx.services.ownCollections.listEntriesInTransaction(
-            tx,
-            templates,
-            {
-              where: designUnderWhere(key),
-              pagination: { limit: 1 },
-              depth: 0,
-            },
-            { lock }
-          );
-        const id = (found.data[0] as { id?: unknown } | undefined)?.id;
-        return typeof id === "string" || typeof id === "number"
-          ? String(id)
-          : null;
-      };
+      // transaction, and a deleted template's copies lose their link to it.
       registerEntryDesignCascade(ctx.hooks, {
         templates,
         ownCollections: () => new Set(Object.values(ctx.self.collections)),
-        hasDesigns: async (tx, collection) => {
+        // On the delete's own transaction, for update: the design is deleted
+        // next, and no second pooled connection is taken while the delete
+        // holds one.
+        designUnder: async (tx, key) => {
           const found =
             await ctx.services.ownCollections.listEntriesInTransaction(
               tx,
               templates,
               {
-                where: {
-                  [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection },
-                },
+                where: designUnderWhere(key),
                 pagination: { limit: 1 },
                 depth: 0,
-              }
+              },
+              { lock: "update" }
             );
-          return found.data.length > 0;
+          const id = (found.data[0] as { id?: unknown } | undefined)?.id;
+          return typeof id === "string" || typeof id === "number"
+            ? String(id)
+            : null;
         },
-        designAt: (tx, key) => designIdUnder(tx, key, "share"),
-        lockEntry: (tx, entry) => lockHolder(addressClaims, tx, entry),
-        releaseEntryLock: (tx, entry) =>
-          releaseHolderLock(addressClaims, tx, entry),
-        // On the delete's own transaction, for update: the design is deleted
-        // next, and no second pooled connection is taken while the delete
-        // holds one.
-        designUnder: (tx, key) => designIdUnder(tx, key, "update"),
-        unlinkCopiesOf: async (tx, id) => {
-          // The first page again after each is emptied, so a copy made or
-          // removed meanwhile cannot shift one past a page number. A copy
-          // read twice (its link not emptied) ends the walk rather than
-          // looping on it.
-          const emptied = new Set<string>();
-          for (;;) {
-            const found =
-              await ctx.services.ownCollections.listEntriesInTransaction(
-                tx,
-                templates,
-                {
-                  where: { [TEMPLATE_FORKED_FROM_FIELD]: { equals: id } },
-                  pagination: { limit: 100 },
-                  depth: 0,
-                },
-                { lock: "update" }
-              );
-            const copies = (found.data as { id?: unknown }[])
-              .map(row => row.id)
-              .filter(
-                (copy): copy is string | number =>
-                  typeof copy === "string" || typeof copy === "number"
-              )
-              .map(String)
-              .filter(copy => !emptied.has(copy));
-            if (copies.length === 0) return;
-            for (const copy of copies) {
-              await ctx.services.collections.updateEntryInTransaction(
-                tx,
-                templates,
-                copy,
-                asOverwrite({ [TEMPLATE_FORKED_FROM_FIELD]: null })
-              );
-              emptied.add(copy);
-            }
-            if (found.data.length < 100) return;
-          }
-        },
+        unlinkCopiesOf: (tx, id) =>
+          unlinkCopies<PluginCollectionTransaction>(
+            {
+              listForUpdate: (transaction, options) =>
+                ctx.services.ownCollections.listEntriesInTransaction(
+                  transaction,
+                  templates,
+                  options,
+                  { lock: "update" }
+                ),
+              list: (transaction, options) =>
+                ctx.services.ownCollections.listEntriesInTransaction(
+                  transaction,
+                  templates,
+                  options
+                ),
+              update: (transaction, copy, data) =>
+                ctx.services.collections.updateEntryInTransaction(
+                  transaction,
+                  templates,
+                  copy,
+                  data
+                ),
+            },
+            tx,
+            id
+          ),
         deleteInTransaction: (tx, slug, id) =>
           ctx.services.collections.deleteEntryInTransaction(tx, slug, id),
       });
@@ -2512,6 +2475,23 @@ export const pageBuilder = (
               transaction,
               collection
             )
+        )
+      );
+      // After the collection is held: the row a template write commits is
+      // judged again on its transaction, a new own design holds its entry,
+      // and a write linking a row to the template it was copied from holds
+      // that template, so one written while either is deleted is refused or
+      // seen by the delete, whichever path wrote it: see `entry-design-write`.
+      ctx.hooks.onInTransaction(
+        templates,
+        judgeTemplateInTransaction<PluginCollectionTransaction>(
+          (transaction, collection, id) =>
+            ctx.services.collections.holdEntryInTransaction(
+              transaction,
+              collection,
+              id
+            ),
+          templates
         )
       );
       // A collection's template and its entries' own designs go with the
@@ -3036,6 +3016,95 @@ export const pageBuilder = (
             address: address === null ? null : addressSegments(address),
           };
         },
+        // Hook-free and as the system, as the template is read, and on the
+        // write's own transaction: the routing columns of the entry's own
+        // design alone.
+        ownDesignPublished: async (collection, id, tx) => {
+          const key = entryDesignKey(collection, id);
+          const found =
+            await ctx.services.ownCollections.listEntriesInTransaction(
+              tx,
+              templatesSlug,
+              {
+                where: { [TEMPLATE_ENTRY_FIELD]: { equals: key } },
+                pagination: { limit: 1 },
+                select: {
+                  id: true,
+                  [TEMPLATE_ENTRY_FIELD]: true,
+                  status: true,
+                },
+                depth: 0,
+              }
+            );
+          const row = found.data[0] as Record<string, unknown> | undefined;
+          // Compared again exactly: a database may compare text loosely.
+          return (
+            row?.[TEMPLATE_ENTRY_FIELD] === key && row.status === "published"
+          );
+        },
+        // On the write's own transaction, a page at a time, stopping on a
+        // short page: the total beside a page is an unlocked count.
+        publishedDesigns: async (collection, tx) => {
+          const ids = new Set<string>();
+          for (let page = 1; ; page += 1) {
+            const found =
+              await ctx.services.ownCollections.listEntriesInTransaction(
+                tx,
+                templatesSlug,
+                {
+                  // Published ones only, filtered by the database: a draft
+                  // design keeps no address, so reading and locking it would
+                  // only slow the write. Each row is still compared exactly.
+                  where: {
+                    [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection },
+                    status: { equals: "published" },
+                  },
+                  pagination: { limit: 500, page },
+                  // A unique order, so no design moves between pages.
+                  sort: { field: "id", direction: "asc" },
+                  select: {
+                    id: true,
+                    [TEMPLATE_ENTRY_FIELD]: true,
+                    [TEMPLATE_ENTRY_ID_FIELD]: true,
+                    status: true,
+                  },
+                  depth: 0,
+                }
+              );
+            for (const value of found.data) {
+              const row = value as Record<string, unknown>;
+              const id = row[TEMPLATE_ENTRY_ID_FIELD];
+              // The key its entry makes, compared exactly, so a design
+              // matched loosely by collection is never counted.
+              if (
+                typeof id === "string" &&
+                row[TEMPLATE_ENTRY_FIELD] === entryDesignKey(collection, id) &&
+                row.status === "published"
+              ) {
+                ids.add(id);
+              }
+            }
+            if (found.data.length < 500) return ids;
+          }
+        },
+        // The host's collection, read as the system, as a template's walk
+        // reads it, but on the write's own transaction: a write holding the
+        // pool's last connection never waits for a second one. One read
+        // for every id asked, the columns an entry's address is judged by
+        // alone; whether each is published is the hook's to judge.
+        entriesWithIds: async (collection, ids, tx) => {
+          const found = await ctx.services.collections.listEntriesInTransaction(
+            tx,
+            collection,
+            {
+              where: { id: { in: [...ids] } },
+              pagination: { limit: ids.length },
+              select: { id: true, [ENTRY_SLUG_FIELD]: true, status: true },
+              depth: 0,
+            }
+          );
+          return found.data as readonly Readonly<Record<string, unknown>>[];
+        },
         storedAddresses: async () =>
           new Map(
             [...(await readStoredAddresses()).entries()].map(
@@ -3048,15 +3117,16 @@ export const pageBuilder = (
           Object.values(ctx.self.collections).includes(collection),
         // The template guard's own judgement of which collections may have
         // one; a localized collection is refused an address.
-        mayHaveTemplate: async collection => {
+        // Given a write's transaction, the registry is read on it.
+        mayHaveTemplate: async (collection, tx) => {
           const problem = await templateCollectionProblem(
             collection,
-            collectionRecord,
+            slug => collectionRecord(slug, tx),
             new Set(Object.values(ctx.self.collections))
           );
           return (
             problem === null &&
-            (await collectionRecord(collection))?.localized !== true
+            (await collectionRecord(collection, tx))?.localized !== true
           );
         },
         storedAddressProblem: (address, collection) =>
@@ -4139,7 +4209,10 @@ export const pageBuilder = (
           {
             label: "Bindings to fix",
             to: BINDINGS_TO_FIX_PAGE_HREF,
-            icon: "AlertTriangle",
+            // Neutral: the entry is there whether or not anything needs
+            // fixing; the warning sign is for the dashboard line and the
+            // editor's chip, which show only when something does.
+            icon: "Unlink",
             requiredPermission: EDIT_PAGES_PERMISSION,
           },
         ],

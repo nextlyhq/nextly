@@ -16,6 +16,15 @@
  * The plugin's own collections are skipped: none of them is drawn with a
  * template, and deleting one is not this module's to answer for.
  *
+ * The entries' own designs are removed before the collection's template.
+ * Deleting a template empties the link of every design copied from it
+ * (`entry-design-cascade`), and each emptied link is an update, with its
+ * hooks, history and events. Removed first, the collection's own designs are
+ * gone by the time its template is deleted, so none is updated only to be
+ * deleted a moment later, and no update hook can refuse the collection's
+ * delete over a row it removes. A design of another collection that names
+ * the template still has its link emptied.
+ *
  * A template written while its collection is being deleted is the other
  * half ({@link holdTemplateCollection}): the write holds the collection's
  * registry row for share in its own transaction, which the delete holds for
@@ -118,11 +127,51 @@ export function holdTemplateCollection<Tx>(
 /** The templates rows that name `collection`: its template and own designs. */
 function namingCollection(collection: string): Record<string, unknown> {
   return {
-    or: [
-      { [TEMPLATE_COLLECTION_FIELD]: { equals: collection } },
-      { [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection } },
-    ],
+    or: [templateOf(collection), designsOf(collection)],
   };
+}
+
+/** The own designs of `collection`'s entries. */
+function designsOf(collection: string): Record<string, unknown> {
+  return { [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection } };
+}
+
+/** `collection`'s template. */
+function templateOf(collection: string): Record<string, unknown> {
+  return { [TEMPLATE_COLLECTION_FIELD]: { equals: collection } };
+}
+
+/**
+ * Delete every templates row matching `where` on the delete's transaction.
+ *
+ * The first page again after each is deleted: what was deleted is gone from
+ * the transaction's own reads, so the next rows move up to it. Locked for
+ * update, so a template saved meanwhile elsewhere waits for the delete
+ * instead of surviving it.
+ */
+async function deleteEvery<Tx>(
+  services: TemplateDeleteServices<Tx>,
+  transaction: Tx,
+  where: Record<string, unknown>
+): Promise<void> {
+  for (;;) {
+    const found = await services.listTemplatesInTransaction(transaction, {
+      where,
+      pagination: { limit: PAGE },
+      depth: 0,
+    });
+    let deleted = 0;
+    for (const row of found.data) {
+      const id = stringOf(row, "id");
+      if (id !== undefined) {
+        await services.deleteTemplateInTransaction(transaction, id);
+        deleted += 1;
+      }
+    }
+    // A short page was the last; a page with nothing to delete would be
+    // read again unchanged.
+    if (found.data.length < PAGE || deleted === 0) return;
+  }
 }
 
 /** A row's string field, or undefined. */
@@ -192,28 +241,10 @@ export function templateCollectionDelete<Tx>(args: {
     },
     inTransaction: async ({ slug, transaction }) => {
       if (own().has(slug)) return;
-      // The first page again after each is deleted: what was deleted is gone
-      // from the transaction's own reads, so the next rows move up to it.
-      // Locked for update, so a template saved meanwhile elsewhere waits for
-      // the delete instead of surviving it.
-      for (;;) {
-        const found = await services.listTemplatesInTransaction(transaction, {
-          where: namingCollection(slug),
-          pagination: { limit: PAGE },
-          depth: 0,
-        });
-        let deleted = 0;
-        for (const row of found.data) {
-          const id = stringOf(row, "id");
-          if (id !== undefined) {
-            await services.deleteTemplateInTransaction(transaction, id);
-            deleted += 1;
-          }
-        }
-        // A short page was the last; a page with nothing to delete would be
-        // read again unchanged.
-        if (found.data.length < PAGE || deleted === 0) return;
-      }
+      // The own designs first, so deleting the template finds none of them
+      // left to empty the link of: see the module's note.
+      await deleteEvery(services, transaction, designsOf(slug));
+      await deleteEvery(services, transaction, templateOf(slug));
     },
   };
 }

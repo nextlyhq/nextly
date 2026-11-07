@@ -41,4 +41,26 @@ describe("the schema fingerprint", () => {
       await schemaFingerprint(sources("g1"))
     );
   });
+
+  it("moves when a named query's declared rows change", async () => {
+    const rows = (fields: string[]) =>
+      sources("g1", {
+        namedQueries: () => [
+          {
+            name: "deals",
+            rows: {
+              key: "id",
+              fields: fields.map(name => ({ name, type: "text" })),
+            },
+          },
+        ],
+      });
+    expect(await schemaFingerprint(rows(["id", "title"]))).not.toBe(
+      await schemaFingerprint(rows(["id"]))
+    );
+    // The control: the same rows give the same fingerprint.
+    expect(await schemaFingerprint(rows(["id"]))).toBe(
+      await schemaFingerprint(rows(["id"]))
+    );
+  });
 });

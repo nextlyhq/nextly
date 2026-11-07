@@ -53,6 +53,7 @@ import {
   type ListOutcome,
 } from "./list-read";
 import { readNamedList } from "./named-read";
+import { readClaimOf } from "./props";
 
 export interface CollectionLoopProps {
   /** The collection queried, or the collection a related source's entries are in. */
@@ -443,7 +444,7 @@ export async function renderCollectionLoop({
   // Past the allowance the list draws what visitors see when nothing
   // matches, its designed empty state, as a list whose data is missing does,
   // with no item: not the item of a list around this one.
-  const claim = { kind: "entries", nodeId: node.id } as const;
+  const claim = { ...readClaimOf(node), kind: "entries" } as const;
   if (paging?.claimed !== true && ctx.queries?.take(claim) === false) {
     return (
       <div

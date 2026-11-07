@@ -620,6 +620,28 @@ export type PluginCollectionService = Pick<
     collectionName: string
   ): Promise<boolean>;
   /**
+   * @experimental Hold an entry for the rest of the transaction `tx` stands
+   * for, and answer whether it exists: its row, locked for share. A delete of
+   * the entry locks the row for update before it removes it, and runs its
+   * in-transaction handlers (`ctx.hooks.onInTransaction`) after, so a write
+   * that must not outlive the entry it names either commits before the
+   * delete goes on, and those handlers see it, or waits for the delete and is
+   * told the entry is gone. It holds the entry's collection first, as
+   * `holdCollectionInTransaction` does, so a delete of the whole collection,
+   * which locks its registry row rather than the entries' rows before its
+   * `ctx.hooks.onCollectionDelete` handlers run, takes turns with the write
+   * too: the write commits first and those handlers see it, or waits and is
+   * told the entry is gone. Asks nothing of the caller's access, and reads
+   * nothing but whether the collection and the row are there. On SQLite, with
+   * one writer at a time, the rows are only read. A collection that does not
+   * exist holds no entry. A settled token is refused.
+   */
+  holdEntryInTransaction(
+    tx: PluginCollectionTransaction,
+    collectionName: string,
+    entryId: string
+  ): Promise<boolean>;
+  /**
    * @experimental Collection `collectionName`'s record, as `getCollection`
    * answers it, read on the transaction `tx` stands for: what the
    * transaction sees, its own uncommitted changes included. `getCollection`
@@ -636,6 +658,28 @@ export type PluginCollectionService = Pick<
     tx: PluginCollectionTransaction,
     collectionName: string
   ): Promise<Collection>;
+  /**
+   * @experimental `listEntries`, read on the transaction `tx` stands for:
+   * the same options and `ServiceOpts`, the same access check, the same
+   * read hooks and the same answer, with every read it makes on the
+   * transaction's connection, the caller's roles under `as: "user"`
+   * included. `listEntries` takes a pooled connection, which inside a
+   * transaction on a pool of one waits for the connection the transaction
+   * holds; this reads on that connection, and so sees what the transaction
+   * wrote. Like any read the services route to a transaction, the page's
+   * rows are read with a shared lock on PostgreSQL and MySQL, held until
+   * the transaction ends. It grants nothing `listEntries` does not: it is
+   * that read, on the caller's transaction. A settled token is refused
+   * before anything is read.
+   */
+  listEntriesInTransaction(
+    tx: PluginCollectionTransaction,
+    // Exactly what the facade's `listEntries` takes, derived from it, so
+    // the two cannot drift.
+    ...read: Parameters<
+      ReplaceTrailingContext<CollectionService["listEntries"]>
+    >
+  ): ReturnType<CollectionService["listEntries"]>;
 };
 
 /**
@@ -788,6 +832,19 @@ export function wrapCollectionsForPlugin(
         "read"
       );
     },
+    // The same, for one entry's row.
+    holdEntryInTransaction: async (
+      token: unknown,
+      collectionName: string,
+      entryId: string
+    ): Promise<boolean> => {
+      const { tx, scope } = transactionOf(token);
+      scope.assertOpen();
+      return scope.track(
+        collections.holdEntryInTransaction(tx, collectionName, entryId),
+        "read"
+      );
+    },
     // The facade's own `getCollection`, so both answer alike, with every
     // read the services make inside it routed to the transaction's
     // connection (`runReadsInTransaction`). Its context is unused there, as
@@ -805,16 +862,41 @@ export function wrapCollectionsForPlugin(
         "read"
       );
     },
+    // The facade's own `listEntries`, translated by the same code, so both
+    // answer alike, with every read the services make inside it routed to
+    // the transaction's connection, and the caller's roles read there too,
+    // as a transactional write's are.
+    listEntriesInTransaction: async (
+      token: unknown,
+      ...read: unknown[]
+    ): Promise<unknown> => {
+      const { tx, scope } = transactionOf(token);
+      scope.assertOpen();
+      const onTransaction = translateServiceOpts(collections, deps, tx);
+      return scope.track(
+        runReadsInTransaction(tx, () =>
+          (
+            onTransaction.listEntries as unknown as (
+              ...args: unknown[]
+            ) => Promise<unknown>
+          )(...read)
+        ),
+        "read"
+      );
+    },
   }) as unknown as PluginCollectionService;
 }
 
 /**
  * The collection service with its access methods accepting a trailing
  * `ServiceOpts`, and its writes resolving to the mutation envelope.
+ * `readsOn` is the transaction a read made through it runs on, when it runs
+ * on one: the caller's roles are read there, as a transactional write's are.
  */
 function translateServiceOpts(
   collections: CollectionService,
-  deps: ServiceOptsDeps
+  deps: ServiceOptsDeps,
+  readsOn?: TransactionContext
 ): CollectionService {
   return new Proxy(collections, {
     get(target, prop, receiver) {
@@ -839,7 +921,7 @@ function translateServiceOpts(
           deps,
           IN_TRANSACTION.has(prop as string)
             ? (args[0] as TransactionContext).getDrizzle()
-            : undefined
+            : readsOn?.getDrizzle()
         );
         // Nothing past the context travels. The context is the last argument
         // a plugin may name; a parameter the service accepts after it (the
