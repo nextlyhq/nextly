@@ -125,13 +125,16 @@ test.describe("Entry content on a template", () => {
     await expect(frame.getByText(`${newer} body`)).toBeVisible({
       timeout: 30_000,
     });
-    // Clicking inside selects the block itself, never the article's blocks:
-    // the pointer passes through them to the block, so the press is made
-    // where the words are, whatever receives it.
+    // Clicking inside selects the block itself, never the article's blocks.
+    // Another block is selected first, so a click that selected nothing new
+    // would leave the heading's card in the inspector.
+    const card = page.locator(".nx-block-card__title");
+    await canvasBlock(page, HEADING).click();
+    await expect(card).not.toHaveText("Entry content");
+    // The pointer passes through the article's blocks to the block, so the
+    // press is made where the words are, whatever receives it.
     await frame.getByText(`${newer} body`).click({ force: true });
-    await expect(
-      page.locator(".nx-block-card__title").filter({ hasText: "Entry content" })
-    ).toBeVisible();
+    await expect(card).toHaveText("Entry content");
 
     // 2. Field offers both of the articles' blocks fields, Body chosen.
     const field = page.getByRole("combobox", { name: "Field" });
