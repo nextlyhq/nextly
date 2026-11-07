@@ -28,3 +28,17 @@ export const REMOVE_LAYOUT_ACTION_COMPONENT =
  */
 export const COMPONENT_LIST_TOOLS_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#ComponentListTools";
+
+/**
+ * The same delete tools alone, above a host's own component store's list,
+ * where Import from file has nothing to bring in.
+ */
+export const COMPONENT_DELETE_LIST_TOOLS_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#ComponentDeleteListTools";
+
+/**
+ * What the component store's own Delete opens in the document screen's menu:
+ * the Delete component dialog, in the built-in Delete's place.
+ */
+export const DELETE_COMPONENT_REPLACEMENT_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#DeleteComponentReplacement";

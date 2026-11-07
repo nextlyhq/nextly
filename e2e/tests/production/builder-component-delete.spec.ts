@@ -13,9 +13,9 @@ import { test } from "../support/visible";
 
 /**
  * Delete component, against a PRODUCTION build: the one way a component is
- * deleted. The admin offers no Delete of its own for components; "Delete
- * component…" in the document bar and on each list row opens the dialog,
- * which turns every copy into plain blocks and then deletes the component.
+ * deleted. The document's own Delete, in its "…" menu, is "Delete
+ * component…", and so is each list row's action; both open the dialog, which
+ * turns every copy into plain blocks and then deletes the component.
  *
  * Covered here: the dialog's offer for a used component (focus on Cancel, the
  * documents named, WCAG AA in both schemes), the whole delete to its end with
@@ -151,7 +151,8 @@ async function openDelete(
   scheme: "light" | "dark" = "light"
 ): Promise<Locator> {
   await gotoAdmin(page, `/collections/components/${id}`, scheme);
-  await page.getByRole("button", { name: "Delete component…" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete component…" }).click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible();
   await checked(dialog);
@@ -181,7 +182,7 @@ function nodeTypes(nodes: unknown): string[] {
 }
 
 test.describe("Delete component", () => {
-  test("is offered in the document bar instead of the editor's own Delete, lists the documents that use it, and starts on Cancel", async ({
+  test("is the editor's own Delete, lists the documents that use it, and starts on Cancel", async ({
     page,
   }) => {
     const api = await signIn(page);
@@ -189,15 +190,13 @@ test.describe("Delete component", () => {
     const placing = await pagePlacing(api, used.id);
 
     await gotoAdmin(page, `/collections/components/${used.id}`);
-    // The editor's own Delete is not offered: a component's own delete is
-    // refused unless it is Delete component's last step.
+    // The editor's own Delete is Delete component: a component's own
+    // delete is refused unless it is Delete component's last step.
     await page.getByRole("button", { name: "More actions" }).click();
-    await expect(page.getByRole("menuitem", { name: /^Delete/ })).toHaveCount(
-      0
-    );
-    await page.keyboard.press("Escape");
-
-    await page.getByRole("button", { name: "Delete component…" }).click();
+    await expect(
+      page.getByRole("menuitem", { name: "Delete", exact: true })
+    ).toHaveCount(0);
+    await page.getByRole("menuitem", { name: "Delete component…" }).click();
     const dialog = page.getByRole("alertdialog", { name: "Delete component" });
     await checked(dialog);
     await expect(dialog).toContainText("is used in 1 document");
@@ -254,7 +253,7 @@ test.describe("Delete component", () => {
     await expect(
       page.getByRole("alertdialog", { name: "Component deleted" })
     ).toBeVisible({ timeout: 180_000 });
-    await page.getByRole("button", { name: "Back to Components" }).click();
+    await page.getByRole("button", { name: "Back to the list" }).click();
     await expect(page).toHaveURL(/\/admin\/collections\/components$/);
 
     const gone = await api.get(`${COMPONENTS}/${used.id}`);

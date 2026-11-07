@@ -23,14 +23,43 @@ import {
   screen,
 } from "@admin/__tests__/utils";
 
-const { useDocumentLock, update, create, canFor } = vi.hoisted(() => ({
-  useDocumentLock: vi.fn(),
-  update: vi.fn(),
-  create: vi.fn(),
-  canFor: vi.fn((_slug: string) => false),
-}));
+const { useDocumentLock, update, create, canFor, replacedDelete } = vi.hoisted(
+  () => ({
+    useDocumentLock: vi.fn(),
+    update: vi.fn(),
+    create: vi.fn(),
+    canFor: vi.fn((_slug: string) => false),
+    // Set by a case standing for a plugin that replaces this collection's
+    // Delete; otherwise the editor's own plugin surfaces stand.
+    replacedDelete: { on: false },
+  })
+);
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
+vi.mock("../usePluginDocumentSurfaces", async importOriginal => {
+  const real =
+    await importOriginal<typeof import("../usePluginDocumentSurfaces")>();
+  return {
+    ...real,
+    usePluginDocumentSurfaces: (
+      args: Parameters<typeof real.usePluginDocumentSurfaces>[0]
+    ) => {
+      const surfaces = real.usePluginDocumentSurfaces(args);
+      if (!replacedDelete.on) return surfaces;
+      return {
+        ...surfaces,
+        actionOverrides: {
+          ...surfaces.actionOverrides,
+          delete: {
+            kind: "replaced" as const,
+            label: "Delete component…",
+            open: () => Promise.resolve({ ok: true as const }),
+          },
+        },
+      };
+    },
+  };
+});
 // A save is observed where it leaves the editor: the mutations.
 vi.mock("@admin/hooks/queries/useUpdateEntry", () => ({
   useUpdateEntry: () => ({ mutateAsync: update, isPending: false }),
@@ -109,6 +138,7 @@ async function menuActions(): Promise<string[]> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  replacedDelete.on = false;
   holding();
   useDocumentLock.mockReturnValue({
     state: { status: "held-by-me" },
@@ -155,6 +185,22 @@ describe("the editor's Delete", () => {
     });
 
     expect(await menuActions()).not.toContain("delete");
+  });
+
+  it("is offered as a plugin's replacement on a collection deleted through it", async () => {
+    // The plugin's action keeps the Delete row, so the row is offered there,
+    // with the delete permission, as the plugin's.
+    holding("read-categories", "update-categories", "delete-categories");
+    replacedDelete.on = true;
+    const ownDelete = {
+      ...(categories as object),
+      admin: { disableDelete: true },
+    } as never;
+    render(<EntryForm collection={ownDelete} entry={entry} mode="edit" />, {
+      wrapper: Providers,
+    });
+
+    expect(await menuActions()).toContain("delete");
   });
 });
 

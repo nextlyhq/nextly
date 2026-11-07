@@ -16,6 +16,7 @@ import {
   type HookContext,
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
+  type PluginCollectionView,
   type PluginDefinition,
   type PluginRouteContext,
   type PluginVersionPinHolder,
@@ -53,6 +54,8 @@ import {
 import {
   BUILDER_VIEW_COMPONENT,
   BUILDER_VIEW_PATH,
+  COMPONENT_DELETE_LIST_TOOLS_COMPONENT,
+  DELETE_COMPONENT_REPLACEMENT_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
 } from "./builder-view";
 import { canvasBindingsRoute } from "./canvas-bindings-route";
@@ -387,6 +390,40 @@ function componentStoreOf(opts: PageBuilderOptions): ComponentStore {
       : { collection: readiness.collection }),
     field: readiness.field ?? COMPONENT_DOCUMENT_FIELD,
   };
+}
+
+/**
+ * Whether the plugin's own Components collection is the component store: no
+ * host store is named, or the one named is it.
+ */
+function storeIsOwn(store: ComponentStore): boolean {
+  return store.collection === undefined || store.collection === COMPONENTS_SLUG;
+}
+
+/**
+ * The admin views that route a component's delete through Delete component,
+ * on the store's collection and no other: the plugin's own when no host store
+ * is named, else the host's.
+ */
+function deleteComponentViews(
+  store: ComponentStore
+): Record<string, PluginCollectionView> {
+  const replaced = {
+    documentActions: {
+      delete: {
+        component: DELETE_COMPONENT_REPLACEMENT_COMPONENT,
+        label: "Delete component…",
+      },
+    },
+  };
+  return store.collection === undefined || storeIsOwn(store)
+    ? { [COMPONENTS_SLUG]: replaced }
+    : {
+        [store.collection]: {
+          ...replaced,
+          beforeList: COMPONENT_DELETE_LIST_TOOLS_COMPONENT,
+        },
+      };
 }
 
 /**
@@ -2328,7 +2365,10 @@ export const pageBuilder = (
           )
         ),
         patternsCollection(),
-        componentsCollection(),
+        // The plugin's own collection is the store unless the host names one.
+        componentsCollection({
+          isStore: storeIsOwn(componentStoreOf(opts)),
+        }),
         layoutsCollection(),
         classUsageIndexCollection(),
         componentUsageIndexCollection(),
@@ -2751,6 +2791,15 @@ export const pageBuilder = (
         // delete and unpublish are refused. The slot is offered to every entry
         // form; the component draws only on a saved Layout's own.
         entryFormToolbarSlot: REMOVE_LAYOUT_ACTION_COMPONENT,
+        // Delete component on the component store, wherever it is: the
+        // plugin's own collection (followed through a rename, as every view
+        // key is), or the host's store named by `componentReadiness`. The
+        // document's own Delete opens the Delete component dialog in its
+        // place, keeping its row, its permission and every reason it can't
+        // run (a past version on screen, a colleague's claim). A host's store
+        // also gets the delete tools above its list, for the row action; the
+        // plugin's own collection declares them itself.
+        views: deleteComponentViews(componentStoreOf(opts)),
         menu: [
           {
             label: "Patterns",

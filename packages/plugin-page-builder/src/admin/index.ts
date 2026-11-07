@@ -32,7 +32,9 @@ import {
 
 import {
   BUILDER_VIEW_COMPONENT,
+  COMPONENT_DELETE_LIST_TOOLS_COMPONENT,
   COMPONENT_LIST_TOOLS_COMPONENT,
+  DELETE_COMPONENT_REPLACEMENT_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
 } from "../builder-view";
 import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
@@ -54,7 +56,11 @@ import "../styles/editor.css";
 
 import { BlocksField } from "./BlocksField";
 import { BlocksSummary } from "./BlocksSummary";
-import { ComponentListTools } from "./DeleteComponentAction";
+import {
+  ComponentDeleteListTools,
+  ComponentListTools,
+  DeleteComponentReplacement,
+} from "./DeleteComponentAction";
 import { PageBuilderView } from "./editor/PageBuilderView";
 import { RemoveLayoutToolbarSlot } from "./RemoveLayoutAction";
 import { registerExportActions } from "./transfer-export-action";
@@ -88,20 +94,22 @@ const COMPONENTS = {
   // The editor itself, drawn by the admin as a view of the document at the
   // address the blocks field's card links to.
   [BUILDER_VIEW_COMPONENT]: PageBuilderView,
-  // "Remove Layout…" in a Layout's document bar, and "Delete component…" in
-  // a component's.
+  // "Remove Layout…" in a Layout's document bar.
   [REMOVE_LAYOUT_ACTION_COMPONENT]: RemoveLayoutToolbarSlot,
   // Above the Components list: Import from file, and the row action's
-  // Delete component dialog.
+  // Delete component dialog; above a host's component store, the dialog.
   [COMPONENT_LIST_TOOLS_COMPONENT]: ComponentListTools,
+  [COMPONENT_DELETE_LIST_TOOLS_COMPONENT]: ComponentDeleteListTools,
+  // The component store's own Delete, opening Delete component instead.
+  [DELETE_COMPONENT_REPLACEMENT_COMPONENT]: DeleteComponentReplacement,
 };
 
 // Eager registration on module load.
 registerComponents(COMPONENTS);
 // "Export" on the Components, Patterns and Layouts lists.
 registerExportActions();
-// "Delete component…" on the Components list is registered by the list's
-// own tools (`ComponentListTools`), under the slug the site resolved.
+// "Delete component…" on the component store's list is registered by the
+// list's own tools, under the slug the site resolved.
 
 // Lazy fallback: the host can trigger registration on demand by package prefix.
 registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
@@ -113,7 +121,9 @@ registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
 export {
   BlocksField,
   BlocksSummary,
+  ComponentDeleteListTools,
   ComponentListTools,
+  DeleteComponentReplacement,
   PageBuilderView,
   RemoveLayoutToolbarSlot,
   TransferImport,

@@ -108,6 +108,13 @@ export interface DeleteComponentDialogProps {
   readonly onDeleted: () => void;
   /** What the button that leaves a deleted component says. */
   readonly leaveLabel: string;
+  /**
+   * Whether the document may be written at this instant, asked just before
+   * the delete starts: in the document's menu, a colleague can take the
+   * document, or a past version be put on screen, while the dialog is open.
+   * Absent, nothing holds it (the list).
+   */
+  readonly mayStart?: () => boolean;
 }
 
 /** Where the dialog is. */
@@ -833,6 +840,7 @@ export function DeleteComponentDialog({
   onClose,
   onDeleted,
   leaveLabel,
+  mayStart,
 }: DeleteComponentDialogProps): JSX.Element {
   const [view, setView] = useState<View>({ kind: "checking" });
   // Each opening and each action, numbered: an answer that arrives for an
@@ -886,6 +894,16 @@ export function DeleteComponentDialog({
   const runDelete = useCallback(async (): Promise<void> => {
     turn.current += 1;
     const mine = turn.current;
+    if (mayStart !== undefined && !mayStart()) {
+      setView({
+        kind: "failed",
+        message:
+          "This document's changes are on hold, so the delete didn't start. Close this and try again once it is yours to change.",
+        retry: "delete",
+        converted: 0,
+      });
+      return;
+    }
     setView({ kind: "deleting", result: null });
     let last: ComponentDeleteResult | null = null;
     for (;;) {
@@ -924,7 +942,7 @@ export function DeleteComponentDialog({
       }
       return;
     }
-  }, [componentId]);
+  }, [componentId, mayStart]);
 
   // Each opening checks afresh; closing stops whatever loop is running.
   useEffect(() => {

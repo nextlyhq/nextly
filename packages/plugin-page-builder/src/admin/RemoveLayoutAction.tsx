@@ -63,7 +63,6 @@ import type {
 import { DEFAULT_LAYOUT_REFUSAL, PAGES_USE_IT } from "../layout-removal/words";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
-import { DeleteComponentAction } from "./DeleteComponentAction";
 import { MovePagesDialog } from "./RemoveLayoutMove";
 
 /** Which Layout the action removes, and how it stands. */
@@ -116,23 +115,17 @@ function reasonOf(error: unknown, fallback: string): string {
 }
 
 /**
- * Why the editor holds this document's writes, or `undefined` when an action
- * that writes it may run. Read from the editor's own actions named in `ids`:
- * a past version on screen, a colleague's claim or a read-only form gives
- * each a reason, and where every write is refused the editor offers none of
- * them. One of them able to run is enough.
- *
- * Remove Layout reads Delete and Unpublish, the two it offers in their
- * place. Delete component reads Publish and Unpublish: a component's own
- * Delete is never offered (`admin.disableDelete`), and one of the two always
- * is to an author who may change its publication, whichever way it stands.
+ * Why the editor holds this document's writes, or `undefined` when Remove
+ * Layout may run. Read from the editor's own Delete and Unpublish: a past
+ * version on screen, a colleague's claim or a read-only form gives both a
+ * reason, and where every write is refused the editor offers neither. One of
+ * the two able to run is enough, since the dialog offers whichever applies.
  */
 function heldReason(
-  actions: Pick<DocumentActions, "actions"> | null,
-  ids: readonly string[]
+  actions: Pick<DocumentActions, "actions"> | null
 ): string | undefined {
-  const removals = (actions?.actions ?? []).filter(action =>
-    ids.includes(action.id)
+  const removals = (actions?.actions ?? []).filter(
+    action => action.id === "delete" || action.id === "unpublish"
   );
   if (removals.length === 0) return "This document's changes are on hold.";
   if (removals.some(action => action.disabledReason === undefined)) {
@@ -142,13 +135,10 @@ function heldReason(
 }
 
 /**
- * The plugin's entry-form toolbar slot: Remove Layout on a saved Layout's own
- * form, Delete component on a saved component's, nothing on any other. A
- * plugin has one such slot, so this one draws both; its name is the
- * specifier the plugin registers, kept as published. Each collection is
- * matched by the slug the site resolved, renamed or not. What the slot is
- * handed (`context`, a controller field) is not needed; the form says which
- * document it is.
+ * The entry-form toolbar slot: Remove Layout on a saved Layout's own form,
+ * nothing on any other. The Layouts collection is matched by the slug the site
+ * resolved, renamed or not. What the slot is handed (`context`, a controller
+ * field) is not needed; the form says which document it is.
  */
 export function RemoveLayoutToolbarSlot(_props: {
   readonly context?: "collection" | "single";
@@ -163,26 +153,6 @@ export function RemoveLayoutToolbarSlot(_props: {
     enabled: collection,
   });
   const layouts = resolved.data?.layoutsCollection;
-  const components = resolved.data?.componentsCollection;
-  if (
-    collection &&
-    components !== undefined &&
-    identity.slug === components &&
-    identity.documentId !== undefined &&
-    identity.documentId !== "" &&
-    identity.documentId !== "create"
-  ) {
-    // Held as the form's own writes are: a past version on screen, or a
-    // colleague's claim on the document, holds Delete component too, with
-    // the same words.
-    return (
-      <DeleteComponentAction
-        componentId={identity.documentId}
-        onDeleted={() => navigateTo(`/admin/collections/${components}`)}
-        heldBecause={heldReason(actions, ["publish", "unpublish"])}
-      />
-    );
-  }
   if (
     !collection ||
     layouts === undefined ||
@@ -196,7 +166,7 @@ export function RemoveLayoutToolbarSlot(_props: {
       collectionSlug={identity.slug}
       entryId={identity.documentId}
       published={status?.status === "published"}
-      heldBecause={heldReason(actions, ["delete", "unpublish"])}
+      heldBecause={heldReason(actions)}
     />
   );
 }

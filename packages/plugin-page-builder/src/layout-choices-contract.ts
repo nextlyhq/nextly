@@ -83,11 +83,6 @@ export interface PageCollectionResponse {
    * form (Remove Layout) can tell a Layout's form, renamed or not.
    */
   readonly layoutsCollection: string;
-  /**
-   * The components collection's RESOLVED slug, so the same surface can tell
-   * a component's form and offer Delete component there.
-   */
-  readonly componentsCollection: string;
 }
 
 /**

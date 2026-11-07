@@ -130,7 +130,7 @@ const handlers = { onClose: vi.fn(), onDeleted: vi.fn() };
  * Whether `text` is on screen. The dialog's live region says some states in
  * the same words as the visible sentence, so more than one match is right.
  */
-async function shown(text: string): Promise<void> {
+async function shown(text: string | RegExp): Promise<void> {
   expect((await screen.findAllByText(text)).length).toBeGreaterThan(0);
 }
 
@@ -184,7 +184,7 @@ describe("the dry run", () => {
 
   it("lists the documents that use it, counting the ones the author can't view, and offers to turn each copy into plain blocks", async () => {
     show();
-    expect(await screen.findByText(/is used in 3 documents/)).toBeTruthy();
+    await shown(/is used in 3 documents/);
     const home = screen.getByRole("link", { name: /^Home / });
     expect(home.getAttribute("href")).toBe("/admin/collections/pages/p1");
     expect(
@@ -225,7 +225,7 @@ describe("the dry run", () => {
         })
       );
     show();
-    expect(await screen.findByText(/is used in 2 documents\./)).toBeTruthy();
+    await shown(/is used in 2 documents\./);
     expect(screen.getByRole("link", { name: /^Home / })).toBeTruthy();
     expect(screen.getByRole("link", { name: /^Pricing / })).toBeTruthy();
   });
@@ -239,7 +239,7 @@ describe("the dry run", () => {
         })
       );
     show();
-    expect(await screen.findByText(/Nothing uses/)).toBeTruthy();
+    await shown(/Nothing uses/);
     expect(
       screen.getByRole("button", { name: "Delete component" })
     ).toBeTruthy();
@@ -264,14 +264,14 @@ describe("the dry run", () => {
       return envelope(result({ status: "none", plan: planOf() }));
     };
     show();
-    expect(await screen.findByText(/Still checking where/)).toBeTruthy();
+    await shown(/Still checking where/);
     expect(screen.getByText("Checking… none found so far")).toBeTruthy();
     expect(screen.queryByText(/Nothing uses/)).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Delete component" })
     ).toBeNull();
     release();
-    expect(await screen.findByText(/Nothing uses/)).toBeTruthy();
+    await shown(/Nothing uses/);
     expect(calls).toEqual([
       { dryRun: true },
       { dryRun: true, after: "slice-2" },
@@ -313,7 +313,7 @@ describe("the dry run", () => {
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: /then delete/ })).toBeNull();
     release();
-    expect(await screen.findByText(/is used in 2 documents\./)).toBeTruthy();
+    await shown(/is used in 2 documents\./);
     expect(screen.getByRole("link", { name: /^Home / })).toBeTruthy();
     expect(screen.getByRole("link", { name: /^Pricing / })).toBeTruthy();
     expect(screen.queryByText(/Nothing uses/)).toBeNull();
@@ -400,9 +400,7 @@ describe("the dry run", () => {
   it("tells an author without the right to delete so, beside the usage, and offers only Close", async () => {
     answer = () => envelope({ ...USED, mayDelete: false });
     show();
-    expect(
-      await screen.findByText(/You don't have permission to delete/)
-    ).toBeTruthy();
+    await shown(/You don't have permission to delete/);
     expect(screen.getByRole("link", { name: /^Home / })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /then delete/ })).toBeNull();

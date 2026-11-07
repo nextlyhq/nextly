@@ -582,8 +582,6 @@ export function readPageCollection(
   return {
     pagesCollection: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
     layoutsCollection: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
-    componentsCollection:
-      ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG,
   };
 }
 
