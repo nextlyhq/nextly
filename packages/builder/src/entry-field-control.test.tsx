@@ -6,6 +6,9 @@
  * stays chosen and reads "(removed)", and Open post opens the previewed
  * entry's edit screen in a new tab.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import {
   cleanup,
   fireEvent,
@@ -47,6 +50,12 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
+
+/** The builder's sheet, which jsdom does not apply. */
+const CHROME = readFileSync(
+  fileURLToPath(new URL("./styles/builder-chrome.css", import.meta.url)),
+  "utf8"
+);
 
 const POSTS: PreviewedCollection = {
   slug: "posts",
@@ -136,6 +145,34 @@ describe("Entry content's Field", () => {
     const { trigger } = draw("summary");
     expect(trigger.textContent).toContain("Words for summary (removed)");
     expect(trigger.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("names the whole of a long choice in the trigger's title, as it is cut to one line", () => {
+    // "membersOnly" the collection no longer has: the longest the trigger
+    // reads, cut with an ellipsis by the sheet, whole in its title.
+    const { trigger } = draw("membersOnly");
+    expect(trigger.getAttribute("title")).toBe(
+      "Words for membersOnly (removed)"
+    );
+  });
+
+  it("titles a field the collection has by its own label (the control)", () => {
+    expect(draw("sidebar").trigger.getAttribute("title")).toBe("Sidebar");
+  });
+
+  it("is cut to one line with an ellipsis by the sheet, as the inspector's other menus are", () => {
+    // jsdom applies no stylesheet, so the rule that keeps the trigger to
+    // one line is held to the sheet: a sheet missing it wraps the words.
+    const selector =
+      '.nx-inspector__field[data-content-control="entryField"]\n  [data-slot="select-value"]';
+    const at = CHROME.indexOf(selector);
+    expect(at).toBeGreaterThan(-1);
+    const open = CHROME.indexOf("{", at);
+    const body = CHROME.slice(open, CHROME.indexOf("}", open));
+    expect(body).toContain("white-space: nowrap;");
+    expect(body).toContain("text-overflow: ellipsis;");
+    expect(body).toContain("overflow: hidden;");
+    expect(body).toContain("min-width: 0;");
   });
 
   it("never calls a choice removed while the collection's fields are not known (the control)", () => {

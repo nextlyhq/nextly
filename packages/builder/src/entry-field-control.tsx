@@ -42,6 +42,8 @@ import {
   fieldName,
   usePreviewedCollection,
   usePreviewedEntry,
+  type PreviewedBlocksField,
+  type PreviewedCollection,
 } from "./previewed-entry";
 
 /** A stored field name, or `undefined` where the block names none as text. */
@@ -57,6 +59,24 @@ function openInNewTab(href: string): void {
 }
 
 /** The Field menu, the line about whose content it is, and Open entry. */
+/**
+ * The words a chosen field is read by: its label where the collection has
+ * it, else its name as the canvas and Layers name it, marked "(removed)"
+ * where the collection no longer has it. Nothing while none is chosen.
+ */
+function chosenWords(
+  field: string | undefined,
+  offered: readonly PreviewedBlocksField[],
+  removed: boolean,
+  collection: PreviewedCollection | undefined
+): string | undefined {
+  if (field === undefined) return undefined;
+  const listed = offered.find(each => each.name === field);
+  if (listed !== undefined) return listed.label;
+  const words = fieldName(field, collection);
+  return removed ? `${words} (removed)` : words;
+}
+
 export function EntryFieldControl({
   id,
   prop,
@@ -75,6 +95,9 @@ export function EntryFieldControl({
   const listsStored =
     field !== undefined && !offered.some(each => each.name === field);
   const singular = collection?.singular ?? "entry";
+  // What the trigger shows, in full: its title, where a long name ("Members
+  // Only (removed)") is cut to one line with an ellipsis.
+  const chosen = chosenWords(field, offered, removed, collection);
   const entryId = previewed?.kind === "entry" ? previewed.id : undefined;
   return (
     <div className="nx-inspector__field" data-content-control="entryField">
@@ -84,7 +107,11 @@ export function EntryFieldControl({
         value={field}
         onValueChange={next => onCommit(prop.name, next)}
       >
-        <SelectTrigger id={id} aria-invalid={removed ? true : undefined}>
+        <SelectTrigger
+          id={id}
+          aria-invalid={removed ? true : undefined}
+          title={chosen}
+        >
           <SelectValue placeholder="Choose a field" />
         </SelectTrigger>
         <SelectContent>
@@ -96,9 +123,7 @@ export function EntryFieldControl({
           {field !== undefined && listsStored ? (
             <SelectItem value={field}>
               {/* Named as the canvas and Layers name it. */}
-              {removed
-                ? `${fieldName(field, collection)} (removed)`
-                : fieldName(field, collection)}
+              {chosen}
             </SelectItem>
           ) : null}
         </SelectContent>
