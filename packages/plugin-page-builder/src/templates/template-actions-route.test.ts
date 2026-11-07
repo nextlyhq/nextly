@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TemplateActionResult } from "./template-actions-contract";
 import {
+  cutToTitleLength,
   readTemplateRoutingAccess,
   runTemplateAction,
   type TemplateActionsContext,
@@ -92,7 +93,7 @@ function setupWith(guard: Partial<TemplateGuardSetup> = {}) {
       }),
       holderOf: async () => null,
       declaredAddresses: new Map([["posts", "/blog"]]),
-      lockEntry: async () => undefined,
+      holdEntry: async () => true,
       entryExists: async () => false,
       addressHolderOf,
       ...guard,
@@ -269,5 +270,32 @@ describe("the routing question", () => {
     expect(await readTemplateRoutingAccess({ caller: null })).toEqual({
       mayManageRouting: false,
     });
+  });
+});
+
+describe("a derived title's length", () => {
+  // An emoji is two UTF-16 units, the length the title field's `maxLength`
+  // counts. A cut by characters keeps 128 of them, 256 units, which the
+  // field refuses; a plain cut by units keeps half of the last one.
+  const emoji = "\u{1F600}";
+
+  it("is held to the units the title field counts", () => {
+    const cut = cutToTitleLength(emoji.repeat(128), 255);
+    expect(cut.length).toBeLessThanOrEqual(255);
+    expect(cut).toBe(emoji.repeat(127));
+  });
+
+  it("keeps no half of a character the cut would split", () => {
+    // 254 units of text, then an emoji across the 255th and 256th.
+    const cut = cutToTitleLength(`${"a".repeat(254)}${emoji}b`, 255);
+    expect(cut).toBe("a".repeat(254));
+    const last = cut.charCodeAt(cut.length - 1);
+    expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+  });
+
+  it("keeps an emoji that ends exactly at the limit, and a title that fits", () => {
+    const fits = `${"a".repeat(253)}${emoji}`;
+    expect(cutToTitleLength(`${fits}tail`, 255)).toBe(fits);
+    expect(cutToTitleLength("Hello world", 255)).toBe("Hello world");
   });
 });

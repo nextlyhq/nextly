@@ -228,6 +228,19 @@ init(ctx) {
   with the collection, or waits and is told the collection is gone. On MySQL, where a
   table drop commits the delete's row locks, both also take a named lock on the
   collection, which the delete holds until its registry row is removed.
+- The same holds for a row of yours that names one ENTRY and must not outlive it, such as
+  one an `onInTransaction` handler on the entry's deletes removes. Hold the entry inside
+  the write's transaction with
+  `ctx.services.collections.holdEntryInTransaction(tx, slug, id)` (`@experimental`), and
+  refuse the write when it answers `false`: a delete locks the entry's row for update
+  before removing it and runs its in-transaction handlers after, so the write either
+  commits first and the handlers see it, or waits and is told the entry is gone. It holds
+  the entry's collection first, as `holdCollectionInTransaction` does, so a delete of the
+  whole collection, which locks the registry row rather than its entries' rows, takes
+  turns with the write the same way and its `onCollectionDelete` handlers see the row. Hold it
+  before you write the row where you can, as an in-transaction handler on your own
+  collection's creates runs after the row is written: on MySQL a delete reading that row
+  meanwhile can deadlock with the hold, and the database then refuses one of the two.
 
 **Never hardcode your own slugs** in `init`. Use `ctx.self` so your plugin keeps working when an integrator renames an entity:
 

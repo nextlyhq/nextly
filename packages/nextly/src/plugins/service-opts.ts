@@ -620,6 +620,28 @@ export type PluginCollectionService = Pick<
     collectionName: string
   ): Promise<boolean>;
   /**
+   * @experimental Hold an entry for the rest of the transaction `tx` stands
+   * for, and answer whether it exists: its row, locked for share. A delete of
+   * the entry locks the row for update before it removes it, and runs its
+   * in-transaction handlers (`ctx.hooks.onInTransaction`) after, so a write
+   * that must not outlive the entry it names either commits before the
+   * delete goes on, and those handlers see it, or waits for the delete and is
+   * told the entry is gone. It holds the entry's collection first, as
+   * `holdCollectionInTransaction` does, so a delete of the whole collection,
+   * which locks its registry row rather than the entries' rows before its
+   * `ctx.hooks.onCollectionDelete` handlers run, takes turns with the write
+   * too: the write commits first and those handlers see it, or waits and is
+   * told the entry is gone. Asks nothing of the caller's access, and reads
+   * nothing but whether the collection and the row are there. On SQLite, with
+   * one writer at a time, the rows are only read. A collection that does not
+   * exist holds no entry. A settled token is refused.
+   */
+  holdEntryInTransaction(
+    tx: PluginCollectionTransaction,
+    collectionName: string,
+    entryId: string
+  ): Promise<boolean>;
+  /**
    * @experimental Collection `collectionName`'s record, as `getCollection`
    * answers it, read on the transaction `tx` stands for: what the
    * transaction sees, its own uncommitted changes included. `getCollection`
@@ -807,6 +829,19 @@ export function wrapCollectionsForPlugin(
       scope.assertOpen();
       return scope.track(
         collections.holdCollectionInTransaction(tx, collectionName),
+        "read"
+      );
+    },
+    // The same, for one entry's row.
+    holdEntryInTransaction: async (
+      token: unknown,
+      collectionName: string,
+      entryId: string
+    ): Promise<boolean> => {
+      const { tx, scope } = transactionOf(token);
+      scope.assertOpen();
+      return scope.track(
+        collections.holdEntryInTransaction(tx, collectionName, entryId),
         "read"
       );
     },
