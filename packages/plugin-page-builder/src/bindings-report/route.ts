@@ -33,7 +33,7 @@ import {
   type BindingsToFixMeta,
   type BindingsToFixRow,
 } from "./contract";
-import { topFieldOf, type ReadableDocument } from "./readable";
+import { readableRows, type ReadableDocument } from "./readable";
 import type { BindingReportRow } from "./rows";
 import type { BindingReportStore, StoredDocumentReport } from "./store";
 
@@ -107,11 +107,8 @@ function itemFor(
   entry: StoredDocumentReport,
   readable: ReadableDocument | undefined
 ): BindingsToFixItem | undefined {
-  if (readable === undefined) return undefined;
-  const rows = entry.rows.filter(row =>
-    readable.fields.has(topFieldOf(row.blocksField))
-  );
-  if (rows.length === 0) return undefined;
+  const rows = readableRows(entry, readable);
+  if (readable === undefined || rows.length === 0) return undefined;
   return {
     documentKey: entry.documentKey,
     kind: entry.kind,

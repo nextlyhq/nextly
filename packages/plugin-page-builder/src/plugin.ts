@@ -26,6 +26,7 @@ import {
   resolvedCollectionView,
   type PluginDefinition,
   type PluginRouteContext,
+  type PluginRouteIdentity,
   type PluginVersionPinHolder,
 } from "@nextlyhq/plugin-sdk";
 import type { PreviewViewportsDeclaration } from "nextly/config";
@@ -42,7 +43,7 @@ import { addressWaitingRoute } from "./address-claims/waiting-report-route";
 import { schemaFingerprint } from "./bindings-report/fingerprint";
 import { BINDINGS_REPORT_JOB, bindingsReportJob } from "./bindings-report/job";
 import { layoutRegionsOf } from "./bindings-report/layout-regions";
-import { readableAsCaller } from "./bindings-report/readable";
+import { readableAsCaller, visibleBindings } from "./bindings-report/readable";
 import { bindingsToFixRoute } from "./bindings-report/route";
 import {
   registerBindingReportOnWrite,
@@ -1578,6 +1579,24 @@ export const pageBuilder = (
     },
   };
   let bindingsKickedAt = 0;
+  /**
+   * How many broken bindings a person may see, read as them by the report
+   * route's own read, for the dashboard's card and attention line.
+   */
+  const bindingsVisibleTo = async (
+    user: PluginRouteIdentity["user"]
+  ): Promise<number> => {
+    const ctx = bindingReportCtx;
+    const store = bindingReportDeps.store();
+    if (ctx === null || store === null) return 0;
+    return visibleBindings(
+      {
+        caller: { identity: () => Promise.resolve({ user }) },
+        services: ctx.services,
+      },
+      await store.list()
+    );
+  };
   /** The latest save among the documents named, for the fingerprint. */
   const latestSave = async (collections: readonly string[]) => {
     const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
@@ -2908,9 +2927,9 @@ export const pageBuilder = (
       // The "Bindings to fix" card, for those who edit pages, hidden while
       // they may see no broken binding.
       dashboard: {
-        widgets: [bindingsToFixWidget(bindingReportDeps.store)],
+        widgets: [bindingsToFixWidget(bindingsVisibleTo)],
         // And a line on the Needs your attention card every dashboard shows.
-        attention: [bindingsToFixAttention(bindingReportDeps.store)],
+        attention: [bindingsToFixAttention(bindingsVisibleTo)],
       },
       admin: {
         // What the editor in the browser needs of the options: see

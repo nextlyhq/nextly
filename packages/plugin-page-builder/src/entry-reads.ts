@@ -16,7 +16,7 @@ import { requireNextly } from "nextly/runtime";
 
 import { readOrNull } from "./composition-route-kit";
 import { ENTRIES_UNTITLED, type EntryItem } from "./entries-contract";
-import { readingAsUser } from "./library-route";
+import { readingAsUser, type IdentifiedCaller } from "./library-route";
 
 /** One as-caller list read, as a route asks the Direct API for it. */
 export interface AsCallerFindArgs {
@@ -57,7 +57,7 @@ export interface AsCallerPage {
  * reads.
  */
 export async function findAsCaller(
-  ctx: Pick<PluginRouteContext, "caller">,
+  ctx: IdentifiedCaller,
   args: AsCallerFindArgs
 ): Promise<AsCallerPage> {
   const result = await requireNextly().find({
