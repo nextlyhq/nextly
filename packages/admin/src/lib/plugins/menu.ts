@@ -54,3 +54,24 @@ export function resolveVisibleMenuItems(
   });
   return filterAndSort(all, can);
 }
+
+/**
+ * The menu items a sidebar search matches: an item whose label contains the
+ * search, ignoring case, with all its children; or one with a child that
+ * does, with those children alone. An empty search matches everything, so a
+ * panel that searches its other entries filters these the same way.
+ */
+export function menuItemsMatching(
+  items: readonly PluginMenuItemMeta[],
+  search: string
+): PluginMenuItemMeta[] {
+  const term = search.trim().toLowerCase();
+  if (term === "") return [...items];
+  const matches = (item: PluginMenuItemMeta) =>
+    item.label.toLowerCase().includes(term);
+  return items.flatMap(item => {
+    if (matches(item)) return [item];
+    const children = (item.children ?? []).filter(matches);
+    return children.length > 0 ? [{ ...item, children }] : [];
+  });
+}

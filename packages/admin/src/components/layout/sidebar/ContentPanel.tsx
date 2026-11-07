@@ -16,6 +16,7 @@ import type { JSX } from "react";
 
 import { DynamicCollectionNav } from "@admin/components/features/dashboard/DynamicCollectionNav";
 import { DynamicSingleNav } from "@admin/components/features/dashboard/DynamicSingleNav";
+import { PluginMenuItems } from "@admin/components/features/dashboard/PluginMenuItems";
 import { Link } from "@admin/components/ui/link";
 import {
   useSidebarCollectionList,
@@ -135,6 +136,13 @@ export function ContentPanel({
           ) : (
             <DynamicSingleNav isActive={isActive} search={search} />
           )}
+          {/* The plugin menu items placed in the part showing, as the narrow
+              sidebar lists them under Collections and Singles. */}
+          <PluginMenuItems
+            isActive={isActive}
+            section={shown}
+            search={search}
+          />
         </SidebarMenu>
       )}
     </div>

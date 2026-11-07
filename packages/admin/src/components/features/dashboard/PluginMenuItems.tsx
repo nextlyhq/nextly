@@ -10,6 +10,7 @@ import type React from "react";
 import * as Icons from "@admin/components/icons";
 import { ChevronDown, Package } from "@admin/components/icons";
 import {
+  SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
@@ -20,7 +21,10 @@ import { Link } from "@admin/components/ui/link";
 import type { ActiveNavSection } from "@admin/constants/nav-sections";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
-import { resolveVisibleMenuItems } from "@admin/lib/plugins/menu";
+import {
+  menuItemsMatching,
+  resolveVisibleMenuItems,
+} from "@admin/lib/plugins/menu";
 import { cn } from "@admin/lib/utils";
 import type { PluginMenuItemMeta } from "@admin/types/branding";
 
@@ -41,6 +45,17 @@ interface PluginMenuItemsProps {
    * its items listed there rather than under Plugins.
    */
   section: ActiveNavSection;
+  /**
+   * The panel's search, which these items obey as the panel's other entries
+   * do; none filters nothing.
+   */
+  search?: string;
+  /**
+   * Draw the items as a menu list of their own, for a panel whose other
+   * entries are not in one; nothing at all when there are none, rather than
+   * an empty list.
+   */
+  asMenu?: boolean;
 }
 
 /**
@@ -52,18 +67,19 @@ interface PluginMenuItemsProps {
 export function PluginMenuItems({
   isActive,
   section,
+  search = "",
+  asMenu = false,
 }: PluginMenuItemsProps): React.JSX.Element | null {
   const branding = useBranding();
   const { hasPermission } = useCurrentUserPermissions();
-  const items = resolveVisibleMenuItems(
-    branding?.plugins,
-    hasPermission,
-    section
+  const items = menuItemsMatching(
+    resolveVisibleMenuItems(branding?.plugins, hasPermission, section),
+    search
   );
 
   if (items.length === 0) return null;
 
-  return (
+  const drawn = (
     <>
       {items.map(item =>
         item.children && item.children.length > 0 ? (
@@ -74,6 +90,7 @@ export function PluginMenuItems({
       )}
     </>
   );
+  return asMenu ? <SidebarMenu>{drawn}</SidebarMenu> : drawn;
 }
 
 function PluginMenuLeaf({

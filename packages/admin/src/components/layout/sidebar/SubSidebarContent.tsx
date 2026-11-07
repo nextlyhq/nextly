@@ -2,6 +2,7 @@ import type { JSX } from "react";
 
 import { DynamicPluginNav } from "@admin/components/features/dashboard/DynamicPluginNav";
 import { DynamicPluginSectionItems } from "@admin/components/features/dashboard/DynamicPluginSectionItems";
+import { PluginMenuItems } from "@admin/components/features/dashboard/PluginMenuItems";
 import * as Icons from "@admin/components/icons";
 import { Layers, Puzzle, FileText, Database } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
@@ -90,6 +91,14 @@ export function SubSidebarContent({
           </p>
           <SidebarMenu>
             <DynamicPluginNav isActive={isActive} search={pluginSearch} />
+            {/* The plugins' own menu items (`contributes.admin.menu`) that
+                live in Plugins, as the narrow sidebar lists them: a plugin
+                with pages of its own, such as a library, is reached here. */}
+            <PluginMenuItems
+              isActive={isActive}
+              section="plugins"
+              search={pluginSearch}
+            />
             {/* Gated on the permission `PLUGIN_BROWSE` itself requires. The
                 panel stays open to a user who can only read a plugin-owned
                 collection, so without this they would be offered a destination
@@ -158,6 +167,8 @@ export function SubSidebarContent({
                 </SidebarMenuItem>
               );
             })}
+            {/* And the menu items the plugin places in its own section. */}
+            <PluginMenuItems isActive={isActive} section={selectedMain} />
           </SidebarMenu>
         </div>
       </div>
@@ -212,6 +223,9 @@ export function SubSidebarContent({
           </div>
         ))}
         <DynamicPluginSectionItems placement="settings" isActive={isActive} />
+        {/* Plugin menu items placed in Settings (or in Users, which shows
+            here), in a list of their own. */}
+        <PluginMenuItems isActive={isActive} section="settings" asMenu />
       </div>
     );
   }
