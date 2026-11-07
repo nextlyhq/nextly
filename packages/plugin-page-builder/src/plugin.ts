@@ -2098,6 +2098,7 @@ export const pageBuilder = (
           withTransaction: work =>
             ctx.services.collections.withTransaction(work),
           warn: (message, meta) => ctx.logger.warn(message, meta),
+          current: () => claimsInit === pageClaimsInit,
         });
         // Only a pass that settled every page ends the saves' part in it: a
         // page it failed to read or claim is still unclaimed, so saves keep

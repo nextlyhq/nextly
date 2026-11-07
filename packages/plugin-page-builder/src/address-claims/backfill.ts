@@ -21,6 +21,7 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 import {
   claimOrWait,
   claimSpaceOrWait,
+  dropStaleWaits,
   lockHolder,
   reconcileHolder,
   type Claims,
@@ -47,6 +48,12 @@ export interface BackfillDeps {
   readonly nextly: PagesReader;
   readonly withTransaction: <T>(work: (tx: Tx) => Promise<T>) => Promise<T>;
   readonly warn: (message: string, context: Record<string, unknown>) => void;
+  /**
+   * Whether this pass still belongs to the running site: false once a reload
+   * has started another, whose languages and page path may differ. Asked
+   * before each page, so a superseded pass stops writing.
+   */
+  readonly current?: () => boolean;
 }
 
 /** Which pages the walk reads. */
@@ -134,6 +141,9 @@ export async function backfillPageClaims(deps: BackfillDeps): Promise<boolean> {
   try {
     for await (const batch of publishedPages(deps.nextly, deps.pages)) {
       for (const row of batch) {
+        // Superseded: the newer pass settles every page, and this one is
+        // not complete.
+        if (deps.current?.() === false) return false;
         if (typeof row.id !== "string" && typeof row.id !== "number") continue;
         if (!(await claimPage(deps, String(row.id)))) complete = false;
       }
@@ -210,7 +220,8 @@ async function claimPage(deps: BackfillDeps, id: string): Promise<boolean> {
 
 /**
  * What the page should hold, from its row as committed now, read under its
- * own lock (taken here, first): null when it is gone.
+ * own lock (taken here, first): null when it is gone, or when this pass has
+ * been superseded.
  */
 async function wantedNow(
   deps: BackfillDeps,
@@ -218,6 +229,9 @@ async function wantedNow(
   holder: Holder
 ): Promise<PageClaims | null> {
   await lockHolder(deps.claims, tx, holder);
+  // Asked again under the lock: a pass superseded while it waited for the
+  // lock leaves the page to the newer one, which reads it after this.
+  if (deps.current?.() === false) return null;
   const row = await currentPage(deps, holder.id);
   return row === null ? null : pageClaims(row, deps.locales, deps.pathTemplate);
 }
@@ -239,6 +253,7 @@ async function waitForAddresses(
     await deps.withTransaction(async tx => {
       const wanted = await wantedNow(deps, tx, holder);
       if (wanted === null) return;
+      await dropStaleWaits(deps.claims, tx, holder, wanted);
       for (const address of wanted.addresses) {
         await claimOrWait(deps.claims, tx, { address, holder });
       }

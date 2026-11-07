@@ -11,6 +11,7 @@ import { backfillPageClaims, type BackfillDeps } from "./backfill";
 import {
   claimOrWait,
   claimSpaceOrWait,
+  dropStaleWaits,
   lockHolder,
   reconcileHolder,
   type Claims,
@@ -20,6 +21,7 @@ import {
 vi.mock("./claim-store", () => ({
   claimOrWait: vi.fn(async () => "claimed"),
   claimSpaceOrWait: vi.fn(async () => "waiting"),
+  dropStaleWaits: vi.fn(async () => undefined),
   lockHolder: vi.fn(async () => undefined),
   reconcileHolder: vi.fn(async () => true),
 }));
@@ -187,6 +189,37 @@ describe("backfillPageClaims", () => {
     ).toBe(false);
     // The pass still settles the pages after the one that failed.
     expect(reconciledPaths()).toEqual([["/about"], ["/contact"]]);
+  });
+
+  it("drops a clashing page's stale waits before it records its current ones", async () => {
+    vi.mocked(reconcileHolder).mockRejectedValueOnce(
+      NextlyError.conflict({ reason: "state" })
+    );
+    const page = { id: "p", slug: "about", status: "published" };
+    expect(await backfillPageClaims(depsOver([page], { p: page }))).toBe(true);
+    const dropped = vi.mocked(dropStaleWaits).mock;
+    expect(dropped.calls[0]?.[3].addresses.map(at => at.segments)).toEqual([
+      ["about"],
+    ]);
+    expect(dropped.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(claimOrWait).mock.invocationCallOrder[0] ?? 0
+    );
+  });
+
+  it("stops writing once a newer pass has started, and is not complete", async () => {
+    const first = { id: "p", slug: "about", status: "published" };
+    const second = { id: "q", slug: "contact", status: "published" };
+    let current = true;
+    const deps = {
+      ...depsOver([first, second], { p: first, q: second }),
+      current: () => current,
+    };
+    vi.mocked(reconcileHolder).mockImplementationOnce(async () => {
+      current = false;
+      return true;
+    });
+    expect(await backfillPageClaims(deps)).toBe(false);
+    expect(reconciledPaths()).toEqual([["/about"]]);
   });
 
   it("is incomplete when the pages could not be read", async () => {

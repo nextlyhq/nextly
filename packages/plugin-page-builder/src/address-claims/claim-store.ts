@@ -787,6 +787,61 @@ function isSpaceWait(row: ClaimRow): boolean {
   return row.kind === "waiting" && row.space !== null;
 }
 
+/**
+ * The waits among `waits` for what `desired` no longer holds: an address the
+ * holder moved from or stopped being published at, or the later pages of a
+ * list it no longer splits. Dropped, so releasing what blocked one never
+ * hands the holder an address or a space it gave up.
+ */
+function staleWaitsOf(
+  waits: readonly ClaimRow[],
+  desired: DesiredClaims
+): ClaimRow[] {
+  const wantedAddresses = new Set(
+    desired.addresses.map(at => claimKey("address", at))
+  );
+  const wantedSpaces = new Set(desired.spaces.map(at => claimKey("space", at)));
+  return waits.filter(row => {
+    if (row.address === null) return true;
+    return isSpaceWait(row)
+      ? !wantedSpaces.has(claimKey("space", row.address))
+      : !wantedAddresses.has(claimKey("address", row.address));
+  });
+}
+
+/**
+ * Drop `holder`'s waits for what `desired` no longer holds, in `tx`, under
+ * the locks a wait is taken under. For a holder that waits rather than
+ * reconciles (one refused at start-up), before its current waits are
+ * recorded, so a wait left by an earlier boot for an address or space it
+ * has since left is never handed to it.
+ */
+export async function dropStaleWaits(
+  claims: Claims,
+  tx: Tx,
+  holder: Holder,
+  desired: DesiredClaims
+): Promise<void> {
+  const waits = await claimsIn(
+    claims,
+    tx,
+    {
+      kind: { equals: "waiting" },
+      holderCollection: { equals: holder.collection },
+      holderId: { equals: holder.id },
+    },
+    row => row.kind === "waiting" && sameHolder(row.holder, holder)
+  );
+  const stale = staleWaitsOf(waits, desired);
+  if (stale.length === 0) return;
+  await lockInOrder(
+    claims,
+    tx,
+    stale.flatMap(row => (row.address === null ? [] : locksFor(row.address)))
+  );
+  for (const row of stale) await remove(claims, tx, row);
+}
+
 /** What a holder should hold: its addresses, and the spaces of its lists. */
 export interface DesiredClaims {
   readonly addresses: readonly ServedAddress[];
@@ -838,20 +893,7 @@ export async function reconcileHolder(
     at => !heldKeys.has(storedKey(claimKey("space", at)))
   );
   const release = owned.filter(row => !wanted.has(row.key));
-  // A wait for an address the holder no longer wants (it moved, or stopped
-  // being published), or for the later pages of a list it no longer splits,
-  // is dropped, so releasing what blocked it never hands the holder an
-  // address or a space it gave up.
-  const wantedAddresses = new Set(
-    desired.addresses.map(at => claimKey("address", at))
-  );
-  const wantedSpaces = new Set(desired.spaces.map(at => claimKey("space", at)));
-  const staleWaits = waits.filter(row => {
-    if (row.address === null) return true;
-    return isSpaceWait(row)
-      ? !wantedSpaces.has(claimKey("space", row.address))
-      : !wantedAddresses.has(claimKey("address", row.address));
-  });
+  const staleWaits = staleWaitsOf(waits, desired);
   if (
     claimAddresses.length === 0 &&
     claimSpaces.length === 0 &&
