@@ -17,6 +17,8 @@
 import type {
   ListFieldKind,
   NamedQueryChoice,
+  NamedQueryDeclaration,
+  NamedQueryHiddenRead,
   NamedQueryParamType,
 } from "@nextlyhq/blocks-engine";
 import type { PaginationMeta } from "@nextlyhq/plugin-sdk";
@@ -26,6 +28,13 @@ export const NAMED_QUERIES_ROUTE_PATH = "/named-queries";
 
 /** The query the route takes: the language visitors' access is judged in. */
 export const NAMED_QUERIES_PARAMS = { locale: "locale" } as const;
+
+/** The route's path in a language, the default's when none is named. */
+export function namedQueriesPath(locale?: string): string {
+  if (locale === undefined || locale === "") return NAMED_QUERIES_ROUTE_PATH;
+  const params = new URLSearchParams({ [NAMED_QUERIES_PARAMS.locale]: locale });
+  return `${NAMED_QUERIES_ROUTE_PATH}?${params.toString()}`;
+}
 
 /**
  * One input of a named query, as its control is drawn: everything its
@@ -59,6 +68,11 @@ export interface NamedQueryRowField {
   readonly type: string;
   /** What a list's filter would call it, when it holds one scalar. */
   readonly kind?: ListFieldKind;
+  /**
+   * A group's own fields, each listed the same way, so a binding can name
+   * one by its path (`seo.title`).
+   */
+  readonly fields?: readonly NamedQueryRowField[];
 }
 
 /**
@@ -86,10 +100,18 @@ export interface NamedQueryItem {
     readonly site: boolean;
   };
   /**
-   * The declared collections visitors can read nothing of, by the name
-   * authors read them by: a published list of the query may show nothing.
+   * The declared collections visitors can read nothing of, each by the name
+   * authors read it by and with the fields it declares: a published list of
+   * the query goes without them. The engine's `namedQueryHiddenReads`, the
+   * judgement a save warns with.
    */
-  readonly readsHidden: readonly string[];
+  readonly readsHidden: readonly NamedQueryHiddenRead[];
+  /**
+   * The declaration itself, without its run function: what an editor judges
+   * a list's inputs against with the engine's own judgement, so the editor
+   * and a save refuse alike. Everything above is derived from it.
+   */
+  readonly declaration: NamedQueryDeclaration;
 }
 
 /** What the route answers: the canonical list envelope, every query on one page. */

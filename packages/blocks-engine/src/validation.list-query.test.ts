@@ -1083,6 +1083,26 @@ describe("the list a page's address pages", () => {
     ).toBeUndefined();
   });
 
+  it("judges each list by the props a caller reads in place of the stored ones", () => {
+    const nodes = [
+      list("stored", { collection: "posts", paginate: true }),
+      list("bound", { collection: "posts", limit: 5 }),
+    ];
+    // As a page whose binding pass turns the stored split off and the
+    // second list's bound split on: the second is the one that pages, and
+    // the answer carries its props as read.
+    expect(
+      paginatedList(nodes, Number.MAX_SAFE_INTEGER, node =>
+        node.id === "bound"
+          ? { collection: "posts", limit: 5, paginate: true }
+          : { collection: "posts", paginate: false }
+      )
+    ).toEqual({
+      id: "bound",
+      props: { collection: "posts", limit: 5, paginate: true },
+    });
+  });
+
   it("stops at its node bound", () => {
     const nodes = [
       list("a", { collection: "posts" }),

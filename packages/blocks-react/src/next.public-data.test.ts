@@ -273,6 +273,9 @@ describe("a routed page's named queries", () => {
     return context.namedQueries;
   }
 
+  /** The run as a list stores it, which a published page's cache ignores. */
+  const ASKED = { params: {}, window: { limit: 1, offset: 0 } } as const;
+
   /** The key parts a kept result was cached under, for one deployment. */
   async function keyPartsIn(deployment: string): Promise<unknown> {
     vi.stubEnv("NEXT_DEPLOYMENT_ID", deployment);
@@ -283,6 +286,7 @@ describe("a routed page's named queries", () => {
         declaration: declaration(),
         key: ["events.upcoming", "same-run-source"],
         read: () => Promise.resolve({ rows: [], reads: 0 }),
+        asked: ASKED,
       });
       return (cached.calls[0] as { keyParts?: unknown } | undefined)?.keyParts;
     } finally {
@@ -302,11 +306,21 @@ describe("a routed page's named queries", () => {
     const host = await hostOf(instance());
     const read = vi.fn(() => Promise.resolve({ rows: [], reads: 0 }));
     cached.calls.length = 0;
-    await host.cache?.({ declaration: declaration(129), key: ["k"], read });
+    await host.cache?.({
+      declaration: declaration(129),
+      key: ["k"],
+      read,
+      asked: ASKED,
+    });
     expect(read).toHaveBeenCalledTimes(1);
     expect(cached.calls).toEqual([]);
     // Within the bound, every declared read tags it.
-    await host.cache?.({ declaration: declaration(3), key: ["k"], read });
+    await host.cache?.({
+      declaration: declaration(3),
+      key: ["k"],
+      read,
+      asked: ASKED,
+    });
     expect((cached.calls[0] as { tags: string[] }).tags).toHaveLength(3);
   });
 

@@ -118,6 +118,16 @@ describe("what is refused", () => {
       "the http-equiv attribute isn't allowed on <meta>",
     ],
     [
+      "a referrer meta tag, which changes the whole page's policy",
+      `<meta name="Referrer" content="unsafe-url">`,
+      "a referrer meta tag isn't allowed",
+    ],
+    [
+      "a link that sends the full page address to the site it loads from",
+      `<link rel="preload" as="image" href="https://a.example/x.png" referrerpolicy="unsafe-url">`,
+      `a link with referrerpolicy "unsafe-url" isn't allowed`,
+    ],
+    [
       "a script's load handler",
       `<script src="https://a.example/x.js" onload="steal()"></script>`,
       "the onload attribute runs code",

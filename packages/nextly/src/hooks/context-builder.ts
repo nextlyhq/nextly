@@ -37,6 +37,9 @@ export interface BuildContextOptions<T = any> {
    */
   originalData?: T;
 
+  /** See {@link HookContext.storedStatus}. */
+  storedStatus?: string | null;
+
   /**
    * User ID performing the operation (if authenticated)
    */
@@ -149,6 +152,9 @@ export function buildContext<T = any>(
     operation: options.operation,
     data: options.data,
     originalData: options.originalData,
+    ...(options.storedStatus === undefined
+      ? {}
+      : { storedStatus: options.storedStatus }),
     user,
     context,
     req: options.req,
@@ -222,6 +228,9 @@ export function cloneContext<T>(context: HookContext<T>): HookContext<T> {
     operation: context.operation,
     data: context.data,
     originalData: context.originalData,
+    ...(context.storedStatus === undefined
+      ? {}
+      : { storedStatus: context.storedStatus }),
     user: context.user ? { ...context.user } : undefined,
     context: { ...context.context },
     req: context.req

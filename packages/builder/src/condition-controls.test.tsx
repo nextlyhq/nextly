@@ -5,7 +5,12 @@
  * conditions, one AND group, groups set through the API and a condition the
  * page can't check, and what it writes.
  */
-import { findNode, type BlockDocument } from "@nextlyhq/blocks-engine";
+import {
+  defineNamedQuery,
+  findNode,
+  namedQueryDeclaration,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -13,6 +18,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ShowWhen } from "./condition-controls";
 import type { ContentServices, LoopCollection } from "./content-controls";
 import { useEditorState, type EditorState } from "./editor-state";
+import type { CustomSource } from "./named-query-model";
 
 afterEach(cleanup);
 
@@ -276,5 +282,94 @@ describe("Show when", () => {
         "The site's collections could not be listed, so conditions can't be chosen here."
       )
     ).toBeTruthy();
+  });
+});
+
+describe("Show when, in a list whose source is a custom source", () => {
+  /** A query whose rows are a schema of its own: no collection holds them. */
+  const soon: CustomSource = {
+    declaration: namedQueryDeclaration(
+      defineNamedQuery({
+        name: "events.soon",
+        label: "Events soon",
+        reads: {},
+        rows: {
+          key: "id",
+          fields: [
+            { name: "id", type: "text" },
+            { name: "startsAt", type: "date" },
+          ],
+        },
+        run: () => Promise.resolve({ rows: [] }),
+      })
+    ),
+    readsHidden: [],
+  };
+
+  /** Block `a` inside a list of `events.soon`, hidden by `conditions`. */
+  const inList = (conditions: unknown): BlockDocument =>
+    ({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "list",
+          type: "core/collection-loop",
+          version: 1,
+          props: { namedQuery: { name: "events.soon", params: {} } },
+          slots: {
+            children: [
+              {
+                id: "a",
+                type: "core/heading",
+                version: 1,
+                props: {},
+                visibility: { conditions },
+              },
+            ],
+          },
+        },
+      ],
+    }) as BlockDocument;
+
+  function ListHost({
+    document,
+    lent,
+  }: {
+    document: BlockDocument;
+    lent: ContentServices;
+  }): React.JSX.Element {
+    const editor = useEditorState({ initialDocument: document });
+    return <ShowWhen editor={editor} nodeId="a" services={lent} />;
+  }
+
+  async function shownWith(lent: ContentServices): Promise<void> {
+    render(
+      <ListHost
+        document={inList([[{ field: "startsAt", op: "exists" }]])}
+        lent={lent}
+      />
+    );
+    // The collections and the custom sources are each read once.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it("offers and judges the fields its query's rows declare", async () => {
+    await shownWith({ ...services, listCustomSources: async () => [soon] });
+    expect(screen.getByTitle("startsAt has a value")).toBeTruthy();
+    // Judged by the rows' own fields, as the save judges it: checkable.
+    expect(screen.queryByRole("alert")).toBeNull();
+    const add = screen.getByRole("button", { name: "Add condition" });
+    expect((add as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("has nothing to offer before the site's custom sources are known", async () => {
+    // The control: the same list, with no custom sources lent.
+    await shownWith(services);
+    const add = screen.getByRole("button", { name: "Add condition" });
+    expect((add as HTMLButtonElement).disabled).toBe(true);
   });
 });

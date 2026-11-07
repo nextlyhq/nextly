@@ -9105,11 +9105,18 @@ export class CollectionMutationService extends BaseService {
       operation: "update",
       user: params.user,
     });
+    const storedStatus = await this.hookStoredStatus(
+      params.collectionName,
+      params.entryId,
+      existingEntry,
+      EVERY_LOCALE
+    );
     await this.hookService.runBeforeChange({
       collection: params.collectionName,
       operation: "update",
       data,
       originalData: existingEntry,
+      ...(storedStatus === undefined ? {} : { storedStatus }),
       storedHooks,
       queryDatabase: this.queryDatabaseFn,
       user: params.user,
@@ -11241,6 +11248,148 @@ export class CollectionMutationService extends BaseService {
         routeAuthorized: params.routeAuthorized,
         // A scoped API key is judged on its own update grant, so the session
         // super-admin bypass does not apply to a super-admin-owned key here.
+        authenticatedScope: params.authenticatedScope,
+      },
+      params.locale
+    );
+    return denied === null;
+  }
+
+  /**
+   * The status a write in `locale` is classified against, as the update's own
+   * gate classifies it: where the collection keeps its status per language,
+   * the write names that language's companion `_status`, and the gate judges
+   * the move from the one committed there; a language with no companion row
+   * (the default one, stored on the main row) and every collection without
+   * per-language status are judged from the main row's.
+   */
+  private async storedStatusInLocale(
+    collectionName: string,
+    entryId: string,
+    row: Record<string, unknown>,
+    locale: string | undefined
+  ): Promise<string | null> {
+    const main = typeof row.status === "string" ? row.status : null;
+    if (locale === undefined || !this.localization) return main;
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    // As the update gates its read: `_status` exists only on a companion
+    // migrated for per-language status, and asking it otherwise fails.
+    if (
+      !companion?.hasStatus ||
+      (await this.companionLacksStatus(collectionName))
+    ) {
+      return main;
+    }
+    const inLocale = await readCompanionLocaleStatus(
+      this.db as Parameters<typeof readCompanionLocaleStatus>[0],
+      companion.table,
+      entryId,
+      locale,
+      cachedCompanionReadiness(this.adapter, companion.companionTableName)
+    );
+    return inLocale ?? main;
+  }
+
+  /**
+   * What an update's `beforeChange` hooks are told it moves from
+   * (`HookContext.storedStatus`): the status stored in the language the
+   * write names, read as {@link storedStatusInLocale} reads it, and for a
+   * write to every language `"published"` when any language is. Undefined
+   * where the collection keeps one status, on the main row the hooks already
+   * hold.
+   */
+  private async hookStoredStatus(
+    collectionName: string,
+    entryId: string,
+    row: Record<string, unknown>,
+    locale: string | undefined
+  ): Promise<string | null | undefined> {
+    if (locale === undefined || !this.localization) return undefined;
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    if (
+      !companion?.hasStatus ||
+      (await this.companionLacksStatus(collectionName))
+    ) {
+      return undefined;
+    }
+    const main = typeof row.status === "string" ? row.status : null;
+    const readiness = cachedCompanionReadiness(
+      this.adapter,
+      companion.companionTableName
+    );
+    if (locale !== EVERY_LOCALE) {
+      const inLocale = await readCompanionLocaleStatus(
+        this.db as Parameters<typeof readCompanionLocaleStatus>[0],
+        companion.table,
+        entryId,
+        locale,
+        readiness
+      );
+      return inLocale ?? main;
+    }
+    if (main === "published") return main;
+    const statuses = await readCompanionLocaleStatusAll(
+      this.db as Parameters<typeof readCompanionLocaleStatusAll>[0],
+      companion.table,
+      entryId,
+      readiness
+    );
+    return [...statuses.values()].includes("published") ? "published" : main;
+  }
+
+  /**
+   * Whether this user may make a write naming `nextStatus` of the entry,
+   * decided without writing: the lifecycle gate an update asks, and only where
+   * that update asks it. Core asks a publish or unpublish gate only for a write
+   * that moves the row into or out of published, as {@link
+   * resolvePublishTransition} classifies it against the stored status, so a
+   * write that keeps the row's status asks nothing more than its update gate.
+   * A collection with no lifecycle asks none; an entry that is not there
+   * answers as a refusal, as {@link canUpdateEntry} does.
+   *
+   * @experimental
+   */
+  async canMoveEntryStatus(params: {
+    collectionName: string;
+    entryId: string;
+    nextStatus: string;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+    /** The language the write acts in, which a rule's filter is matched in. */
+    locale?: string;
+  }): Promise<boolean> {
+    const existingEntry = await this.storedEntry(
+      params.collectionName,
+      params.entryId
+    );
+    if (!existingEntry) return false;
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    // As `resolveTransitionAuthorization` reads it: no lifecycle, no gate.
+    if ((collection as { status?: boolean }).status !== true) return true;
+    const move = resolvePublishTransition(
+      await this.storedStatusInLocale(
+        params.collectionName,
+        params.entryId,
+        existingEntry,
+        params.locale
+      ),
+      params.nextStatus
+    );
+    if (move === null) return true;
+    const denied = await this.refusalOfStoredUpdate(
+      {
+        collectionName: params.collectionName,
+        operation: move,
+        entryId: params.entryId,
+        user: params.user,
+        // Never overridden, and never route-authorized: a route attests
+        // update, never publish or unpublish.
+        overrideAccess: false,
+        routeAuthorized: false,
         authenticatedScope: params.authenticatedScope,
       },
       params.locale
@@ -13788,11 +13937,18 @@ export class CollectionMutationService extends BaseService {
       // Collection-level beforeChange hooks, on data the validation gate has
       // just passed. Paired with the field-level phase below so the two
       // declarations of that name mean the same moment.
+      const storedStatus = await this.hookStoredStatus(
+        params.collectionName,
+        params.entryId,
+        existingEntry as Record<string, unknown>,
+        params.locale
+      );
       await this.hookService.runBeforeChange({
         collection: params.collectionName,
         operation: "update",
         data: finalData,
         originalData: existingEntry,
+        ...(storedStatus === undefined ? {} : { storedStatus }),
         storedHooks,
         queryDatabase: this.queryDatabaseFn,
         user: params.user,
@@ -17622,6 +17778,101 @@ export class CollectionMutationService extends BaseService {
    * @param params - Collection name, entry ID, and optional user context
    * @returns Deletion result or error
    */
+  /**
+   * The delete gate for one entry, as a delete asks it before any hook runs:
+   * the caller's grant, then each language the entry holds, with each filter
+   * a rule answers matched against the entry in its language and kept for the
+   * row lock. The one place the question is asked, by `deleteEntry` and by
+   * `canDeleteEntry` alike, so the check cannot drift from the writer. Reads
+   * only: no hook runs and nothing is written.
+   */
+  private async deleteGateOf(
+    params: {
+      collectionName: string;
+      entryId: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      routeAuthorized?: boolean;
+      authenticatedScope?: AuthenticatedScope;
+      appliesFilter?: boolean;
+    },
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper }
+  ) {
+    // A delete rule that answers a filter allows only the entries it
+    // matches, so the gate hands the filter back for the delete to match its
+    // entry against.
+    const accessParams = {
+      collectionName: params.collectionName,
+      operation: "delete" as const,
+      entryId: params.entryId,
+      user: params.user,
+      overrideAccess: params.overrideAccess,
+      routeAuthorized: params.routeAuthorized,
+      // A scoped API key is judged on its own delete grant, so the session
+      // super-admin bypass does not apply to a super-admin-owned key here.
+      authenticatedScope: params.authenticatedScope,
+    };
+    // Collection metadata: for the languages the entry holds, and for the
+    // stored hooks the delete runs after this.
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    // A delete removes every language the entry holds, so it is asked in
+    // each of them, each time told that one, and a refusal in any refuses
+    // it. Each filter answered is matched in its language now, before any
+    // hook runs, and again under the delete's row lock, so the entry removed
+    // is the one judged.
+    const deleteLanguages = {
+      collectionName: params.collectionName,
+      entryId: params.entryId,
+      fields: (collection.schemaDefinition?.fields ||
+        collection.fields ||
+        []) as FieldConfig[],
+    };
+    const asked = await this.deleteAskedInEachLanguage({
+      entry: deleteLanguages,
+      schema,
+      params: accessParams,
+      appliesFilter: params.appliesFilter !== false,
+    });
+    if ("refusal" in asked) return { refusal: asked.refusal };
+    return { refusal: undefined, collection, deleteLanguages, asked };
+  }
+
+  /**
+   * Whether this caller may delete the entry, decided without deleting it
+   * and without running any hook: the gate `deleteEntry` asks before its
+   * hooks (`deleteGateOf`), a rule's row filter matched against this entry
+   * included. Never overridden, since it exists to apply the rules. An entry
+   * that is not there answers as a refusal, so missing and forbidden cannot
+   * be told apart.
+   *
+   * @experimental
+   */
+  async canDeleteEntry(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    /** API-key scope; judges the delete gate on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<boolean> {
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+    if (
+      (await this.storedEntry(params.collectionName, params.entryId)) ===
+      undefined
+    ) {
+      return false;
+    }
+    const schema = await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    );
+    const gate = await this.deleteGateOf(
+      { ...params, overrideAccess: false, routeAuthorized: false },
+      schema
+    );
+    return gate.refusal === undefined;
+  }
+
   async deleteEntry(params: {
     collectionName: string;
     entryId: string;
@@ -17688,45 +17939,15 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
-      // 1. Check collection-level access FIRST. A delete rule that answers a
-      // filter allows only the entries it matches, so the gate hands the
-      // filter back for this delete to match its entry against.
-      const accessParams = {
-        collectionName: params.collectionName,
-        operation: "delete" as const,
-        entryId: params.entryId,
-        user: accessUser,
-        overrideAccess: params.overrideAccess,
-        routeAuthorized: params.routeAuthorized,
-        // A scoped API key is judged on its own delete grant, so the session
-        // super-admin bypass does not apply to a super-admin-owned key here.
-        authenticatedScope: params.authenticatedScope,
-      };
-      // Collection metadata: for the languages the entry holds, and for the
-      // stored hooks below.
-      const collection = await this.collectionService.getCollection(
-        params.collectionName
+      // 1. Check collection-level access FIRST, before any hook runs: the
+      // gate `canDeleteEntry` asks too, so the two cannot drift.
+      const gate = await this.deleteGateOf(
+        { ...params, user: accessUser },
+        schema
       );
-      // A delete removes every language the entry holds, so it is asked in
-      // each of them, each time told that one, and a refusal in any refuses
-      // it. Each filter answered is matched in its language now, before any
-      // hook runs, and again under the row lock below, so the entry removed
-      // is the one judged.
-      const deleteLanguages = {
-        collectionName: params.collectionName,
-        entryId: params.entryId,
-        fields: (collection.schemaDefinition?.fields ||
-          collection.fields ||
-          []) as FieldConfig[],
-      };
-      const asked = await this.deleteAskedInEachLanguage({
-        entry: deleteLanguages,
-        schema,
-        params: accessParams,
-        appliesFilter: params.appliesFilter !== false,
-      });
-      if ("refusal" in asked) return asked.refusal;
-      const { languages: askedLanguages, filters: deleteFilters } = asked;
+      if (gate.refusal !== undefined) return gate.refusal;
+      const { collection, deleteLanguages } = gate;
+      const { languages: askedLanguages, filters: deleteFilters } = gate.asked;
       const { storedHooks, tableName, sharedContext, requestFacts } =
         this.operationSetup(collection, params);
 

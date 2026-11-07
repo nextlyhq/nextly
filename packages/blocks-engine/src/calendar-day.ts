@@ -23,3 +23,20 @@ export function isCalendarDay(value: unknown): value is string {
     date.getUTCDate() === day
   );
 }
+
+/**
+ * The calendar day an instant falls on in a time zone, `YYYY-MM-DD`: what
+ * "today" is for a page in the site's zone. `zone` must be one the runtime
+ * knows (see `safeTimeZone`).
+ */
+export function calendarDayIn(zone: string, at: Date): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(at);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find(candidate => candidate.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
