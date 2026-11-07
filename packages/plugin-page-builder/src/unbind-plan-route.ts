@@ -32,6 +32,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
+import { TEMPLATES_SLUG } from "./collections/templates";
 import {
   blocksDocumentOf,
   parsedWith,
@@ -87,6 +88,8 @@ export interface UnbindPlanReads {
   ): Promise<Readonly<Record<string, unknown>> | null>;
   /** The one unbind decision. */
   plan: typeof planUnbind;
+  /** The collection templates are stored in, under the host's name for it. */
+  readonly templates: string;
 }
 
 /**
@@ -139,7 +142,12 @@ export async function answerUnbindPlan(
     });
   }
   const { page: at } = request;
-  const target = templateTargetOf(page);
+  // A template's collection, read only from a template: an ordinary
+  // collection may have a field of the same name, which names nothing.
+  const target =
+    !("single" in at) && at.collection === reads.templates
+      ? templateTargetOf(page)
+      : undefined;
   const source: UnbindSource = {
     // A Single's page reads the Single, named as the collection and the id.
     ...("single" in at
@@ -174,6 +182,7 @@ function directUnbindPlanReads(ctx: PluginRouteContext): UnbindPlanReads {
           });
     },
     plan: planUnbind,
+    templates: ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG,
   };
 }
 
