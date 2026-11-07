@@ -200,8 +200,9 @@ const NO_MARGIN = {
  * The parts' defaults: lists without markers or a browser's gutter, since the
  * nesting is what shows the structure; a nested list set in by one `em`; one
  * line's breathing room between entries; and a title in the weight of a
- * label. Everything else inherits from the block, so a template styles the
- * contents by styling the block.
+ * label; the note an author sees on an empty block, slanted and quieter.
+ * Everything else inherits from the block, so a template styles the contents
+ * by styling the block.
  */
 const TABLE_OF_CONTENTS_PARTS = {
   title: {
@@ -237,9 +238,17 @@ const TABLE_OF_CONTENTS_PARTS = {
     },
   },
   link: {},
+  // Set apart from the page's own words, so an author never reads it as
+  // content: slanted, and a step quieter than the text around it.
   note: {
     baseStyles: {
-      base: { base: { margin: { ...NO_MARGIN, blockStart: "0.75em" } } },
+      base: {
+        base: {
+          fontStyle: "italic",
+          opacity: 0.75,
+          margin: { ...NO_MARGIN, blockStart: "0.75em" },
+        },
+      },
     },
   },
 } as const;
