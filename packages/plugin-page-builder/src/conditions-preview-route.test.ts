@@ -94,6 +94,19 @@ describe("what a visitor reads of a page being edited", () => {
     });
   });
 
+  it("reads only the fields a visitor may read, never the whole row", async () => {
+    const publicEntry = vi.fn(async () => PUBLISHED);
+    await readConditionsPreview(
+      { collection: "pages", id: "p1" },
+      reads({ publicEntry })
+    );
+    // The id and the public fields: never the page's blocks document.
+    expect(publicEntry).toHaveBeenCalledWith(
+      { collection: "pages", id: "p1" },
+      ["id", "audience"]
+    );
+  });
+
   it("answers no values for a page a visitor reads none of", async () => {
     const answer = await readConditionsPreview(
       { collection: "pages", id: "p1" },
@@ -195,6 +208,11 @@ describe("the route as bound", () => {
     expect(visitorReads.length).toBeGreaterThan(0);
     for (const [args] of visitorReads) {
       expect(args).toMatchObject({ overrideAccess: false, user: undefined });
+      // Only the id and the fields a visitor may read: no blocks document.
+      expect((args as Record<string, unknown>).select).toEqual({
+        id: true,
+        audience: true,
+      });
     }
     // Whether the caller may open it is asked of the id alone: no row,
     // draft or blocks document is loaded for it.

@@ -114,7 +114,11 @@ export async function readConditionsPreview(
   if (!opened) throw previewRefusal(ROUTE, collection);
   // Only now, with the page shown to be the caller's to open: read as a
   // visitor reads it.
-  const { publicValues, fields } = await visitorView(request, reads);
+  const { publicValues, fields } = await visitorView(
+    request,
+    reads,
+    "public-fields"
+  );
   return {
     id: request.id,
     noun: labelOf(record, collection),
@@ -161,7 +165,7 @@ export function conditionsPreviewEntryRoute(setup: {
                   : { locale: request.locale }),
               })
             ).items.length > 0,
-          publicEntry: request => bound.publicEntry(request),
+          publicEntry: (request, select) => bound.publicEntry(request, select),
           publicFields: (collection, locale) =>
             bound.publicFields(collection, locale),
         })
