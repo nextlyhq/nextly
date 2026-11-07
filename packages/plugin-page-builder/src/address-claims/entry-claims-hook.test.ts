@@ -130,8 +130,9 @@ function harness(options: {
       read += 1;
       return answer;
     },
-    ownDesignPublished: async () => false,
-    publishedDesigns: async () => new Set(),
+    publishedOwnDesign: async () => null,
+    publishedDesigns: async () => new Map(),
+    templatePaginates: async () => false,
     entriesWithIds: async (_collection, _ids, tx) => {
       if (tx === undefined) throw new Error("entries read off the write");
       return [];
@@ -296,6 +297,24 @@ describe("a template's publish", () => {
 
 type Row = Record<string, unknown>;
 
+/** A design document holding one list of posts, split into pages. */
+const PAGED = {
+  formatVersion: 1,
+  kind: "template",
+  nodes: [
+    {
+      id: "list",
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts", limit: 10, paginate: true },
+      slots: { children: [], empty: [] },
+    },
+  ],
+};
+
+/** A design document splitting no list into pages. */
+const PLAIN = { formatVersion: 1, kind: "template", nodes: [] };
+
 /** A read of the store's rows: each field equal to, or among, the values. */
 type Where = Record<string, { equals?: unknown; in?: readonly unknown[] }>;
 
@@ -385,6 +404,8 @@ function memoryClaims() {
 function designHarness(options: {
   declared: boolean;
   templatePublished?: boolean;
+  /** Whether the collection's template splits a list into pages. */
+  templatePaged?: boolean;
 }) {
   /** The ids each read of entries by id asked for, in order. */
   const entryReads: string[][] = [];
@@ -396,8 +417,9 @@ function designHarness(options: {
       published: options.templatePublished ?? true,
       address: options.declared ? null : ["events"],
     } as ServingTemplate | null,
+    templatePaged: options.templatePaged ?? false,
     entries: new Map<string, Row>(),
-    designs: new Map<string, boolean>(),
+    designs: new Map<string, { published: boolean; paged: boolean }>(),
     // Whether the collection may still have a template: false once it is
     // made localized, or loses its `slug` field.
     eligible: true,
@@ -409,17 +431,26 @@ function designHarness(options: {
     templates: "templates",
     locales: () => ["en"],
     templateOf: async asked => (ours(asked) ? state.template : null),
-    ownDesignPublished: async (asked, id, tx) => {
+    publishedOwnDesign: async (asked, id, tx) => {
       // Asked inside a write, so always on its transaction.
       if (tx === undefined) throw new Error("design read off the write");
-      return ours(asked) && state.designs.get(id) === true;
+      const design = ours(asked) ? state.designs.get(id) : undefined;
+      return design?.published === true ? { paginates: design.paged } : null;
     },
     publishedDesigns: async (asked, tx) => {
       if (tx === undefined) throw new Error("designs read off the write");
-      return new Set(
+      return new Map(
         ours(asked)
-          ? [...state.designs].filter(([, on]) => on).map(([id]) => id)
+          ? [...state.designs]
+              .filter(([, design]) => design.published)
+              .map(([id, design]) => [id, { paginates: design.paged }])
           : []
+      );
+    },
+    templatePaginates: async (asked, tx) => {
+      if (tx === undefined) throw new Error("template read off the write");
+      return (
+        ours(asked) && state.template?.published === true && state.templatePaged
       );
     },
     entriesWithIds: async (asked, ids, tx) => {
@@ -474,16 +505,17 @@ function designHarness(options: {
     await handler({ transaction: {}, ...write });
   };
   const entryHook = options.declared ? collection : "*";
-  const templateRow = (status: string) => ({
+  const templateRow = (status: string, paged = state.templatePaged) => ({
     id: "t1",
     title: "Template",
     collection,
     status,
     address: stored,
+    content: paged ? PAGED : PLAIN,
   });
   const templateStatus = () =>
     state.template?.published === true ? "published" : "draft";
-  const designRow = (id: string, published: boolean) => ({
+  const designRow = (id: string, published: boolean, paged: boolean) => ({
     id: `d-${id}`,
     title: id,
     collection: null,
@@ -491,23 +523,42 @@ function designHarness(options: {
     entryCollection: collection,
     entryId: id,
     status: published ? "published" : "draft",
+    content: paged ? PAGED : PLAIN,
   });
-  /** Write `id`'s own design: given, updated to `published`, or removed. */
+  /**
+   * Write `id`'s own design: given, updated to `published` (and `paged`, its
+   * list split into pages or not), or removed. The design stands as written
+   * before its hook runs, since the hook reads on the write's transaction,
+   * which sees the write.
+   */
   const design = async (
     id: string,
     operation: "create" | "update" | "delete",
-    published = false
+    published = false,
+    paged = state.designs.get(id)?.paged ?? false
   ) => {
     const was = state.designs.get(id);
-    const before = was === undefined ? undefined : designRow(id, was);
+    const before =
+      was === undefined ? undefined : designRow(id, was.published, was.paged);
+    if (operation === "delete") state.designs.delete(id);
+    else state.designs.set(id, { published, paged });
     await run("templates", {
       operation,
       id: `d-${id}`,
-      data: operation === "delete" ? before : designRow(id, published),
+      data: operation === "delete" ? before : designRow(id, published, paged),
       originalData: operation === "update" ? before : undefined,
     });
-    if (operation === "delete") state.designs.delete(id);
-    else state.designs.set(id, published);
+  };
+  /** Republish the collection's template with its list paged or not. */
+  const repageTemplate = async (paged: boolean) => {
+    const before = templateRow(templateStatus(), state.templatePaged);
+    state.templatePaged = paged;
+    await run("templates", {
+      operation: "update",
+      id: "t1",
+      data: templateRow(templateStatus(), paged),
+      originalData: before,
+    });
   };
   return {
     held,
@@ -529,31 +580,50 @@ function designHarness(options: {
       await design(id, "delete");
       state.entries.delete(id);
     },
-    unpublishTemplate: async () => {
+    // A template's write stands as written before its hook runs, as a
+    // design's does, since the hook reads on the write's transaction.
+    publishTemplate: async () => {
+      const before = templateRow(templateStatus());
+      state.template = {
+        published: true,
+        address: state.template?.address ?? null,
+      };
       await run("templates", {
         operation: "update",
         id: "t1",
-        data: templateRow("draft"),
-        originalData: templateRow(templateStatus()),
+        data: templateRow("published"),
+        originalData: before,
       });
+    },
+    unpublishTemplate: async () => {
+      const before = templateRow(templateStatus());
       state.template = {
         published: false,
         address: state.template?.address ?? null,
       };
+      await run("templates", {
+        operation: "update",
+        id: "t1",
+        data: templateRow("draft"),
+        originalData: before,
+      });
     },
     deleteTemplate: async () => {
+      const before = templateRow(templateStatus());
+      state.template = null;
       await run("templates", {
         operation: "delete",
         id: "t1",
-        data: templateRow(templateStatus()),
+        data: before,
       });
-      state.template = null;
     },
-    giveDesign: (id: string, published = false) =>
-      design(id, "create", published),
-    publishDesign: (id: string) => design(id, "update", true),
+    giveDesign: (id: string, published = false, paged = false) =>
+      design(id, "create", published, paged),
+    publishDesign: (id: string, paged?: boolean) =>
+      design(id, "update", true, paged),
     unpublishDesign: (id: string) => design(id, "update", false),
     removeDesign: (id: string) => design(id, "delete"),
+    repageTemplate,
   };
 }
 
@@ -770,5 +840,116 @@ describe("an entry drawn with its own design in a collection that may no longer 
     // runtime collection's stored address when the template is
     // unpublished" above).
     expect(h.held()).toEqual([]);
+  });
+});
+
+describe("an entry drawn with a design that splits a list into pages", () => {
+  it("holds its list's later pages with its address while its template pages, and gives them up when the template stops", async () => {
+    const h = designHarness({ declared: true, templatePaged: true });
+    await h.save("hello");
+    expect(h.held()).toEqual([
+      "address /blog/hello posts:hello",
+      "space /blog/hello posts:hello",
+    ]);
+
+    await h.repageTemplate(false);
+    expect(h.held()).toEqual(["address /blog/hello posts:hello"]);
+
+    await h.repageTemplate(true);
+    expect(h.held()).toEqual([
+      "address /blog/hello posts:hello",
+      "space /blog/hello posts:hello",
+    ]);
+  });
+
+  it("holds no later pages while its template splits no list, and gives them all up when the entry is unpublished", async () => {
+    const h = designHarness({ declared: true });
+    await h.save("hello");
+    expect(h.held()).toEqual(["address /blog/hello posts:hello"]);
+
+    await h.repageTemplate(true);
+    await h.save("hello", "draft");
+    expect(h.held()).toEqual([]);
+  });
+
+  it("holds later pages for the one entry whose own design pages where the template does not", async () => {
+    const h = designHarness({ declared: true });
+    await h.save("hello");
+    await h.save("other");
+
+    await h.giveDesign("hello", true, true);
+    expect(h.held()).toEqual([
+      "address /blog/hello posts:hello",
+      "address /blog/other posts:other",
+      "space /blog/hello posts:hello",
+    ]);
+
+    // Its own save keeps them, drawn by its own design.
+    await h.save("hello");
+    expect(h.held()).toContain("space /blog/hello posts:hello");
+
+    // Republished with its list no longer paged, then unpublished, removed.
+    await h.publishDesign("hello", false);
+    expect(h.held()).toEqual([
+      "address /blog/hello posts:hello",
+      "address /blog/other posts:other",
+    ]);
+    await h.publishDesign("hello", true);
+    expect(h.held()).toContain("space /blog/hello posts:hello");
+    await h.unpublishDesign("hello");
+    expect(h.held()).toEqual([
+      "address /blog/hello posts:hello",
+      "address /blog/other posts:other",
+    ]);
+    await h.publishDesign("hello", true);
+    await h.removeDesign("hello");
+    expect(h.held()).toEqual([
+      "address /blog/hello posts:hello",
+      "address /blog/other posts:other",
+    ]);
+  });
+
+  it("gives up its later pages for an own design that pages no list over a template that does, and takes them back when it is removed", async () => {
+    const h = designHarness({ declared: true, templatePaged: true });
+    await h.save("hello");
+    await h.giveDesign("hello", true, false);
+    expect(h.held()).toEqual(["address /blog/hello posts:hello"]);
+
+    await h.removeDesign("hello");
+    expect(h.held()).toEqual([
+      "address /blog/hello posts:hello",
+      "space /blog/hello posts:hello",
+    ]);
+  });
+
+  it("keeps the later pages of an entry served by its own paged design when the template is unpublished, and the others give up all", async () => {
+    const h = designHarness({ declared: true, templatePaged: true });
+    await h.save("hello");
+    await h.save("other");
+    await h.giveDesign("hello", true, true);
+
+    await h.unpublishTemplate();
+
+    expect(h.held()).toEqual([
+      "address /blog/hello posts:hello",
+      "space /blog/hello posts:hello",
+    ]);
+  });
+
+  it("claims its later pages when its template is first published paged, at a runtime collection's stored address", async () => {
+    const h = designHarness({
+      declared: false,
+      templatePublished: false,
+      templatePaged: true,
+    });
+    await h.save("hello");
+    expect(h.held()).toEqual([]);
+
+    await h.publishTemplate();
+
+    expect(h.held()).toEqual([
+      "address /events/hello events:hello",
+      "space /events/hello events:hello",
+    ]);
   });
 });

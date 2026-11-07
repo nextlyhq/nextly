@@ -958,7 +958,10 @@ export interface DesiredClaims {
  * With `wait`, an address another document holds is not refused: the
  * holder waits for it instead ({@link claimOrWait}), as a document does whose
  * address follows from something no one is saving now (a template published
- * over existing entries, or a start-up pass).
+ * over existing entries, or a start-up pass). So does a list's later pages
+ * where a document is published among them ({@link claimSpaceOrWait}): an
+ * entry whose template starts splitting its list into pages keeps its
+ * address, and its list is paged once the document there gives it up.
  *
  * @returns Whether anything changed.
  */
@@ -1005,7 +1008,11 @@ export async function reconcileHolder(
     }
   }
   for (const list of claimSpaces) {
-    await claimSpace(claims, tx, { list, holder, describe });
+    if (options.wait === true) {
+      await claimSpaceOrWait(claims, tx, { list, holder });
+    } else {
+      await claimSpace(claims, tx, { list, holder, describe });
+    }
   }
   for (const row of release) {
     if (row.address === null) continue;
