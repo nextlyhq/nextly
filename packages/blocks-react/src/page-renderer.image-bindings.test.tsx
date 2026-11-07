@@ -44,6 +44,7 @@ const POSTS: readonly BindingFieldShape[] = [
   { name: "cover", type: "upload", relationTo: "media" },
   { name: "either", type: "upload", relationTo: ["media", "documents"] },
   { name: "attachment", type: "upload", relationTo: "documents" },
+  { name: "photo", type: "upload", relationTo: "photos" },
   { name: "photoUrl", type: "url" },
 ];
 
@@ -86,11 +87,13 @@ function boundImage(
 async function render(
   document: BlockDocument,
   entry: Readonly<Record<string, unknown>>,
-  remotePatterns?: readonly URL[]
+  remotePatterns?: readonly URL[],
+  mediaCollection?: string
 ): Promise<string> {
   const bindings: PageBindings = {
     entry,
     entryRef: { collection: "posts" },
+    ...(mediaCollection === undefined ? {} : { mediaCollection }),
     fieldShapes: {
       fieldsOf: ref =>
         "collection" in ref && ref.collection === "posts" ? POSTS : undefined,
@@ -307,6 +310,34 @@ describe("an image bound to a field", () => {
       })
     );
     expect(other.map(tag => attribute(tag, "src"))).toEqual([
+      "/media/fallback.jpg",
+    ]);
+  });
+
+  it("reads media from the collection the host names, and nothing from the default library then", async () => {
+    // A site resolving its pictures from "photos": a field to photos draws,
+    // and one to the default library names records the lookup won't read.
+    const fallback = { fallback: "/media/fallback.jpg" };
+    const own = images(
+      await render(
+        page(boundImage("photo", fallback)),
+        { photo: "m1" },
+        undefined,
+        "photos"
+      )
+    );
+    expect(own.map(tag => attribute(tag, "src"))).toEqual([
+      "https://cdn.example/m1.jpg",
+    ]);
+    const library = images(
+      await render(
+        page(boundImage("cover", fallback)),
+        { cover: "m1" },
+        undefined,
+        "photos"
+      )
+    );
+    expect(library.map(tag => attribute(tag, "src"))).toEqual([
       "/media/fallback.jpg",
     ]);
   });

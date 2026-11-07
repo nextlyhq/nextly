@@ -106,6 +106,12 @@ export interface BindingRunInput {
   readonly locale?: string;
   /** The site's time zone, for date-times; UTC when absent or invalid. */
   readonly timeZone?: string;
+  /**
+   * The collection whose ids the host's media lookup reads, so an image is
+   * filled only from an upload field pointing there; `media`, Nextly's media
+   * library, when absent.
+   */
+  readonly mediaCollection?: string;
   readonly props: BlockPropsLookup;
 }
 
@@ -126,6 +132,8 @@ export interface BindingRun {
   /** False when a time zone was given and refused, so UTC is used instead. */
   readonly timeZoneValid: boolean;
   readonly formatter: BindingFormatter;
+  /** The collection an image's media id is read from; `media` when absent. */
+  readonly mediaCollection?: string;
 }
 
 /**
@@ -154,6 +162,9 @@ export function createBindingRun(input: BindingRunInput): BindingRun {
     env,
     timeZoneValid: zone.valid,
     formatter: createBindingFormatter(env),
+    ...(input.mediaCollection === undefined
+      ? {}
+      : { mediaCollection: input.mediaCollection }),
   };
 }
 
@@ -436,8 +447,12 @@ function ownImageFill(node: BlockNode, prop: string): Fill {
  * text and size. A URL field's value fills it only when it is an image
  * address. A field the schema did not describe is read by the value's shape.
  */
-function shapeImage(binding: CheckedBinding, value: unknown): Shaped {
-  const image = boundImageOf(value, binding.field);
+function shapeImage(
+  binding: CheckedBinding,
+  value: unknown,
+  mediaCollection: string
+): Shaped {
+  const image = boundImageOf(value, binding.field, mediaCollection);
   if (image === undefined) return misfitValue("image");
   const fallback = imageFallbackOf(binding.fallback);
   return {
@@ -455,7 +470,8 @@ function shapeImage(binding: CheckedBinding, value: unknown): Shaped {
 /** What a bound image field's value names, or nothing usable. */
 function boundImageOf(
   value: unknown,
-  field: BindingFieldShape | undefined
+  field: BindingFieldShape | undefined,
+  mediaCollection: string
 ): ImageValue | undefined {
   const kind = field === undefined ? undefined : bindingKindOf(field);
   // A URL field holds an address, whatever else it looks like.
@@ -466,25 +482,28 @@ function boundImageOf(
   }
   // An upload field to another collection names records the host's media
   // lookup does not read, so an id of one would draw an unrelated picture.
-  if (!mayHoldMedia(field)) return undefined;
-  if (isPlainRecord(value)) return recordImageOf(value);
+  if (!mayHoldMedia(field, mediaCollection)) return undefined;
+  if (isPlainRecord(value)) return recordImageOf(value, mediaCollection);
   return kind === "media" ? mediaIdImage(value) : imageValueOf(value);
 }
 
 /**
- * The collection a host's media lookup reads: the media library. An image is
- * resolved through `resolveMedia(id)` alone, so an id from any other
- * collection is not one it can draw.
+ * The collection a host's media lookup reads when a route names none:
+ * Nextly's media library. An image is resolved through `resolveMedia(id)`
+ * alone, so an id from any other collection is not one it can draw.
  */
 const MEDIA_COLLECTION = "media";
 
 /** Whether a field may hold media: it names no collection, or names this one. */
-function mayHoldMedia(field: BindingFieldShape | undefined): boolean {
+function mayHoldMedia(
+  field: BindingFieldShape | undefined,
+  mediaCollection: string
+): boolean {
   const targets = field?.relationTo;
   if (targets === undefined) return true;
   return typeof targets === "string"
-    ? targets === MEDIA_COLLECTION
-    : targets.includes(MEDIA_COLLECTION);
+    ? targets === mediaCollection
+    : targets.includes(mediaCollection);
 }
 
 /**
@@ -493,16 +512,19 @@ function mayHoldMedia(field: BindingFieldShape | undefined): boolean {
  * address.
  */
 function recordImageOf(
-  record: Readonly<Record<string, unknown>>
+  record: Readonly<Record<string, unknown>>,
+  mediaCollection: string
 ): ImageValue | undefined {
   // An upload field that may point at several collections stores, and
   // populates, `{ relationTo, value }`: the media is its value, and only in
-  // the arm that points at the media library.
+  // the arm that points at the collection media is read from.
   const arm = ownEntry(record, "relationTo");
   if (typeof arm === "string" && Object.hasOwn(record, "value")) {
-    if (arm !== MEDIA_COLLECTION) return undefined;
+    if (arm !== mediaCollection) return undefined;
     const value = ownEntry(record, "value");
-    return isPlainRecord(value) ? recordImageOf(value) : mediaIdImage(value);
+    return isPlainRecord(value)
+      ? recordImageOf(value, mediaCollection)
+      : mediaIdImage(value);
   }
   const id = mediaIdImage(ownEntry(record, "id"));
   if (id !== undefined) return id;
@@ -549,7 +571,7 @@ function fillOf(
     return fallbackFillOf(binding.kind, binding.fallback);
   const shaped =
     binding.kind === "image"
-      ? shapeImage(binding, value)
+      ? shapeImage(binding, value, run.mediaCollection ?? MEDIA_COLLECTION)
       : shapeValue(binding, value, run);
   if (!shaped.ok) {
     issues.push({

@@ -2681,6 +2681,16 @@ export interface BindingSourcesArgs {
   readonly conditions?: ConditionDemand;
 }
 
+/** A page's bindings, told which collection the route reads media from. */
+function withMediaCollection(
+  bindings: PageBindings | undefined,
+  mediaCollection: string | undefined
+): PageBindings | undefined {
+  return bindings === undefined || mediaCollection === undefined
+    ? bindings
+    : { ...bindings, mediaCollection };
+}
+
 /**
  * What a page's bindings read, through `args.reader`, or nothing when the
  * documents it draws hold no binding.
@@ -2962,7 +2972,7 @@ async function readPageInputs(args: {
       )
     : parts;
   const readingDocs = presentedOf(reading);
-  const bindings = await readBindingSources({
+  const read = await readBindingSources({
     documents: readingDocs,
     entrySource: args.entrySource,
     slug: context.collection,
@@ -2983,6 +2993,9 @@ async function readPageInputs(args: {
       ? { conditions: conditionDemand(readingDocs.flatMap(doc => doc.nodes)) }
       : {}),
   });
+  // The collection the route reads media from, so a bound image is filled
+  // only from an upload field pointing there.
+  const bindings = withMediaCollection(read, config.mediaCollection);
   const decided = conditioned
     ? decideConditions(parts, bindings, bindingIssueLog(context))
     : parts;
