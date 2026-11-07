@@ -41,6 +41,10 @@ vi.mock("nextly/runtime", async importOriginal => {
 
 import { throughBoundary } from "./__tests__/through-boundary";
 import { coreBlocks } from "./blocks";
+import {
+  createDefaultDataProvider,
+  type BlocksDataProviderFactory,
+} from "./context";
 import { createPublicBlocksPage } from "./next";
 import type { PageRendererProps } from "./page-renderer";
 import { PageRenderer } from "./page-renderer";
@@ -142,7 +146,11 @@ function readsSoFar(nextly: Site): number {
 }
 
 /** A page of one list of posts: a title, an author's name, an image, a link. */
-function listing(limit: number): BlockDocument {
+function listing(
+  limit: number,
+  /** Leave each entry's link out by a condition no entry meets. */
+  options: { readonly linkHidden?: boolean } = {}
+): BlockDocument {
   const itemText = (id: string, path: string) => ({
     id,
     type: "core/heading",
@@ -178,6 +186,15 @@ function listing(limit: number): BlockDocument {
                 type: "core/button",
                 version: 1,
                 props: { label: "Read", entryCollection: "posts" },
+                ...(options.linkHidden === true
+                  ? {
+                      visibility: {
+                        conditions: [
+                          [{ field: "title", op: "equals", value: "No post" }],
+                        ],
+                      },
+                    }
+                  : {}),
                 bindings: { entryId: { $bind: "id", source: "item" } },
               },
             ],
@@ -212,7 +229,10 @@ async function quiet(): Promise<void> {
 /** The page at `/journal` rendered, and the reads it made below the route. */
 async function journal(
   nextly: Site,
-  config: { maxQueries?: number } = {}
+  config: {
+    maxQueries?: number;
+    data?: BlocksDataProviderFactory;
+  } = {}
 ): Promise<{ html: string; reads: Row[]; total: number }> {
   return await rendered(nextly, {
     collections: ["pages", "posts"],
@@ -234,6 +254,7 @@ async function rendered(
     field: string;
     slug: string;
     maxQueries?: number;
+    data?: BlocksDataProviderFactory;
     /** Draw without the lists' read-ahead, as each entry read one by one. */
     oneByOne?: boolean;
   }
@@ -493,6 +514,42 @@ function postPage(): BlockDocument {
     })
   ) as BlockDocument;
 }
+
+describe("what a list reads ahead, and through what", () => {
+  it("reads a relation through the page's own data provider, so one that does not serve its collection reads none", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const nextly = site(5, listing(5));
+    const { html, reads } = await journal(nextly, {
+      // Lists may read posts, and nothing else.
+      data: reader =>
+        createDefaultDataProvider(reader, { collections: ["posts"] }),
+    });
+    expect(html).toContain("Post number 5");
+    // The author binding shows its fallback: the relation was not read.
+    expect(html).toContain(">None<");
+    expect(html).not.toContain("Writer");
+    expect(reads.map(args => args.collection)).not.toContain("authors");
+    warn.mockRestore();
+  });
+
+  it("reads nothing for a block each entry's conditions leave out, and still reads what the entries draw", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const nextly = site(5, listing(5, { linkHidden: true }));
+    // Room for the entries, their authors and the template's image only: a
+    // read for the hidden links would be refused, and logged.
+    const { html, reads } = await journal(nextly, { maxQueries: 3 });
+    expect(html).toContain("Writer 1");
+    expect(html).toContain("/media/1.jpg");
+    expect(html).not.toContain(">Read<");
+    expect(described(reads)).toEqual([
+      "posts: query",
+      "authors: by ids",
+      "images: query",
+    ]);
+    await quiet();
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
 
 describe("the overrun line", () => {
   it("is said once per page in ten minutes, however often the page renders over its cap", async () => {

@@ -87,7 +87,11 @@ describe("a list's read-ahead", () => {
       items,
       TEMPLATE,
       createStandaloneContext({ listReads: reads }),
-      { nodeId: "list", collection: "posts" }
+      {
+        nodeId: "list",
+        collection: "posts",
+        contextOf: item => createStandaloneContext({ listReads: reads, item }),
+      }
     );
     expect(reads.related).toHaveBeenCalledOnce();
     expect(reads.related).toHaveBeenCalledWith(

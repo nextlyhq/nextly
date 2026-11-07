@@ -3607,18 +3607,24 @@ function overrunMayBeSaid(page: string, now: number): boolean {
 }
 
 /**
- * What a page's lists read ahead for their entries: relations through the
- * public reader, as the page's own bindings read them, judged by the public's
- * field shapes; links through the page's own resolver, whose answers the
- * entries' blocks then take without a read of their own.
+ * What a page's lists read ahead for their entries:
+ * - relations through the page's own data provider, the one its lists read
+ *   their entries through, so whatever the provider refuses a list (a
+ *   collection it does not serve) it refuses a list's relations too: the
+ *   items keep their ids and their bindings show their fallbacks. Judged by
+ *   the public's field shapes. Never through any other reader;
+ * - links through the page's own resolver, whose answers the entries'
+ *   blocks then take without a read of their own. A link names where this
+ *   route serves an entry and is read under the route's own posture, as the
+ *   same link outside a list is, so a batched link answers as that one does.
  */
 function listBatchReads(args: {
-  readonly reader: BlocksPublicReader;
+  readonly data: BlocksDataProvider;
   readonly shapes: BlocksFieldShapes | undefined;
   readonly budget: QueryBudget;
   readonly entryPaths: EntryPathReads;
 }): ListBatchReads {
-  const { reader, shapes, budget } = args;
+  const { data, shapes, budget } = args;
   return {
     related: async (collection, field, ids, fields, claim) => {
       // Only a relation the public's shapes say is a to-one relation to one
@@ -3629,7 +3635,7 @@ function listBatchReads(args: {
       const found = new Map<string, Readonly<Record<string, unknown>>>();
       for (const chunk of chunked(wanted, AHEAD_BATCH_SIZE)) {
         if (!budget.take({ ...claim, kind: "related" })) break;
-        const page = await reader
+        const page = await data
           .find({
             collection: target,
             filters: [{ field: "id", op: "in", value: chunk }],
@@ -3638,8 +3644,19 @@ function listBatchReads(args: {
           })
           .catch(() => undefined);
         // Rows matched to ids only with certainty; otherwise these items
-        // keep their ids, and their bindings show their fallbacks.
-        const rows = page === undefined ? undefined : rowsById(page, chunk);
+        // keep their ids, and their bindings show their fallbacks. A
+        // provider need not count what it matched; then the rows it gave are
+        // taken as its count.
+        const rows =
+          page === undefined
+            ? undefined
+            : rowsById(
+                {
+                  items: page.items,
+                  meta: { total: page.total ?? page.items.length },
+                },
+                chunk
+              );
         if (rows === undefined) continue;
         for (const [id, row] of rows) found.set(id, row);
       }
@@ -3960,6 +3977,9 @@ function blocksRouteConfig(
         { onRefused: () => overrun.refused(budget) }
       );
       const media = mediaResolver(config, readerFor(config), budget);
+      // The one provider this render's lists read through: their entries,
+      // and what they read ahead for them.
+      const listData = dataFor(data, config, context.locale, listWindow);
       const entryPaths = entryPathResolver(
         config,
         isPublic,
@@ -3988,7 +4008,7 @@ function blocksRouteConfig(
         // list there tells that author what it could not read as stored. A
         // published page never does.
         diagnostics: entry[WORKING_DRAFT_KEY] === true,
-        data: dataFor(data, config, context.locale, listWindow),
+        data: listData,
         // Fresh for THIS render. `core/collection-loop` claims from it before
         // each read, and an absent budget reads as unlimited — the loop's own
         // check is `ctx.queries?.take() === false` — so a routed page without
@@ -4087,7 +4107,7 @@ function blocksRouteConfig(
       // reads: relations as the public reads them, links as the blocks drawn
       // inside the entries would read them one by one.
       const listReads = listBatchReads({
-        reader: publicReaderFor(config, context.locale, listWindow),
+        data: listData,
         shapes: bindings?.fieldShapes,
         budget,
         entryPaths,

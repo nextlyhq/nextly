@@ -28,6 +28,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
+import { conditionAllows } from "../visibility";
 
 /** Where a prop's value comes from: as set, or a list item's field path. */
 type ValueSource =
@@ -85,16 +86,27 @@ function valueSource(node: BlockNode, prop: string): ValueSource | undefined {
 }
 
 /**
- * What a list's template asks of each entry: walked through every slot, but
- * not into a list inside it, whose entries are its own.
+ * What a list's template asks of one entry: walked through every slot, but
+ * not into a list inside it, whose entries are its own, nor into a block
+ * `drawn` says the entry does not draw.
  */
-export function itemReadDemand(template: readonly BlockNode[]): ItemReadDemand {
+export function itemReadDemand(
+  template: readonly BlockNode[],
+  drawn: (node: BlockNode) => boolean = () => true
+): ItemReadDemand {
   const follows = new Map<string, Set<string>>();
   const links: { collection: ValueSource; id: ValueSource }[] = [];
   const stack: BlockNode[] = [...template];
   for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
-    // A list inside the template draws entries of its own.
-    if (!isPlainRecord(node) || node.type === COLLECTION_LIST_TYPE) continue;
+    // A list inside the template draws entries of its own, and a block the
+    // entry's conditions leave out draws nothing to read for.
+    if (
+      !isPlainRecord(node) ||
+      node.type === COLLECTION_LIST_TYPE ||
+      !drawn(node)
+    ) {
+      continue;
+    }
     addFollows(node, follows);
     const link = linkOf(node);
     if (link !== undefined) links.push(link);
@@ -159,13 +171,16 @@ export async function withReadAhead<
   outcome: O,
   list: BlockNode,
   ctx: PageContext,
-  collection: string | undefined
+  entries: {
+    readonly collection: string | undefined;
+    readonly contextOf: (item: Record<string, unknown>) => PageContext;
+  }
 ): Promise<O> {
   const items = await readListAhead(
     outcome.items,
     list.slots?.[LIST_ENTRY_SLOT] ?? [],
     ctx,
-    { nodeId: list.id, collection }
+    { nodeId: list.id, ...entries }
   );
   return items === outcome.items ? outcome : { ...outcome, items };
 }
@@ -175,6 +190,14 @@ export async function withReadAhead<
  * the items' bindings follow read in place of its id, and the links the
  * template draws settled for the per-entry reads to answer from.
  *
+ * Each entry asks only for what it draws: its template walked with the
+ * render's own gate (`conditionAllows`, against the context the entry is
+ * drawn with, `contextOf`), so a block an entry's conditions leave out spends
+ * nothing. The route's set of blocks its entry's conditions kept is not
+ * handed to a list, so a block inside one that an entry condition kept is
+ * judged against the item here; if that leaves it out, it reads as it is
+ * drawn, one entry at a time, still counted, and draws the same.
+ *
  * Every read is claimed for the list (`nodeId`), so a page past its
  * allowance names the list as the block that went unread. A host without
  * batch reads gets the entries back as they were.
@@ -183,21 +206,29 @@ export async function readListAhead(
   items: readonly Record<string, unknown>[],
   template: readonly BlockNode[],
   ctx: PageContext,
-  list: { readonly nodeId: string; readonly collection: string | undefined }
+  list: {
+    readonly nodeId: string;
+    readonly collection: string | undefined;
+    readonly contextOf: (item: Record<string, unknown>) => PageContext;
+  }
 ): Promise<readonly Record<string, unknown>[]> {
   const reads = ctx.listReads;
   if (reads === undefined || items.length === 0) return items;
-  const demand = itemReadDemand(template);
+  const demands = items.map(item =>
+    itemReadDemand(template, node =>
+      conditionAllows(node, list.contextOf(item))
+    )
+  );
   const claim = { nodeId: list.nodeId };
   const drawn =
     list.collection === undefined
       ? items
-      : await withRelations(items, demand.follows, {
+      : await withRelations(items, demands, {
           reads,
           collection: list.collection,
           claim,
         });
-  const refs = linkRefs(drawn, demand.links);
+  const refs = linkRefs(drawn, demands);
   if (refs.length > 0) await reads.entryPaths(refs, claim);
   return drawn;
 }
@@ -210,13 +241,33 @@ function storedId(value: unknown): string | undefined {
 }
 
 /**
+ * Each relation the entries follow, with every field read there and the
+ * entries that follow it, by their place in the list.
+ */
+function followsOf(
+  demands: readonly ItemReadDemand[]
+): Map<string, { fields: Set<string>; entries: number[] }> {
+  const follows = new Map<string, { fields: Set<string>; entries: number[] }>();
+  demands.forEach((demand, index) => {
+    for (const [field, inner] of demand.follows) {
+      const wanted = follows.get(field) ?? { fields: new Set(), entries: [] };
+      for (const name of inner) wanted.fields.add(name);
+      wanted.entries.push(index);
+      follows.set(field, wanted);
+    }
+  });
+  return follows;
+}
+
+/**
  * The items with each followed relation read, one read per relation for all
- * of them, in place of the id each stores. An item whose related entry was
- * not read keeps its id, and its binding shows its fallback.
+ * the entries that follow it, in place of the id each stores. An item whose
+ * related entry was not read keeps its id, and its binding shows its
+ * fallback.
  */
 async function withRelations(
   items: readonly Record<string, unknown>[],
-  follows: ItemReadDemand["follows"],
+  demands: readonly ItemReadDemand[],
   how: {
     readonly reads: NonNullable<PageContext["listReads"]>;
     readonly collection: string;
@@ -224,19 +275,20 @@ async function withRelations(
   }
 ): Promise<readonly Record<string, unknown>[]> {
   let drawn = items;
-  for (const [field, inner] of follows) {
-    const ids = drawn.flatMap(item => storedId(item[field]) ?? []);
+  for (const [field, { fields, entries }] of followsOf(demands)) {
+    const ids = entries.flatMap(index => storedId(drawn[index]?.[field]) ?? []);
     if (ids.length === 0) continue;
     const related = await how.reads.related(
       how.collection,
       field,
       ids,
-      [...inner],
+      [...fields],
       how.claim
     );
     if (related === undefined) continue;
-    drawn = drawn.map(item => {
-      const id = storedId(item[field]);
+    const following = new Set(entries);
+    drawn = drawn.map((item, index) => {
+      const id = following.has(index) ? storedId(item[field]) : undefined;
       const row = id === undefined ? undefined : related.get(id);
       return row === undefined ? item : { ...item, [field]: row };
     });
@@ -244,14 +296,14 @@ async function withRelations(
   return drawn;
 }
 
-/** Every entry the template links to, for all the items, each once. */
+/** Every entry the items' drawn links point at, each once. */
 function linkRefs(
   items: readonly Record<string, unknown>[],
-  links: ItemReadDemand["links"]
+  demands: readonly ItemReadDemand[]
 ): { collection: string; id: string }[] {
   const refs = new Map<string, { collection: string; id: string }>();
-  for (const item of items) {
-    for (const link of links) {
+  for (const [index, item] of items.entries()) {
+    for (const link of demands[index]?.links ?? []) {
       const collection = valueFor(link.collection, item);
       const id = valueFor(link.id, item);
       if (collection === undefined || id === undefined) continue;

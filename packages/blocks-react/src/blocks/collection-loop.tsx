@@ -466,7 +466,19 @@ export async function renderCollectionLoop({
   );
   // What the entries' template reads, read ahead for all of them at once, so
   // the list's cost does not grow with its length.
-  const read = await withReadAhead(outcome, node, ctx, collection);
+  // An ordinary entry: the item is no named query's row, whatever the list
+  // around this one shows. Read ahead and drawn with the same context, so the
+  // read-ahead asks only for what each entry draws.
+  const contextOf = (item: Record<string, unknown>): PageContext => ({
+    ...ctx,
+    item,
+    itemSource: collection,
+    itemQuery: undefined,
+  });
+  const read = await withReadAhead(outcome, node, ctx, {
+    collection,
+    contextOf,
+  });
   // The links between pages, under the entries, when the route pages this
   // list and its read said how many entries it matches.
   const pages = pageLinks(
@@ -478,14 +490,7 @@ export async function renderCollectionLoop({
   return drawList(
     {
       outcome: read,
-      // An ordinary entry: the item is no named query's row, whatever the
-      // list around this one shows.
-      itemContext: item => ({
-        ...ctx,
-        item,
-        itemSource: collection,
-        itemQuery: undefined,
-      }),
+      itemContext: contextOf,
     },
     { className, renderSlot, spacingMode, ctx, nodeId: node.id },
     pages
