@@ -479,6 +479,18 @@ its title, description and image from the template's SEO settings. A path nobody
 holds is not found, and so is an entry whose collection has no published template.
 `createPublicContentPage` is the cached, pre-rendered form.
 
+An entry with its own design ([An entry's own design](/docs/page-builder/compose-through-the-api#an-entrys-own-design))
+is drawn with that design instead, and takes its SEO settings from it, once the design
+is published. Until then, and after it is removed, the entry keeps its collection's
+template. A draft own design is never drawn by this route, in preview mode too:
+preview it in the editor. Publishing, unpublishing or
+removing an own design refreshes the entry's cached page, as a change to the template
+does. The design is read with the template in one query, through
+`pageBuilderContent()`'s `templates.readFor`; a provider written by hand without it
+draws every entry with its collection's template. A design that splits a list into
+pages draws its first page only, as a template does, since an entry's list does not
+page yet.
+
 #### Collections made in the Schema Builder
 
 A collection made in the Schema Builder has no code to declare its address in, so

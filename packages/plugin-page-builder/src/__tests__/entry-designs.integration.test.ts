@@ -2,7 +2,8 @@
  * An entry's own design against a real instance: giving one through the
  * template actions route as a draft copy of the collection's published
  * template, the unique key and the entry's lock that keep one per entry when
- * two gives run at once, removing it, and its deletion with its entry.
+ * two gives run at once, removing it, its deletion with its entry, and the
+ * site drawing the entry with it once it is published.
  *
  * @module __tests__/entry-designs.integration.test
  */
@@ -22,6 +23,7 @@ import { defineCollection, text } from "nextly/config";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { TEMPLATES_SLUG } from "../collections/templates";
+import { pageBuilderContent } from "../page-content";
 import { pageBuilder } from "../plugin";
 import type { TemplateActionResult } from "../templates/template-actions-contract";
 
@@ -375,6 +377,72 @@ describe.each(getConfiguredTestDialects())(
       expect(refused.status).toBe(404);
       expect(JSON.stringify(refused.body)).not.toContain("Hello world");
       expect(await designs(t)).toHaveLength(1);
+    });
+
+    it("draws an entry with its own design for the public once it is published, never its draft, and its neighbours with the template", async () => {
+      const t = await boot();
+      const { cookie } = await holding(t, DESIGNER);
+      const template = await publishedTemplate(t, cookie);
+      const hello = await entry(t, "Hello world");
+      const other = await entry(t, "Other");
+      const content = pageBuilderContent({ nextly: t.nextly as never });
+      const drawnWith = async (id: string) => {
+        const found = await content.templates.readFor("posts", id, undefined);
+        return {
+          id: found?.id,
+          nodes: (
+            found?.document as { nodes?: { id: string }[] } | null
+          )?.nodes?.map(node => node.id),
+        };
+      };
+      expect((await drawnWith(hello)).id).toBe(template);
+
+      const given = await act(cookie, {
+        kind: "give-entry-design",
+        collection: "posts",
+        entry: hello,
+      });
+      const own = (given.body.item as TemplateActionResult).template?.id ?? "";
+      await t.nextly.update({
+        collection: TEMPLATES_SLUG,
+        id: own,
+        data: { content: templateDocument("own-heading") },
+        overrideAccess: true,
+      });
+      // A draft own design is not the public's: the template still draws it.
+      expect((await drawnWith(hello)).id).toBe(template);
+
+      const published = await act(cookie, {
+        kind: "publish-template",
+        id: own,
+      });
+      expect(published.status).toBe(200);
+      expect(await drawnWith(hello)).toEqual({
+        id: own,
+        nodes: ["own-heading"],
+      });
+      expect((await drawnWith(other)).id).toBe(template);
+
+      // A working draft over the published own design stays unseen.
+      await t.nextly.update({
+        collection: TEMPLATES_SLUG,
+        id: own,
+        data: { content: templateDocument("draft-heading") },
+        draft: true,
+        overrideAccess: true,
+      });
+      expect(await drawnWith(hello)).toEqual({
+        id: own,
+        nodes: ["own-heading"],
+      });
+
+      // Removed, the entry is drawn with the template again.
+      await act(cookie, {
+        kind: "remove-entry-design",
+        collection: "posts",
+        entry: hello,
+      });
+      expect((await drawnWith(hello)).id).toBe(template);
     });
 
     it("deletes an entry's own design with the entry", async () => {
