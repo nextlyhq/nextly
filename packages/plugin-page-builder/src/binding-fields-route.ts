@@ -15,8 +15,9 @@
  *
  * ## How much
  *
- * One step into a relation, a bounded number of fields, Singles and
- * relations, and the picker keeps the answer briefly: it opens often.
+ * One step into a relation, a bounded number of fields and Singles, and of
+ * relations across the whole ask, and the picker keeps the answer briefly:
+ * it opens often. A Single no visitor may read any of is left out.
  *
  * ## Caching
  *
@@ -71,8 +72,14 @@ const BindingFieldsBody = z
 const MOST_FIELDS = 100;
 /** At most this many Singles are listed. */
 const MOST_SINGLES = 50;
-/** At most this many relations of one source are followed a step in. */
-const MOST_RELATIONS = 10;
+/**
+ * At most this many relations are followed a step in, across the whole ask:
+ * each costs two reads, so the cap bounds one ask's reads whatever the number
+ * of Singles.
+ */
+const MOST_RELATIONS = 20;
+/** A date every read of an entry carries, whatever its declared fields. */
+const TIMESTAMPS: ReadonlySet<string> = new Set(["createdAt", "updatedAt"]);
 /** A preview's length, in characters, before it is cut. */
 const PREVIEW_LENGTH = 80;
 
@@ -208,7 +215,11 @@ function pickerField(shape: BindingFieldShape, read: SourceRead): PickerField {
   const publicShape = read.publicShapes.find(
     candidate => candidate.name === shape.name
   );
-  const isPublic = publicShape !== undefined;
+  // The timestamps are read with the entry, so a visitor who may read the
+  // source reads them, though its field shapes never list them.
+  const isPublic =
+    publicShape !== undefined ||
+    (TIMESTAMPS.has(shape.name) && read.publicShapes.length > 0);
   const draft = !sameJsonValue(value, read.published?.[shape.name]);
   const preview = isPublic && !draft ? previewOf(value) : undefined;
   const group = groupRead(shape, read, publicShape);
@@ -223,28 +234,62 @@ function pickerField(shape: BindingFieldShape, read: SourceRead): PickerField {
   };
 }
 
-/** A source's fields, each relation followed one step in, up to the cap. */
+/**
+ * A relation's field as a visitor reaches it: through the relation, so not
+ * public where the relation is not, and a draft's where the relation is a
+ * draft's (it names another entry than the published one does), with no
+ * value shown then.
+ */
+function throughRelation(
+  inner: PickerField,
+  relation: PickerField
+): PickerField {
+  const { preview, ...withoutPreview } = inner;
+  const { draft: ownDraft, ...rest } = withoutPreview;
+  const isPublic = inner.public && relation.public;
+  const draft = relation.draft === true || ownDraft === true;
+  return {
+    ...rest,
+    public: isPublic,
+    ...(isPublic && draft ? { draft: true as const } : {}),
+    ...(isPublic && !draft && preview !== undefined ? { preview } : {}),
+  };
+}
+
+/** How many relations the ask has followed, shared by every source. */
+interface FollowBudget {
+  followed: number;
+}
+
+/** A source's fields, each relation followed one step in, up to the ask's cap. */
 async function sourceFields(
   read: SourceRead,
-  reads: BindingFieldsReads
+  reads: BindingFieldsReads,
+  budget: FollowBudget
 ): Promise<readonly PickerField[]> {
-  let followed = 0;
   return Promise.all(
     read.shapes.map(async shape => {
       const field = pickerField(shape, read);
       const target = followable(shape);
       const id = relatedId(read.row[shape.name]);
       if (target === undefined || id === undefined) return field;
-      if (followed >= MOST_RELATIONS) return field;
-      followed += 1;
+      if (budget.followed >= MOST_RELATIONS) return field;
+      budget.followed += 1;
       const related = await readSource({ collection: target, id }, reads);
       if (related === undefined) return field;
       return {
         ...field,
-        fields: related.shapes.map(inner => pickerField(inner, related)),
+        fields: related.shapes.map(inner =>
+          throughRelation(pickerField(inner, related), field)
+        ),
       };
     })
   );
+}
+
+/** Whether a visitor may read a field, or one inside it. */
+function isReachable(field: PickerField): boolean {
+  return field.public || (field.fields ?? []).some(isReachable);
 }
 
 /** The site settings, every one public, previewed as visitors see them. */
@@ -275,6 +320,8 @@ export async function readBindingFields(
 ): Promise<BindingFieldsResponse> {
   const sources: PickerSource[] = [];
   const own = request.source;
+  const budget: FollowBudget = { followed: 0 };
+  const singles = (await reads.singles()).slice(0, MOST_SINGLES);
   const entryRef: FieldsRef | undefined =
     own.kind === "single"
       ? { single: own.slug }
@@ -286,12 +333,16 @@ export async function readBindingFields(
     if (read !== undefined) {
       sources.push({
         binding: { source: "entry" },
-        label: await reads.collectionLabel(own.slug),
-        fields: await sourceFields(read, reads),
+        // A Single's own label for a Single, a collection's for an entry.
+        label:
+          own.kind === "single"
+            ? (singles.find(single => single.slug === own.slug)?.label ??
+              own.slug)
+            : await reads.collectionLabel(own.slug),
+        fields: await sourceFields(read, reads, budget),
       });
     }
   }
-  const singles = (await reads.singles()).slice(0, MOST_SINGLES);
   const singleSources = await Promise.all(
     singles.map(async ({ slug, label }): Promise<PickerSource | undefined> => {
       const read = await readSource({ single: slug }, reads);
@@ -300,12 +351,16 @@ export async function readBindingFields(
         : {
             binding: { source: "single", sourceKey: slug },
             label,
-            fields: await sourceFields(read, reads),
+            fields: await sourceFields(read, reads, budget),
           };
     })
   );
+  // A Single no visitor may read any of can only ever show a binding's
+  // fallback, such as a plugin's own settings: it is left out.
   for (const source of singleSources) {
-    if (source !== undefined && source.fields.length > 0) sources.push(source);
+    if (source !== undefined && source.fields.some(isReachable)) {
+      sources.push(source);
+    }
   }
   sources.push(await siteSource(reads));
   return { sources };
@@ -328,38 +383,32 @@ function directBindingFieldsReads(
       const { bindingFieldShapes } = await import("nextly/runtime");
       return (await bindingFieldShapes(ref, at)) ?? [];
     },
+    // The readers answer a missing or refused read with `null`, by core's
+    // one gate; any other failure is the ask's, and fails it.
     asEditor: async (ref, select) => {
       const reader = await editor;
-      try {
-        return "single" in ref
-          ? await reader.findSingle({ slug: ref.single, select, ...at })
-          : await reader.findById({
-              collection: ref.collection,
-              id: ref.id,
-              select,
-              ...at,
-            });
-      } catch {
-        // A read the gate refuses reads as nothing, as the canvas reads it.
-        return null;
-      }
+      return "single" in ref
+        ? reader.findSingle({ slug: ref.single, select, ...at })
+        : reader.findById({
+            collection: ref.collection,
+            id: ref.id,
+            select,
+            ...at,
+          });
     },
     published: async (ref, select) => {
       const reader = await visitor;
-      try {
-        if ("single" in ref) {
-          return await reader.findSingle({ slug: ref.single, select, ...at });
-        }
-        const found = await reader.find({
-          collection: ref.collection,
-          filters: [{ field: "id", op: "equals", value: ref.id }],
-          limit: 1,
-        });
-        const row = found.items[0];
-        return isPlainRecord(row) ? row : null;
-      } catch {
-        return null;
+      if ("single" in ref) {
+        return reader.findSingle({ slug: ref.single, select, ...at });
       }
+      const found = await reader.find({
+        collection: ref.collection,
+        filters: [{ field: "id", op: "equals", value: ref.id }],
+        select,
+        limit: 1,
+      });
+      const row = found.items[0];
+      return isPlainRecord(row) ? row : null;
     },
     singles: async () => {
       const listed: unknown = await ctx.services.singles.list({

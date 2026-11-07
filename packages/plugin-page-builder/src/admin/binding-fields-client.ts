@@ -97,7 +97,13 @@ export function bindingFieldsReader(
     if (hit !== undefined && now() - hit.at < BINDING_FIELDS_KEPT_MS) {
       return hit.read;
     }
-    const entry: Kept = { at: now(), read: ask(request) };
+    const at = now();
+    // Aged answers are dropped as a new one is kept, so a long session that
+    // opens many pages holds only the last half-minute's.
+    for (const [old, { at: when }] of kept) {
+      if (at - when >= BINDING_FIELDS_KEPT_MS) kept.delete(old);
+    }
+    const entry: Kept = { at, read: ask(request) };
     kept.set(key, entry);
     entry.read.catch(() => {
       if (kept.get(key) === entry) kept.delete(key);

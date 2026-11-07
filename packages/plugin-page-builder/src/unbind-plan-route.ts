@@ -31,6 +31,7 @@ import {
   readBodyWith,
 } from "./composition-route-kit";
 import { editorReaderAsCaller } from "./entry-reads";
+import { TEMPLATE_TARGET_FIELDS } from "./templates/template-preview-contract";
 import { templateTargetOf } from "./templates/template-target";
 import { planUnbind, type UnbindSource } from "./unbind-kept";
 import {
@@ -128,13 +129,7 @@ export async function answerUnbindPlan(
     ...(target === undefined ? {} : { templateTarget: target.collection }),
   };
   const { nodeId, prop, keep } = request.action;
-  return reads.plan(
-    source,
-    request.document,
-    nodeId,
-    prop,
-    keep ?? "visitor"
-  );
+  return reads.plan(source, request.document, nodeId, prop, keep ?? "visitor");
 }
 
 /** The reads the route binds: the page as the caller, and the one decision. */
@@ -142,9 +137,12 @@ function directUnbindPlanReads(ctx: PluginRouteContext): UnbindPlanReads {
   return {
     readPage: async page => {
       const reader = await editorReaderAsCaller(ctx, page.locale);
+      // Only what the plan reads of it, the template's collection: the
+      // document itself is the editor's, sent with the ask.
       return reader.findById({
         collection: page.collection,
         id: page.id,
+        select: TEMPLATE_TARGET_FIELDS,
         ...(page.locale === undefined ? {} : { locale: page.locale }),
       });
     },
