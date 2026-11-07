@@ -1022,9 +1022,12 @@ function drawnDocumentOf(
   let byField = DRAWN_DOCUMENTS.get(entry);
   const kept = byField?.get(field);
   if (kept !== undefined) return kept;
+  // The page's own limits, so the entry's blocks are cut where it is.
+  const { maxNodes, maxDepth } = effectiveLimits(config);
   const document = composeEntryContent(readDocument(entry, field, context), {
     valueOf: name => entry[name],
-    maxNodes: effectiveLimits(config).maxNodes,
+    maxNodes,
+    maxDepth,
   });
   if (byField === undefined) {
     byField = new Map();

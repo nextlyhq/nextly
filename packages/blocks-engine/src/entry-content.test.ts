@@ -411,3 +411,44 @@ describe("an entry larger than the page may draw", () => {
     expect(reads.past).toBe(0);
   });
 });
+
+describe("an entry nested deeper than the page may draw", () => {
+  /** A chain of `levels` boxes, the innermost holding a text block. */
+  function chain(levels: number): BlockDocument {
+    let inner: unknown = text("deepest", "At the bottom");
+    for (let level = levels - 1; level >= 0; level -= 1) {
+      inner = box(`b${String(level)}`, [inner]);
+    }
+    return documentOf("page", inner);
+  }
+
+  /** How many levels of the entry's blocks are drawn below the block. */
+  function drawnLevels(composed: BlockDocument): number {
+    let levels = 0;
+    let at = composed.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT];
+    while (Array.isArray(at) && at.length > 0) {
+      levels += 1;
+      at = at[0]?.slots?.children;
+    }
+    return levels;
+  }
+
+  const template = documentOf("template", entryContent("ec"));
+  const body = chain(20);
+
+  it("draws to the depth the caller raised the limit to", () => {
+    // 20 boxes and the text below them: 21 levels under the top-level block,
+    // the deepest at depth 22.
+    const composed = composeEntryContent(template, {
+      valueOf: () => body,
+      maxDepth: 22,
+    });
+    expect(drawnLevels(composed)).toBe(21);
+  });
+
+  it("is cut at the format's own depth where none is given (the control)", () => {
+    // The block at depth 1, so its blocks reach depth 12: eleven levels.
+    const composed = composeEntryContent(template, { valueOf: () => body });
+    expect(drawnLevels(composed)).toBe(11);
+  });
+});

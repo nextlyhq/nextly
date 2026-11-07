@@ -281,6 +281,12 @@ export interface EntryContentSource {
    * limit where absent.
    */
   readonly maxNodes?: number;
+  /**
+   * How deep the drawn page may nest, as the renderer counts it (a top-level
+   * block at depth 1): the entry's blocks below it are never read. The
+   * format's own limit where absent.
+   */
+  readonly maxDepth?: number;
 }
 
 /**
@@ -387,16 +393,23 @@ function drawnAttributes(
  * out, at any depth, so the content can never draw itself, and cut after
  * `budget` entries in document order, so an entry larger than the page may
  * draw is never walked or copied past that. Read by index, so not one entry
- * past the budget is read; nested no deeper than the format allows.
+ * past the budget is read; nested no deeper than the page may draw.
  */
 function drawableForest(
   nodes: readonly unknown[],
-  budget: number
+  limits: {
+    /** How many entries may still be drawn. */
+    readonly budget: number;
+    /** The depth the entry's top-level blocks are drawn at. */
+    readonly depth: number;
+    /** The deepest the drawn page may nest, as the renderer counts it. */
+    readonly maxDepth: number;
+  }
 ): BlockNode[] {
-  let left = budget;
+  let left = limits.budget;
   const cut = (forest: readonly unknown[], depth: number): BlockNode[] => {
     const kept: BlockNode[] = [];
-    if (depth > DEFAULT_LIMITS.maxDepth) return kept;
+    if (depth > limits.maxDepth) return kept;
     for (let at = 0; at < forest.length && left > 0; at += 1) {
       left -= 1;
       const node = forest[at];
@@ -413,7 +426,16 @@ function drawableForest(
     }
     return { ...node, slots };
   };
-  return cut(nodes, 0);
+  return cut(nodes, limits.depth);
+}
+
+/**
+ * How deep a node at `path` sits, as the renderer counts it: 1 for a
+ * top-level block, one more for each slot above it.
+ */
+function depthOf(path: string): number {
+  // One piece for a top-level path, one more for each slot it passes.
+  return path.split("/slots/").length;
 }
 
 /**
@@ -455,7 +477,13 @@ export function composeEntryContent(
   if (entry === null || entry.nodes.length === 0) return document;
   // The entry's blocks within what the page may still draw beside the
   // template's own, cut before any of them is minted, walked or copied.
-  const kept = drawableForest(entry.nodes, maxNodes - host.count);
+  const kept = drawableForest(entry.nodes, {
+    budget: maxNodes - host.count,
+    // A slot's blocks one below the block holding it, which sits as deep as
+    // its path has slots below the top (a top-level block at depth 1).
+    depth: depthOf(first.path) + 1,
+    maxDepth: source.maxDepth ?? DEFAULT_LIMITS.maxDepth,
+  });
   if (kept.length === 0) return document;
   const ids = drawnIds(kept, first.node.id, host.ids);
   const domIds = drawnDomIds(kept, ids, host.domIds);

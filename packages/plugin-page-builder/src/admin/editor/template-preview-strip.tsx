@@ -142,14 +142,10 @@ const EntryAsRead = createContext<PreviewedEntry | undefined>(undefined);
  */
 export function useDrawnTemplate(
   document: BlockDocument,
-  /** The limits the canvas draws under; their node cap bounds the walk. */
-  limits?: { readonly maxNodes?: number }
+  /** The limits the canvas draws under, which bound the entry's walk. */
+  limits?: { readonly maxNodes?: number; readonly maxDepth?: number }
 ): BlockDocument {
-  return useComposedEntryContent(
-    document,
-    useContext(EntryAsRead),
-    limits?.maxNodes
-  );
+  return useComposedEntryContent(document, useContext(EntryAsRead), limits);
 }
 
 /**

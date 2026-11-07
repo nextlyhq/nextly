@@ -101,8 +101,8 @@ export function useEntryContentDrawing(
   document: BlockDocument,
   render: CanvasRender | undefined,
   /**
-   * `document` as drawn, where the host composed it (and applied its
-   * conditions to it): drawn as it is, with nothing composed here.
+   * `document` as drawn, where the host composed it: drawn as it is, with
+   * nothing composed here.
    */
   composed?: BlockDocument
 ): {
@@ -119,7 +119,7 @@ export function useEntryContentDrawing(
   const own = useComposedEntryContent(
     document,
     composed === undefined ? previewed : undefined,
-    maxNodes
+    render?.limits
   );
   const drawn = composed ?? own;
   const context = render?.context;
@@ -166,8 +166,14 @@ function useHoldsEntryContent(
 export function useComposedEntryContent(
   document: BlockDocument,
   previewed: PreviewedEntry | undefined,
-  maxNodes?: number
+  /**
+   * The limits the canvas draws under: the entry's blocks past its node cap
+   * or below its depth are never read. The format's own where absent.
+   */
+  limits?: { readonly maxNodes?: number; readonly maxDepth?: number }
 ): BlockDocument {
+  const maxNodes = limits?.maxNodes;
+  const maxDepth = limits?.maxDepth;
   const holds = useHoldsEntryContent(document, maxNodes);
   return useMemo(
     () =>
@@ -180,7 +186,8 @@ export function useComposedEntryContent(
             valueOf: name =>
               entryBlocksDocumentOf(previewed.editorValues[name]) ?? undefined,
             ...(maxNodes === undefined ? {} : { maxNodes }),
+            ...(maxDepth === undefined ? {} : { maxDepth }),
           }),
-    [document, previewed, holds, maxNodes]
+    [document, previewed, holds, maxNodes, maxDepth]
   );
 }
