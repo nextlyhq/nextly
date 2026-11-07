@@ -265,6 +265,51 @@ describe("plugin services inside a named query's frame", () => {
     expect(data.list).toEqual([1, 2, 3]);
   });
 
+  it("run a method of returned data on that data, and refuse it inside the frame", () => {
+    registerPluginService(PLUGIN, "withMethod", () => ({
+      open: () => ({
+        rows: ["SENTINEL"],
+        read() {
+          return this.rows;
+        },
+      }),
+    }));
+    const service = services().withMethod as unknown as {
+      open: () => { rows: string[]; read: () => string[] };
+    };
+    const opened = service.open();
+    expect(opened.read()).toEqual(["SENTINEL"]);
+    const frame = openNamedQueryFrame("notes.all");
+    expect(outcome(() => frame.run(() => opened.read()))).toBe(
+      "named-query-trusted-read"
+    );
+  });
+
+  it("read a property defined fixed in place through the proxy as stored", () => {
+    registerPluginService(PLUGIN, "fixable", () => ({ name: "service" }));
+    const service = services().fixable as unknown as Record<string, unknown>;
+    const handler = () => ["SENTINEL"];
+    Object.defineProperty(service, "handler", {
+      value: handler,
+      configurable: false,
+      writable: false,
+    });
+    Object.defineProperty(service, "limit", {
+      value: 5,
+      configurable: false,
+      writable: false,
+    });
+    // Outside the frame: read as stored, with no proxy invariant broken.
+    expect(service.handler).toBe(handler);
+    expect(service.limit).toBe(5);
+    // Inside it: the handle is refused; a plain value still reads.
+    const frame = openNamedQueryFrame("notes.all");
+    expect(outcome(() => frame.run(() => service.handler))).toBe(
+      "named-query-trusted-read"
+    );
+    expect(frame.run(() => service.limit)).toBe(5);
+  });
+
   it("answer through the frame's own door", () => {
     const frame = openNamedQueryFrame("notes.all");
     expect(frame.run(() => frame.read(() => services().store?.read()))).toEqual(

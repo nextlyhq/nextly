@@ -134,6 +134,7 @@ function guardedResult(value: unknown, path: string): unknown {
  */
 function proxyOver(
   value: object,
+  path: string,
   get: (real: object, prop: PropertyKey) => unknown,
   describe: (
     real: object,
@@ -145,7 +146,27 @@ function proxyOver(
     ? []
     : (Object.create(Object.getPrototypeOf(value) as object | null) as object);
   return new Proxy(standIn, {
-    get: (_standIn, prop) => get(value, prop),
+    get: (stood, prop) => {
+      // A property defined fixed in place stands on the stand-in, and a
+      // proxy must read it as exactly what is stored there: handed out as
+      // it is, and refused while a frame is open when it is a handle.
+      const fixed = Reflect.getOwnPropertyDescriptor(stood, prop);
+      if (fixed !== undefined && fixed.configurable === false) {
+        if (!("value" in fixed)) return undefined;
+        if (fixed.writable === false) {
+          const held: unknown = fixed.value;
+          const handle =
+            typeof held === "function" ||
+            (typeof held === "object" && held !== null);
+          const refused = handle
+            ? refusedInsideNamedQuery(`${path}.${String(prop)}`)
+            : undefined;
+          if (refused !== undefined) throw refused;
+          return held;
+        }
+      }
+      return get(value, prop);
+    },
     getOwnPropertyDescriptor: (stood, prop) => {
       const descriptor = describe(value, prop);
       if (descriptor === undefined) return undefined;
@@ -189,16 +210,25 @@ const traversedPlain = new WeakMap<object, object>();
 function plainDataGuarded(value: object, path: string): object {
   const known = traversedPlain.get(value);
   if (known !== undefined) return known;
-  const proxy = proxyOver(value, (target, prop) => {
+  const proxy = proxyOver(value, path, (target, prop) => {
     // An inherited member, such as an array's `map`, read as it is, with
     // this proxy as its receiver so what it reads comes back guarded.
     if (!Object.hasOwn(target, prop)) {
       return Reflect.get(target, prop, proxy) as unknown;
     }
-    return guardedResult(
-      Reflect.get(target, prop, target),
-      `${path}.${String(prop)}`
-    );
+    const at = `${path}.${String(prop)}`;
+    const member = Reflect.get(target, prop, target) as unknown;
+    // A method of the data runs on the data it was read from, so `this`
+    // inside it is that record, as it always was.
+    if (typeof member === "function") {
+      const method = member as (...args: unknown[]) => unknown;
+      return (...args: unknown[]) => {
+        const refused = refusedInsideNamedQuery(at);
+        if (refused !== undefined) throw refused;
+        return guardedResult(Reflect.apply(method, target, args), `${at}()`);
+      };
+    }
+    return guardedResult(member, at);
   });
   traversedPlain.set(value, proxy);
   return proxy;
@@ -218,17 +248,20 @@ const guardedObjects = new WeakMap<object, object>();
 export function refusingInsideNamedQuery<T>(value: T, path: string): T {
   if (typeof value === "function") {
     const method = value as (...args: unknown[]) => unknown;
-    return ((...args: unknown[]) => {
+    // Called with the receiver it was called on, so a function that reads
+    // `this` reads what it always did.
+    return function guarded(this: unknown, ...args: unknown[]) {
       const refused = refusedInsideNamedQuery(path);
       if (refused !== undefined) throw refused;
-      return guardedResult(method(...args), `${path}()`);
-    }) as T;
+      return guardedResult(Reflect.apply(method, this, args), `${path}()`);
+    } as T;
   }
   if (typeof value !== "object" || value === null) return value;
   const known = guardedObjects.get(value);
   if (known !== undefined) return known as T;
   const proxy = proxyOver(
     value,
+    path,
     (target, prop) => {
       // Refused before the property is read, since reading one runs its
       // getter, which can read data as a method can.
