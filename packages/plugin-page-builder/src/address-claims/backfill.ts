@@ -20,6 +20,7 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 
 import {
   claimOrWait,
+  claimSpaceOrWait,
   lockHolder,
   reconcileHolder,
   type Claims,
@@ -222,9 +223,10 @@ async function wantedNow(
 }
 
 /**
- * Where another document holds the page's address: wait for each address
- * rather than refuse, and claim no space, which a later save of the page
- * settles (refused, naming the page in its way, which tells its author).
+ * Where another document holds the page's address, or one is published
+ * among its list's later pages: wait for each address and for the later
+ * pages rather than refuse, since nobody is saving the page now. It is
+ * served at each, and its list paged, once what is in the way is released.
  * The page is read again under its lock, as in the first attempt, since a
  * save may have moved or unpublished it between the two: a wait recorded
  * for an address it has left would later hand it that address.
@@ -237,14 +239,11 @@ async function waitForAddresses(
     await deps.withTransaction(async tx => {
       const wanted = await wantedNow(deps, tx, holder);
       if (wanted === null) return;
-      if (wanted.spaces.length > 0) {
-        deps.warn(
-          "A page's list could not hold its later pages: another page is published among them. Its next save is refused, naming that page.",
-          { page: holder.id }
-        );
-      }
       for (const address of wanted.addresses) {
         await claimOrWait(deps.claims, tx, { address, holder });
+      }
+      for (const list of wanted.spaces) {
+        await claimSpaceOrWait(deps.claims, tx, { list, holder });
       }
     });
     return true;

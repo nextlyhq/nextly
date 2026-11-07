@@ -26,8 +26,8 @@ import {
   hashId,
   isFetchableUrl,
   isListDay,
-  isPlainRecord,
   DOCUMENT_FORMAT_VERSION,
+  mayPaginateList,
   paginatedList,
   type PaginatedList,
   regionDocument,
@@ -594,22 +594,6 @@ function pagedListOf(
       typeof stored.id === "string" ? drawn.get(stored.id) : undefined;
     return list === undefined ? {} : listPropsAsBound(list, run);
   });
-}
-
-/**
- * Whether the page's stored document could split a list into pages: one
- * split as stored, or one whose split is bound to the entry, which only the
- * page's binding pass can settle. Asked before anything is read, so a page
- * with neither costs the route nothing.
- */
-function mayPageAList(document: BlockDocument, maxNodes: number): boolean {
-  return (
-    paginatedList(document.nodes, maxNodes, list =>
-      isPlainRecord(list.bindings) && "paginate" in list.bindings
-        ? { ...(isPlainRecord(list.props) ? list.props : {}), paginate: true }
-        : list.props
-    ) !== undefined
-  );
 }
 
 /**
@@ -3282,7 +3266,10 @@ function blocksRouteConfig(
       // Nothing is read for a page whose stored document neither splits a
       // list into pages nor binds a list's split: composing it cannot add
       // one its own nodes do not hold.
-      if (!mayPageAList(document, effectiveLimits(config).maxNodes)) {
+      if (
+        mayPaginateList(document.nodes, effectiveLimits(config).maxNodes) ===
+        undefined
+      ) {
         return null;
       }
       // Counted under the page's read allowance, spent in the render's own

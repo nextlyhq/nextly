@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { backfillPageClaims, type BackfillDeps } from "./backfill";
 import {
   claimOrWait,
+  claimSpaceOrWait,
   lockHolder,
   reconcileHolder,
   type Claims,
@@ -18,6 +19,7 @@ import {
 
 vi.mock("./claim-store", () => ({
   claimOrWait: vi.fn(async () => "claimed"),
+  claimSpaceOrWait: vi.fn(async () => "waiting"),
   lockHolder: vi.fn(async () => undefined),
   reconcileHolder: vi.fn(async () => true),
 }));
@@ -97,6 +99,39 @@ describe("backfillPageClaims", () => {
     const page = { id: "p", slug: "about", status: "published" };
     expect(await backfillPageClaims(depsOver([page], { p: page }))).toBe(true);
     expect(claimOrWait).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a clashing page's list waiting for its later pages", async () => {
+    vi.mocked(reconcileHolder).mockRejectedValueOnce(
+      NextlyError.conflict({ reason: "state" })
+    );
+    const page = {
+      id: "p",
+      slug: "news",
+      status: "published",
+      content: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "list",
+            type: "core/collection-loop",
+            version: 1,
+            props: { collection: "posts", paginate: true },
+            slots: { children: [], empty: [] },
+          },
+        ],
+      },
+    };
+    expect(await backfillPageClaims(depsOver([page], { p: page }))).toBe(true);
+    expect(
+      vi
+        .mocked(claimSpaceOrWait)
+        .mock.calls.map(call => [
+          `/${call[2].list.segments.join("/")}`,
+          call[2].holder.id,
+        ])
+    ).toEqual([["/news", "p"]]);
   });
 
   it("waits for the address a clashing page has now, read again under its lock", async () => {

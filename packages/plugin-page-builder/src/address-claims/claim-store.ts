@@ -34,6 +34,7 @@ import {
   pathOf,
   servedAddress,
   spaceHolding,
+  spaceWaitingKey,
   waitingKey,
   type ClaimKind,
   type ServedAddress,
@@ -52,7 +53,10 @@ export interface ClaimRow {
   readonly kind: ClaimKind;
   readonly address: ServedAddress | null;
   readonly holder: Holder | null;
-  /** For an address claim, the key of the space that would hold it. */
+  /**
+   * For an address claim, the key of the space that would hold it; for a
+   * wait for a list's later pages, the key of that list's space.
+   */
   readonly space: string | null;
   /** For a waiting row, the key of the claim it waits on. */
   readonly blockedBy: string | null;
@@ -531,23 +535,74 @@ export async function claimSpace(
     readonly describe: DescribeHolder;
   }
 ): Promise<void> {
+  const blocking = await spaceBlockers(claims, tx, claim);
+  if (blocking === "claimed") return;
+  const [first] = blocking;
+  throw await refusal(
+    first?.kind === "address" && first.address !== null
+      ? first.address
+      : laterPage(claim.list),
+    first,
+    claim.describe
+  );
+}
+
+/**
+ * Give `holder` the later pages of its list at `list` if nothing is in their
+ * way, or leave it waiting on each claim that is: a document at one of them,
+ * or another holder of the space. It takes them once every one of those is
+ * released. Used where nobody is saving the page (the start-up pass), so its
+ * list goes unpaged rather than its page being refused.
+ */
+export async function claimSpaceOrWait(
+  claims: Claims,
+  tx: Tx,
+  claim: { readonly list: ServedAddress; readonly holder: Holder }
+): Promise<"claimed" | "waiting"> {
+  const blocking = await spaceBlockers(claims, tx, claim);
+  if (blocking === "claimed") return "claimed";
+  for (const row of blocking) {
+    // Already waiting on this one is a duplicate key, and changes nothing.
+    await insert(claims, tx, {
+      ...columns(
+        "waiting",
+        spaceWaitingKey(claim.holder, claim.list, row.key),
+        claim.list,
+        claim.holder
+      ),
+      // Marks the wait as one for the list's later pages, not its address.
+      space: storedKey(claimKey("space", claim.list)),
+      blockedBy: row.key,
+    });
+  }
+  return "waiting";
+}
+
+/**
+ * The claims in the way of `claim`'s space, read under the list's lock: its
+ * holder, where another holds it, or else every address claimed inside it.
+ * "claimed" when there are none and the space is now `claim`'s (or already
+ * was). The one reading both a refusal and a wait are decided from.
+ */
+async function spaceBlockers(
+  claims: Claims,
+  tx: Tx,
+  claim: { readonly list: ServedAddress; readonly holder: Holder }
+): Promise<ClaimRow[] | "claimed"> {
   await lock(claims, tx, claim.list);
   const key = claimKey("space", claim.list);
   const [existing] = await keyed(claims, tx, [key]);
   if (existing !== undefined) {
-    if (sameHolder(existing.holder, claim.holder)) return;
-    throw await refusal(laterPage(claim.list), existing, claim.describe);
+    return sameHolder(existing.holder, claim.holder) ? "claimed" : [existing];
   }
   const stored = storedKey(key);
-  const [first] = await claimsIn(
+  const inside = await claimsIn(
     claims,
     tx,
     { kind: { equals: "address" }, space: { equals: stored } },
     row => row.kind === "address" && row.space === stored
   );
-  if (first !== undefined && first.address !== null) {
-    throw await refusal(first.address, first, claim.describe);
-  }
+  if (inside.length > 0) return inside;
   if (
     (await insert(
       claims,
@@ -555,14 +610,20 @@ export async function claimSpace(
       columns("space", key, claim.list, claim.holder)
     )) !== null
   ) {
-    return;
+    return "claimed";
   }
+  // Taken by a save that committed meanwhile, now read.
   const [winner] = await keyed(claims, tx, [key]);
-  throw await refusal(laterPage(claim.list), winner, claim.describe);
+  if (winner === undefined) {
+    throw NextlyError.internal({
+      logContext: { reason: "space-held-by-no-claim" },
+    });
+  }
+  return sameHolder(winner.holder, claim.holder) ? "claimed" : [winner];
 }
 
 /** The second page of the list at `list`, the first address its space holds. */
-function laterPage(list: ServedAddress): ServedAddress {
+export function laterPage(list: ServedAddress): ServedAddress {
   return { locale: list.locale, segments: [...list.segments, "page", "2"] };
 }
 
@@ -692,6 +753,9 @@ async function handOver(claims: Claims, tx: Tx, key: string): Promise<void> {
     const { holder, address } = wait;
     if (holder === null || address === null) continue;
     await remove(claims, tx, wait);
+    // A wait for a list's later pages is marked by its space; one for an
+    // address is not, and the two are settled apart.
+    const forSpace = isSpaceWait(wait);
     const still = await claimsIn(
       claims,
       tx,
@@ -703,14 +767,24 @@ async function handOver(claims: Claims, tx: Tx, key: string): Promise<void> {
       row =>
         row.kind === "waiting" &&
         sameHolder(row.holder, holder) &&
-        sameAddress(row.address, address)
+        sameAddress(row.address, address) &&
+        isSpaceWait(row) === forSpace
     );
     if (still.length > 0) continue;
     // Read again rather than assumed free: another claim may have been taken
     // there while it waited, a waiter served just now included, and it then
     // waits on that one.
-    await claimOrWait(claims, tx, { address, holder });
+    if (forSpace) {
+      await claimSpaceOrWait(claims, tx, { list: address, holder });
+    } else {
+      await claimOrWait(claims, tx, { address, holder });
+    }
   }
+}
+
+/** Whether `row` waits for a list's later pages rather than an address. */
+function isSpaceWait(row: ClaimRow): boolean {
+  return row.kind === "waiting" && row.space !== null;
 }
 
 /** What a holder should hold: its addresses, and the spaces of its lists. */
@@ -765,16 +839,19 @@ export async function reconcileHolder(
   );
   const release = owned.filter(row => !wanted.has(row.key));
   // A wait for an address the holder no longer wants (it moved, or stopped
-  // being published) is dropped, so releasing what blocked it never hands
-  // the holder an address it gave up.
+  // being published), or for the later pages of a list it no longer splits,
+  // is dropped, so releasing what blocked it never hands the holder an
+  // address or a space it gave up.
   const wantedAddresses = new Set(
     desired.addresses.map(at => claimKey("address", at))
   );
-  const staleWaits = waits.filter(
-    row =>
-      row.address === null ||
-      !wantedAddresses.has(claimKey("address", row.address))
-  );
+  const wantedSpaces = new Set(desired.spaces.map(at => claimKey("space", at)));
+  const staleWaits = waits.filter(row => {
+    if (row.address === null) return true;
+    return isSpaceWait(row)
+      ? !wantedSpaces.has(claimKey("space", row.address))
+      : !wantedAddresses.has(claimKey("address", row.address));
+  });
   if (
     claimAddresses.length === 0 &&
     claimSpaces.length === 0 &&
