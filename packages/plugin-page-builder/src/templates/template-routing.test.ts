@@ -35,6 +35,8 @@ function setup(
     readCollection: async () => null,
     holderOf: async () => null,
     declaredAddresses: new Map([["posts", "/blog"]]),
+    lockEntry: async () => undefined,
+    entryExists: async () => false,
     addressHolderOf: async () => null,
     ...overrides,
   };
@@ -196,6 +198,30 @@ describe("the address guard", () => {
       /Only a collection's template has an address/
     );
     expect(addressHolderProblem({ collection: "events" })).toBeNull();
+  });
+
+  it("refuses an address on an entry's own design", async () => {
+    expect(
+      addressHolderProblem({
+        collection: null,
+        entry: "posts:p1",
+        entryCollection: "posts",
+        entryId: "p1",
+      })
+    ).toMatch(/own design has no address of its own/);
+    const words = await refusalOf(() =>
+      guardAddress(setup(), {
+        operation: "update",
+        data: { address: "/mine" },
+        originalData: {
+          id: "d1",
+          entry: "posts:p1",
+          entryCollection: "posts",
+          entryId: "p1",
+        },
+      })
+    );
+    expect(words).toMatch(/own design has no address of its own/);
   });
 
   it("refuses to read inside a caller's transaction, but lets a judging write through", async () => {

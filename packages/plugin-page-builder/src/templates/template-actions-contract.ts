@@ -40,8 +40,10 @@ export interface TemplateSummary {
   /** Absent from a dry run's create, which stores nothing. */
   readonly id?: string;
   readonly title: string;
-  /** The collection whose entries it draws. */
+  /** The collection whose entries it draws, or whose entry it serves. */
   readonly collection: string;
+  /** For an entry's own design, the id of the entry it serves. */
+  readonly entry?: string;
   readonly status: "draft" | "published";
   /**
    * The address its collection's entries are served at, as the template

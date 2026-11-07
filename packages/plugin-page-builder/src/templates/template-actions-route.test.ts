@@ -89,6 +89,8 @@ function setupWith(guard: Partial<TemplateGuardSetup> = {}) {
       readCollection: async () => null,
       holderOf: async () => null,
       declaredAddresses: new Map([["posts", "/blog"]]),
+      lockEntry: async () => undefined,
+      entryExists: async () => false,
       addressHolderOf,
       ...guard,
     }),
