@@ -14,16 +14,17 @@
 import { defineCollection, text, type CollectionConfig } from "nextly/config";
 
 import { blocks } from "../fields/blocksHelper";
+import { TEMPLATE_COLLECTION_FIELD } from "../templates/template-preview-contract";
 
 /** The slug templates are stored under, before any rename a host applies. */
 export const TEMPLATES_SLUG = "templates";
 
 /**
- * The field naming the collection a template renders. Unique, so a
- * collection has one template: read by the guard that names the template
- * already there, and by everything that finds a collection's template.
+ * The field naming the collection a template renders, declared in the
+ * preview contract so the editor's bundle reads the same name without this
+ * module's runtime imports, and re-exported here beside the collection.
  */
-export const TEMPLATE_COLLECTION_FIELD = "collection";
+export { TEMPLATE_COLLECTION_FIELD };
 
 /** The blocks field holding the template's design. */
 export const TEMPLATE_CONTENT_FIELD = "content";

@@ -14,6 +14,7 @@ import {
   listFieldsFrom,
   newConditionIssues,
   newListQueryIssues,
+  type TemplateTargets,
 } from "./list-query-judgement";
 
 const CATEGORIES: ListFields = {
@@ -140,6 +141,129 @@ describe("a write's collection lists, judged by the server", () => {
     expect(fieldsOf.mock.calls).toEqual([
       ["posts", "fr"],
       ["categories", "fr"],
+    ]);
+  });
+});
+
+describe("a template's lists and conditions, judged against the collection it draws", () => {
+  // The templates collection holds a title and the collection's name; none
+  // of a post's fields.
+  const TEMPLATES: ListFields = {
+    declared: new Set(["id", "title", "collection", "content"]),
+    readable: [
+      { name: "id", type: "text" },
+      { name: "title", type: "text" },
+    ],
+  };
+  const fieldsOf = vi.fn(async (collection: string) =>
+    collection === "templates" ? TEMPLATES : FIELDS[collection]
+  );
+  const asTemplate = { ...relatedToEntry, kind: "template" };
+  /** The templates collection, its stored targets read as the system. */
+  const templates = (
+    stored: Readonly<Record<string, string>> = {}
+  ): TemplateTargets & { storedTargetOf: ReturnType<typeof vi.fn> } => ({
+    collection: "templates",
+    field: "collection",
+    storedTargetOf: vi.fn(async (id: string) => stored[id]),
+  });
+  /** A write to the templates collection, carrying `data`. */
+  const templateWrite = (
+    data: Record<string, unknown>,
+    write: Partial<PluginFieldWrite> = {}
+  ): PluginFieldValidateArgs => ({
+    ...args({ slug: "templates", ...write }),
+    data,
+  });
+
+  it("judges a related list against the template's collection, as the write stores it", async () => {
+    fieldsOf.mockClear();
+    expect(
+      await newListQueryIssues(
+        asTemplate,
+        templateWrite({ collection: "posts" }),
+        "Template",
+        { fieldsOf, templates: templates() }
+      )
+    ).toEqual([]);
+    // The entry's fields are the posts', never the templates'.
+    expect(fieldsOf.mock.calls.map(([collection]) => collection)).toEqual([
+      "posts",
+      "categories",
+    ]);
+  });
+
+  it("judges the same list as a page of the templates collection against that collection (the control)", async () => {
+    // A page stored in the templates collection is an entry of it, so a
+    // list of its related entries is judged against the templates' fields,
+    // which hold no categories.
+    const asPage = await newListQueryIssues(
+      relatedToEntry,
+      templateWrite({ collection: "posts" }),
+      "Template",
+      { fieldsOf, templates: templates() }
+    );
+    expect(asPage.map(issue => issue.code)).toEqual(["list-field-unknown"]);
+  });
+
+  it("reads the template's stored collection when the write does not carry it", async () => {
+    const targets = templates({ t1: "posts" });
+    expect(
+      await newListQueryIssues(
+        asTemplate,
+        templateWrite({}, { id: "t1" }),
+        "Template",
+        { fieldsOf, templates: targets }
+      )
+    ).toEqual([]);
+    expect(targets.storedTargetOf).toHaveBeenCalledWith("t1");
+    // And a template stored elsewhere is judged with its entry unknown: by
+    // the list's shape alone, never against the templates collection.
+    const unknown = templates({});
+    expect(
+      await newListQueryIssues(
+        asTemplate,
+        templateWrite({}, { id: "t2" }),
+        "Template",
+        { fieldsOf, templates: unknown }
+      )
+    ).toEqual([]);
+  });
+
+  it("judges a condition on the entry against the template's collection", async () => {
+    const condition = {
+      formatVersion: 1,
+      kind: "template",
+      nodes: [
+        {
+          id: "box",
+          type: "core/box",
+          version: 1,
+          props: {},
+          visibility: {
+            conditions: [[{ field: "categories", op: "exists" }]],
+          },
+        },
+      ],
+    };
+    expect(
+      await newConditionIssues(
+        condition,
+        templateWrite({ collection: "posts" }),
+        "Template",
+        { fieldsOf, templates: templates() }
+      )
+    ).toEqual([]);
+    // CONTROL: the same condition on a page of the templates collection
+    // names a field the templates do not have.
+    const asPage = await newConditionIssues(
+      { ...condition, kind: "page" },
+      templateWrite({ collection: "posts" }),
+      "Template",
+      { fieldsOf, templates: templates() }
+    );
+    expect(asPage.map(issue => issue.code)).toEqual([
+      "condition-field-unknown",
     ]);
   });
 });

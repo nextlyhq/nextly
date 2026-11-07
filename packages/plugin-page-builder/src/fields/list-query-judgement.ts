@@ -145,7 +145,7 @@ export interface ListSetting {
  * condition by its operator, as a component placing the one being saved is.
  * A list's item inside the definition is still known, and still judged.
  */
-export function listSettingOf(
+function listSettingOf(
   write: PluginFieldWrite,
   document: unknown
 ): ListSetting {
@@ -155,6 +155,105 @@ export function listSettingOf(
     ...locale,
     entryCollection: write.kind === "collection" ? write.slug : null,
   };
+}
+
+/**
+ * Where templates are stored, and what a stored one draws: a template's
+ * lists and conditions read the entry of the collection it names, not an
+ * entry of the templates collection it is stored in.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export interface TemplateTargets {
+  /** The RESOLVED templates collection: a host may rename it. */
+  readonly collection: string;
+  /** The field a template names its collection in. */
+  readonly field: string;
+  /**
+   * The collection a stored template draws, read as the system, or
+   * `undefined` where none is stored or the template cannot be read.
+   */
+  readonly storedTargetOf: (id: string) => Promise<string | undefined>;
+}
+
+/**
+ * What a template document draws: `null` where the document is not a
+ * template stored where templates are, else the collection it names, or
+ * `undefined` for that where it cannot be known.
+ *
+ * The collection is the template's own field, as the write stores it: the
+ * value the write carries (`carried`), which the template guard holds to the
+ * stored one (a template keeps the collection it draws), or, where it carries
+ * none, the value stored. Never a value the editor sends beside the write.
+ * Inside a caller's transaction the stored value is not read, since a read
+ * on another connection can wait on the one the transaction holds.
+ */
+export async function templateTargetIn(
+  where: {
+    readonly slug: string;
+    readonly id?: string | undefined;
+    readonly inTransaction: boolean;
+  },
+  document: unknown,
+  carried: unknown,
+  templates: TemplateTargets | undefined
+): Promise<{ readonly target: string | undefined } | null> {
+  if (
+    templates === undefined ||
+    !isPlainRecord(document) ||
+    document.kind !== "template" ||
+    where.slug !== templates.collection
+  ) {
+    return null;
+  }
+  if (typeof carried === "string" && carried !== "") return { target: carried };
+  if (where.id === undefined || where.inTransaction) {
+    return { target: undefined };
+  }
+  return { target: await templates.storedTargetOf(where.id) };
+}
+
+/**
+ * The setting a template's lists and conditions are judged in: the write's
+ * language, with the collection the template draws as the entry's
+ * ({@link templateTargetIn}); `undefined` for any other document, which
+ * `listSettingOf` answers for. Where the collection cannot be known, the
+ * entry is unknown, and such a list is judged by its shape alone.
+ */
+async function templateSettingOf(
+  write: PluginFieldWrite,
+  document: unknown,
+  data: Readonly<Record<string, unknown>>,
+  templates: TemplateTargets | undefined
+): Promise<ListSetting | undefined> {
+  if (write.kind !== "collection") return undefined;
+  const found = await templateTargetIn(
+    write,
+    document,
+    templates === undefined ? undefined : data[templates.field],
+    templates
+  );
+  if (found === null) return undefined;
+  const locale = write.locale === undefined ? {} : { locale: write.locale };
+  return found.target === undefined
+    ? locale
+    : { ...locale, entryCollection: found.target };
+}
+
+/**
+ * A write's setting: a template's ({@link templateSettingOf}) where the
+ * document is one, else {@link listSettingOf}'s.
+ */
+export async function writeSettingOf(
+  write: PluginFieldWrite,
+  document: unknown,
+  data: Readonly<Record<string, unknown>>,
+  templates: TemplateTargets | undefined
+): Promise<ListSetting> {
+  return (
+    (await templateSettingOf(write, document, data, templates)) ??
+    listSettingOf(write, document)
+  );
 }
 
 /**
@@ -247,6 +346,11 @@ export interface ListJudging {
    * not be read, for a caller whose server log says so.
    */
   readonly onUnjudged?: (kept: number) => void;
+  /**
+   * Where templates are stored, so a template's lists are judged against the
+   * collection it draws; absent, a template is judged as any other entry.
+   */
+  readonly templates?: TemplateTargets;
 }
 
 /** One finding of a forest judgement, as the engine names it. */
@@ -372,9 +476,10 @@ export async function newListQueryIssues(
   if (nodes === undefined || args.write === undefined) return [];
   // Only what the schema or the host decides: the engine's own validation
   // already reported the shape of each of the page's own lists on this write.
+  // A template's lists read the entry of the collection it draws.
   const found = await listErrorsIn(
     nodes,
-    listSettingOf(args.write, value),
+    await writeSettingOf(args.write, value, args.data, site.templates),
     site,
     issue => LIST_FIELD_CODES.has(issue.code)
   );
@@ -399,9 +504,10 @@ export async function newConditionIssues(
   if (nodes === undefined || args.write === undefined) return [];
   // The operators were judged by the engine's own validation of this write;
   // only what the schema or the host decides is left.
+  // A template's conditions read the entry of the collection it draws.
   const found = await errorsIn(
     nodes,
-    listSettingOf(args.write, value),
+    await writeSettingOf(args.write, value, args.data, site.templates),
     site,
     conditionIssues,
     issue => CONDITION_FIELD_CODES.has(issue.code)

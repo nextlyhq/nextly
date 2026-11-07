@@ -68,6 +68,28 @@ export function templateHolderReader(
   };
 }
 
+/**
+ * The collection a stored template draws, read as the system over the
+ * plugin's own reads, every state of it: `undefined` where there is no such
+ * template or it names none. What a template's lists are judged against
+ * when its save does not carry the collection.
+ */
+export function templateTargetReader(
+  own: OwnTemplateReads,
+  templatesCollection: string
+): (id: string) => Promise<string | undefined> {
+  return async id => {
+    const found = await own.listEntries(templatesCollection, {
+      where: { id: { equals: id } },
+      pagination: { limit: 1 },
+      depth: 0,
+    });
+    const row = found.data[0] as Record<string, unknown> | undefined;
+    const target = row?.[TEMPLATE_COLLECTION_FIELD];
+    return typeof target === "string" && target !== "" ? target : undefined;
+  };
+}
+
 /** A stored title as a refusal names it. */
 function titleOf(value: unknown): string {
   const title = typeof value === "string" ? value.trim() : "";

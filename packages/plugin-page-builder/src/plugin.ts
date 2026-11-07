@@ -104,7 +104,11 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
-import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
+import {
+  TEMPLATE_COLLECTION_FIELD,
+  templatesCollection,
+  TEMPLATES_SLUG,
+} from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
 import {
@@ -295,8 +299,13 @@ import { templateActionsRoute } from "./templates/template-actions-route";
 import {
   registerTemplateGuard,
   templateHolderReader,
+  templateTargetReader,
   type TemplateGuardSetup,
 } from "./templates/template-guard";
+import {
+  templatePreviewEntriesRoute,
+  templatePreviewEntryRoute,
+} from "./templates/template-preview-route";
 import { tokenUsageIndex } from "./token-usage";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
@@ -2060,6 +2069,17 @@ export const pageBuilder = (
         // write, so a field hidden a moment ago is refused at the next save.
         // This site's named queries, for a list whose source is one.
         namedQueries: namedQuerySource,
+        // Where templates live, under the host's name for them, so a
+        // template's lists and conditions are judged against the collection
+        // it draws, read from the template itself.
+        templates: {
+          collection: templates,
+          field: TEMPLATE_COLLECTION_FIELD,
+          storedTargetOf: templateTargetReader(
+            ctx.services.ownCollections,
+            templates
+          ),
+        },
         listFields: listFieldsFrom({
           record: collection =>
             ctx.services.collections.getCollection(collection, {}),
@@ -2779,6 +2799,11 @@ export const pageBuilder = (
         }),
         // Give a collection its template and publish it, each with a dry run.
         templateActionsRoute({ guard: requireTemplateGuard }),
+        // A template's preview in the editor: the entries of its collection
+        // the author may preview, and the one being previewed, read as the
+        // author asking. Reads only: which entry is previewed is not stored.
+        templatePreviewEntriesRoute({ guard: requireTemplateGuard }),
+        templatePreviewEntryRoute({ guard: requireTemplateGuard }),
         // What an API client or an agent reads before composing: the
         // patterns, components (fields, slots, variants) and Layouts it may
         // read, and the actions above with their request schemas.

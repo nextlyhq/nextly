@@ -103,9 +103,11 @@ import {
 import {
   composedConditionIssues,
   composedListQueryIssues,
-  listSettingOf,
+  templateTargetIn,
+  writeSettingOf,
   type ComposedListIssue,
   type ListFieldsReader,
+  type TemplateTargets,
 } from "./list-query-judgement";
 import {
   composedFormsRead,
@@ -258,6 +260,12 @@ export interface CompositionSetup {
    * a list is judged by its shape alone.
    */
   readonly namedQueries?: NamedQuerySource;
+  /**
+   * Where templates are stored and what a stored one draws, so a template's
+   * lists and conditions are judged against the collection it draws rather
+   * than the templates collection. Absent, a template is judged as any entry.
+   */
+  readonly templates?: TemplateTargets;
 }
 
 /** What the site defines that a page refers to by id. */
@@ -413,6 +421,7 @@ export async function compositionIssues(
       report,
       stored,
       write,
+      data: args.data,
       field: args.path,
       writtenTo: documentOf(write),
     });
@@ -809,6 +818,8 @@ async function judgeOwnComposition(args: {
   stored: () => Promise<StoredRead>;
   /** The write, for the language and host its lists are judged in. */
   write: PluginFieldWrite;
+  /** The write's payload, for the collection a template draws. */
+  data: Readonly<Record<string, unknown>>;
   /** The blocks field being written, for the server log. */
   field?: string;
   /** Which document is being written, for the server log. */
@@ -857,6 +868,7 @@ async function judgeOwnComposition(args: {
     reading: { library, read, limits: setup.limits, work },
     stored: args.stored,
     write: args.write,
+    data: args.data,
     report,
     unjudged: { field: args.field ?? "", ...args.writtenTo },
   });
@@ -915,6 +927,8 @@ async function judgeComposedLists(args: {
   };
   stored: () => Promise<StoredRead>;
   write: PluginFieldWrite;
+  /** The write's payload, for the collection a template draws. */
+  data: Readonly<Record<string, unknown>>;
   report: Report;
   /** Which document is written, for the server log of problems kept. */
   unjudged: Omit<PlacementUnjudged, "breaks">;
@@ -951,8 +965,14 @@ async function judgeComposedLists(args: {
       args.setup.onPlacementUnjudged?.({ ...args.unjudged, breaks }),
   };
   // A component's own save leaves the entry unknown: its lists and
-  // conditions read the entries of the pages placing it.
-  const setting = listSettingOf(args.write, args.document);
+  // conditions read the entries of the pages placing it. A template's read
+  // the entry of the collection it draws.
+  const setting = await writeSettingOf(
+    args.write,
+    args.document,
+    args.data,
+    args.setup.templates
+  );
   const found = [
     ...(await composedListQueryIssues(
       args.composed,
@@ -1681,8 +1701,7 @@ async function reportListsBroken(args: {
   listFields: ListFieldsReader | undefined;
 }): Promise<void> {
   const { host, stored, before, after, setup, tally, listFields } = args;
-  const setting =
-    host.slug === setup.store.collection ? {} : { entryCollection: host.slug };
+  const setting = await hostSettingOf(host, stored, setup);
   const site = {
     ...(listFields === undefined ? {} : { fieldsOf: listFields }),
     ...(setup.namedQueries === undefined
@@ -1712,6 +1731,36 @@ async function reportListsBroken(args: {
     );
     reportHostIssues(host, tally, code, found);
   }
+}
+
+/**
+ * The setting a host's lists are judged in when a component it places is
+ * saved: no entry for a host that is itself a component, the collection a
+ * template draws for a template (as its own save judges it, from the template
+ * as stored), and the host's own collection for any other entry.
+ */
+async function hostSettingOf(
+  host: HostRef,
+  stored: BlockDocument,
+  setup: CompositionSetup
+): Promise<{ readonly entryCollection?: string | null }> {
+  if (host.slug === setup.store.collection) return {};
+  if (!host.single) {
+    // Judged as a save of the template is, from the template as stored: no
+    // payload carries its collection here, so the stored one is read.
+    const template = await templateTargetIn(
+      { slug: host.slug, id: host.id, inTransaction: false },
+      stored,
+      undefined,
+      setup.templates
+    );
+    if (template !== null) {
+      return template.target === undefined
+        ? {}
+        : { entryCollection: template.target };
+    }
+  }
+  return { entryCollection: host.slug };
 }
 
 /** Each issue a save would bring to one host, as that host's fault. */

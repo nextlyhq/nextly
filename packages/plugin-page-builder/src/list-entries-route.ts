@@ -70,6 +70,7 @@ import { respondList } from "nextly";
 import { z } from "nextly/zod";
 
 import { readBodyWith } from "./composition-route-kit";
+import { editorReaderAsCaller } from "./entry-reads";
 import { readingAsUser } from "./library-route";
 import {
   LIST_ENTRIES_NAMED_MAX_PARAMS,
@@ -462,23 +463,10 @@ function directNamedListEntriesReads(
 /** The read the route binds: the editor reader, as the caller. */
 function directListEntriesReads(ctx: PluginRouteContext): ListEntriesReads {
   return {
-    // Imported at call time, so loading this module costs none of the
-    // runtime, as the route's other reads are.
-    find: async query => {
-      const { createEditorReader, requireNextly } = await import(
-        "nextly/runtime"
-      );
-      const nextly = requireNextly();
-      // The caller as core judges their own reads: their user, and an API
-      // key's own scope when the request carried one.
-      const { user, actor } = await readingAsUser(ctx);
-      const reader = createEditorReader(
-        { find: async args => await nextly.find(args) },
-        { user, ...(actor === undefined ? {} : { actor }) },
-        query.locale === undefined ? {} : { locale: query.locale }
-      );
-      return reader.find(query);
-    },
+    // The shared editor reader as the caller, built per read in the read's
+    // own language.
+    find: async query =>
+      (await editorReaderAsCaller(ctx, query.locale)).find(query),
   };
 }
 
