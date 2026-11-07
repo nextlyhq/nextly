@@ -3,8 +3,9 @@
  * template actions route as a draft copy of the collection's published
  * template, the unique key that keeps one per entry when two gives run at
  * once, removing it, its deletion with its entry, a Direct API create whose
- * entry is deleted while it is written, a template a later hook points at a
- * collection the guard refuses, and a deleted template's link emptied on a
+ * entry is deleted while it is written, a Direct API create whose source
+ * template is deleted while it is written, a template a later hook points at
+ * a collection the guard refuses, and a deleted template's link emptied on a
  * published design's live row.
  *
  * @module __tests__/entry-designs.integration.test
@@ -66,6 +67,11 @@ function templateDocument(id: string) {
 const racing: {
   remove?: (entryId: string) => Promise<void>;
   /**
+   * When set, the template a new row is linked to (`forkedFrom`) is deleted
+   * in `beforeChange`, in the same window.
+   */
+  removeSource?: (templateId: string) => Promise<void>;
+  /**
    * When set, the data a template write stores after the guard has let it
    * through: a later hook rewriting what the guard judged.
    */
@@ -88,6 +94,10 @@ const racer = definePlugin({
       if (racing.remove !== undefined && typeof entryId === "string") {
         await racing.remove(entryId);
       }
+      const source = data?.forkedFrom;
+      if (racing.removeSource !== undefined && typeof source === "string") {
+        await racing.removeSource(source);
+      }
       return undefined;
     });
   },
@@ -100,6 +110,7 @@ describe.each(getConfiguredTestDialects())(
 
     afterEach(async () => {
       racing.remove = undefined;
+      racing.removeSource = undefined;
       racing.rewrite = undefined;
       await current?.destroy();
       current = undefined;
@@ -500,6 +511,64 @@ describe.each(getConfiguredTestDialects())(
       // transaction found it gone, and kept nothing naming it.
       expect(NextlyError.isCode(refused, "VALIDATION_ERROR")).toBe(true);
       expect((await designs(t)).map(row => row.entryId)).toEqual([kept]);
+    });
+
+    it("refuses a Direct API own design whose source template is deleted while it is written", async () => {
+      const t = await boot();
+      const { cookie } = await holding(t, DESIGNER);
+      const template = await publishedTemplate(t, cookie);
+      const hello = await entry(t, "Hello world");
+      // The control: with nothing racing, a copy linked the same way is kept,
+      // and the delete below empties its link.
+      const kept = await entry(t, "Kept");
+      await t.nextly.create({
+        collection: TEMPLATES_SLUG,
+        data: {
+          title: "Kept",
+          entry: `posts/${kept}`,
+          entryCollection: "posts",
+          entryId: kept,
+          forkedFrom: template,
+        },
+        overrideAccess: true,
+      });
+      expect((await designs(t))[0]?.forkedFrom).toBe(template);
+      racing.removeSource = async templateId => {
+        racing.removeSource = undefined;
+        await t.nextly.delete({
+          collection: TEMPLATES_SLUG,
+          id: templateId,
+          overrideAccess: true,
+        });
+      };
+
+      const refused = await t.nextly
+        .create({
+          collection: TEMPLATES_SLUG,
+          data: {
+            title: "Direct",
+            entry: `posts/${hello}`,
+            entryCollection: "posts",
+            entryId: hello,
+            forkedFrom: template,
+          },
+          overrideAccess: true,
+        })
+        .then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+      // The delete walked the copies before this one was written; the
+      // write's own transaction found the template gone, and kept nothing
+      // naming it.
+      expect(NextlyError.isCode(refused, "VALIDATION_ERROR")).toBe(true);
+      expect(JSON.stringify((refused as NextlyError).publicData)).toContain(
+        "forkedFrom"
+      );
+      const left = await designs(t);
+      expect(left.map(row => row.entryId)).toEqual([kept]);
+      expect(left[0]?.forkedFrom ?? null).toBeNull();
     });
 
     it("empties a deleted template's link on a published design's live row, and leaves a waiting draft unpublished", async () => {

@@ -24,6 +24,15 @@
  *   (`entry-design-cascade`), so the two take turns: the design commits
  *   first and is deleted with the entry, or waits and is refused, the entry
  *   gone. That holds for a Direct API create as for the template action.
+ * - for a write that sets or changes the template a design was copied from
+ *   (`forkedFrom`), that the template is still there, holding its row for
+ *   share until the write ends. A delete of that template locks its row for
+ *   update before it removes it, and empties the link of every copy it finds
+ *   in its in-transaction phase after (`unlink-copies`), so the two take
+ *   turns: the copy commits first and the delete finds it and empties its
+ *   link, or waits and is refused, the template gone. Without the hold, a
+ *   copy written while the delete walked the copies would commit after it,
+ *   naming a template that no longer exists.
  *
  * @module templates/entry-design-write
  */
@@ -32,6 +41,7 @@ import {
   TEMPLATE_ENTRY_COLLECTION_FIELD,
   TEMPLATE_ENTRY_FIELD,
   TEMPLATE_ENTRY_ID_FIELD,
+  TEMPLATE_FORKED_FROM_FIELD,
 } from "../collections/templates";
 
 import {
@@ -196,24 +206,76 @@ async function holdNewDesignEntry<Tx>(
 }
 
 /**
+ * The template a write newly links its row to as the one it was copied from,
+ * or undefined: a create naming one, or an update naming another than the
+ * stored row did. An update without the stored row has nothing to tell an
+ * unchanged link from, so the link it names counts as new. An empty link
+ * names no template.
+ */
+function newSourceOf(
+  data: Readonly<Record<string, unknown>>,
+  original: Readonly<Record<string, unknown>> | null
+): string | undefined {
+  const source = data[TEMPLATE_FORKED_FROM_FIELD];
+  if (typeof source !== "string" || source === "") return undefined;
+  if (original !== null && original[TEMPLATE_FORKED_FROM_FIELD] === source) {
+    return undefined;
+  }
+  return source;
+}
+
+/**
+ * Hold the template a write newly names as the one its row was copied from,
+ * on the write's transaction, and refuse the write once that template is
+ * gone, so no row commits linked to a template already deleted.
+ */
+async function holdNewSource<Tx>(
+  holdEntry: (tx: Tx, collection: string, id: string) => Promise<boolean>,
+  templates: string,
+  tx: Tx,
+  data: Readonly<Record<string, unknown>>,
+  original: Readonly<Record<string, unknown>> | null
+): Promise<void> {
+  const source = newSourceOf(data, original);
+  if (source === undefined) return;
+  if (await holdEntry(tx, templates, source)) return;
+  throw designShapeRefusal({
+    path: TEMPLATE_FORKED_FROM_FIELD,
+    message: `There is no template "${source}" for forkedFrom to name: it was deleted, or never existed.`,
+  });
+}
+
+/**
  * The in-transaction handler for the templates collection: the shape of
  * every create and update judged again, the collections it newly names
- * held to those the guard let through, and a new own design's entry held
- * and refused once it is gone. `holdEntry` answers whether the entry exists,
- * holding its row until the transaction ends.
+ * held to those the guard let through, a new own design's entry held and
+ * refused once it is gone, and the template a write newly names in
+ * `forkedFrom` held and refused once it is gone. `holdEntry` answers whether
+ * an entry exists, holding its row until the transaction ends; `templates`
+ * is the RESOLVED templates slug, which a host may rename.
  */
 export function judgeTemplateInTransaction<Tx>(
-  holdEntry: (tx: Tx, collection: string, id: string) => Promise<boolean>
+  holdEntry: (tx: Tx, collection: string, id: string) => Promise<boolean>,
+  templates: string
 ): (write: TemplateWrite<Tx>) => Promise<void> {
   return async write => {
     if (write.operation === "delete") return;
     const data = write.data ?? {};
     if (write.operation === "update") {
-      judgeUpdate(write.context, data, write.originalData ?? null);
+      const original = write.originalData ?? null;
+      judgeUpdate(write.context, data, original);
+      await holdNewSource(
+        holdEntry,
+        templates,
+        write.transaction,
+        data,
+        original
+      );
       return;
     }
     refuseShape(designShapeProblem(null, data));
     refuseUnguardedCollection(write.context, data, null);
     await holdNewDesignEntry(holdEntry, write.transaction, data);
+    await holdNewSource(holdEntry, templates, write.transaction, data, null);
   };
 }
