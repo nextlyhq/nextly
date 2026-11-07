@@ -16,6 +16,7 @@
 import {
   DEFAULT_BINDING_SOURCE,
   isPlainRecord,
+  SITE_SETTING_FIELD_SHAPES,
   type BindingDocument,
   type BindingFieldShape,
   type BindingSchemaRef,
@@ -122,6 +123,8 @@ function sourceFields(
       ? fieldsOf(entry)
       : undefined;
   }
+  // The settings a page is handed: the table the judgement read them by.
+  if (source === "site") return SITE_SETTING_FIELD_SHAPES;
   return undefined;
 }
 
