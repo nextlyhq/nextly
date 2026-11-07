@@ -194,6 +194,8 @@ function listing(
     readonly list?: Record<string, unknown>;
     /** More blocks for each entry's template. */
     readonly more?: readonly BlockNode[];
+    /** Each entry's image bound to its own featured image. */
+    readonly boundImage?: boolean;
   } = {}
 ): BlockDocument {
   const itemText = (id: string, path: string) => ({
@@ -220,12 +222,22 @@ function listing(
               // One picture for every entry: a bound image is filled only
               // once it carries its whole media object, which main does not
               // do yet, so the template's image is set, read once.
-              {
-                id: "picture",
-                type: "core/image",
-                version: 1,
-                props: { alt: "", mediaId: "image-1" },
-              },
+              options.boundImage === true
+                ? {
+                    id: "picture",
+                    type: "core/image",
+                    version: 1,
+                    props: { alt: "" },
+                    bindings: {
+                      mediaId: { $bind: "featuredImage", source: "item" },
+                    },
+                  }
+                : {
+                    id: "picture",
+                    type: "core/image",
+                    version: 1,
+                    props: { alt: "", mediaId: "image-1" },
+                  },
               {
                 id: "more",
                 type: "core/button",
@@ -964,6 +976,9 @@ describe("what a page costs to read, measured", () => {
     expect(post.html).toContain("reads");
 
     const ahead = await journal(site(100, listing(100)));
+    // Each entry's own picture, bound: one read per distinct image.
+    const bound = await journal(site(100, listing(100, { boundImage: true })));
+    expect(bound.html).toContain("/media/100.jpg");
     const oneByOne = await rendered(site(100, listing(100)), {
       collections: ["pages", "posts"],
       field: "content",
@@ -974,6 +989,7 @@ describe("what a page costs to read, measured", () => {
     const measured = {
       postPage: { reads: post.total, finds: described(post.reads) },
       listing100: { reads: ahead.total },
+      listing100BoundImages: { reads: bound.total },
       listing100OneByOne: { reads: oneByOne.total },
     };
     const out = process.env.READ_BUDGET_MEASUREMENTS;
