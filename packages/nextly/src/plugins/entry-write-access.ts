@@ -24,12 +24,16 @@
  *   keeping the document's status asks nothing more, as the update does;
  * - for each field named, the field's own update rule, which an update
  *   applies by leaving out a field the person may not set: a field it would
- *   leave out answers no.
+ *   leave out answers no. The rules are run over the body the write would
+ *   send, as the update runs them over its own: the values `data` gives, the
+ *   status the check names, and `null` for a field named only in `fields`.
+ *   A rule reading `data` therefore judges what it will judge on the write
+ *   when the check gives the write's values.
  *
  * No hook runs, nothing is written, and a document that does not exist
- * answers `false`, as one the person may not write. A field rule that decides
- * by the value written is asked with no value, and the write still judges the
- * value it carries.
+ * answers `false`, as one the person may not write. A `beforeChange` hook
+ * that changes the body runs only on the write, so a rule is judged on the
+ * body as the plugin sends it.
  *
  * @module plugins/entry-write-access
  * @experimental
@@ -71,6 +75,12 @@ export type PluginWriteCheck = (
   readonly status?: string;
   /** The top-level fields the write sets, each judged by its update rule. */
   readonly fields?: readonly string[];
+  /**
+   * The body the write sends, by top-level field: each field it names is
+   * judged as `fields` are, and every rule is run over this body, with
+   * `status` the one the check names.
+   */
+  readonly data?: Readonly<Record<string, unknown>>;
   /** The language the write is made in. */
   readonly locale?: string;
 };
@@ -85,6 +95,10 @@ const NAME = z.string().min(1).max(255);
 const PARTS = {
   status: NAME.optional(),
   fields: z.array(NAME).max(64).optional(),
+  data: z
+    .record(NAME, z.unknown())
+    .refine(body => Object.keys(body).length <= 64)
+    .optional(),
   locale: NAME.optional(),
 };
 
@@ -125,7 +139,11 @@ export async function mayWriteEntry(
             locale
           );
     if (!gates) return false;
-    return fieldsKept(identity, asked, named.data.fields ?? []);
+    return fieldsKept(identity, asked, {
+      fields: asked.fields ?? [],
+      ...(asked.data === undefined ? {} : { data: asked.data }),
+      ...(asked.status === undefined ? {} : { status: asked.status }),
+    });
   });
 }
 
@@ -177,8 +195,9 @@ async function singleGates(
 
 /**
  * Whether every field named survives the field update rules an update
- * applies: the same pass the write runs, over a payload naming only those
- * fields, as the person.
+ * applies: the same pass the write runs, as the person, over the body the
+ * write would send (see the module docblock). The body is copied first, since
+ * the pass removes what it refuses from the object it is handed.
  */
 async function fieldsKept(
   identity: PluginRouteIdentity,
@@ -187,12 +206,20 @@ async function fieldsKept(
     readonly collection?: string;
     readonly id?: string;
   },
-  fields: readonly string[]
+  write: {
+    readonly fields: readonly string[];
+    readonly data?: Readonly<Record<string, unknown>>;
+    readonly status?: string;
+  }
 ): Promise<boolean> {
+  const sent = write.data ?? {};
+  const fields = [...new Set([...write.fields, ...Object.keys(sent)])];
   if (fields.length === 0) return true;
-  const data: Record<string, unknown> = Object.fromEntries(
-    fields.map(field => [field, null])
-  );
+  const data: Record<string, unknown> = {
+    ...Object.fromEntries(fields.map(field => [field, null])),
+    ...structuredClone(sent),
+    ...(write.status === undefined ? {} : { status: write.status }),
+  };
   await applyFieldWriteAccess({
     kind: asked.single !== undefined ? "single" : "collection",
     slug: asked.single ?? asked.collection ?? "",
@@ -211,4 +238,4 @@ const IDENTITY_REFUSAL =
   "A write check is made as a route's caller, as `ctx.caller.identity()` resolved them.";
 
 const CHECK_REFUSAL =
-  "A write check names one document (a collection and an entry id, or a Single, and not both), and may name the status the write names, the fields it sets, and its language.";
+  "A write check names one document (a collection and an entry id, or a Single, and not both), and may name the status the write names, the fields it sets, the body it sends, and its language.";

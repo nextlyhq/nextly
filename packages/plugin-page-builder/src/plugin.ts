@@ -110,6 +110,7 @@ import { componentActionRoutes } from "./component-actions-route";
 import {
   registerComponentGuards,
   storedUseCheck,
+  storeLifecycle,
 } from "./component-delete/guards";
 import { componentDeleteRoutes } from "./component-delete/route";
 import { componentDeleteJob } from "./component-delete/sweep";
@@ -2368,14 +2369,26 @@ export const pageBuilder = (
       // so a component a Layout uses is refused naming the Layout first.
       {
         const placing = composition.hostsOf;
+        const store = composition.store.collection;
+        // The registry's record of the collection, which a store made in the
+        // admin changes there; never read inside a caller's transaction.
+        const lifecycle = storeLifecycle(
+          async () =>
+            (
+              (await ctx.services.collections.getCollection(store, {})) as {
+                status?: unknown;
+              } | null
+            )?.status === true
+        );
         registerComponentGuards({
           ctx,
-          components: composition.store.collection,
+          components: store,
           runs: () => fenceStore(ctx.db, ctx.dialect),
           hostsOf: () => placing,
           confirmUnused: storedUseCheck(() =>
             componentDeleteRewriteService(requireRewriteInstall)
           ),
+          lifecycle,
         });
       }
       rewriteInstall = rewriteInstallFor(ctx, opts, composition);
