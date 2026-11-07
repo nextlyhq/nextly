@@ -359,6 +359,10 @@ function topLevelFields(fields: FieldConfig[]): Map<string, FieldConfig> {
  * simply be dropped from the value: the container is written whole, so a
  * missing key erases what the live document holds. The caller withholds the
  * entire field instead.
+ *
+ * `repeater` says the value is a repeater's ("list"), or one of its rows
+ * ("row"): a row's `id` is its saved identity, which the write keeps, so a
+ * restored row is the same row it was when the snapshot was taken.
  */
 function pruneContainerValue(
   value: unknown,
@@ -368,7 +372,8 @@ function pruneContainerValue(
   blocked: string[],
   path: string,
   isComponentValue: boolean,
-  storesType: boolean
+  storesType: boolean,
+  repeater: "list" | "row" | false
 ): unknown {
   if (Array.isArray(value)) {
     return value.map((row, i) =>
@@ -380,7 +385,9 @@ function pruneContainerValue(
         blocked,
         `${path}[${i}]`,
         isComponentValue,
-        storesType
+        storesType,
+        // Only a repeater's own list holds its rows.
+        repeater === "list" ? "row" : false
       )
     );
   }
@@ -411,9 +418,16 @@ function pruneContainerValue(
     // restore delete and reinsert instances, taking their per-locale companion
     // rows and any other row-scoped state with them.
     //
-    // Only for component instances. A group or repeater is ordinary JSON, where
-    // a stale key that happens to be called `id` is exactly the kind of unknown
-    // key this function exists to remove.
+    // A repeater row's `id` is kept too: every write gives each row one, and
+    // keeping it here means a restore brings back the rows as the same rows.
+    if (repeater === "row" && key === "id" && !isComponentValue) {
+      out[key] = child;
+      continue;
+    }
+
+    // Only for component instances and repeater rows (above). A group is
+    // ordinary JSON, where a stale key that happens to be called `id` is
+    // exactly the kind of unknown key this function exists to remove.
     if (isComponentValue && (isFieldGroupTypeKey(key) || key === "id")) {
       // The type marker exists to record what the snapshot captured, and it has
       // already done its work above by selecting this row's schema. Carrying it
@@ -482,7 +496,8 @@ function pruneContainerValue(
         // A nested component's instances carry the same row metadata; a
         // nested group's values do not.
         componentSlugs(field).length > 0,
-        fieldNamesMultipleComponents(field)
+        fieldNamesMultipleComponents(field),
+        field.type === "repeater" ? "list" : false
       );
       continue;
     }
@@ -780,7 +795,8 @@ export function buildRestorePayload(
         blocked,
         key,
         isFieldGroupField,
-        fieldNamesMultipleComponents(field)
+        fieldNamesMultipleComponents(field),
+        field.type === "repeater" ? "list" : false
       );
 
       // A nested component the schema refuses takes the whole field with it.

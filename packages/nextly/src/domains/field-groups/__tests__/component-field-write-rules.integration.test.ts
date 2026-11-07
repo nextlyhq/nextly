@@ -1113,6 +1113,11 @@ describe.each(getConfiguredTestDialects())(
             `locked-${door}`,
             null,
           ]);
+          // A repeated id is no longer stored twice: the first row keeps it
+          // and the copy is stored under a fresh id of its own.
+          expect(rows[0]?.id).toBe("r1");
+          expect(typeof rows[1]?.id).toBe("string");
+          expect(rows[1]?.id).not.toBe("r1");
         });
 
         it("judges a row by its own siblings when another row's id repeats", async () => {
@@ -1137,6 +1142,10 @@ describe.each(getConfiguredTestDialects())(
             null,
             `gated-${door}`,
           ]);
+          // The copy takes a fresh id; the rows it sits between keep theirs.
+          expect(rows[0]?.id).toBe("r1");
+          expect(rows[2]?.id).toBe("r2");
+          expect(new Set(rows.map(row => row.id)).size).toBe(3);
         });
       });
 
