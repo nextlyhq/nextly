@@ -596,11 +596,17 @@ async function spaceBlockers(
     return sameHolder(existing.holder, claim.holder) ? "claimed" : [existing];
   }
   const stored = storedKey(key);
+  // The holder's own address inside the space is no blocker: a page moving
+  // from `/news/page/2` to `/news` as it starts paginating gives that
+  // address up in the same reconcile, which claims before it releases.
   const inside = await claimsIn(
     claims,
     tx,
     { kind: { equals: "address" }, space: { equals: stored } },
-    row => row.kind === "address" && row.space === stored
+    row =>
+      row.kind === "address" &&
+      row.space === stored &&
+      !sameHolder(row.holder, claim.holder)
   );
   if (inside.length > 0) return inside;
   if (

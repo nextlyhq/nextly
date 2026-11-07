@@ -398,6 +398,22 @@ describe.each(getConfiguredTestDialects())(
       expect(await stored(claims, "address")).toEqual([["/news", "list"]]);
     });
 
+    it("lets a page move to a list's address as it starts holding the list's later pages", async () => {
+      const claims = claimsOf(await boot());
+      await claim(claims, "/news/page/2", page("p1"));
+      await saving(claims, tx =>
+        reconcileHolder(
+          claims,
+          tx,
+          page("p1"),
+          { addresses: [at("/news")], spaces: [at("/news")] },
+          describeHolder
+        )
+      );
+      expect(await stored(claims, "address")).toEqual([["/news", "p1"]]);
+      expect(await stored(claims, "space")).toEqual([["/news", "p1"]]);
+    });
+
     it("gives up the waits and claims a holder has left, handing a released one on", async () => {
       const claims = claimsOf(await boot());
       // p1 holds /old, which a stale hand-over could have given it; it also
