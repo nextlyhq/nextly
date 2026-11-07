@@ -29,6 +29,7 @@ import { COMPONENTS_SLUG } from "./collections/components";
 import type { ActionBy } from "./component-actions-contract";
 import { documentVersionOf } from "./document-version";
 import { asServiceCaller, type ComponentStore } from "./library-route";
+import { templateTargetOf } from "./templates/template-target";
 
 /** The capabilities the composition routes use, named rather than imported whole. */
 export type CompositionRouteContext = Pick<
@@ -245,6 +246,12 @@ export interface StoredPageRead {
   readonly document: BlockDocument;
   /** The row's version as read; absent from a server that issues none. */
   readonly rev: string | undefined;
+  /**
+   * The collection the row names, where it is a template's: carried on the
+   * write of its blocks (`carryingTemplateTarget`), so the write is judged
+   * against it. Absent for any row naming none.
+   */
+  readonly templateTarget?: string;
 }
 
 /** A row's blocks field with the row's version, or `null` when it holds none. */
@@ -253,7 +260,13 @@ export function storedPageReadOf(
   field: string
 ): StoredPageRead | null {
   const document = blocksDocumentOf(row, field);
-  return document === null ? null : { document, rev: documentVersionOf(row) };
+  if (document === null) return null;
+  const templateTarget = templateTargetOf(row);
+  return {
+    document,
+    rev: documentVersionOf(row),
+    ...(templateTarget === undefined ? {} : { templateTarget }),
+  };
 }
 
 /**
@@ -282,17 +295,19 @@ export function createdId(item: unknown): string {
 
 /**
  * Refuse, rolling back what the transaction made, when the stored page
- * changed since the action was planned against it, and give the version of
- * the page as read here. The page is read again as late as the write allows,
- * and the write sends this read's version back, so an edit landing between
- * the two is refused by the update rather than overwritten.
+ * changed since the action was planned against it, and give the page as read
+ * here. The page is read again as late as the write allows, and the write
+ * sends this read's version back, so an edit landing between the two is
+ * refused by the update rather than overwritten.
  */
 export async function requireUnchangedPage(
   readNow: () => Promise<StoredPageRead | null>,
   planned: BlockDocument
-): Promise<string | undefined> {
+): Promise<StoredPageRead> {
   const now = await readNow();
-  if (now !== null && sameStoredValue(now.document, planned)) return now.rev;
+  // The read itself, so a write planned from it sends its version and, for a
+  // template, the collection it draws.
+  if (now !== null && sameStoredValue(now.document, planned)) return now;
   throw NextlyError.conflict({
     reason: "state",
     message:

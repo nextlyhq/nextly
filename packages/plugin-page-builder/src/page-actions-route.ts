@@ -90,6 +90,10 @@ import {
   storedFingerprint,
 } from "./judged-writes";
 import { readingAsUser, type ComponentStore } from "./library-route";
+import {
+  carryingTemplateTarget,
+  templateTargetOf,
+} from "./templates/template-target";
 
 /** The blocks field a page action edits when the address names none. */
 const DEFAULT_FIELD = "content";
@@ -170,6 +174,8 @@ interface StoredPage {
 interface ReadPage {
   readonly page: StoredPage;
   readonly version: unknown;
+  /** The collection the row names, where it is a template's. */
+  readonly templateTarget: string | undefined;
 }
 
 /** What an action plans: the write it makes, and what it answers with. */
@@ -217,11 +223,18 @@ export async function runPageAction(
     page.collection,
     setup
   );
-  const data = {
-    ...planned.data,
-    ...(body.publish === true ? { status: "published" } : {}),
-    ...(read.version === undefined ? {} : { [VERSION_KEY]: read.version }),
-  };
+  // A template's collection with it, read with the page, so the write is
+  // judged against it inside the transaction below.
+  const data = carryingTemplateTarget(
+    ctx.self,
+    page.collection,
+    read.templateTarget,
+    {
+      ...planned.data,
+      ...(body.publish === true ? { status: "published" } : {}),
+      ...(read.version === undefined ? {} : { [VERSION_KEY]: read.version }),
+    }
+  );
   const options = asCaller(ctx, page.locale);
   await collections.warmLocalizedReadiness(page.collection);
   const judged = await judgeInTransaction(
@@ -336,7 +349,11 @@ async function readStoredPage(
   );
   if (typeof row !== "object" || row === null) return null;
   const record = row as Record<string, unknown>;
-  return { page: storedPageOf(record, field), version: record[VERSION_KEY] };
+  return {
+    page: storedPageOf(record, field),
+    version: record[VERSION_KEY],
+    templateTarget: templateTargetOf(record),
+  };
 }
 
 /** The parts of a page row an action reads and writes. */
