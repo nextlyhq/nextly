@@ -433,8 +433,11 @@ describe.each(getConfiguredTestDialects())(
         for (const kind of action.kinds) {
           const answer = await dryRun(action, kind);
           const said = `${action.name} ${kind}: ${String(answer.status)} ${JSON.stringify(answer.body)}`;
-          // Reached as a caller the route admits, so its body was read.
+          // Reached as a caller the route admits, so its body was read, and
+          // answered rather than failing: a kind whose handler throws is not
+          // one a client can use, whatever the manifest says.
           expect([401, 403], said).not.toContain(answer.status);
+          expect(answer.status, said).toBeLessThan(500);
           // Refused for a missing id or field, or judged by a dry run: any
           // answer but the route not knowing the kind.
           expect(refusedPaths(answer), said).not.toContain("action.kind");
