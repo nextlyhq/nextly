@@ -7,6 +7,7 @@
  * a bound prop's chip, whose unbind keeps what the host's plan says.
  */
 import {
+  bindablePropKind,
   clearBlocks,
   registerBlocks,
   type BlockDocument,
@@ -209,5 +210,92 @@ describe("a bound prop", () => {
         })
       )
     );
+  });
+});
+
+describe("every bindable prop", () => {
+  it("offers the bind button on its own row, and a prop no field fills offers none", () => {
+    // One prop of each type a block may draw on its own row.
+    const props = {
+      title: { label: "Title", role: "content", type: "text" },
+      summary: { label: "Summary", role: "content", type: "textarea" },
+      address: { label: "Address", role: "content", type: "url" },
+      count: { label: "Count", role: "content", type: "number" },
+      shown: { label: "Shown", role: "content", type: "checkbox" },
+      tone: {
+        label: "Tone",
+        role: "content",
+        type: "select",
+        options: [
+          { label: "Calm", value: "calm" },
+          { label: "Loud", value: "loud" },
+        ],
+      },
+      body: { label: "Body", role: "content", type: "richText" },
+      glyph: { label: "Glyph", role: "content", type: "icon" },
+    } as const;
+    registerBlocks(
+      [
+        {
+          name: "acme/every",
+          version: 1,
+          description: "Every type.",
+          example: { props: {} },
+          editor: { label: "Every" },
+          props,
+          defaultProps: {},
+          render: () => null,
+        },
+      ] as never,
+      { source: "binding-controls-every-test" }
+    );
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "e", type: "acme/every", version: 1, props: {} }],
+    } as BlockDocument;
+    render(
+      <InspectorPanel
+        editor={
+          {
+            document,
+            selectedId: "e",
+            selection: { ids: ["e"], primary: "e" },
+            applyAll: vi.fn(() => document),
+            select: vi.fn(),
+            apply: vi.fn(() => document),
+            undo: vi.fn(),
+            redo: vi.fn(),
+            canUndo: false,
+            canRedo: false,
+            undoDepth: 0,
+            composed: () => undefined,
+          } as unknown as EditorState
+        }
+        contentServices={{ listBindingFields: async () => SOURCES }}
+      />
+    );
+    for (const schema of Object.values(props)) {
+      const button = screen.queryByRole("button", {
+        name: `Bind ${schema.label} to a field`,
+      });
+      // The engine's own answer to "can any field fill this prop".
+      if (bindablePropKind(schema as never) === undefined) {
+        expect(button, schema.label).toBeNull();
+      } else {
+        expect(button, schema.label).not.toBeNull();
+      }
+    }
+    // The control: some prop types bind and some don't, or the loop proves nothing.
+    expect(
+      Object.values(props).filter(
+        schema => bindablePropKind(schema as never) !== undefined
+      ).length
+    ).toBeGreaterThan(3);
+    expect(
+      Object.values(props).some(
+        schema => bindablePropKind(schema as never) === undefined
+      )
+    ).toBe(true);
   });
 });
