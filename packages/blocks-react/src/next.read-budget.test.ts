@@ -1708,3 +1708,130 @@ describe("a list's reads ahead, stopped where a step reads nothing ahead", () =>
     expect(counted.unread).toEqual([]);
   });
 });
+
+describe("a list's reads ahead, from what each block is drawn with", () => {
+  it("reads no media ahead for an image drawn from an address, so a later block keeps its read", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    runtime.shapes.set("collection:posts", [
+      { name: "title", type: "text" },
+      { name: "slug", type: "text" },
+      { name: "author", type: "relationship", relationTo: "authors" },
+      { name: "coverUrl", type: "url" },
+    ]);
+    const nextly = site(
+      1,
+      pageOf([
+        postsList("list", 1, [
+          // Drawn from the address the entry's URL field holds: no read.
+          {
+            id: "cover",
+            type: "core/image",
+            version: 1,
+            props: { alt: "" },
+            bindings: { mediaId: { $bind: "coverUrl", source: "item" } },
+          },
+          itemHeading("author", "author.name", "No author"),
+        ]),
+      ])
+    );
+    for (const post of nextly.stored.posts ?? []) {
+      post.coverUrl = `/pictures/${String(post.id)}.jpg`;
+    }
+    // The entries, then the author's relation.
+    const { html } = await journal(nextly, { maxQueries: 1 + 1 });
+    expect(html).toContain("/pictures/post-1.jpg");
+    expect(html).toContain("Writer 1");
+  });
+});
+
+describe("a list's link batch that cannot be used", () => {
+  it("stops the reads ahead, so the link keeps the reads it was asked on", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const nextly = site(
+      1,
+      pageOf([
+        postsList("list", 1, [
+          {
+            id: "more",
+            type: "core/button",
+            version: 1,
+            props: { label: "Read", entryCollection: "posts" },
+            bindings: { entryId: { $bind: "id", source: "item" } },
+          },
+          itemHeading("author", "author.name", "No author"),
+        ]),
+      ]),
+      // A batch read by `id in` whose count the route cannot trust.
+      { distrustBatches: true }
+    );
+    const route = createPublicBlocksPage({
+      collections: ["pages", "posts"],
+      field: "content",
+      blocks,
+      mediaCollection: "images",
+      // The entries, then exactly what a batch of one link is asked on: its
+      // reads and one more link's after it.
+      maxQueries: 1 + 8,
+      nextly: nextly as never,
+    });
+    const element = await throughBoundary<{ children?: unknown }>(
+      route.ContentPage({ params: { slug: ["journal"] } })
+    );
+    const html = await renderToHtml(element);
+    expect(html).toContain('href="/post-1"');
+    // The relation after it is not read ahead: the reads it would have
+    // spent stay for the link as it is drawn.
+    expect(reportIn(element)?.byKind.related).toBeUndefined();
+  });
+});
+
+describe("two lists drawing one image", () => {
+  const twoLists = () =>
+    pageOf([
+      postsList("list-a", 1, [
+        {
+          id: "cover-a",
+          type: "core/image",
+          version: 1,
+          props: { alt: "", mediaId: "image-1" },
+        },
+      ]),
+      postsList("list-b", 1, [
+        {
+          id: "cover-b",
+          type: "core/image",
+          version: 1,
+          props: { alt: "", mediaId: "image-1" },
+        },
+        itemHeading("author-b", "author.name", "No author"),
+      ]),
+    ]);
+
+  it("read it once, the second list waiting for the first one's batch", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const nextly = site(1, twoLists());
+    const route = createPublicBlocksPage({
+      collections: ["pages", "posts"],
+      field: "content",
+      blocks,
+      mediaCollection: "images",
+      nextly: nextly as never,
+    });
+    const element = await throughBoundary<{ children?: unknown }>(
+      route.ContentPage({ params: { slug: ["journal"] } })
+    );
+    const html = await renderToHtml(element);
+    expect(html.split("/media/1.jpg").length - 1).toBe(2);
+    expect(reportIn(element)?.byKind.image).toBe(1);
+  });
+
+  it("leave the second list its read for a later block under a tight allowance", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    // Both lists' entries, the one batch, and the second list's relation.
+    const { html } = await journal(site(1, twoLists()), {
+      maxQueries: 2 + 2,
+    });
+    expect(html.split("/media/1.jpg").length - 1).toBe(2);
+    expect(html).toContain("Writer 1");
+  });
+});
