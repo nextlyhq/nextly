@@ -487,6 +487,7 @@ describe.each(getConfiguredTestDialects())(
               content: document("page", [
                 box("h1", [box("h2-placing-deep", [placing("i1", deep)])]),
               ]),
+              _overwrite: true,
             },
             { overrideAccess: true }
           );
@@ -497,6 +498,13 @@ describe.each(getConfiguredTestDialects())(
 
       expect(one.status).toBe("fulfilled");
       expect(two.status).toBe("rejected");
+      // Refused by the composition check, judged too deep or, where it met
+      // the first save, as the graph lock's own race (MySQL answers from an
+      // older snapshot): not for a reason any save can fail, nor any other
+      // conflict.
+      expect(String(two.status === "rejected" ? two.reason : "")).toMatch(
+        /depth-exceeded|raced another change to the page builder's components/
+      );
     });
 
     it("refuses the second half of a loop saved in a transaction its caller opened", async () => {
