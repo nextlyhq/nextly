@@ -36,7 +36,6 @@ import {
   OnboardingChecklist,
   SelectionBreadcrumb,
   SpacingOverlay,
-  VariantPreviewTag,
   VisitorUnreadableBadges,
   VisitorUnreadableProvider,
   type ComponentFieldsHost,
@@ -91,6 +90,7 @@ import { OwnDesignsChip } from "../TemplateOwnDesigns";
 import type { OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
+import { previewedCanvas } from "./canvas-preview-mode";
 import {
   editorPanelRenderer,
   useEditorPanels,
@@ -689,6 +689,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     canvasDir,
     visitorUnreadable,
   } = view;
+  // The theme the frame draws the page in and the tags saying so, from one
+  // answer, so the tag never names a mode the canvas is not drawn in.
+  const previewed = previewedCanvas(view.previewMode, view.preview.previewing);
   return (
     <>
       {/*
@@ -763,9 +766,13 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             // is drawn inside the site's own layout and stylesheets.
             source={canvasSource}
             onSourceFallback={onCanvasFallback}
+            // The site mode the author picked, on the frame's document and
+            // the frame element only; nothing picked draws the page's own.
+            theme={previewed.theme}
             overlay={
               <>
-                <VariantPreviewTag name={view.preview.previewing} />
+                {/* One row: the variant previewed and the mode picked. */}
+                {previewed.tags}
                 {/* A selected block the page hides on this device is drawn
                     anyway, and its ring says so. */}
                 <CanvasMarks

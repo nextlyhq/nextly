@@ -7,7 +7,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { openEditorWith } from "./canvas/editor-driver";
 import { expectNoAxeViolations } from "./support/axe";
-import { canvasFrame } from "./support/canvas-frame";
+import { CANVAS_FRAME, canvasFrame } from "./support/canvas-frame";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 
@@ -251,6 +251,132 @@ test("a new variable with a dark value is kept, and the sheet applies it on a da
     } finally {
       await markAbove([]);
     }
+  } finally {
+    const restored = await page.request.patch(SITE_STYLE, {
+      data: { tokens: before },
+    });
+    expect(restored.ok(), `restoring the variables: ${restored.status()}`).toBe(
+      true
+    );
+  }
+});
+
+/** The site's canvas route answered as missing, so the blank page is drawn. */
+async function useBlankCanvasPage(page: Page): Promise<void> {
+  await page.route("**/page-builder-canvas", async route => {
+    // A thrown handler prints the request, headers and all; answer instead.
+    try {
+      await route.fulfill({
+        status: 404,
+        contentType: "text/html",
+        body: "<!doctype html><html><body><main>Not found</main></body></html>",
+      });
+    } catch {
+      await route.abort().catch(() => undefined);
+    }
+  });
+}
+
+/**
+ * What the editor's own chrome is drawn in: its root's classes and theme
+ * attribute, and the scheme and ground its page computes. A preview of the
+ * site's mode must leave every part of it as it was.
+ */
+function adminChrome(page: Page) {
+  return page.evaluate(() => {
+    const root = document.documentElement;
+    return {
+      classes: root.className,
+      theme: root.getAttribute("data-theme"),
+      scheme: getComputedStyle(root).colorScheme,
+      ground: getComputedStyle(document.body).backgroundColor,
+    };
+  });
+}
+
+test("a mode picked in the Design panel draws the canvas in it, on a device that prefers the other", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const before = await storedTokens(page);
+  try {
+    const seeded = await page.request.patch(SITE_STYLE, {
+      data: {
+        tokens: {
+          tokens: [
+            {
+              name: "color.sea",
+              kind: "color",
+              values: { light: LIGHT, dark: DARK },
+            },
+          ],
+        },
+      },
+    });
+    expect(seeded.ok(), `seeding the variables: ${seeded.status()}`).toBe(true);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    // On the editor's blank page, which states the canvas's scheme from the
+    // nearest theme marker, as the first test here explains.
+    await useBlankCanvasPage(page);
+    await page.emulateMedia({ colorScheme: "dark" });
+    await openEditorWith(page, NODES, "variables-text");
+    await openDesign(page);
+
+    const canvas = canvasFrame(page).locator(".nx-canvas");
+    const canvasMode = () =>
+      canvas.evaluate((element, property) => {
+        const style = getComputedStyle(element);
+        return {
+          scheme: style.colorScheme,
+          value: style.getPropertyValue(property).trim(),
+        };
+      }, PROPERTY);
+    // The iframe ELEMENT's own scheme, which the frame's
+    // prefers-color-scheme follows.
+    const frameScheme = () =>
+      page
+        .locator(CANVAS_FRAME)
+        .evaluate(frame => getComputedStyle(frame).colorScheme);
+    const preview = page.getByRole("group", { name: "Preview" });
+    const useDevice = page.getByRole("button", { name: "Use device" });
+
+    // Nothing picked: the device's dark, and no tag.
+    await expect(preview.getByRole("button", { name: "Dark" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+    await expect.poll(canvasMode).toEqual({ scheme: "dark", value: DARK });
+    await expect(useDevice).toHaveCount(0);
+    const darkChrome = await adminChrome(page);
+
+    // Light, on a dark device.
+    await preview.getByRole("button", { name: "Light" }).click();
+    await expect.poll(canvasMode).toEqual({ scheme: "light", value: LIGHT });
+    await expect.poll(frameScheme).toBe("light");
+    await expect(page.getByText("Light preview")).toBeVisible();
+    await expect(useDevice).toBeVisible();
+    expect(await adminChrome(page)).toEqual(darkChrome);
+
+    // Use device clears the pick: the canvas and the switch follow the
+    // device again, and the tag goes.
+    await useDevice.click();
+    await expect.poll(canvasMode).toEqual({ scheme: "dark", value: DARK });
+    await expect.poll(frameScheme).toBe("normal");
+    await expect(useDevice).toHaveCount(0);
+    await expect(preview.getByRole("button", { name: "Dark" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+
+    // Dark, on a light device.
+    await page.emulateMedia({ colorScheme: "light" });
+    await expect.poll(canvasMode).toEqual({ scheme: "light", value: LIGHT });
+    const lightChrome = await adminChrome(page);
+    await preview.getByRole("button", { name: "Dark" }).click();
+    await expect.poll(canvasMode).toEqual({ scheme: "dark", value: DARK });
+    await expect.poll(frameScheme).toBe("dark");
+    await expect(page.getByText("Dark preview")).toBeVisible();
+    expect(await adminChrome(page)).toEqual(lightChrome);
   } finally {
     const restored = await page.request.patch(SITE_STYLE, {
       data: { tokens: before },
