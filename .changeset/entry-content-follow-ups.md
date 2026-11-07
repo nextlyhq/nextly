@@ -34,7 +34,9 @@ Follow-ups to a template's Entry content block.
 - The entry's own DOM ids are claimed against every id the template already publishes,
   as a placed component's are, so a minted id is never rendered twice.
 - Composing an entry's content keeps to the page's node limit: an entry larger than the
-  page may draw is cut before any of it is walked or copied.
+  page may draw is cut before any of it is walked or copied. The template is charged
+  what it draws once its components are expanded, so a placement still resolves when the
+  entry fills the page.
 - On the editor's canvas the entry's drawn blocks are inert, so no link or field inside
   takes focus or a press; a click still selects Entry content.
 - Applying conditions judges the blocks inside the entry's own content with the

@@ -10,7 +10,11 @@
  *
  * @module conditioned-page
  */
-import type { BlockDocument, DocumentLimits } from "@nextlyhq/blocks-engine";
+import type {
+  BlockDocument,
+  DefinitionsById,
+  DocumentLimits,
+} from "@nextlyhq/blocks-engine";
 import {
   conditionedBlocksIn,
   useComposedEntryContent,
@@ -49,10 +53,15 @@ export interface ConditionedPage {
 export function useConditionedPage(
   document: BlockDocument,
   preview: TemplatePreview | undefined,
-  limits: DocumentLimits | undefined
+  limits: DocumentLimits | undefined,
+  /** The definitions of the components the page places, if any. */
+  definitions?: DefinitionsById
 ): ConditionedPage {
   const entry = useSettledEntry(preview);
-  const composed = useComposedEntryContent(document, entry, limits);
+  const composed = useComposedEntryContent(document, entry, {
+    ...limits,
+    ...(definitions === undefined ? {} : { definitions }),
+  });
   const held = useMemo(
     () => conditionedBlocksIn(composed, limits),
     [composed, limits]

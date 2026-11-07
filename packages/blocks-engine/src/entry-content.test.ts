@@ -9,7 +9,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { DOCUMENT_FORMAT_VERSION, type BlockDocument } from "./document";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
+  type BlockDocument,
+} from "./document";
 import {
   composeEntryContent,
   ENTRY_CONTENT_SLOT,
@@ -17,6 +21,9 @@ import {
   entryContentPlacements,
   holdsEntryContent,
 } from "./entry-content";
+import { DEFAULT_LIMITS } from "./limits";
+import { resolveComponentInstances } from "./resolve-instances";
+import { walkNodes } from "./tree";
 import { validate, type ValidationContext } from "./validation";
 import { FIXTURE_BREAKPOINTS } from "./validation.fixtures";
 
@@ -450,5 +457,70 @@ describe("an entry nested deeper than the page may draw", () => {
     // The block at depth 1, so its blocks reach depth 12: eleven levels.
     const composed = composeEntryContent(template, { valueOf: () => body });
     expect(drawnLevels(composed)).toBe(11);
+  });
+});
+
+describe("an entry beside a template that places a component", () => {
+  // A two-node template: a placement of a two-node component, and the block.
+  const card = documentOf(
+    "component",
+    text("c1", "Card title"),
+    text("c2", "Card body")
+  );
+  const definitions = new Map([["card", card]]);
+  const template = documentOf(
+    "template",
+    {
+      id: "placed",
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId: "card" },
+    },
+    entryContent("ec")
+  );
+  const body = documentOf(
+    "page",
+    text("e1", "One"),
+    text("e2", "Two"),
+    text("e3", "Three"),
+    text("e4", "Four")
+  );
+  const limits = { ...DEFAULT_LIMITS, maxNodes: 5 };
+
+  /** The page as the renderer resolves it under the cap of 5. */
+  function resolvedUnderCap(composed: BlockDocument) {
+    const resolved = resolveComponentInstances(composed, definitions, {
+      limits,
+      conditioned: "carry",
+    });
+    let nodes = 0;
+    walkNodes(resolved.document.nodes, () => {
+      nodes += 1;
+    });
+    return { unresolved: resolved.unresolved, nodes };
+  }
+
+  it("keeps the room the component's expansion needs, and cuts the entry to what remains", () => {
+    const composed = composeEntryContent(template, {
+      valueOf: () => body,
+      maxNodes: 5,
+      definitions,
+    });
+    const drawn = composed.nodes[1]?.slots?.[ENTRY_CONTENT_SLOT] ?? [];
+    // The entry is cut, but not dropped.
+    expect(drawn.length).toBeGreaterThan(0);
+    expect(drawn.length).toBeLessThan(4);
+    const resolved = resolvedUnderCap(composed);
+    // The placement resolves, and the page fills exactly the room it has.
+    expect(resolved.unresolved).toEqual([]);
+    expect(resolved.nodes).toBe(5);
+  });
+
+  it("leaves the placement unresolved when each instance is charged as one node (the control)", () => {
+    const composed = composeEntryContent(template, {
+      valueOf: () => body,
+      maxNodes: 5,
+    });
+    expect(resolvedUnderCap(composed).unresolved).toHaveLength(1);
   });
 });

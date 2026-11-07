@@ -29,6 +29,7 @@ import {
   PREVIEWED_ENTRY_KEYS,
   PreviewedEntryProvider,
   useComposedEntryContent,
+  type EntryContentLimits,
   type PreviewedCollection,
   type PreviewedEntry,
 } from "@nextlyhq/builder/shell";
@@ -142,8 +143,12 @@ const EntryAsRead = createContext<PreviewedEntry | undefined>(undefined);
  */
 export function useDrawnTemplate(
   document: BlockDocument,
-  /** The limits the canvas draws under, which bound the entry's walk. */
-  limits?: { readonly maxNodes?: number; readonly maxDepth?: number }
+  /**
+   * The limits the canvas draws under, which bound the entry's walk, and
+   * the definitions of the components the page places, whose expansion the
+   * entry leaves room for.
+   */
+  limits?: EntryContentLimits
 ): BlockDocument {
   return useComposedEntryContent(document, useContext(EntryAsRead), limits);
 }

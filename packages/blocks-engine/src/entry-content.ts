@@ -37,7 +37,13 @@ import { remapFragmentBindings, remapFragmentProps } from "./fragment-refs";
 import { describeValue, pointer } from "./issue-text";
 import { DEFAULT_LIMITS } from "./limits";
 import { isPlainRecord } from "./plain-record";
-import { claimedDomId, composedNodeId, hostIdsIn } from "./resolve-instances";
+import {
+  claimedDomId,
+  composedNodeId,
+  hostIdsIn,
+  resolveComponentInstances,
+  type ComponentLookup,
+} from "./resolve-instances";
 import { mapForest, mintDomId, remapIdReferences, walkNodes } from "./tree";
 
 /**
@@ -287,6 +293,14 @@ export interface EntryContentSource {
    * format's own limit where absent.
    */
   readonly maxDepth?: number;
+  /**
+   * The definitions of the components the page places, as the renderer will
+   * expand them: the template is then charged what it draws once its
+   * instances are expanded, so the entry never takes the room an expansion
+   * needs, and every instance still resolves under the page's one node
+   * limit. Absent, each instance is charged as the one node it is stored as.
+   */
+  readonly definitions?: ComponentLookup;
 }
 
 /**
@@ -430,6 +444,31 @@ function drawableForest(
 }
 
 /**
+ * What the template costs of the page's node limit once drawn: its stored
+ * nodes (`stored`), or, given the components' definitions, the nodes it
+ * holds once the resolver has expanded its instances under that limit, as
+ * the renderer will. Conditioned instances are expanded too, so the room
+ * kept is the most any entry of the collection can need.
+ */
+function templateCost(
+  document: BlockDocument,
+  stored: number,
+  source: EntryContentSource,
+  maxNodes: number
+): number {
+  if (source.definitions === undefined) return stored;
+  const resolved = resolveComponentInstances(document, source.definitions, {
+    limits: { ...DEFAULT_LIMITS, maxNodes },
+    conditioned: "carry",
+  }).document;
+  let count = 0;
+  walkNodes(resolved.nodes, () => {
+    count += 1;
+  });
+  return Math.max(stored, count);
+}
+
+/**
  * How deep a node at `path` sits, as the renderer counts it: 1 for a
  * top-level block, one more for each slot above it.
  */
@@ -478,7 +517,7 @@ export function composeEntryContent(
   // The entry's blocks within what the page may still draw beside the
   // template's own, cut before any of them is minted, walked or copied.
   const kept = drawableForest(entry.nodes, {
-    budget: maxNodes - host.count,
+    budget: maxNodes - templateCost(document, host.count, source, maxNodes),
     // A slot's blocks one below the block holding it, which sits as deep as
     // its path has slots below the top (a top-level block at depth 1).
     depth: depthOf(first.path) + 1,

@@ -1253,7 +1253,11 @@ function useDrawnCanvasRender(
   locale: string | undefined,
   component: boolean
 ): ReturnType<typeof useBoundCanvasRender> {
-  const drawn = useDrawnTemplate(document, render.limits);
+  // Under the canvas's limits, the entry left the room its components need.
+  const drawn = useDrawnTemplate(document, {
+    ...render.limits,
+    definitions: render.definitions,
+  });
   return useBoundCanvasRender(
     render,
     { document: drawn, stored: document, regions },
@@ -1477,7 +1481,9 @@ function EditorBody<TFieldValues extends FieldValues>({
   const conditioned = useConditionedPage(
     reveal.document,
     templatePreview,
-    canvas.canvasRender.limits
+    canvas.canvasRender.limits,
+    // The placed components, whose expansion the entry leaves room for.
+    canvas.canvasRender.definitions
   );
   const conditionsUnchecked = useConditionsUnchecked(
     conditioned.composed,
