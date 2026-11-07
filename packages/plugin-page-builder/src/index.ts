@@ -256,6 +256,8 @@ export type {
   PageAction,
   PageActionRequest,
   PageActionResult,
+  UnbindAnswer,
+  UnbindKeep,
 } from "./composition-actions-contract";
 // The collection template actions: give a collection its template, and
 // publish it, each with a dry run.

@@ -87,6 +87,7 @@ export {
   type ExposureTargetInput,
   type ListQueryChange,
   type PageAction,
+  type UnbindKeep,
 } from "./composition-actions";
 
 export { bindOp, unbindOp, type KeptProps } from "./binding-ops";
