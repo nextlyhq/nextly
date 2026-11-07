@@ -102,7 +102,7 @@ function fittingOptions(
   sources.forEach((source, index) => {
     const group = String(index);
     for (const field of source.fields) {
-      const label = fieldLabel(field.name);
+      const label = choiceLabel(field);
       if (canBindFieldToProp(field, prop.schema)) {
         options.push(option(source, group, field, field.name, label));
       }
@@ -114,7 +114,7 @@ function fittingOptions(
             group,
             inner,
             `${field.name}.${inner.name}`,
-            fieldLabel(inner.name),
+            choiceLabel(inner),
             label
           )
         );
@@ -154,7 +154,7 @@ function OptionRow({ option }: { option: FieldOption }): React.JSX.Element {
         {option.parent === undefined ? null : (
           <span className="nx-binding-option__parent">{option.parent} › </span>
         )}
-        {fieldLabel(field.name)}
+        {choiceLabel(field)}
       </span>
       {/* Words, not a colour or an icon alone: each is part of the option's
           own text, so a screen reader announces it with the field. */}
@@ -428,14 +428,42 @@ function noteFor(
   }
 }
 
+/**
+ * The name a field is listed by: the host's label where it gives one ("Site
+ * URL"), else its stored name as a person reads it.
+ */
+function choiceLabel(field: BindingFieldChoice): string {
+  return field.label ?? fieldLabel(field.name);
+}
+
+/**
+ * A bound path named segment by segment as the picker names it, through the
+ * source's fields where they are read; a segment the source does not list is
+ * named from its own key.
+ */
+function pathName(
+  path: string,
+  fields: readonly BindingFieldChoice[] | undefined
+): string {
+  const names: string[] = [];
+  let level = fields;
+  for (const segment of path.split(".")) {
+    const field = level?.find(candidate => candidate.name === segment);
+    names.push(field === undefined ? fieldLabel(segment) : choiceLabel(field));
+    level = field?.fields;
+  }
+  return names.join(" › ");
+}
+
 /** The field a binding reads, named, and its source, once the sources are read. */
 function boundNames(
   binding: Binding,
   sources: readonly BindingFieldSource[] | "loading" | "failed"
 ): { readonly field: string; readonly source: string | undefined } {
   const path = binding.$bind;
-  const field = path.split(".").map(fieldLabel).join(" › ");
-  if (typeof sources === "string") return { field, source: undefined };
+  if (typeof sources === "string") {
+    return { field: pathName(path, undefined), source: undefined };
+  }
   const wanted = binding.source ?? "entry";
   const found = sources.find(
     candidate =>
@@ -444,7 +472,10 @@ function boundNames(
         ("sourceKey" in binding &&
           candidate.binding.sourceKey === binding.sourceKey))
   );
-  return { field, source: found === undefined ? undefined : sourceName(found) };
+  return {
+    field: pathName(path, found?.fields),
+    source: found === undefined ? undefined : sourceName(found),
+  };
 }
 
 /** A bound prop: the chip, its menu, and the fallback a visitor sees without a value. */

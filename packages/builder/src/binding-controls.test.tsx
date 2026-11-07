@@ -56,7 +56,10 @@ const SOURCES: readonly BindingFieldSource[] = [
   {
     binding: { source: "site" },
     label: "Site",
-    fields: [{ name: "applicationName", type: "text", public: true }],
+    fields: [
+      { name: "applicationName", type: "text", public: true },
+      { name: "siteUrl", type: "url", label: "Site URL", public: true },
+    ],
   },
 ];
 
@@ -174,6 +177,17 @@ describe("the field picker", () => {
       (await screen.findByText(/^Could not read Contact details\./)).textContent
     ).toBe("Could not read Contact details. Close this and try again.");
     expect(screen.getByRole("option", { name: /^Title/ })).toBeTruthy();
+  });
+
+  it("names a field by the host's label where it gives one", async () => {
+    mount(undefined);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Text to a field" })
+    );
+    const site = within(
+      await screen.findByRole("group", { name: "Site" })
+    ).getAllByRole("option");
+    expect(site.map(option => option.textContent)).toContain("Site URL");
   });
 
   it("writes the pick as one edit of the block's bindings", async () => {
