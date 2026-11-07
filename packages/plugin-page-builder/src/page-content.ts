@@ -74,7 +74,8 @@ export interface PageBuilderContentProvider {
   ) => Promise<ContentAddressHolder | null>;
   readonly addresses: (
     locale: string | undefined,
-    limit: number
+    limit: number,
+    under: readonly string[]
   ) => Promise<readonly (readonly string[])[]>;
   readonly addressCollections: () => Promise<readonly string[]>;
   readonly entryPath: (
@@ -132,7 +133,7 @@ export function pageBuilderContent(
   return {
     resolveAddress: async (locale, path) =>
       (await service()).holderAt(locale, path),
-    addresses: async (locale, limit) => {
+    addresses: async (locale, limit, under) => {
       const store = await service();
       const paths: string[][] = [];
       for (let page = 1; paths.length < limit; page += 1) {
@@ -140,7 +141,12 @@ export function pageBuilderContent(
           limit: ADDRESS_PAGE,
           page,
         });
-        paths.push(...read.paths.slice(0, limit - paths.length));
+        // Only the paths under the route's mount count toward its limit, so
+        // addresses elsewhere never crowd out the ones it serves.
+        const within = read.paths.filter(path =>
+          under.every((part, at) => path[at] === part)
+        );
+        paths.push(...within.slice(0, limit - paths.length));
         if (page * ADDRESS_PAGE >= read.total || read.paths.length === 0) {
           break;
         }

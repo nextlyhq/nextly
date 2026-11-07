@@ -3673,13 +3673,16 @@ export interface ContentPageConfig {
     ) => Promise<ContentTemplate | null>;
   };
   /**
-   * The addresses held in `locale`, as path segments, at most `limit`: what
-   * {@link createPublicContentPage} pre-renders. Absent, it pre-renders
-   * nothing and renders each path on its first request.
+   * The addresses held in `locale` under the path `under` (the route's
+   * mount, as segments; none for the site's root), as path segments, at
+   * most `limit` of them: what {@link createPublicContentPage} pre-renders.
+   * Absent, it pre-renders nothing and renders each path on its first
+   * request.
    */
   readonly addresses?: (
     locale: string | undefined,
-    limit: number
+    limit: number,
+    under: readonly string[]
   ) => Promise<readonly (readonly string[])[]>;
   /**
    * The collections whose writes change who holds an address, so the public
@@ -3730,10 +3733,22 @@ function buildContentRoute(
 ): StaticContentRoute<ReactElement> {
   const { templates } = config;
   const entryPath = config.entryPath;
+  /**
+   * The tags a cached read of the address store carries: every collection
+   * whose writes change who holds an address (the pages', the templates', and
+   * each the store names), so any write that moves an address refreshes it.
+   */
+  const addressTags = async (): Promise<string[]> => {
+    const collections = [
+      ...config.pages.collections,
+      templates.collection,
+      ...((await config.addressCollections?.()) ?? []),
+    ];
+    return [...new Set(collections)].flatMap(slug => nextlyTags(slug));
+  };
   // A link to a page or an entry names the address it is served at, from the
   // same store that routes, so a post's link to another post carries its
-  // collection's address. Cached on a public route, tagged with the target's
-  // collection, whose writes move it.
+  // collection's address. Cached on a public route, under the store's tags.
   const pages: BlocksPageConfig =
     config.pages.resolveEntryPath !== undefined || entryPath === undefined
       ? config.pages
@@ -3744,7 +3759,7 @@ function buildContentRoute(
             const read = () => entryPath(collection, id, locale);
             if (!isPublic) return await read();
             return await cachedFind(read, {
-              tags: nextlyTags(collection, id),
+              tags: await addressTags(),
               keyParts: [
                 "nextly-content-entry-path",
                 config.pages.cacheScope ?? "",
@@ -3794,14 +3809,9 @@ function buildContentRoute(
   async function holderOf(path: string): Promise<ContentAddressHolder | null> {
     const read = () => config.resolveAddress(pages.locale, path);
     if (!isPublic) return await read();
-    const collections = [
-      ...pages.collections,
-      templates.collection,
-      ...((await config.addressCollections?.()) ?? []),
-    ];
     // `null` stands for "nobody" inside the cache, which keeps values as JSON.
     return await cachedFind(async () => (await read()) ?? null, {
-      tags: [...new Set(collections)].flatMap(slug => nextlyTags(slug)),
+      tags: await addressTags(),
       keyParts: [
         "nextly-content-address",
         pages.cacheScope ?? "",
@@ -3945,7 +3955,7 @@ function buildContentRoute(
   async function generateStaticParams(): Promise<Array<{ slug: string[] }>> {
     const limit = pages.staticParamsLimit ?? 1000;
     if (config.addresses === undefined || limit <= 0) return [];
-    const held = await config.addresses(pages.locale, limit);
+    const held = await config.addresses(pages.locale, limit, mountSegments);
     // Only the addresses under this route's mount, as the route serves them.
     return held.flatMap(segments =>
       mountSegments.every((part, at) => segments[at] === part)

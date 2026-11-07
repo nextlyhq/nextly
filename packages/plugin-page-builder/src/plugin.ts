@@ -1317,7 +1317,8 @@ export const pageBuilder = (
   let defaultLayoutSetup: DefaultLayoutSetup | null = null;
   // The claiming of existing pages' addresses, set by `init` and run once the
   // boot has finished.
-  let pageClaimsBackfill: (() => Promise<void>) | null = null;
+  // It answers whether every page was settled.
+  let pageClaimsBackfill: (() => Promise<boolean>) | null = null;
   // Set once that pass has finished, after which a page save need not claim
   // the existing pages its list's later pages would fall on.
   let pageClaimsBackfilled = false;
@@ -2068,7 +2069,7 @@ export const pageBuilder = (
       });
       pageClaimsBackfill = async () => {
         const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-        await backfillPageClaims({
+        const complete = await backfillPageClaims({
           pages: pagesSlug,
           claims: claimsStore,
           locales: siteLocales(),
@@ -2080,7 +2081,11 @@ export const pageBuilder = (
             ctx.services.collections.withTransaction(work),
           warn: (message, meta) => ctx.logger.warn(message, meta),
         });
-        pageClaimsBackfilled = true;
+        // Only a pass that settled every page: after one that warned, saves
+        // keep claiming the existing pages they would fall on themselves,
+        // until a later start completes it.
+        pageClaimsBackfilled = complete;
+        return complete;
       };
       // Each collection's entries hold `<its address>/<slug>` while it and
       // the collection's template are published, in the save's transaction,
@@ -2380,8 +2385,10 @@ export const pageBuilder = (
       const backfill = pageClaimsBackfill;
       const entryPass = entryClaimsPass;
       if (backfill !== null) {
+        // The entries' pass only after every page holds its address: until
+        // then an entry could take a path a page is still owed.
         void backfill()
-          .then(() => entryPass?.())
+          .then(complete => (complete ? entryPass?.() : undefined))
           .catch(() => undefined);
       }
       void seedGraphLock?.();

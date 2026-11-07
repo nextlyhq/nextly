@@ -46,8 +46,15 @@ export interface BackfillDeps {
   readonly warn: (message: string, context: Record<string, unknown>) => void;
 }
 
-/** Claim every published page's address, in id order. Never throws. */
-export async function backfillPageClaims(deps: BackfillDeps): Promise<void> {
+/**
+ * Claim every published page's address, in id order. Never throws.
+ *
+ * @returns Whether every page was settled: false when a read or a page's
+ *   claim failed and was warned about, so what relies on every existing page
+ *   holding its address waits for a pass that completes.
+ */
+export async function backfillPageClaims(deps: BackfillDeps): Promise<boolean> {
+  let complete = true;
   for (let page = 1; ; page += 1) {
     let items: readonly unknown[];
     try {
@@ -66,26 +73,28 @@ export async function backfillPageClaims(deps: BackfillDeps): Promise<void> {
       deps.warn("Could not read the pages whose addresses to claim.", {
         error: String(error),
       });
-      return;
+      return false;
     }
     for (const item of items) {
       const row = item as Record<string, unknown>;
       if (typeof row.id !== "string" && typeof row.id !== "number") continue;
-      await claimPage(deps, String(row.id), row);
+      if (!(await claimPage(deps, String(row.id), row))) complete = false;
     }
-    if (items.length < BATCH) return;
+    if (items.length < BATCH) return complete;
   }
 }
 
 /**
  * One page's claims: reconciled as a save would, or, where another document
  * already holds its address, left waiting for it.
+ *
+ * @returns Whether the page was settled, held or waiting.
  */
 async function claimPage(
   deps: BackfillDeps,
   id: string,
   row: Readonly<Record<string, unknown>>
-): Promise<void> {
+): Promise<boolean> {
   const holder = { collection: deps.pages, id };
   // Reconciled even when it holds nothing now, so claims for an address
   // it is no longer served at are given up.
@@ -100,14 +109,14 @@ async function claimPage(
         async other => `${other.collection} ${other.id}`
       )
     );
-    return;
+    return true;
   } catch (error) {
     if (!NextlyError.isCode(error, "CONFLICT")) {
       deps.warn("Could not claim a page's address.", {
         page: id,
         error: String(error),
       });
-      return;
+      return false;
     }
   }
   // Held by another document: wait for each address rather than refuse,
@@ -125,10 +134,12 @@ async function claimPage(
         await claimOrWait(deps.claims, tx, { address, holder });
       }
     });
+    return true;
   } catch (error) {
     deps.warn("Could not record a page as waiting for its address.", {
       page: id,
       error: String(error),
     });
+    return false;
   }
 }

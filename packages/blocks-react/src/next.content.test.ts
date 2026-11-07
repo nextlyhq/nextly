@@ -366,20 +366,46 @@ describe("the content route", () => {
     expect(options.lookups).toEqual([["fr", "/site/blog/caf%C3%A9"]]);
   });
 
-  it("pre-renders the addresses the store holds under the route's mount", async () => {
+  it("pre-renders the addresses the store holds under the route's mount, asking for those alone", async () => {
+    const asked: (readonly string[])[] = [];
     const route = createPublicContentPage(
       config({
         pages: { ...config().pages, mountPath: "/site" },
-        addresses: async () => [
-          ["site", "about"],
-          ["site", "blog", "hello"],
-          ["elsewhere", "x"],
-        ],
+        addresses: async (_locale, _limit, under) => {
+          asked.push(under);
+          return [
+            ["site", "about"],
+            ["site", "blog", "hello"],
+            ["elsewhere", "x"],
+          ];
+        },
       })
     );
     expect(await route.generateStaticParams()).toEqual([
       { slug: ["about"] },
       { slug: ["blog", "hello"] },
+    ]);
+    expect(asked).toEqual([["site"]]);
+  });
+
+  it("caches a public route's links under every collection whose writes move an address", async () => {
+    const route = createPublicContentPage(
+      config({
+        entryPath: async (_collection, id) => `/blog/${id}`,
+        addressCollections: async () => ["pages", "templates", "posts"],
+      })
+    );
+    const element = await throughBoundary<PageRendererProps>(
+      route.ContentPage({ params: { slug: ["blog", "hello"] } })
+    );
+    runtime.tags = [];
+    expect(
+      await element.props.context?.resolveEntryPath("posts", "other")
+    ).toBe("/blog/other");
+    // A template's unpublish or a page's handover moves the target's address
+    // with no write to the target's own collection.
+    expect(runtime.tags).toEqual([
+      ["nextly:pages", "nextly:templates", "nextly:posts"],
     ]);
   });
 });
