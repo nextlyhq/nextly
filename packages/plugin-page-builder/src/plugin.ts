@@ -38,6 +38,16 @@ import type { PreviewViewportsDeclaration } from "nextly/config";
 // isomorphic and reachable from a browser bundle.
 import { version as PLUGIN_VERSION } from "../package.json";
 
+import {
+  backfillPageClaims,
+  publishedPages,
+  type PagesReader,
+} from "./address-claims/backfill";
+import { claimLocales } from "./address-claims/page-claims";
+import {
+  registerPageAddressClaims,
+  type ReadsById,
+} from "./address-claims/page-claims-hook";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
 import {
   BLOCK_SERVICE,
@@ -73,7 +83,10 @@ import {
 } from "./class-usage-hook";
 import { classUsageIndex } from "./class-usage-reconcile";
 import { hostFieldReader } from "./class-usage-runtime";
-import { addressClaimsCollection } from "./collections/address-claims";
+import {
+  ADDRESS_CLAIMS_SLUG,
+  addressClaimsCollection,
+} from "./collections/address-claims";
 import { classUsageIndexCollection } from "./collections/class-usage-index";
 import {
   COMPONENT_RETIRED_SLUG,
@@ -91,6 +104,12 @@ import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
+import {
+  registerComponentGuards,
+  storedUseCheck,
+} from "./component-delete/guards";
+import { componentDeleteRoutes } from "./component-delete/route";
+import { componentDeleteJob } from "./component-delete/sweep";
 import {
   componentFactsRoute,
   componentStoreShape,
@@ -133,10 +152,10 @@ import type {
 import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { listFieldsFrom } from "./fields/list-query-judgement";
 import { hostFetchPolicy } from "./host-policy";
-import { registerFencedWriteReport } from "./host-rewrite/after-commit";
 import type { HostAddress } from "./host-rewrite/contract";
 import { fencedComponentsReader, fenceStore } from "./host-rewrite/fence";
-import { progressStore } from "./host-rewrite/progress";
+import { readSiteFieldGroups } from "./host-rewrite/field-groups";
+import { registerInTransactionFence } from "./host-rewrite/in-transaction";
 import {
   COMPONENT_DELETE_REWRITE_SERVICE,
   componentDeleteRewriteService,
@@ -1112,6 +1131,9 @@ function rewriteInstallFor(
         ctx.config.localization?.locales.map(locale => locale.code) ?? [],
       defaultLocale: () => ctx.config.localization?.defaultLocale,
       layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+      // A document whose field groups hold no blocks field is no host: its
+      // field groups' values are stored apart, where no copy can be.
+      fieldGroups: siteFieldGroups(ctx, nextly),
     },
     hints: async componentId => {
       const found = await composition.hostsOf?.placing([componentId]);
@@ -1254,6 +1276,46 @@ function configuredSingles(ctx: {
 }
 
 /**
+ * The site's field groups, read once per walk from the registry through the
+ * Direct API, with the code's declarations for a slug the registry does not
+ * hold; nothing at all where the registry cannot be read to the end
+ * (`host-rewrite/field-groups`).
+ */
+function siteFieldGroups(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
+  nextly: () => Promise<RewriteDirectApi>
+): () => Promise<(slug: string) => { readonly fields?: unknown } | undefined> {
+  const inCode = declaredFieldGroups(ctx);
+  return () =>
+    readSiteFieldGroups({
+      page: async (offset, limit) =>
+        (await nextly()).fieldGroups.find({ limit, offset }),
+      inCode,
+      warn: (message, meta) => ctx.logger.warn(message, meta),
+    });
+}
+
+/**
+ * The field groups the site declares in code, by slug, as its config states
+ * them.
+ */
+function declaredFieldGroups(ctx: {
+  config?: { fieldGroups?: unknown };
+}): (slug: string) => { readonly fields?: unknown } | undefined {
+  const groups = ctx.config?.fieldGroups;
+  const bySlug = new Map<string, { readonly fields?: unknown }>();
+  if (Array.isArray(groups)) {
+    for (const group of groups) {
+      const slug = (group as { slug?: unknown } | null)?.slug;
+      if (typeof slug === "string") {
+        bySlug.set(slug, group as { readonly fields?: unknown });
+      }
+    }
+  }
+  return slug => bySlug.get(slug);
+}
+
+/**
  * The live Singles on one registry page whose declaration holds a blocks
  * field; `undefined` when a live row carries no readable slug, since a Single
  * that cannot be named cannot be read.
@@ -1337,6 +1399,12 @@ export const pageBuilder = (
    * handled long after it.
    */
   let defaultLayoutSetup: DefaultLayoutSetup | null = null;
+  // The claiming of existing pages' addresses, set by `init` and run once the
+  // boot has finished.
+  let pageClaimsBackfill: (() => Promise<void>) | null = null;
+  // Set once that pass has finished, after which a page save need not claim
+  // the existing pages its list's later pages would fall on.
+  let pageClaimsBackfilled = false;
 
   /**
    * The templates guard's lookups over the installed plugin: the RESOLVED
@@ -1443,6 +1511,28 @@ export const pageBuilder = (
       );
     }
     return rewriteInstall;
+  };
+  // What Delete component's sweep reads and moves, resolved per pass.
+  const componentDeleteSweepDeps = () => {
+    const installed = requireRewriteInstall();
+    const runs = fenceStore(installed.db, installed.dialect);
+    return {
+      deleting: () => runs.runsAt("deleting"),
+      store: () => runs,
+      exists: async (componentId: string) => {
+        const nextly = await installed.site.nextly();
+        const found = await nextly.find({
+          collection: installed.store.collection,
+          where: { id: { equals: componentId } },
+          status: "all",
+          limit: 1,
+          depth: 0,
+          overrideAccess: true,
+        });
+        return found.items.length > 0;
+      },
+      now: () => new Date(),
+    };
   };
 
   /**
@@ -2024,6 +2114,60 @@ export const pageBuilder = (
         pathOf: () => "tokens",
       });
       registerReadinessNotice(ctx, opts);
+      // A page's address, and its paginated list's later pages, held in the
+      // address store in the save's own transaction, so two documents never
+      // hold one address whichever path saved them.
+      const claimsStore = {
+        services: ctx.services,
+        slug: ctx.self.collections[ADDRESS_CLAIMS_SLUG] ?? ADDRESS_CLAIMS_SLUG,
+        dialect: ctx.dialect,
+      };
+      const pagesSlug = ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG;
+      const siteLocales = (): readonly string[] =>
+        claimLocales(
+          ctx.config.localization?.locales.map(locale => locale.code) ?? [],
+          ctx.config.localization?.defaultLocale
+        );
+      registerPageAddressClaims(ctx.hooks, {
+        pages: pagesSlug,
+        claims: claimsStore,
+        locales: siteLocales,
+        nextly: async () => {
+          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+          return (await getCachedNextly()) as unknown as ReadsById;
+        },
+        collection: slug =>
+          ctx.services.collections.getCollection(slug, undefined as never),
+        ...(opts.pagePreviewPath === undefined
+          ? {}
+          : { pathTemplate: opts.pagePreviewPath }),
+        backfillDone: () => pageClaimsBackfilled,
+        publishedPages: async function* () {
+          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+          const nextly = (await getCachedNextly()) as unknown as PagesReader;
+          yield* publishedPages(nextly, pagesSlug);
+        },
+      });
+      pageClaimsBackfill = async () => {
+        const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+        const complete = await backfillPageClaims({
+          pages: pagesSlug,
+          claims: claimsStore,
+          locales: siteLocales(),
+          ...(opts.pagePreviewPath === undefined
+            ? {}
+            : { pathTemplate: opts.pagePreviewPath }),
+          nextly: (await getCachedNextly()) as unknown as PagesReader,
+          withTransaction: work =>
+            ctx.services.collections.withTransaction(work),
+          warn: (message, meta) => ctx.logger.warn(message, meta),
+        });
+        // Only a pass that settled every page ends the saves' part in it: a
+        // page it failed to read or claim is still unclaimed, so saves keep
+        // claiming the pages in a list's way until a later boot's pass
+        // finishes.
+        if (complete) pageClaimsBackfilled = true;
+      };
       // A page published naming a Layout that is not: it is served inside the
       // site's default until its own is published, and the author is told.
       registerLayoutReadinessNotice({
@@ -2110,15 +2254,31 @@ export const pageBuilder = (
           walkAgain: () => Promise.resolve(),
         };
       }
-      // A write that keeps a reference to a component being deleted, committed
-      // after the deletion converted that document, sends the document back to
-      // be converted again from what was saved.
-      registerFencedWriteReport({
+      // Every write holding a component being deleted is judged again last
+      // inside its own transaction: before the delete, it sends its document
+      // back to be converted again from what was saved; once the delete is
+      // under way, it is refused as made from a stale copy.
+      registerInTransactionFence({
         ctx,
-        fence: () => fenceStore(ctx.db, ctx.dialect),
-        progress: () => progressStore(ctx.db, ctx.dialect),
         limits: () => opts.limits ?? DEFAULT_LIMITS,
+        // A component being deleted may not itself change meanwhile.
+        components: composition.store.collection,
       });
+      // A component's own delete only through Delete component, and no
+      // unpublish of one documents place. Registered after the Layout guard,
+      // so a component a Layout uses is refused naming the Layout first.
+      {
+        const placing = composition.hostsOf;
+        registerComponentGuards({
+          ctx,
+          components: composition.store.collection,
+          runs: () => fenceStore(ctx.db, ctx.dialect),
+          hostsOf: () => placing,
+          confirmUnused: storedUseCheck(() =>
+            componentDeleteRewriteService(requireRewriteInstall)
+          ),
+        });
+      }
       rewriteInstall = rewriteInstallFor(ctx, opts, composition);
       // The breakpoints the write path judges a save against: one read of
       // the site's style, the same answer the blocks field gets. A removal's
@@ -2163,6 +2323,10 @@ export const pageBuilder = (
     // Then record the site's spacing model, once: AFTER the seed, so the seed
     // is recorded and not taken for content. Neither step throws.
     onReady: () => {
+      // Existing pages' addresses, claimed in the background: the backfill
+      // never throws, and a boot is not held for it.
+      const backfill = pageClaimsBackfill;
+      if (backfill !== null) void backfill().catch(() => undefined);
       void seedGraphLock?.();
       const setup = defaultLayoutSetup;
       const spacing = spacingSetup;
@@ -2289,6 +2453,9 @@ export const pageBuilder = (
         // The breakpoint removal a write opened again, which nobody is
         // waiting on: carried on each pass until it is done.
         breakpointRemovalJob(removalService),
+        // Delete component's sweep: a delete that stopped after its write
+        // becomes its tombstone. Never a host write or a delete.
+        componentDeleteJob(componentDeleteSweepDeps),
       ],
       // The index is contributed unconditionally, alongside the pages it
       // describes. Its table existing is what lets the maintenance path write
@@ -2565,6 +2732,19 @@ export const pageBuilder = (
         // under it. The Layout's own delete and unpublish refuse every write
         // that does not come through here.
         removeLayoutRoute(),
+        // Delete component: the dry run, each step of the delete as the
+        // person who started it, and its progress. A component's own delete
+        // refuses every write that does not come through here.
+        ...componentDeleteRoutes({
+          store: componentStoreOf(opts),
+          install: () => {
+            const installed = requireRewriteInstall();
+            return {
+              rewrite: componentDeleteRewriteService(requireRewriteInstall),
+              runs: fenceStore(installed.db, installed.dialect),
+            };
+          },
+        }),
         // The Layouts an author may choose for a page, with the published
         // regions the editor draws around it, read as the author from the
         // component store the editor's library reads, under the bounds the

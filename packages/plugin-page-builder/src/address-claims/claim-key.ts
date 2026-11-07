@@ -152,6 +152,19 @@ export function waitingKey(
 }
 
 /**
+ * The key of the lock row a holder's own claims are reconciled under, so the
+ * start-up pass and a save of the same page take turns. Its namespace is the
+ * lock's, but it holds no `|`, which every address's lock key does after its
+ * language, so the two never meet.
+ */
+export function holderLockKey(holder: {
+  readonly collection: string;
+  readonly id: string;
+}): string {
+  return `${NAMESPACE.lock}:holder:${encodeURIComponent(holder.collection)}:${encodeURIComponent(holder.id)}`;
+}
+
+/**
  * The list whose page-segment space holds `address`, or null when `address`
  * is not a later page of any list. `/news/page/2` is in the space of `/news`;
  * `/news` itself is not, since the list's first page is a document's own

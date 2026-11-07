@@ -412,6 +412,24 @@ or migration follows, no stored address is rewritten, and a collection
 without it keeps stripping `/` from its slugs. Two pages at one address are kept
 apart by the slug's uniqueness, as before.
 
+### One address, one page
+
+A published page holds its address, and a page whose Collection list is split into
+pages also holds that list's later pages (`/news/page/2`, `/news/page/3`, …) as one
+space, however many pages the list has today. Saving a page that would share an
+address with another document is refused, naming the other document: publishing a
+page at `/news/page/2` while the page at `/news` splits its list into pages, or
+splitting the list at `/news` into pages while a page is published at
+`/news/page/2`. The other document is named by its title where you may read it, and
+by its id where you may not. The address is held from the save that publishes the
+page, in the same transaction, so two saves at once can't both take it, whichever
+way the pages were saved (the editor, the API, a batch, a release or a scheduled
+publish). Unpublishing or deleting the page frees its address; turning off Split
+into pages frees the later pages and keeps the page's own address. A site upgrading
+to this claims its published pages' addresses in the background after start-up,
+oldest first; a page that clashes with an older one waits for it and appears in the
+waiting report.
+
 ## Reading content into a page
 
 The **Collection list** block (stored as `core/collection-loop`) queries one of your

@@ -140,6 +140,16 @@ export interface RewriteReport {
    * on a run whose converting walk did its job.
    */
   readonly caughtByFinalWalk: readonly HostAddress[];
+  /**
+   * The status each write names, for the hosts whose write names one: a
+   * public live row with no pending draft, published again in the state it
+   * was read in. In a dry run, the ones a real run would write, so a caller
+   * can ask before it starts whether each write is allowed.
+   */
+  readonly statuses?: readonly {
+    readonly host: HostAddress;
+    readonly status: string;
+  }[];
   /** Whether the run has walked every host to the end, twice. */
   readonly finished: boolean;
 }

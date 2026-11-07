@@ -131,6 +131,13 @@ function site(hosts: Record<string, Partial<StoredHost>>) {
         progress.set(key, state);
         reasons.set(key, reason);
       },
+      settledAmong: async (_run: string, keys: readonly string[]) =>
+        new Set(
+          keys.filter(key => {
+            const state = progress.get(key);
+            return state !== undefined && state !== "pending";
+          })
+        ),
       all: async () =>
         [...progress].map(([documentKey, state]) => ({
           documentKey,
