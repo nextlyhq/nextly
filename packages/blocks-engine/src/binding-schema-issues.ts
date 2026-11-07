@@ -20,6 +20,7 @@ import {
   type BindingSchemaRef,
   type BindingSchemaSource,
 } from "./binding-rules";
+import type { PropSchema } from "./block";
 import { DEFAULT_BINDING_SOURCE, MAX_SEO_SEGMENTS } from "./document";
 import { withHeldSeverityOf } from "./held-findings";
 import { pointer } from "./issue-text";
@@ -93,39 +94,69 @@ function nodeFindings(
 ): BindingFinding[] {
   const bindings = node.bindings;
   const id = node.id;
-  const type = node.type;
   if (!isPlainRecord(bindings) || typeof id !== "string") return [];
-  // A definition found with no `props` declares none, so every binding on it
-  // names a prop it lacks; only a definition not found leaves props unjudged.
-  const definition =
-    typeof type === "string" ? judgement.definitions?.get(type) : undefined;
-  const props = definition === undefined ? undefined : (definition.props ?? {});
+  const props = declaredProps(node.type, judgement.definitions);
   const findings: BindingFinding[] = [];
   for (const prop of ownKeys(bindings)) {
-    const binding = ownEntry(bindings, prop);
-    const check = checkBinding({
-      nodeId: id,
-      prop,
-      binding,
-      ...(props === undefined ? {} : { props }),
-      schema: judgement.schema,
-      ...(judgement.entry === undefined
-        ? {}
-        : { refs: { entry: judgement.entry } }),
-    });
-    for (const issue of check.issues) {
-      // A malformed binding is the shape check's to report, once.
-      if (issue.code === "binding-malformed") continue;
-      findings.push({
-        path: pointer(pointer(path, "bindings"), prop),
-        nodeId: id,
-        code: issue.code,
-        message: issue.message,
-        identity: `${prop}\u0000${sourceIdentity(binding)}\u0000${issue.path}`,
-      });
-    }
+    findings.push(
+      ...propFindings(
+        { id, prop, binding: ownEntry(bindings, prop), props },
+        pointer(pointer(path, "bindings"), prop),
+        judgement
+      )
+    );
   }
   return findings;
+}
+
+/**
+ * The props a block declares, or `undefined` when its definition is not
+ * found. A definition found with no `props` declares none, so every binding
+ * on it names a prop it lacks; only a definition not found leaves props
+ * unjudged.
+ */
+function declaredProps(
+  type: unknown,
+  definitions: SlotDefaultSource | undefined
+): Partial<Record<string, PropSchema>> | undefined {
+  const definition =
+    typeof type === "string" ? definitions?.get(type) : undefined;
+  return definition === undefined ? undefined : (definition.props ?? {});
+}
+
+/** One bound prop's problems, where it sits. */
+function propFindings(
+  bound: {
+    readonly id: string;
+    readonly prop: string;
+    readonly binding: unknown;
+    readonly props: Partial<Record<string, PropSchema>> | undefined;
+  },
+  path: string,
+  judgement: BindingSchemaJudgement
+): BindingFinding[] {
+  const check = checkBinding({
+    nodeId: bound.id,
+    prop: bound.prop,
+    binding: bound.binding,
+    ...(bound.props === undefined ? {} : { props: bound.props }),
+    schema: judgement.schema,
+    ...(judgement.entry === undefined
+      ? {}
+      : { refs: { entry: judgement.entry } }),
+  });
+  return (
+    check.issues
+      // A malformed binding is the shape check's to report, once.
+      .filter(issue => issue.code !== "binding-malformed")
+      .map(issue => ({
+        path,
+        nodeId: bound.id,
+        code: issue.code,
+        message: issue.message,
+        identity: `${bound.prop}\u0000${sourceIdentity(bound.binding)}\u0000${issue.path}`,
+      }))
+  );
 }
 
 /** A node's children to judge, in document order once popped. */
