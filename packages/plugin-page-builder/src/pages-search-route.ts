@@ -78,6 +78,7 @@ import {
 import {
   entryOf,
   findAsCaller,
+  idsKeptByWorkflowKey,
   readSavedAsCaller,
   type AsCallerFindArgs,
   type AsCallerPage,
@@ -1232,17 +1233,12 @@ async function idsMatching(
   reads: PagesSearchReads
 ): Promise<ReadonlySet<string>> {
   try {
-    const page = await reads.find({
-      collection: source.slug,
-      where: workflowWhere(key, ids),
-      select: { id: true },
-      limit: ids.length,
-    });
-    return new Set(
-      page.items.flatMap(row => {
-        const entry = entryOf(row, undefined);
-        return entry === undefined ? [] : [entry.id];
-      })
+    // The shared read, which the template preview's list asks too.
+    return await idsKeptByWorkflowKey(
+      async args => await reads.find(args),
+      source.slug,
+      ids,
+      key
     );
   } catch (error) {
     const refused =
@@ -1258,19 +1254,6 @@ async function idsMatching(
     }
     return new Set();
   }
-}
-
-/**
- * The ids, with one of core's reserved workflow keys at the filter's top
- * level, where core reads them.
- *
- * Asserted rather than typed: the keys take `true` itself, a form the
- * `WhereFilter` type, spelled for field conditions, does not describe. The
- * spelling is core's (`nextly/reserved-filter-keys`), so it is not restated.
- */
-function workflowWhere(key: string, ids: readonly string[]): WhereFilter {
-  const where: Record<string, unknown> = { id: { in: [...ids] }, [key]: true };
-  return where as WhereFilter;
 }
 
 /**

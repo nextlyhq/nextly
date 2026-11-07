@@ -27,6 +27,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 
 const { canvasBindingsFor, canvasBindingsRequest, useCanvasBindings } =
   await import("./canvas-bindings-client");
+const { CanvasEntryProvider } = await import("./editor/canvas-entry");
+
+/** The retries the editor has asked for, which a wrapper hands the canvas. */
+let retries = 0;
 
 const page = (bindings?: Record<string, unknown>): BlockDocument =>
   ({
@@ -299,5 +303,114 @@ describe("the canvas's binding sources", () => {
       vi.useRealTimers();
       editing.identity = null;
     }
+  });
+});
+
+describe("the canvas's entry, for a template", () => {
+  /** The template being edited: an entry of the templates collection. */
+  const template = {
+    kind: "collection" as const,
+    slug: "templates",
+    documentId: "t1",
+  };
+
+  /** The source the route was asked to read, from the last ask. */
+  const askedSource = () =>
+    (
+      writePluginRoute.mock.calls.at(-1)?.[0] as
+        | { body: { source: unknown } }
+        | undefined
+    )?.body.source;
+
+  it("reads the previewed entry of the template's collection, not the template's own row", async () => {
+    editing.identity = template;
+    writePluginRoute.mockReset();
+    writePluginRoute.mockResolvedValue(answer("A post"));
+    const drawn = [page({ text: { $bind: "title" } })];
+    renderHook(() => useCanvasBindings(drawn, "pt"), {
+      wrapper: ({ children }) =>
+        CanvasEntryProvider({
+          identity: { kind: "collection", slug: "posts", documentId: "p9" },
+          children,
+        }),
+    });
+    await waitFor(() => expect(writePluginRoute).toHaveBeenCalled());
+    expect(askedSource()).toEqual({
+      kind: "collection",
+      slug: "posts",
+      id: "p9",
+    });
+    editing.identity = null;
+  });
+
+  it("reads no entry while there is none to preview, so bound text draws its fallback", async () => {
+    editing.identity = template;
+    writePluginRoute.mockReset();
+    writePluginRoute.mockResolvedValue(answer("unused"));
+    const drawn = [page({ text: { $bind: "title" } })];
+    renderHook(() => useCanvasBindings(drawn, "nl"), {
+      wrapper: ({ children }) =>
+        CanvasEntryProvider({
+          identity: { kind: "collection", slug: "posts" },
+          children,
+        }),
+    });
+    await waitFor(() => expect(writePluginRoute).toHaveBeenCalled());
+    expect(askedSource()).toEqual({ kind: "collection", slug: "posts" });
+    editing.identity = null;
+  });
+
+  it("reads a page's own entry where no entry is given (the control)", async () => {
+    editing.identity = identity;
+    writePluginRoute.mockReset();
+    writePluginRoute.mockResolvedValue(answer("Its own title"));
+    const drawn = [page({ text: { $bind: "title" } })];
+    renderHook(() => useCanvasBindings(drawn, "sv"));
+    await waitFor(() => expect(writePluginRoute).toHaveBeenCalled());
+    expect(askedSource()).toEqual({
+      kind: "collection",
+      slug: "posts",
+      id: "p1",
+    });
+    editing.identity = null;
+  });
+});
+
+describe("the canvas's read, as the template's strip hears it", () => {
+  it("says the read failed, and asks again when the editor retries", async () => {
+    editing.identity = {
+      kind: "collection",
+      slug: "templates",
+      documentId: "t1",
+    };
+    writePluginRoute.mockReset();
+    writePluginRoute.mockRejectedValueOnce(new Error("offline"));
+    const heard: { entryId: string | undefined; state: string }[] = [];
+    const onRead = (read: { entryId: string | undefined; state: string }) =>
+      heard.push(read);
+    const drawn = [page({ text: { $bind: "title" } })];
+    const { rerender } = renderHook(() => useCanvasBindings(drawn, "da"), {
+      wrapper: ({ children }) =>
+        CanvasEntryProvider({
+          identity: { kind: "collection", slug: "posts", documentId: "p7" },
+          retry: retries,
+          onRead,
+          children,
+        }),
+    });
+    await waitFor(() =>
+      expect(heard.at(-1)).toEqual({ entryId: "p7", state: "failed" })
+    );
+    // Nothing asks again on its own: the same ask is not remade.
+    expect(writePluginRoute).toHaveBeenCalledTimes(1);
+
+    writePluginRoute.mockResolvedValueOnce(answer("A post"));
+    retries = 1;
+    rerender();
+    await waitFor(() =>
+      expect(heard.at(-1)).toEqual({ entryId: "p7", state: "answered" })
+    );
+    expect(writePluginRoute).toHaveBeenCalledTimes(2);
+    editing.identity = null;
   });
 });

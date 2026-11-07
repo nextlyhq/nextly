@@ -69,6 +69,7 @@ import {
 } from "react-hook-form";
 
 import { siteSheet } from "../../site-style";
+import { BindingsToFixChip } from "../bindings-report/BindingsToFixChip";
 import { ComponentActionPrompt } from "../ComponentActionPrompt";
 import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
 import { contributedInspector } from "../contributed-blocks";
@@ -85,7 +86,10 @@ import {
   SiteStylePreviewContext,
 } from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
+import { OwnDesignsChip } from "../TemplateOwnDesigns";
 
+import type { OpenAt } from "./builder-address";
+import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
 import {
   editorPanelRenderer,
@@ -126,6 +130,12 @@ import {
   offerableTokens,
   siteStyleStatus,
 } from "./site-style-studios";
+import { documentFrom } from "./stored-document";
+import {
+  TemplatePreviewScope,
+  TemplatePreviewStrip,
+  useTemplatePreviewState,
+} from "./template-preview-strip";
 import { useComponentView, type ComponentView } from "./use-component-view";
 import { useEditorMount, type EditorMount } from "./use-editor-mount";
 import {
@@ -281,8 +291,11 @@ const COMPONENT_READ_NOTES: Readonly<
  */
 function editorTopBar(
   view: EditorView,
-  /** The page's title as the form has it now, and the field being edited. */
-  page: { title: string | undefined; field: string }
+  /**
+   * The page's title as the form has it now, the field being edited, and the
+   * canvas, which a binding's Select brings its block into view in.
+   */
+  page: { title: string | undefined; field: string; canvas: HTMLElement | null }
 ): {
   topBar: React.JSX.Element;
   topBarCenter: React.JSX.Element;
@@ -318,6 +331,17 @@ function editorTopBar(
           onAllPages={() => view.requestPanel("pages")}
         />
         <DocumentStatusPill isDirty={documentDirty} />
+        {/* The page's bindings that no longer fit, beside its status: shown
+            only when it has one. */}
+        <BindingsToFixChip
+          editor={editor}
+          field={page.field}
+          canvas={page.canvas}
+          requestPanel={view.requestPanel}
+        />
+        {/* On a collection's template, how many of its entries have their
+            own design, opening the list; nothing on any other document. */}
+        <OwnDesignsChip />
         <HistoryButtons editor={editor} inline={inline} />
         {/* What the page costs to read, against its allowance: a page's
             alone, since a component is read as part of each page placing it. */}
@@ -1025,8 +1049,11 @@ interface BlocksEditorProps<TFieldValues extends FieldValues> {
   onClose: () => void;
   name: Path<TFieldValues>;
   control: Control<TFieldValues>;
-  /** The section to open at, as the address names it; none opens at the top. */
-  openAt?: string | undefined;
+  /**
+   * The section or block to open at, as the address names it; none opens at
+   * the top.
+   */
+  openAt?: OpenAt | undefined;
 }
 
 export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
@@ -1038,6 +1065,11 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
    * of the style writers run in the editor component itself.
    */
   const style = useSiteStyleHistory();
+  // Read once, from the document the editor opens with, as the editor reads
+  // it: its kind does not change while the editor is open.
+  const [isTemplate] = useState(
+    () => documentFrom(props.initialValue, props.kinds).kind === "template"
+  );
   return (
     <SiteStyleHistoryContext.Provider value={style.history}>
       {/* Held style edits, drawn before they are stored. */}
@@ -1051,7 +1083,19 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
             window the page is drawn in.
           */}
             <CanvasFrameProvider>
+              {/*
+                A template is drawn with an entry of the collection it names,
+                chosen in the strip above its canvas: read around the editor,
+                so the canvas, the inspector and the strip all read the one
+                answer. Any other document is drawn as itself.
+              */}
+              {isTemplate ? (
+                <TemplatePreviewScope control={props.control}>
               <EditorBody {...props} />
+                </TemplatePreviewScope>
+              ) : (
+                <EditorBody {...props} />
+              )}
             </CanvasFrameProvider>
           </ConnectStyleHistoryContext.Provider>
         </StyleRevisionContext.Provider>
@@ -1180,20 +1224,21 @@ function EditorBody<TFieldValues extends FieldValues>({
   // A stored image's name and picture in the inspector, read as the canvas
   // reads it.
   const readMedia = useMediaSummaryReader();
-  const identity = useDocumentIdentity();
+  // The entry the canvas is drawn as: the document's own, or the entry a
+  // template is previewed with, whose collection the inspector judges by.
+  const identity = useCanvasEntryIdentity();
   const entryCollection = listEntryCollectionOf(
     identity,
     mount.initialDocument
   );
+  // The Previewing strip, for a template only.
+  const templatePreview = useTemplatePreviewState();
   // The conditioned blocks the page can't check, badged in red on the canvas,
   // judged with the collections the inspector lists, in this language.
-  const conditionServices = useMemo(
-    () => ({
-      // The inspector's own function, so both share one read of the list.
-      listLoopCollections: loopCollectionsIn(mount.locale, mount.userId),
-      ...(entryCollection === undefined ? {} : { entryCollection }),
-    }),
-    [mount.locale, mount.userId, entryCollection]
+  const conditionServices = useConditionServices(
+    mount.locale,
+    mount.userId,
+    entryCollection
   );
   const conditionsUnchecked = useConditionsUnchecked(
     componentView.preview.document,
@@ -1224,7 +1269,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     conditionsUnchecked,
   };
   useOpenAtSection({
-    sectionId: openAt,
+    sectionId: openAt?.sectionId,
+    blockId: openAt?.blockId,
     editor,
     canvas: canvas.canvasElement,
     requestPanel: panels.requestPanel,
@@ -1273,7 +1319,13 @@ function EditorBody<TFieldValues extends FieldValues>({
           // the editor's OWN dirty signal: the form's is false for as long as the
           // editor is open, because the document is committed on the way out.
           // The title is the top bar's switcher, so the shell draws none.
-          {...editorTopBar(view, { title: page.title, field: name })}
+          {...editorTopBar(view, {
+            title: page.title,
+            field: name,
+            canvas: canvas.canvasElement,
+          })}
+          // Pinned above a template's canvas: the entry it is drawn with.
+          canvasStrip={templateStrip(templatePreview)}
           openSettingsRequest={view.pages.settingsRequest}
           renderSettings={editorSettings(view, page)}
           // The shell owns the region; this fills it. Rendered unconditionally
@@ -1405,6 +1457,38 @@ function EditorBody<TFieldValues extends FieldValues>({
         </BuilderShell>
       </VisitorUnreadableProvider>
     </EditorFrame>
+  );
+}
+
+/**
+ * What the canvas's condition badges judge with: the inspector's own read of
+ * the collections (so both share one read of the list), and the collection
+ * the document's entry is of, where it has one. One object per language,
+ * person and collection.
+ */
+function useConditionServices(
+  locale: string | undefined,
+  userId: string | null,
+  entryCollection: string | null | undefined
+): {
+  listLoopCollections: NonNullable<ContentServices["listLoopCollections"]>;
+  entryCollection?: string | null;
+} {
+  return useMemo(
+    () => ({
+      listLoopCollections: loopCollectionsIn(locale, userId),
+      ...(entryCollection === undefined ? {} : { entryCollection }),
+    }),
+    [locale, userId, entryCollection]
+  );
+}
+
+/** The Previewing strip for a template's preview, or none for any other document. */
+function templateStrip(
+  preview: ReturnType<typeof useTemplatePreviewState>
+): React.JSX.Element | undefined {
+  return preview === undefined ? undefined : (
+    <TemplatePreviewStrip preview={preview} />
   );
 }
 

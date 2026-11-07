@@ -42,7 +42,7 @@ import {
   type CanvasBindingsResponse,
 } from "./canvas-bindings-contract";
 import { readBodyWith } from "./composition-route-kit";
-import { readingAsUser } from "./library-route";
+import { editorReaderAsCaller } from "./entry-reads";
 
 /** A field name a binding may read: no paths, operators or quoting. */
 const NAME = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
@@ -166,27 +166,16 @@ function directCanvasBindingsReads(
     // Imported at call time, so loading this module costs none of the
     // runtime, as the route's other reads are.
     read: async request => {
-      const [runtime, next, blocks] = await Promise.all([
-        import("nextly/runtime"),
+      const [next, blocks] = await Promise.all([
         import("@nextlyhq/blocks-react/next"),
         import("@nextlyhq/blocks-react"),
       ]);
-      const nextly = runtime.requireNextly();
-      // The caller as core judges their own reads: their user, and an API
-      // key's own scope when the request carried one.
-      const { user, actor } = await readingAsUser(ctx);
       const locale = request.locale;
-      const reader = runtime.createEditorReader(
-        {
-          find: async args => await nextly.find(args),
-          findSingle: async args => await nextly.findSingle(args),
-          // The page's own entry and each entry a binding follows to, by id,
-          // so a pending working draft is what the canvas shows.
-          findByID: async args => await nextly.findByID(args),
-        },
-        { user, ...(actor === undefined ? {} : { actor }) },
-        locale === undefined ? {} : { locale }
-      );
+      // The editor reader as the caller: their user, and an API key's own
+      // scope when the request carried one. The page's own entry and each
+      // entry a binding follows to are read by id, so a pending working
+      // draft is what the canvas shows.
+      const reader = await editorReaderAsCaller(ctx, locale);
       // A published page's own allowance, for one ask, counting what it
       // spends, so the editor's read meter adds what these reads cost as
       // they were made, as a named query's run reports its reads.

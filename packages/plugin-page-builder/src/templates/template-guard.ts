@@ -29,6 +29,7 @@ import {
   TEMPLATE_ENTRY_COLLECTION_FIELD,
   TEMPLATE_ENTRY_ID_FIELD,
 } from "../collections/templates";
+import type { TemplateTargets } from "../fields/list-query-judgement";
 import { JUDGEMENT_CONTEXT } from "../judged-writes";
 
 import {
@@ -36,6 +37,8 @@ import {
   designShapeRefusal,
   isEntryDesign,
 } from "./entry-designs";
+import { TEMPLATE_TARGET_FIELDS } from "./template-preview-contract";
+import { templateTargetOf } from "./template-target";
 import {
   addressRefusal,
   heldAddressMessage,
@@ -88,6 +91,55 @@ export function templateHolderReader(
     const row = found.data[0] as Record<string, unknown> | undefined;
     if (row === undefined || typeof row.id !== "string") return null;
     return { id: row.id, title: titleOf(row.title) };
+  };
+}
+
+/**
+ * The collections stored templates draw, by template id, read as the system
+ * over the plugin's own reads, every state of each, in ONE read however many
+ * ids are asked: a template missing from the answer is not stored or names
+ * none. What template lists are judged against when a save does not carry
+ * the collection, and when a component save judges the templates placing it.
+ */
+function templateTargetsReader(
+  own: OwnTemplateReads,
+  templatesCollection: string
+): (ids: readonly string[]) => Promise<ReadonlyMap<string, string>> {
+  return async ids => {
+    const targets = new Map<string, string>();
+    if (ids.length === 0) return targets;
+    const found = await own.listEntries(templatesCollection, {
+      where: { id: { in: [...ids] } },
+      pagination: { limit: ids.length },
+      depth: 0,
+    });
+    for (const value of found.data) {
+      const row = recordOf(value);
+      // A collection's template names it as `collection`, an entry's own
+      // design as `entryCollection`: the one rule `templateTargetOf` keeps.
+      const target = templateTargetOf(row);
+      if (typeof row?.id === "string" && target !== undefined) {
+        targets.set(row.id, target.collection);
+      }
+    }
+    return targets;
+  };
+}
+
+/**
+ * Where templates live and what each stored one draws, as a save's
+ * judgement reads them (`TemplateTargets`): the templates collection under
+ * the host's name for it, the fields a template names its collection in,
+ * and the reader of those collections from the stored templates.
+ */
+export function templateTargets(
+  own: OwnTemplateReads,
+  templatesCollection: string
+): TemplateTargets {
+  return {
+    collection: templatesCollection,
+    fields: TEMPLATE_TARGET_FIELDS,
+    storedTargetsOf: templateTargetsReader(own, templatesCollection),
   };
 }
 
@@ -425,13 +477,15 @@ export async function addressCollectionProblem(
   collection: unknown
 ): Promise<string | null> {
   if (typeof collection !== "string") return null;
+  // One read of the collection's record, both questions asked of it, so a
+  // change between two reads cannot pass each half.
+  const record = await setup.readCollection(collection);
   const problem = await templateCollectionProblem(
     collection,
-    setup.readCollection,
+    async () => record,
     setup.ownCollections()
   );
   if (problem !== null) return problem;
-  const record = await setup.readCollection(collection);
   return record?.localized === true
     ? `The collection "${collection}" is localized, and a localized collection's entries cannot be served under a template address yet.`
     : null;

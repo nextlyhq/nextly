@@ -19,6 +19,11 @@ import { defineCollection, text, type CollectionConfig } from "nextly/config";
 
 import { blocks } from "../fields/blocksHelper";
 import {
+  TEMPLATE_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_ID_FIELD,
+} from "../templates/template-preview-contract";
+import {
   mayManageTemplateRouting,
   TEMPLATE_ADDRESS_FIELD,
 } from "../templates/template-routing";
@@ -27,11 +32,11 @@ import {
 export const TEMPLATES_SLUG = "templates";
 
 /**
- * The field naming the collection a template renders. Unique, so a
- * collection has one template: read by the guard that names the template
- * already there, and by everything that finds a collection's template.
+ * The field naming the collection a template renders, declared in the
+ * preview contract so the editor's bundle reads the same name without this
+ * module's runtime imports, and re-exported here beside the collection.
  */
-export const TEMPLATE_COLLECTION_FIELD = "collection";
+export { TEMPLATE_COLLECTION_FIELD };
 
 /** The blocks field holding the template's design. */
 export const TEMPLATE_CONTENT_FIELD = "content";
@@ -49,8 +54,8 @@ export const TEMPLATE_CONTENT_FIELD = "content";
  * template it was copied from, emptied when that template is deleted.
  */
 export const TEMPLATE_ENTRY_FIELD = "entry";
-export const TEMPLATE_ENTRY_COLLECTION_FIELD = "entryCollection";
-export const TEMPLATE_ENTRY_ID_FIELD = "entryId";
+export { TEMPLATE_ENTRY_COLLECTION_FIELD };
+export { TEMPLATE_ENTRY_ID_FIELD };
 export const TEMPLATE_FORKED_FROM_FIELD = "forkedFrom";
 
 /**

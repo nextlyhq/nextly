@@ -22,6 +22,11 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  ENTRY_DESIGN_SECTION_COMPONENT,
+  TEMPLATE_DELETE_COMPONENT,
+  TEMPLATE_OWN_DESIGNS_COMPONENT,
+} from "../builder-view";
 import { TEMPLATE_ADDRESS_FIELD_COMPONENT } from "../collections/templates";
 import { BLOCKS_FIELD_COMPONENT } from "../fields/blocksField";
 
@@ -40,6 +45,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The list actions and the import bar the entry also registers; their own
   // behaviour is tested beside them.
   registerRowAction: () => undefined,
+  // The Design column's provider on every list, and its place after Status.
+  registerColumns: () => undefined,
+  transformColumns: () => undefined,
   writePluginRoute: () => Promise.resolve(undefined),
   isApiError: () => false,
   navigateTo: () => undefined,
@@ -67,6 +75,25 @@ describe("the admin entry's component registration", () => {
       // unrelated entry satisfies a count and leaves the field unresolvable.
       expect(Object.keys(registered)).toContain(BLOCKS_FIELD_COMPONENT);
       expect(registered[BLOCKS_FIELD_COMPONENT]).toBeTypeOf("function");
+    },
+    IMPORT_GRAPH_BUDGET_MS
+  );
+
+  it(
+    "registers the own-design components the plugin's declarations name",
+    async () => {
+      await import("./index");
+
+      // Declared by specifier in the plugin's admin contributions, so a
+      // missing registration would leave the Design section, the template's
+      // own designs and its delete with nothing to draw.
+      for (const path of [
+        ENTRY_DESIGN_SECTION_COMPONENT,
+        TEMPLATE_OWN_DESIGNS_COMPONENT,
+        TEMPLATE_DELETE_COMPONENT,
+      ]) {
+        expect(registered[path], path).toBeTypeOf("function");
+      }
     },
     IMPORT_GRAPH_BUDGET_MS
   );
