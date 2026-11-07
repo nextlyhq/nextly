@@ -525,6 +525,14 @@ export { FrameState, Widget } from "@nextlyhq/admin";
  */
 export { formatWidgetTime, useWidgetClock } from "@nextlyhq/admin";
 /**
+ * @experimental A field's key as the admin's screens word it, where the
+ * field carries no label of its own or is held only by its key:
+ * `humanizeFieldName("membersOnly")` is "Members Only". Core's one humaniser,
+ * so a plugin names a field as the admin does. The same function the root
+ * entry offers server code.
+ */
+export { humanizeFieldName } from "@nextlyhq/admin";
+/**
  * @experimental `useRefreshDashboard()`: a function that asks every card on
  * the dashboard, and the header's summary, again, for a widget whose own
  * write changes what they answer (a card marking a row done, say). Each card

@@ -241,6 +241,16 @@ export { isLocaleSelector } from "nextly";
 export { previewUrlFromTemplate, readableTitleText } from "nextly/config";
 
 /**
+ * @experimental A field's key as the admin's screens word it, where the
+ * field carries no label of its own: `humanizeFieldName("membersOnly")` is
+ * "Members Only". Core's one humaniser, from a module that imports nothing,
+ * so a plugin's server code names a field as the admin does. The same
+ * function `./admin` offers a plugin's admin code. `plugin-page-builder`
+ * names a template's blocks fields with it.
+ */
+export { humanizeFieldName } from "nextly/field-label";
+
+/**
  * Core plugin contract types.
  * @public `PluginDefinition`, `PluginContributions`, `PluginContext`,
  *   `PluginPermission`, `PermissionSlug`, `ServiceOpts`, `AuthUser`.
