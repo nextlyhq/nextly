@@ -2,10 +2,11 @@
 /**
  * The template form's collection control: a saved template's collection by
  * its name and read-only; a choice of collections by name while one is made,
- * offered only once the pages slug is known; a saved template's collection
- * the list leaves out kept fixed unless the retarget answer allows a change,
- * when the choice is offered again, with a note saying why where it does
- * not; and typing the slug where the collections cannot be listed.
+ * exactly the ones the choices route answers, and none while a cached answer
+ * is being refreshed; a saved template's collection the list leaves out kept
+ * fixed unless the retarget answer allows a change, when the choice is
+ * offered again, with a note saying why where it does not; and typing the
+ * slug where the collections cannot be listed.
  */
 import {
   act,
@@ -35,12 +36,12 @@ import {
   usePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
 
-import { PAGE_COLLECTION_ROUTE_PATH } from "../layout-choices-contract";
 import {
   loopCollectionsPath,
   type LoopCollectionItem,
 } from "../loop-collections-contract";
 import {
+  TEMPLATE_COLLECTION_CHOICES_ROUTE_PATH,
   TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH,
   templateCollectionRetargetPath,
 } from "../templates/template-actions-contract";
@@ -50,7 +51,6 @@ import {
   clearAddressNote,
   collectionFieldView,
   LIST_FAILED_NOTE,
-  offeredCollections,
   removedNote,
   TemplateCollectionField,
   TYPE_SLUG_NOTE,
@@ -84,26 +84,35 @@ const LISTED: LoopCollectionItem[] = [
   item("events", "Events"),
 ];
 
-/** One read's answer: data, a failure, or nothing yet. */
-type Answer = { data?: unknown; error: Error | null };
+/**
+ * One read's answer: data, a failure, or nothing yet; `fetching` while the
+ * hook refreshes it, cached data and all.
+ */
+type Answer = { data?: unknown; error: Error | null; fetching?: boolean };
 
 const LISTED_ANSWER: Answer = {
   data: { items: LISTED, meta: {} },
   error: null,
 };
-const PAGES_ANSWER: Answer = {
+/**
+ * What the choices route answers: in ITS order, which is not by name, and
+ * without Pages or Authors, which the list above holds.
+ */
+const CHOICES_ANSWER: Answer = {
   data: {
-    pagesCollection: "pages",
-    layoutsCollection: "layouts",
-    templatesCollection: "templates",
+    items: [
+      { slug: "posts", label: "Posts" },
+      { slug: "events", label: "Events" },
+    ],
+    meta: {},
   },
   error: null,
 };
 
 /** What the list route answers. */
 let listed: Answer = LISTED_ANSWER;
-/** What the pages slug route answers. */
-let pages: Answer = PAGES_ANSWER;
+/** What the choices route answers. */
+let choices: Answer = CHOICES_ANSWER;
 /** What the retarget question answers, for any template. */
 let retarget: Answer = {
   data: { retarget: "collection-exists" },
@@ -125,7 +134,7 @@ beforeAll(() => {
 /** The answer a read gets by its path; a disabled read gets nothing, as the hook does. */
 function answerFor(path: string, enabled: boolean): Answer {
   if (!enabled) return { data: undefined, error: null };
-  if (path === PAGE_COLLECTION_ROUTE_PATH) return pages;
+  if (path === TEMPLATE_COLLECTION_CHOICES_ROUTE_PATH) return choices;
   if (path.startsWith(TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH)) return retarget;
   return listed;
 }
@@ -137,34 +146,35 @@ beforeEach(() => {
   }: {
     path: string;
     enabled?: boolean;
-  }) => ({
-    ...answerFor(path, enabled),
-    pending: false,
-    fetching: false,
-    refetch,
-  })) as unknown as typeof usePluginRoute);
+  }) => {
+    const { fetching = false, ...answer } = answerFor(path, enabled);
+    return { ...answer, pending: false, fetching, refetch };
+  }) as unknown as typeof usePluginRoute);
 });
 
 afterEach(() => {
   cleanup();
   listed = LISTED_ANSWER;
-  pages = PAGES_ANSWER;
+  choices = CHOICES_ANSWER;
   retarget = { data: { retarget: "collection-exists" }, error: null };
   refetch.mockReset();
   identity.mockReset();
   read.mockReset();
 });
 
-/** The retarget question's reads the control made while enabled, by path. */
-function retargetAsked(): string[] {
+/** The reads under `route` the control made while enabled, by path. */
+function askedUnder(route: string): string[] {
   return read.mock.calls
     .map(([options]) => options)
     .filter(
-      options =>
-        options.path.startsWith(TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH) &&
-        options.enabled !== false
+      options => options.path.startsWith(route) && options.enabled !== false
     )
     .map(options => options.path);
+}
+
+/** The retarget question's reads the control made while enabled, by path. */
+function retargetAsked(): string[] {
+  return askedUnder(TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH);
 }
 
 function Form({ defaults }: { defaults: FieldValues }) {
@@ -193,17 +203,31 @@ function renderField(
   return render(<Form defaults={{ collection, address }} />);
 }
 
+const OFFERED = [
+  { slug: "events", label: "Events" },
+  { slug: "posts", label: "Posts" },
+];
+
 const answered: CollectionChoices = {
-  state: "answered",
-  named: new Map([
-    ["posts", "Posts"],
-    ["events", "Events"],
-  ]),
-  offered: [
-    { slug: "events", label: "Events" },
-    { slug: "posts", label: "Posts" },
-  ],
+  named: {
+    state: "answered",
+    value: new Map([
+      ["posts", "Posts"],
+      ["events", "Events"],
+    ]),
+  },
+  offered: { state: "answered", value: OFFERED },
 };
+
+/** `answered`, with one of its reads in another state. */
+function withState(
+  read: keyof CollectionChoices,
+  state: "pending" | "failed"
+): CollectionChoices {
+  return read === "named"
+    ? { ...answered, named: { state } }
+    : { ...answered, offered: { state } };
+}
 
 /** A saved template's flags, its value as saved unless `value` says otherwise. */
 function savedAt(stored: string, value: string = stored) {
@@ -275,7 +299,7 @@ describe("collectionFieldView", () => {
   it("offers the choice again, saying why, where a change is allowed", () => {
     const reopened = {
       kind: "choose",
-      options: answered.offered,
+      options: OFFERED,
       loading: false,
       note: removedNote("articles"),
     };
@@ -289,12 +313,42 @@ describe("collectionFieldView", () => {
     ).toEqual(reopened);
   });
 
+  it("keeps a gone collection fixed until the choices are in, even where a change is allowed", () => {
+    expect(
+      collectionFieldView(
+        savedAt("articles"),
+        withState("offered", "pending"),
+        "allowed"
+      )
+    ).toEqual({ kind: "fixed", label: null, slug: "articles", note: null });
+    expect(
+      collectionFieldView(
+        savedAt("articles"),
+        withState("offered", "failed"),
+        "allowed"
+      )
+    ).toEqual({
+      kind: "fixed",
+      label: null,
+      slug: "articles",
+      note: LIST_FAILED_NOTE,
+    });
+  });
+
   it("keeps a saved template's slug read-only while the names load or fail", () => {
     expect(
-      collectionFieldView(savedAt("posts"), { state: "pending" }, "allowed")
+      collectionFieldView(
+        savedAt("posts"),
+        withState("named", "pending"),
+        "allowed"
+      )
     ).toEqual({ kind: "fixed", label: null, slug: "posts", note: null });
     expect(
-      collectionFieldView(savedAt("posts"), { state: "failed" }, "allowed")
+      collectionFieldView(
+        savedAt("posts"),
+        withState("named", "failed"),
+        "allowed"
+      )
     ).toEqual({
       kind: "fixed",
       label: null,
@@ -306,19 +360,32 @@ describe("collectionFieldView", () => {
   it("offers a choice by name while a template is made, and typing when none can be listed", () => {
     expect(collectionFieldView(NEW, answered, "pending")).toEqual({
       kind: "choose",
-      options: answered.offered,
+      options: OFFERED,
       loading: false,
       note: null,
     });
-    expect(collectionFieldView(NEW, { state: "pending" }, "pending")).toEqual({
+    expect(
+      collectionFieldView(NEW, withState("offered", "pending"), "pending")
+    ).toEqual({
       kind: "choose",
       options: [],
       loading: true,
       note: null,
     });
-    expect(collectionFieldView(NEW, { state: "failed" }, "pending")).toEqual({
+    expect(
+      collectionFieldView(NEW, withState("offered", "failed"), "pending")
+    ).toEqual({
       kind: "type",
       note: TYPE_SLUG_NOTE,
+    });
+    // A new template draws no saved collection, so the names decide nothing.
+    expect(
+      collectionFieldView(NEW, withState("named", "failed"), "pending")
+    ).toEqual({
+      kind: "choose",
+      options: OFFERED,
+      loading: false,
+      note: null,
     });
   });
 
@@ -333,51 +400,34 @@ describe("collectionFieldView", () => {
   });
 });
 
-describe("offeredCollections", () => {
-  it("offers the collections with an address field, less the pages, by name", () => {
-    expect(offeredCollections(LISTED, "pages")).toEqual([
-      { slug: "events", label: "Events" },
-      { slug: "posts", label: "Posts" },
-    ]);
-    // The control: without the pages slug, Pages is offered, so the filter
-    // above is the pages slug's and not the address field's.
-    expect(offeredCollections(LISTED, undefined).map(c => c.slug)).toEqual([
-      "events",
-      "pages",
-      "posts",
-    ]);
-  });
-});
-
-describe("offeredCollections, by the slug field's type", () => {
-  it("leaves out a collection whose readable slug field is not text, keeping one whose type is not known", () => {
-    const numbered: LoopCollectionItem = {
-      ...item("issues", "Issues"),
-      readable: [{ name: "slug", type: "number" }],
-    };
-    const texted: LoopCollectionItem = {
-      ...item("notes", "Notes"),
-      readable: [{ name: "slug", type: "text" }],
-    };
-    expect(
-      offeredCollections(
-        [numbered, texted, item("posts", "Posts")],
-        "pages"
-      ).map(c => c.slug)
-    ).toEqual(["notes", "posts"]);
-  });
-});
-
-describe("the collection list read", () => {
-  it("is asked again on every mount, since schema edits do not refresh it", () => {
+describe("the collection reads", () => {
+  it("asks the list and the choices again on every mount, since schema edits do not refresh them", () => {
     renderField("", undefined);
     const asked = read.mock.calls.map(([options]) => options);
-    expect(
-      asked.some(
-        options =>
-          options.path === loopCollectionsPath() && options.staleTime === 0
-      )
-    ).toBe(true);
+    for (const path of [
+      loopCollectionsPath(),
+      TEMPLATE_COLLECTION_CHOICES_ROUTE_PATH,
+    ]) {
+      expect(
+        asked.some(
+          options =>
+            options.path === path &&
+            options.staleTime === 0 &&
+            options.enabled !== false
+        )
+      ).toBe(true);
+    }
+  });
+
+  it("asks the choices only where a choice may be drawn", () => {
+    // A saved template the list names is fixed: no choice to draw.
+    renderField("posts", "t1");
+    expect(askedUnder(TEMPLATE_COLLECTION_CHOICES_ROUTE_PATH)).toEqual([]);
+    cleanup();
+    read.mockClear();
+    // One the list leaves out may be offered a change, so they are asked.
+    renderField("articles", "t1");
+    expect(askedUnder(TEMPLATE_COLLECTION_CHOICES_ROUTE_PATH)).not.toEqual([]);
   });
 });
 
@@ -397,11 +447,11 @@ describe("the collection control", () => {
     await act(async () => {
       fireEvent.keyDown(trigger, { key: "Enter" });
     });
-    // Each by name, with its slug beside it; Pages and a collection with no
-    // address are not offered.
+    // Exactly the server's choices, in its order: Pages and Authors, which
+    // the list holds, are not offered, and nothing is reordered here.
     expect(screen.getAllByRole("option").map(o => o.textContent)).toEqual([
-      "Events events",
       "Posts posts",
+      "Events events",
     ]);
     await act(async () => {
       fireEvent.click(screen.getByRole("option", { name: "Posts posts" }));
@@ -409,20 +459,67 @@ describe("the collection control", () => {
     expect(values().collection).toBe("posts");
   });
 
-  it("falls back to typing the slug when the collections cannot be listed", () => {
-    listed = { error: new Error("refused"), data: undefined };
+  it("offers a collection the list cannot judge only as the server answers it", async () => {
+    // The list holds a collection whose slug field the public cannot read,
+    // which says nothing of its type: the server's answer leaves it out, and
+    // so does the choice.
+    listed = {
+      data: {
+        items: [...LISTED, item("issues", "Issues")],
+        meta: {},
+      },
+      error: null,
+    };
     renderField("");
-    const input = screen.getByRole("textbox", { name: "Collection" });
-    fireEvent.change(input, { target: { value: "posts" } });
-    expect(values().collection).toBe("posts");
-    expect(screen.getByText(TYPE_SLUG_NOTE)).toBeTruthy();
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("combobox", { name: "Collection" }), {
+        key: "Enter",
+      });
+    });
+    expect(screen.getAllByRole("option").map(o => o.textContent)).toEqual([
+      "Posts posts",
+      "Events events",
+    ]);
   });
 
-  it("offers nothing until the pages slug is known, even with the list in hand", async () => {
-    // The list answered first, as it can on a cold load: Pages would be
-    // offered, and a template for it cannot be saved.
-    pages = { data: undefined, error: null };
+  it("falls back to typing the slug when the choices cannot be read", () => {
+    // Refused, and answered without a list: neither says what may be chosen.
+    for (const answer of [
+      { data: undefined, error: new Error("refused") },
+      { data: null, error: null },
+      { data: { items: "posts" }, error: null },
+    ]) {
+      choices = answer;
+      renderField("");
+      const input = screen.getByRole("textbox", { name: "Collection" });
+      fireEvent.change(input, { target: { value: "posts" } });
+      expect(values().collection).toBe("posts");
+      expect(screen.queryByRole("combobox")).toBeNull();
+      expect(screen.getByText(TYPE_SLUG_NOTE)).toBeTruthy();
+      cleanup();
+    }
+  });
+
+  it("waits, rather than offering typing, while a read that failed before is asked again", async () => {
+    // The query keeps its earlier error beside the retry in flight: the
+    // fresh answer may yet list the collections.
+    choices = {
+      ...CHOICES_ANSWER,
+      error: new Error("earlier failure"),
+      fetching: true,
+    };
     renderField("");
+    const trigger = screen.getByRole("combobox", { name: "Collection" });
+    expect(trigger.textContent).toBe("Loading collections…");
+    expect(screen.queryByText(TYPE_SLUG_NOTE)).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Collection" })).toBeNull();
+  });
+
+  it("offers nothing while a cached answer is refreshed, until the fresh one arrives", async () => {
+    // The hook keeps the cached choices while it asks again on mount: they
+    // may name a collection since removed or no longer eligible.
+    choices = { ...CHOICES_ANSWER, fetching: true };
+    const { rerender } = renderField("");
     const trigger = screen.getByRole("combobox", { name: "Collection" });
     expect(trigger.textContent).toBe("Loading collections…");
     expect(trigger.hasAttribute("disabled")).toBe(true);
@@ -430,21 +527,60 @@ describe("the collection control", () => {
       fireEvent.keyDown(trigger, { key: "Enter" });
     });
     expect(screen.queryAllByRole("option")).toEqual([]);
+    // The fresh answer, once in, is what is offered.
+    choices = {
+      data: { items: [{ slug: "events", label: "Events" }], meta: {} },
+      error: null,
+    };
+    rerender(<Form defaults={{ collection: "", address: null }} />);
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("combobox", { name: "Collection" }), {
+        key: "Enter",
+      });
+    });
+    expect(screen.getAllByRole("option").map(o => o.textContent)).toEqual([
+      "Events events",
+    ]);
   });
 
-  it("falls back to typing the slug when the pages slug cannot be read", () => {
-    // Refused, and answered without a slug: neither says what Pages is.
-    for (const answer of [
-      { data: undefined, error: new Error("refused") },
-      { data: null, error: null },
-    ]) {
-      pages = answer;
-      renderField("");
-      expect(screen.getByRole("textbox", { name: "Collection" })).toBeTruthy();
-      expect(screen.queryByRole("combobox")).toBeNull();
-      expect(screen.getByText(TYPE_SLUG_NOTE)).toBeTruthy();
-      cleanup();
-    }
+  it("keeps a saved collection pending while the list or the retarget answer is refreshed", () => {
+    // A cached list naming the collection, being asked again: not yet shown
+    // by its name.
+    listed = { ...LISTED_ANSWER, fetching: true };
+    renderField("posts", "t1");
+    let shown = screen.getByRole("textbox", { name: "Collection" });
+    expect(shown.textContent).toBe("posts");
+    expect(shown.getAttribute("aria-busy")).toBe("true");
+    cleanup();
+    // A cached "allowed" being asked again: no choice until it is fresh.
+    listed = LISTED_ANSWER;
+    retarget = { data: { retarget: "allowed" }, error: null, fetching: true };
+    renderField("articles", "t1");
+    shown = screen.getByRole("textbox", { name: "Collection" });
+    expect(shown.getAttribute("aria-busy")).toBe("true");
+    expect(screen.queryByRole("combobox")).toBeNull();
+    cleanup();
+    // Allowed and fresh, but the choices being refreshed: still none.
+    retarget = { data: { retarget: "allowed" }, error: null };
+    choices = { ...CHOICES_ANSWER, fetching: true };
+    renderField("articles", "t1");
+    shown = screen.getByRole("textbox", { name: "Collection" });
+    expect(shown.getAttribute("aria-busy")).toBe("true");
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
+  it("keeps a saved collection pending while a retarget answer that failed before is asked again", () => {
+    // The query keeps its earlier error beside the retry in flight, as after
+    // the address is cleared and the question is asked again.
+    retarget = {
+      data: undefined,
+      error: new Error("earlier failure"),
+      fetching: true,
+    };
+    renderField("articles", "t1");
+    const shown = screen.getByRole("textbox", { name: "Collection" });
+    expect(shown.getAttribute("aria-busy")).toBe("true");
+    expect(screen.queryByRole("combobox")).toBeNull();
   });
 
   it("asks the retarget question by template, only where the list leaves its collection out", () => {
@@ -529,6 +665,10 @@ describe("the collection control", () => {
     await act(async () => {
       fireEvent.keyDown(trigger, { key: "Enter" });
     });
+    expect(screen.getAllByRole("option").map(o => o.textContent)).toEqual([
+      "Posts posts",
+      "Events events",
+    ]);
     await act(async () => {
       fireEvent.click(screen.getByRole("option", { name: "Posts posts" }));
     });
