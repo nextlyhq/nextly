@@ -54,10 +54,10 @@ export interface SaveConflicts {
   readonly entries: readonly EntryConflict[];
   /**
    * From the refusals that sent the save back to read again, when any did:
-   * who made the save the last of them names, and whether exactly one save
-   * came between the version this save was first sent with and the one it
-   * merged onto. Only then can that person be named as the one who changed
-   * the entries; otherwise someone else may have.
+   * whether the conflicts are all the doing of one save, the one a single
+   * refusal named, made just after the version this save was first sent
+   * with, and then who made it. Otherwise `oneSaveBetween` is false and no
+   * one is named: someone else may have changed the entries.
    */
   readonly refusal?: {
     readonly changedBy?: StaleChanger;
@@ -147,6 +147,9 @@ export async function saveSectionMerged(
 ): Promise<VersionedSectionSaved> {
   const refusals: StaleRefusal[] = [];
   const sent: (string | undefined)[] = [];
+  // The conflicts the first try already met, before any refusal: a save
+  // made before the author's read reached, not the one that refused it.
+  let earlier: ReadonlySet<string> | undefined;
   return attemptUntilFresh(
     save.read,
     async latest => {
@@ -158,6 +161,7 @@ export async function saveSectionMerged(
         replaced,
         save.prefer
       );
+      earlier ??= new Set(conflicts.map(conflictIdentity));
       sent.push(latest.rev);
       const answered = await save.write(
         withVersionFrom({ [save.section]: value }, latest.rev)
@@ -169,7 +173,9 @@ export async function saveSectionMerged(
         attempts: sent.length,
         ...(conflicts.length === 0
           ? {}
-          : { conflicts: describeConflicts(conflicts, refusals, sent) }),
+          : {
+              conflicts: describeConflicts(conflicts, refusals, sent, earlier),
+            }),
       };
     },
     {
@@ -182,29 +188,45 @@ export async function saveSectionMerged(
   );
 }
 
+/** A conflict's entry or setting, as one string. */
+function conflictIdentity(conflict: EntryConflict): string {
+  return `${conflict.setting ? "setting" : "entry"}:${conflict.key}`;
+}
+
 /**
- * The conflicts with what the refusals say of who caused them. Exactly one
- * save came between when one refusal sent the save back and the version it
- * named is the one after the version first sent.
+ * The conflicts with what the refusals say of who caused them. The last
+ * refusal's author is named, and exactly one save said to have come
+ * between, only when it is the save that brought every conflict about: one
+ * refusal sent the save back, the version it named is the one after the
+ * version first sent, and the first try, made on the copy before that save,
+ * met none of the conflicts. A conflict already there at the first try came
+ * from a save made before, by whoever made it.
  */
 function describeConflicts(
   entries: readonly EntryConflict[],
   refusals: readonly StaleRefusal[],
-  sent: readonly (string | undefined)[]
+  sent: readonly (string | undefined)[],
+  earlier: ReadonlySet<string> | undefined
 ): SaveConflicts {
   const last = refusals.at(-1);
   if (last === undefined) return { entries };
   const first = revisionNumber(sent[0]);
   const now = revisionNumber(last.currentVersion);
+  const attributable =
+    refusals.length === 1 &&
+    first !== undefined &&
+    now !== undefined &&
+    now === first + 1 &&
+    entries.every(entry => earlier?.has(conflictIdentity(entry)) !== true);
   return {
     entries,
-    refusal: {
-      ...(last.changedBy === undefined ? {} : { changedBy: last.changedBy }),
-      oneSaveBetween:
-        refusals.length === 1 &&
-        first !== undefined &&
-        now !== undefined &&
-        now === first + 1,
-    },
+    refusal: attributable
+      ? {
+          ...(last.changedBy === undefined
+            ? {}
+            : { changedBy: last.changedBy }),
+          oneSaveBetween: true,
+        }
+      : { oneSaveBetween: false },
   };
 }

@@ -270,23 +270,27 @@ function useHeldPreview(): {
     () => new Map()
   );
   const preview = useCallback<NonNullable<SiteStyleHistory["preview"]>>(
-    (section, value, state) => {
+    (section, value, state, stored) => {
       setHeld(current => {
         const was = current.get(section);
         // An answer about a value no longer drawn is about an older burst.
         if (state !== "held" && was?.value !== value) return current;
         const next = new Map(current);
+        // Once stored, what the write stored is drawn: a merge onto another
+        // save shows that save at once, before the read moves on.
+        const drawn =
+          state === "stored" && stored !== undefined ? stored : value;
         // Dropped too once stored where the read already holds it, which
         // happens when the read came back before the write's answer did.
         if (
           state === "dropped" ||
           (state === "stored" &&
-            sameSection(storedSection(read.current, section), value))
+            sameSection(storedSection(read.current, section), drawn))
         ) {
           next.delete(section);
         } else
           next.set(section, {
-            value,
+            value: drawn,
             storedAt: state === "stored" ? read.current : UNANSWERED,
           });
         return next;

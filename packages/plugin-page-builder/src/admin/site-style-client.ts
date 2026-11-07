@@ -379,7 +379,13 @@ export interface SiteStyleHistory {
   readonly preview?: (
     section: SiteStyleSection,
     value: unknown,
-    state: "held" | "stored" | "dropped"
+    state: "held" | "stored" | "dropped",
+    /**
+     * For `"stored"`: what the write stored, when it was merged onto a newer
+     * save and so differs from `value`. Drawn in its place until the read
+     * moves on, so the other save shows at once.
+     */
+    stored?: unknown
   ) => void;
 }
 
@@ -1106,11 +1112,9 @@ export function useSaveSiteStyle(): SiteStyleWrite {
             recordedPlan(from)
           ).done;
           if (sent !== SKIP) {
-            history.preview?.(
-              section,
-              sent,
-              result.saved ? "stored" : "dropped"
-            );
+            // Drawn as written, the merge with any save it met.
+            if (result.saved) history.preview?.(section, sent, "stored", holds);
+            else history.preview?.(section, sent, "dropped");
           }
           return replayOf(result, section, holds);
         };
@@ -1134,17 +1138,17 @@ export function useSaveSiteStyle(): SiteStyleWrite {
           async () => replacedBy(await done, before)
         ),
       });
-      const { result, wrote } = await done;
+      const { result, wrote, holds } = await done;
       // Refused, or not written because the edits came back to where they
       // started: either way nothing changed, so the step is withdrawn (which
       // also gives back the redo it cut off) and nothing new is drawn.
       const changed = result.saved && wrote;
       if (held !== undefined) {
-        history.preview?.(
-          section,
-          held.write.value,
-          changed ? "stored" : "dropped"
-        );
+        // Stored, the section is drawn as written: the merge, with any save
+        // it met, rather than the burst's value alone.
+        if (changed) {
+          history.preview?.(section, held.write.value, "stored", holds);
+        } else history.preview?.(section, held.write.value, "dropped");
       }
       if (!changed) {
         withdrawn = true;
