@@ -413,6 +413,7 @@ export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
  * for the sources the drawn page's bindings read.
  */
 export { useComposedEntryContent } from "./entry-content-canvas";
+export type { EntryContentLimits } from "./entry-content-canvas";
 /**
  * @experimental The entry a template is previewed with: the host provides it
  * around a template's editor, and anything inside reads it. `undefined`
