@@ -38,9 +38,7 @@
  * @module page-read-meter
  */
 import {
-  bindingKindOf,
   DEFAULT_LIMITS,
-  type BindingFieldShape,
   type BlockDocument,
   type DefinitionsById,
   type DocumentLimits,
@@ -51,6 +49,8 @@ import {
   createStandaloneContext,
   DEFAULT_MAX_QUERIES,
   definitionsFor,
+  emptyDataProvider,
+  relatedThrough,
   PageRenderer,
   READ_KINDS,
   type ListBatchReads,
@@ -59,7 +59,6 @@ import {
   type PageRendererProps,
   type QueryBudget,
   type ReadClaim,
-  type ReadKind,
   type ResolvedMedia,
 } from "@nextlyhq/blocks-react";
 import {
@@ -116,20 +115,6 @@ function countedMedia(
   };
 }
 
-/** Whether `field` of a collection is a to-one relation a list can follow. */
-function followable(
-  fields: readonly BindingFieldShape[] | undefined,
-  field: string
-): boolean {
-  const shape = fields?.find(candidate => candidate.name === field);
-  return (
-    shape !== undefined &&
-    shape.hasMany !== true &&
-    bindingKindOf(shape) === "reference" &&
-    typeof shape.relationTo === "string"
-  );
-}
-
 /**
  * Links and a list's batches, counted as the published page counts them:
  * one entry's link once, at {@link LINK_READS}; a list's links into one
@@ -142,28 +127,36 @@ function countedLinks(budget: QueryBudget): {
   const known = new Set<string>();
   const key = (collection: string, id: string) => `${collection}\u0000${id}`;
   return {
+    // Settled only once every read it needed was granted: a link refused
+    // is asked again by the next block that draws it, and named as unread,
+    // as the published page's resolver leaves it.
     resolve: (collection, id, claim) => {
       const ref = key(collection, id);
-      if (!known.has(ref)) {
+      if (
+        !known.has(ref) &&
+        claimEach(budget, LINK_READS, { ...claim, kind: "link" })
+      ) {
         known.add(ref);
-        claimEach(budget, LINK_READS, { ...claim, kind: "link" });
       }
       // The canvas draws no address for a link to an entry.
       return Promise.resolve(null);
     },
     ahead: (refs, claim) => {
-      const byCollection = new Map<string, string[]>();
-      for (const { collection, id } of refs) {
-        if (known.has(key(collection, id))) continue;
-        known.add(key(collection, id));
-        byCollection.set(collection, [
-          ...(byCollection.get(collection) ?? []),
-          id,
-        ]);
-      }
-      for (const ids of byCollection.values()) {
+      for (const ids of unsettled(refs, known, key).values()) {
         for (let at = 0; at < ids.length; at += BATCH_SIZE) {
-          claimEach(budget, LINK_READS, { ...claim, kind: "link" });
+          const batch = ids.slice(at, at + BATCH_SIZE);
+          // Asked only where the allowance also covers each link's own
+          // reads after it, as the published page asks a batch.
+          if (
+            (budget.remaining?.() ?? Infinity) <
+            LINK_READS * (batch.length + 1)
+          ) {
+            return Promise.resolve();
+          }
+          if (!claimEach(budget, LINK_READS, { ...claim, kind: "link" })) {
+            return Promise.resolve();
+          }
+          for (const id of batch) known.add(id);
         }
       }
       return Promise.resolve();
@@ -171,17 +164,22 @@ function countedLinks(budget: QueryBudget): {
   };
 }
 
-/** A count's reads by kind, added to another's. */
-function addKinds(
-  one: PageReadReport["byKind"],
-  other: PageReadReport["byKind"]
-): PageReadReport["byKind"] {
-  const sum: Partial<Record<ReadKind, number>> = { ...one };
-  for (const kind of READ_KINDS) {
-    const count = other[kind];
-    if (count !== undefined) sum[kind] = (sum[kind] ?? 0) + count;
+/** The links not yet settled, by collection, each by its kept key. */
+function unsettled(
+  refs: readonly { readonly collection: string; readonly id: string }[],
+  known: ReadonlySet<string>,
+  key: (collection: string, id: string) => string
+): Map<string, string[]> {
+  const byCollection = new Map<string, string[]>();
+  for (const { collection, id } of refs) {
+    const ref = key(collection, id);
+    if (known.has(ref)) continue;
+    byCollection.set(collection, [
+      ...(byCollection.get(collection) ?? []),
+      ref,
+    ]);
   }
-  return sum;
+  return byCollection;
 }
 
 /**
@@ -208,17 +206,10 @@ function countingContext(
     resolveMedia: countedMedia(base, budget),
     resolveEntryPath: links.resolve,
     listReads: {
-      related: (collection, field, ids, _fields, claim) => {
-        if (followable(shapes?.fieldsOf({ collection }), field)) {
-          const distinct = new Set(ids.map(String)).size;
-          for (let at = 0; at < distinct; at += BATCH_SIZE) {
-            if (!budget.take({ ...claim, kind: "related" })) break;
-          }
-        }
-        // Counted, not read: the canvas draws a list item's relation as it
-        // always has.
-        return Promise.resolve(undefined);
-      },
+      // The published page's own read, through the canvas's data provider,
+      // so the rows come back and what a list draws through them (a link
+      // or an image by a related entry's field) is counted too.
+      related: relatedThrough(base.data ?? emptyDataProvider, shapes, budget),
       entryPaths: links.ahead,
     },
   };
@@ -233,6 +224,24 @@ async function drawOnce(element: ReactElement): Promise<void> {
   });
   await stream.allReady;
   await stream.cancel();
+}
+
+/**
+ * The binding reads the canvas bindings route reported, claimed again in
+ * the count's budget by kind, the refused ones too: what they cost the page
+ * at this point of its reads.
+ */
+function replayBindingReads(
+  bindings: PageReadReport | undefined,
+  budget: QueryBudget
+): void {
+  if (bindings === undefined) return;
+  for (const kind of READ_KINDS) {
+    for (let read = 0; read < (bindings.byKind[kind] ?? 0); read += 1) {
+      budget.take({ kind });
+    }
+  }
+  for (let read = 0; read < bindings.refused; read += 1) budget.take();
 }
 
 /** A Layout region the page is drawn inside, as the canvas draws it. */
@@ -272,20 +281,23 @@ async function countComponentReads(
 }
 
 /**
- * What the page reads when published: drawn once, off screen, under a
- * budget of what the binding reads left, then added to those reads.
+ * What the page reads when published, in the published page's order, under
+ * one budget of `cap`: the components the page and its Layout place, then
+ * the binding reads as the canvas bindings route made them, then the page
+ * drawn once, off screen, inside its Layout.
  */
 export async function countPageReads(
   drawnWith: DrawnWith,
   document: BlockDocument,
-  regions: readonly DrawnRegion[]
+  regions: readonly DrawnRegion[],
+  /** The allowance counted against: the default a published page has. */
+  cap: number = DEFAULT_MAX_QUERIES
 ): Promise<PageReadReport> {
   const bindings =
     drawnWith.bindings === undefined
       ? undefined
       : bindingReadsOf(drawnWith.bindings);
-  const spent = bindings?.used ?? 0;
-  const budget = createQueryBudget(Math.max(0, DEFAULT_MAX_QUERIES - spent));
+  const budget = createQueryBudget(cap);
   const limits = drawnWith.limits ?? DEFAULT_LIMITS;
   // What the published page reads before it draws, in its order: the
   // components the page places, then its Layout's row and the components
@@ -306,6 +318,10 @@ export async function countPageReads(
       limits
     );
   }
+  // Then the binding reads, against what the components left, as the
+  // published page makes them: each the route reported, claimed again here
+  // in the same budget, so the ones past the allowance are refused.
+  replayBindingReads(bindings, budget);
   const context = countingContext(drawnWith, budget);
   // The page inside its Layout, as the published page draws it: the
   // header, the page and the footer under the one budget.
@@ -327,14 +343,7 @@ export async function countPageReads(
       footer === undefined ? null : part(footer.document, footer.definitions)
     )
   );
-  const drawn = budget.report();
-  return {
-    cap: DEFAULT_MAX_QUERIES,
-    used: spent + drawn.used,
-    refused: (bindings?.refused ?? 0) + drawn.refused,
-    byKind: addKinds(bindings?.byKind ?? {}, drawn.byKind),
-    unread: drawn.unread,
-  };
+  return budget.report();
 }
 
 /**

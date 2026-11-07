@@ -19,19 +19,27 @@
  * @module blocks/list-batch
  */
 import {
+  bindingKindOf,
   COLLECTION_LIST_TYPE,
   DEFAULT_BINDING_SOURCE,
   LIST_ENTRY_SLOT,
   isBindPath,
   isPlainRecord,
   resolveNodeBindings,
+  type BindingFieldShape,
   type BindingIssue,
   type BindingRun,
   type BlockNode,
   type BoundValues,
 } from "@nextlyhq/blocks-engine";
 
-import type { PageContext } from "../context";
+import type {
+  BlocksDataProvider,
+  BlocksFieldShapes,
+  ListBatchReads,
+  PageContext,
+  QueryBudget,
+} from "../context";
 import { conditionAllows } from "../visibility";
 
 import { ICON_TYPE, iconMayDraw } from "./icon";
@@ -478,6 +486,104 @@ export function fillItemBindings<N extends BlockNode>(
     bound = { ...bound, ...result.bound };
   }
   return { props, bound, issues };
+}
+
+/** The collection a field leads to, when a path may follow it. */
+export function relationTarget(
+  fields: readonly BindingFieldShape[] | undefined,
+  name: string
+): string | undefined {
+  const field = fields?.find(candidate => candidate.name === name);
+  if (field === undefined || field.hasMany === true) return undefined;
+  const kind = bindingKindOf(field);
+  return (kind === "reference" || kind === "media") &&
+    typeof field.relationTo === "string"
+    ? field.relationTo
+    : undefined;
+}
+
+/** How many ids one read ahead asks for: the readers' own page cap. */
+export const AHEAD_BATCH_SIZE = 100;
+
+/**
+ * A batch's rows by the ids asked for, or `undefined` when they cannot be
+ * matched to those ids with certainty: the database's own count must equal
+ * the rows returned, and every row must carry a distinct id that was asked
+ * for. A read hook that rewrote or dropped an id fails that, and the batch
+ * is not trusted; the per-id path, which never matches by a returned id,
+ * answers instead.
+ */
+export function rowsById(
+  found: { readonly items: readonly unknown[]; readonly meta?: unknown },
+  asked: readonly string[]
+): Map<string, Record<string, unknown>> | undefined {
+  const total = isPlainRecord(found.meta) ? found.meta.total : undefined;
+  if (typeof total !== "number" || total !== found.items.length) {
+    return undefined;
+  }
+  const wanted = new Set(asked);
+  const rows = new Map<string, Record<string, unknown>>();
+  for (const item of found.items) {
+    if (!isPlainRecord(item)) return undefined;
+    const id = item.id;
+    if (typeof id !== "string" && typeof id !== "number") return undefined;
+    const key = String(id);
+    if (!wanted.has(key) || rows.has(key)) return undefined;
+    rows.set(key, item);
+  }
+  return rows;
+}
+
+/**
+ * A list's relations read through `data`, the page's own data provider (the
+ * one its entries come through), so whatever it refuses a list it refuses a
+ * list's relations too, and judged by the public's field shapes: the read a
+ * route's lists make, and the one the editor's count makes, alike.
+ *
+ * @experimental
+ */
+export function relatedThrough(
+  data: BlocksDataProvider,
+  shapes: BlocksFieldShapes | undefined,
+  budget: QueryBudget
+): ListBatchReads["related"] {
+  return async (collection, field, ids, fields, claim) => {
+    // Only a relation the public's shapes say is a to-one relation to one
+    // collection, as an entry binding's path may follow.
+    const target = relationTarget(shapes?.fieldsOf({ collection }), field);
+    if (target === undefined) return undefined;
+    const wanted = [...new Set(ids.map(String))];
+    const found = new Map<string, Readonly<Record<string, unknown>>>();
+    for (let at = 0; at < wanted.length; at += AHEAD_BATCH_SIZE) {
+      const chunk = wanted.slice(at, at + AHEAD_BATCH_SIZE);
+      if (!budget.take({ ...claim, kind: "related" })) break;
+      const page = await data
+        .find({
+          collection: target,
+          filters: [{ field: "id", op: "in", value: chunk }],
+          limit: chunk.length,
+          select: [...fields],
+        })
+        .catch(() => undefined);
+      // Rows matched to ids only with certainty; otherwise these items
+      // keep their ids, and their bindings show their fallbacks. A
+      // provider need not count what it matched; then the rows it gave are
+      // taken as its count.
+      const rows =
+        page === undefined
+          ? undefined
+          : rowsById(
+              {
+                items: page.items,
+                meta: { total: page.total ?? page.items.length },
+              },
+              chunk
+            );
+      if (rows === undefined) continue;
+      for (const [id, row] of rows) found.set(id, row);
+    }
+    return found;
+  };
 }
 
 /**

@@ -15,7 +15,6 @@
  */
 import {
   bindingDemand,
-  bindingKindOf,
   calendarDayIn,
   COLLECTION_LIST_TYPE,
   conditionDemand,
@@ -92,7 +91,13 @@ import type { ReactElement, ReactNode } from "react";
 import { createElement, Fragment, Suspense } from "react";
 
 import { recordedFieldShapes, shapeRefKey } from "./binding-wire";
-import { itemFollowsIn } from "./blocks/list-batch";
+import {
+  AHEAD_BATCH_SIZE,
+  itemFollowsIn,
+  relatedThrough,
+  relationTarget,
+  rowsById,
+} from "./blocks/list-batch";
 import {
   conditionDayStart,
   listEntryCount,
@@ -1954,38 +1959,6 @@ function mediaResolver(
   };
 }
 
-/** How many ids one read ahead asks for: the readers' own page cap. */
-const AHEAD_BATCH_SIZE = 100;
-
-/**
- * A batch's rows by the ids asked for, or `undefined` when they cannot be
- * matched to those ids with certainty: the database's own count must equal
- * the rows returned, and every row must carry a distinct id that was asked
- * for. A read hook that rewrote or dropped an id fails that, and the batch
- * is not trusted; the per-id path, which never matches by a returned id,
- * answers instead.
- */
-function rowsById(
-  found: { readonly items: readonly unknown[]; readonly meta?: unknown },
-  asked: readonly string[]
-): Map<string, Record<string, unknown>> | undefined {
-  const total = isPlainRecord(found.meta) ? found.meta.total : undefined;
-  if (typeof total !== "number" || total !== found.items.length) {
-    return undefined;
-  }
-  const wanted = new Set(asked);
-  const rows = new Map<string, Record<string, unknown>>();
-  for (const item of found.items) {
-    if (!isPlainRecord(item)) return undefined;
-    const id = item.id;
-    if (typeof id !== "string" && typeof id !== "number") return undefined;
-    const key = String(id);
-    if (!wanted.has(key) || rows.has(key)) return undefined;
-    rows.set(key, item);
-  }
-  return rows;
-}
-
 /**
  * The lifecycle and identity a named media collection is read under, by id or
  * in a batch alike.
@@ -2665,20 +2638,6 @@ async function readSingle(
   } catch {
     return undefined;
   }
-}
-
-/** The collection a field leads to, when a path may follow it. */
-function relationTarget(
-  fields: readonly BindingFieldShape[] | undefined,
-  name: string
-): string | undefined {
-  const field = fields?.find(candidate => candidate.name === name);
-  if (field === undefined || field.hasMany === true) return undefined;
-  const kind = bindingKindOf(field);
-  return (kind === "reference" || kind === "media") &&
-    typeof field.relationTo === "string"
-    ? field.relationTo
-    : undefined;
 }
 
 /**
@@ -3706,42 +3665,7 @@ function listBatchReads(args: {
 }): ListBatchReads {
   const { data, shapes, budget } = args;
   return {
-    related: async (collection, field, ids, fields, claim) => {
-      // Only a relation the public's shapes say is a to-one relation to one
-      // collection, as an entry binding's path may follow.
-      const target = relationTarget(shapes?.fieldsOf({ collection }), field);
-      if (target === undefined) return undefined;
-      const wanted = [...new Set(ids.map(String))];
-      const found = new Map<string, Readonly<Record<string, unknown>>>();
-      for (const chunk of chunked(wanted, AHEAD_BATCH_SIZE)) {
-        if (!budget.take({ ...claim, kind: "related" })) break;
-        const page = await data
-          .find({
-            collection: target,
-            filters: [{ field: "id", op: "in", value: chunk }],
-            limit: chunk.length,
-            select: [...fields],
-          })
-          .catch(() => undefined);
-        // Rows matched to ids only with certainty; otherwise these items
-        // keep their ids, and their bindings show their fallbacks. A
-        // provider need not count what it matched; then the rows it gave are
-        // taken as its count.
-        const rows =
-          page === undefined
-            ? undefined
-            : rowsById(
-                {
-                  items: page.items,
-                  meta: { total: page.total ?? page.items.length },
-                },
-                chunk
-              );
-        if (rows === undefined) continue;
-        for (const [id, row] of rows) found.set(id, row);
-      }
-      return found;
-    },
+    related: relatedThrough(data, shapes, budget),
     entryPaths: args.entryPaths.ahead,
   };
 }
