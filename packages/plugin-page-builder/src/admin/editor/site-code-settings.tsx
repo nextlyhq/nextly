@@ -196,7 +196,8 @@ function useSiteCodeFlow(props: SiteCodeSectionProps) {
     working,
     problem,
     edit: (): void => {
-      if (stored === undefined) return;
+      // Never from a read being refreshed: it may predate a save.
+      if (stored === undefined || read.fetching) return;
       setText({ head: stored.head, body: stored.body });
       setVersion(stored.version);
       setProblem(null);
@@ -244,7 +245,14 @@ function StepView({
   const { step, working, problem } = flow;
   switch (step.kind) {
     case "view":
-      return <Summary stored={stored} saved={step.saved} onEdit={flow.edit} />;
+      return (
+        <Summary
+          stored={stored}
+          saved={step.saved}
+          refreshing={flow.read.fetching}
+          onEdit={flow.edit}
+        />
+      );
     case "edit":
       return (
         <Editor
@@ -306,10 +314,13 @@ function elements(count: number): string {
 function Summary({
   stored,
   saved,
+  refreshing,
   onEdit,
 }: {
   stored: SiteCodeRead;
   saved: SiteCodeChecked | undefined;
+  /** The read is being refreshed; the code opens once it answers. */
+  refreshing: boolean;
   onEdit: () => void;
 }): JSX.Element {
   const empty =
@@ -340,7 +351,12 @@ function Summary({
         ))}
       </dl>
       <div className="flex flex-wrap items-center gap-3">
-        <Button type="button" variant="outline" onClick={onEdit}>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onEdit}
+          disabled={refreshing}
+        >
           {empty ? "Add code" : "Edit code"}
         </Button>
         <LastChanged stored={stored} />
@@ -417,6 +433,7 @@ function Editor({
           onChange={value => onText({ ...text, [place.slot]: value })}
           refusals={refused?.[place.slot].refusals ?? []}
           firstRefusal={place.slot === firstPlace ? firstRefusal : undefined}
+          working={working}
         />
       ))}
       <p className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -461,6 +478,7 @@ function PlaceEditor({
   onChange,
   refusals,
   firstRefusal,
+  working,
 }: {
   place: Place;
   label: string;
@@ -468,6 +486,8 @@ function PlaceEditor({
   onChange: (value: string) => void;
   refusals: readonly string[];
   firstRefusal: RefObject<HTMLLIElement | null> | undefined;
+  /** A check or save is in flight with this text: it can't change under it. */
+  working: boolean;
 }): JSX.Element {
   const id = useId();
   const refusedId = `${id}-refused`;
@@ -491,6 +511,7 @@ function PlaceEditor({
         id={id}
         value={value}
         onChange={event => onChange(event.target.value)}
+        readOnly={working}
         spellCheck={false}
         autoCapitalize="off"
         autoCorrect="off"
@@ -500,7 +521,8 @@ function PlaceEditor({
         aria-describedby={
           refusals.length > 0 ? `${countId} ${refusedId}` : countId
         }
-        className="resize-y bg-muted/40 font-mono text-xs leading-relaxed"
+        // Red-edged while it holds what can't be stored, as its list below.
+        className={`resize-y bg-muted/40 font-mono text-xs leading-relaxed ${refusals.length > 0 || over ? "border-destructive" : ""}`}
       />
       {refusals.length === 0 ? null : (
         <div
@@ -557,20 +579,62 @@ function findingsOf(checked: SiteCodeChecked): Seen[] {
   return [...seen.values()];
 }
 
-/** What to add to the site's policy, each directive once. */
-function additionsOf(checked: SiteCodeChecked): CspAddition[] {
-  const added = new Map<string, string[]>();
-  for (const policy of checked.csp) {
-    for (const { directive, sources } of policy.additions) {
-      const known = added.get(directive) ?? [];
-      added.set(directive, [...new Set([...known, ...sources])]);
-    }
-  }
-  return [...added].map(([directive, sources]) => ({ directive, sources }));
+/** What to add to one policy: which it is, and a line per directive. */
+interface AllowGroup {
+  readonly label: string;
+  readonly lines: readonly string[];
 }
 
-/** A finding's message as the start of a line. */
+/** A policy known to the check, in words. */
+const POLICY_WORDS: Readonly<
+  Record<SiteCodeChecked["csp"][number]["source"], string>
+> = {
+  declared: "the policy this site declares",
+  live: "the policy the site sends",
+};
+
+/** One directive's addition as the line a policy is given. */
+function lineOf({ directive, sources }: CspAddition): string {
+  return `${directive} ${sources.join(" ")}`;
+}
+
+/**
+ * What to add, kept with the policy it is for: the declared and the sent
+ * policy, and each policy of a header carrying several, are given apart,
+ * since one's needs added to another would widen it for nothing. Advice the
+ * same for both is given once, for the site's policy.
+ */
+function allowGroupsOf(checked: SiteCodeChecked): AllowGroup[] {
+  const groups: AllowGroup[] = [];
+  for (const { source, additions } of checked.csp) {
+    const byPolicy = new Map<number, string[]>();
+    for (const addition of additions) {
+      byPolicy.set(addition.policy, [
+        ...(byPolicy.get(addition.policy) ?? []),
+        lineOf(addition),
+      ]);
+    }
+    for (const [policy, lines] of byPolicy) {
+      const part =
+        byPolicy.size > 1 ? `, the ${ordinal(policy)} in its header` : "";
+      groups.push({ label: `${POLICY_WORDS[source]}${part}`, lines });
+    }
+  }
+  const [first, second, ...rest] = groups;
+  const same =
+    first !== undefined &&
+    second !== undefined &&
+    rest.length === 0 &&
+    first.lines.join("\n") === second.lines.join("\n");
+  return same ? [{ label: "the site's policy", lines: first.lines }] : groups;
+}
+
+/**
+ * A finding's message as the start of a line: capitalised, unless it starts
+ * with an address, which is shown as written.
+ */
 function sentence(message: string): string {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(message)) return message;
   return message.charAt(0).toUpperCase() + message.slice(1);
 }
 
@@ -591,7 +655,7 @@ function PolicyFindings({
   const [understood, setUnderstood] = useState(false);
   const understoodId = useId();
   const findings = findingsOf(checked);
-  const additions = additionsOf(checked);
+  const allow = allowGroupsOf(checked);
   return (
     <div className="space-y-3">
       <div className="rounded-lg border border-l-4 border-l-warning p-4">
@@ -609,7 +673,7 @@ function PolicyFindings({
               key={`${finding.slot}-${finding.index}-${finding.directive}-${finding.message}`}
               className="flex flex-wrap gap-x-3 gap-y-0.5 py-2"
             >
-              <span className="w-32 shrink-0 text-muted-foreground">
+              <span className="w-40 shrink-0 text-muted-foreground">
                 {finding.slot === "head" ? "Head" : "End of body"},{" "}
                 {ordinal(finding.index)} element
               </span>
@@ -623,7 +687,21 @@ function PolicyFindings({
             </li>
           ))}
         </ul>
-        {additions.length === 0 ? null : <ToAllow additions={additions} />}
+        {allow.length === 0 ? null : (
+          <div className="mb-3 space-y-2 rounded-md bg-muted p-3 text-sm text-muted-foreground">
+            {allow.map(group => (
+              <ToAllow key={group.label} group={group} />
+            ))}
+            <a
+              href={SITE_CODE_POLICY_DOCS_HREF}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-block font-medium text-foreground underline underline-offset-4"
+            >
+              How site code and your policy work
+            </a>
+          </div>
+        )}
         <div className="flex items-start gap-2 text-sm">
           <Checkbox
             id={understoodId}
@@ -660,15 +738,9 @@ function PolicyFindings({
 }
 
 /** "To allow it, add to the site's policy: …", with a Copy button. */
-function ToAllow({
-  additions,
-}: {
-  additions: readonly CspAddition[];
-}): JSX.Element {
+function ToAllow({ group }: { group: AllowGroup }): JSX.Element {
   const [copied, setCopied] = useState(false);
-  const lines = additions.map(
-    ({ directive, sources }) => `${directive} ${sources.join(" ")}`
-  );
+  const { lines } = group;
   const copy = (): void => {
     void navigator.clipboard?.writeText(lines.join("; ")).then(
       () => setCopied(true),
@@ -676,18 +748,18 @@ function ToAllow({
     );
   };
   return (
-    <div className="mb-3 rounded-md bg-muted p-3 text-sm text-muted-foreground">
+    <div>
       <div className="mb-1.5 flex items-center justify-between gap-3">
         <span>
           <strong className="font-medium text-foreground">To allow it,</strong>{" "}
-          {"add to the site's policy:"}
+          add to {group.label}:
         </span>
         <Button
           type="button"
           variant="ghost"
           size="sm"
           onClick={copy}
-          aria-label={copied ? "Copied" : "Copy what to add"}
+          aria-label={copied ? "Copied" : `Copy what to add to ${group.label}`}
         >
           {copied ? (
             <Check className="size-4" aria-hidden="true" />
@@ -700,20 +772,12 @@ function ToAllow({
       <ul className="space-y-1">
         {lines.map(line => (
           <li key={line}>
-            <code className="break-all rounded bg-background px-1 py-0.5 font-mono text-xs text-foreground">
+            <code className="break-words rounded bg-background px-1 py-0.5 font-mono text-xs text-foreground">
               {line}
             </code>
           </li>
         ))}
       </ul>
-      <a
-        href={SITE_CODE_POLICY_DOCS_HREF}
-        target="_blank"
-        rel="noreferrer"
-        className="mt-2 inline-block text-primary underline-offset-4 hover:underline"
-      >
-        How site code and your policy work
-      </a>
     </div>
   );
 }
@@ -796,17 +860,21 @@ function Actions({
 }): JSX.Element {
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        {hint === undefined ? null : (
-          <span className="mr-auto text-xs text-muted-foreground">{hint}</span>
-        )}
-        {working ? (
-          <Loader2
-            className="size-4 animate-spin text-muted-foreground"
-            aria-label="Checking"
-          />
-        ) : null}
-        {children}
+      {/* The hint takes what room is left and wraps; the buttons stay
+          together on its line. */}
+      <div className="flex items-center gap-4">
+        <span className="min-w-0 flex-1 text-xs text-muted-foreground">
+          {hint}
+        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          {working ? (
+            <Loader2
+              className="size-4 animate-spin text-muted-foreground"
+              aria-label="Checking"
+            />
+          ) : null}
+          {children}
+        </div>
       </div>
       {problem === null ? null : (
         <p role="alert" className="text-right text-sm text-destructive">

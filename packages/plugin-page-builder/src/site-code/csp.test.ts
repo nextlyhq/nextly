@@ -784,14 +784,23 @@ describe("adding what site code needs to a policy", () => {
     // script-src-elem is new, so it comes whole; img-src gains one URL.
     expect(siteCodePolicyAdditions(policy, facts)).toEqual([
       {
+        policy: 0,
         directive: "img-src",
         sources: ["https://t.example/p.gif"],
       },
       {
+        policy: 0,
         directive: "script-src-elem",
         sources: ["'self'", "https://cdn.example", await loaderHash()],
       },
     ]);
+    // Each of a header's policies is given its own: the second already
+    // allows images from anywhere, so it gains no img-src.
+    expect(
+      siteCodePolicyAdditions(`${policy}, img-src *`, facts).map(
+        ({ policy: which, directive }) => `${which} ${directive}`
+      )
+    ).toEqual(["0 img-src", "0 script-src-elem"]);
     expect(
       siteCodePolicyAdditions("default-src * 'unsafe-inline'", facts)
     ).toEqual([]);

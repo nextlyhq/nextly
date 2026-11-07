@@ -267,14 +267,10 @@ export function SettingsDialog({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {leave.discarding === "code"
-                ? "Discard your code changes?"
-                : "Discard your breakpoint changes?"}
+              {DISCARD_WORDS[leave.discarding].title}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {leave.discarding === "code"
-                ? "They have not been saved. The site keeps the code it has."
-                : "They have not been saved. The site keeps the breakpoints it has."}
+              {DISCARD_WORDS[leave.discarding].description}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -289,8 +285,35 @@ export function SettingsDialog({
   );
 }
 
+/** What leaving would discard, and how the question says so. */
+const DISCARD_WORDS = {
+  breakpoints: {
+    title: "Discard your breakpoint changes?",
+    description:
+      "They have not been saved. The site keeps the breakpoints it has.",
+  },
+  code: {
+    title: "Discard your code changes?",
+    description: "They have not been saved. The site keeps the code it has.",
+  },
+  both: {
+    title: "Discard your breakpoint and code changes?",
+    description:
+      "Neither has been saved. The site keeps the breakpoints and the code it has.",
+  },
+} as const;
+
 /** A way out of the breakpoint editor: closing Settings, or another tab. */
 type Leave = { kind: "close" } | { kind: "tab"; to: string };
+
+/** Which drafts leaving would discard. */
+function discardingOf(
+  breakpoints: boolean,
+  code: boolean
+): keyof typeof DISCARD_WORDS {
+  if (breakpoints && code) return "both";
+  return code ? "code" : "breakpoints";
+}
 
 /**
  * Leaving the Site tab while its breakpoints or its code are being edited
@@ -323,8 +346,9 @@ function useLeaveGuard(onOpenChange: (open: boolean) => void, open: boolean) {
   return {
     tab,
     asking: pending !== null,
-    // What a discard would throw away: the code's draft, else breakpoints'.
-    discarding: editingCode ? ("code" as const) : ("breakpoints" as const),
+    // What a discard would throw away: both drafts where both are open, as a
+    // breakpoint draft stays while the code is open over it.
+    discarding: discardingOf(editing, editingCode),
     setEditing,
     setSaving,
     setEditingCode,

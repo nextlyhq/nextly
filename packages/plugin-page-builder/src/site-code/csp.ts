@@ -1069,6 +1069,11 @@ function loadNeeds(
 
 /** The sources one directive of a policy needs for site code to run. */
 export interface CspAddition {
+  /**
+   * Which of the header's policies it is for, from 0: a header may carry
+   * several, comma-separated, and each is enforced on its own.
+   */
+  readonly policy: number;
   readonly directive: string;
   readonly sources: readonly string[];
 }
@@ -1077,7 +1082,9 @@ export interface CspAddition {
  * What `mergeSiteCodeIntoCsp` adds to a policy, per directive: the sources a
  * directive lacks, or the directive whole where the policy doesn't name it
  * yet, as it must then be added. Read from the merge itself, so what a person
- * is told to add is exactly what the merge would.
+ * is told to add is exactly what the merge would. Each of a header's policies
+ * is given its own, since adding one policy's needs to another would widen
+ * it for nothing.
  */
 export function siteCodePolicyAdditions(
   header: string,
@@ -1089,21 +1096,20 @@ export function siteCodePolicyAdditions(
     siteOrigin: facts.siteOrigin,
     nonce: elementNonce(options.siteNonce, policies),
   };
-  const added = new Map<string, readonly string[]>();
-  for (const parsed of policies) {
-    for (const [directive, sources] of mergedPolicy(parsed, facts, context)) {
-      const had = parsed.get(directive);
-      const fresh =
-        had === undefined
-          ? sources
-          : sources.filter(source => !had.includes(source));
-      if (fresh.length === 0) continue;
-      added.set(directive, [
-        ...new Set([...(added.get(directive) ?? []), ...fresh]),
-      ]);
-    }
-  }
-  return [...added].map(([directive, sources]) => ({ directive, sources }));
+  return policies.flatMap((parsed, policy) =>
+    [...mergedPolicy(parsed, facts, context)].flatMap(
+      ([directive, sources]) => {
+        const had = parsed.get(directive);
+        const fresh =
+          had === undefined
+            ? sources
+            : sources.filter(source => !had.includes(source));
+        return fresh.length === 0
+          ? []
+          : [{ policy, directive, sources: fresh }];
+      }
+    )
+  );
 }
 
 /**

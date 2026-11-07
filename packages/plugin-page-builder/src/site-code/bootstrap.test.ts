@@ -6,7 +6,7 @@
  *
  * @module site-code/bootstrap.test
  */
-import { JSDOM, VirtualConsole } from "jsdom";
+import { JSDOM, ResourceLoader, VirtualConsole } from "jsdom";
 import { describe, expect, it } from "vitest";
 
 import { CANVAS_MOUNT_ATTRIBUTE } from "../canvas/attributes";
@@ -169,6 +169,60 @@ describe("the loader, in order and kept out of the admin", () => {
       "head library",
       "body",
     ]);
+  });
+
+  it("waits on no nomodule script where modules run, which is never fetched there", async () => {
+    // A loader that never answers for the legacy bundle, as a module-capable
+    // browser never fetches it: no load or error ever comes.
+    class NeverForLegacy extends ResourceLoader {
+      override fetch(
+        url: string,
+        options: Parameters<ResourceLoader["fetch"]>[1]
+      ) {
+        if (url.includes("legacy")) {
+          return Object.assign(new Promise<Buffer>(() => undefined), {
+            abort: () => undefined,
+          });
+        }
+        return super.fetch(url, options);
+      }
+    }
+    const head = JSON.stringify({
+      slot: "head",
+      skip: ["/admin"],
+      entries: [
+        {
+          tag: "script",
+          attrs: { src: "https://cdn.example/legacy.js", nomodule: "" },
+        },
+      ],
+    });
+    const body = JSON.stringify({
+      slot: "body",
+      skip: ["/admin"],
+      entries: [{ tag: "script", attrs: {}, text: "window.ran = ['body']" }],
+    });
+    const dom = new JSDOM(
+      `<!doctype html><html><head><script type="application/json" ${SITE_CODE_DATA_ATTRIBUTE}="head">${head}</script><script>${SITE_CODE_BOOTSTRAP}</script></head><body><script type="application/json" ${SITE_CODE_DATA_ATTRIBUTE}="body">${body}</script><script>${SITE_CODE_BOOTSTRAP}</script></body></html>`,
+      {
+        url: "https://acme.example/",
+        runScripts: "dangerously",
+        resources: new NeverForLegacy(),
+        // A browser that runs modules has noModule on its scripts.
+        beforeParse: window => {
+          Object.defineProperty(
+            window.HTMLScriptElement.prototype,
+            "noModule",
+            {
+              configurable: true,
+              get: () => false,
+            }
+          );
+        },
+      }
+    );
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect((dom.window as unknown as { ran?: string[] }).ran).toEqual(["body"]);
   });
 
   it("loads the admin afresh when the page moves into it within the app", async () => {

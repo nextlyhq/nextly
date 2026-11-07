@@ -454,6 +454,27 @@ describe("the Settings dialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("asks before closing over unsaved code, naming a breakpoint draft kept under it too", async () => {
+    const onOpenChange = show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Edit breakpoints" })
+    );
+    // The code opens over the breakpoint draft, which stays.
+    await userEvent.click(screen.getByRole("button", { name: "Add code" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Head" }), {
+      target: { value: "<script>a()</script>" },
+    });
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    const ask = await screen.findByRole("alertdialog");
+    expect(ask.textContent).toContain(
+      "Discard your breakpoint and code changes?"
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
   it("changes the default Layout at once, and says Saved", async () => {
     show();
     await userEvent.click(screen.getByRole("tab", { name: "Site" }));

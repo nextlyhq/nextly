@@ -28,6 +28,10 @@ const refetch = vi.fn();
 /** Each write's body, in order: dry runs and saves alike. */
 const writes: Record<string, unknown>[] = [];
 let checkAnswer: SiteCodeChecked;
+/** Whether the read is being refreshed. */
+let refreshing = false;
+/** Holds every write until released, to look at the section mid-check. */
+let held: Promise<void> | null = null;
 let saveAnswer: SiteCodeSaved;
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
@@ -35,11 +39,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     data: codeRead,
     pending: false,
     error: null,
-    fetching: false,
+    fetching: refreshing,
     refetch,
   }),
   writePluginRoute: async ({ body }: { body: Record<string, unknown> }) => {
     writes.push(body);
+    if (held !== null) await held;
     return {
       message: "",
       item: body.dryRun === true ? checkAnswer : saveAnswer,
@@ -89,6 +94,8 @@ beforeEach(() => {
   fetched.length = 0;
   refetch.mockClear();
   livePolicy = null;
+  refreshing = false;
+  held = null;
   checkAnswer = unchecked;
   saveAnswer = { ...unchecked, version: "rev-2" };
   vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
@@ -250,6 +257,7 @@ describe("the site's code in Settings", () => {
           },
           additions: [
             {
+              policy: 0,
               directive: "script-src-elem",
               sources: ["'self'", "https://www.googletagmanager.com/gtag/js"],
             },
@@ -294,7 +302,16 @@ describe("the site's code in Settings", () => {
     const add =
       "script-src-elem 'self' https://www.googletagmanager.com/gtag/js";
     expect(screen.getByText(add)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Copy what to add" }));
+    expect(
+      screen.getByText("add to the policy this site declares:", {
+        exact: false,
+      })
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Copy what to add to the policy this site declares",
+      })
+    );
     await waitFor(() => expect(clipboard).toHaveBeenCalledWith(add));
     const saveAnyway = screen.getByRole("button", { name: "Save anyway" });
     expect((saveAnyway as HTMLButtonElement).disabled).toBe(true);
@@ -378,5 +395,91 @@ describe("the site's code in Settings", () => {
       (screen.getByRole("textbox", { name: "Head" }) as HTMLTextAreaElement)
         .value
     ).toBe("<script>a()</script>");
+  });
+
+  it("keeps the text as it was checked while the check is in flight", async () => {
+    let release = (): void => undefined;
+    held = new Promise(resolve => {
+      release = resolve;
+    });
+    show();
+    editHead("<script>a()</script>");
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    const head = screen.getByRole("textbox", { name: "Head" });
+    expect((head as HTMLTextAreaElement).readOnly).toBe(true);
+    release();
+    await screen.findByText(/^No security policy is known/);
+  });
+
+  it("opens the code only once a refreshing read has answered", () => {
+    refreshing = true;
+    show();
+    const add = screen.getByRole("button", { name: "Add code" });
+    expect((add as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(add);
+    expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("keeps each policy's additions apart, and gives the same advice once", async () => {
+    const blocked = (source: "declared" | "live", sources: string[]) => ({
+      source,
+      check: {
+        checked: true as const,
+        findings: [
+          {
+            slot: "head" as const,
+            index: 0,
+            directive: "script-src",
+            message: "https://cdn.example is blocked for scripts",
+            level: "error" as const,
+          },
+        ],
+      },
+      additions: [{ policy: 0, directive: "script-src-elem", sources }],
+    });
+    checkAnswer = {
+      head: judged(1),
+      body: judged(0),
+      csp: [
+        blocked("declared", ["'self'", "https://cdn.example/a.js"]),
+        blocked("live", ["https:", "https://cdn.example/a.js"]),
+      ],
+      cspKey: "sha256-k",
+    };
+    show();
+    editHead('<script src="https://cdn.example/a.js"></script>');
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    // Each policy's line under its own name: never 'self' and https: merged.
+    expect(
+      await screen.findByText("script-src-elem 'self' https://cdn.example/a.js")
+    ).toBeTruthy();
+    expect(
+      screen.getByText("script-src-elem https: https://cdn.example/a.js")
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: "Copy what to add to the policy the site sends",
+      })
+    ).toBeTruthy();
+    cleanup();
+    checkAnswer = {
+      ...checkAnswer,
+      csp: [
+        blocked("declared", ["https://cdn.example/a.js"]),
+        blocked("live", ["https://cdn.example/a.js"]),
+      ],
+    };
+    show();
+    editHead('<script src="https://cdn.example/a.js"></script>');
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    expect(
+      await screen.findByRole("button", {
+        name: "Copy what to add to the site's policy",
+      })
+    ).toBeTruthy();
+    expect(
+      screen.getAllByRole("button", { name: /^Copy what to add/ })
+    ).toHaveLength(1);
   });
 });
