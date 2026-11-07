@@ -64,13 +64,13 @@ function bindingFor(option: FieldOption, kept: Binding | undefined): Binding {
       source: "single",
       sourceKey: source.sourceKey,
       ...fallback,
-    } as Binding;
+    };
   }
   return {
     $bind: option.path,
     ...(source.source === "entry" ? {} : { source: source.source }),
     ...fallback,
-  } as Binding;
+  };
 }
 
 /** The binding with `fallback` as its fallback; none when it is empty. */
@@ -82,7 +82,7 @@ function withFallback(binding: Binding, fallback: string): Binding {
 }
 
 /** A source's name as the chip and the picker say it: "This post", "Site". */
-export function sourceName(source: BindingFieldSource): string {
+function sourceName(source: BindingFieldSource): string {
   return source.binding.source === "entry"
     ? `This ${source.label.toLowerCase()}`
     : source.label;
@@ -93,7 +93,7 @@ export function sourceName(source: BindingFieldSource): string {
  * group, in the order the picker lists them. A relation or group whose own
  * value does not fit is not offered itself, only what is inside it.
  */
-export function fittingOptions(
+function fittingOptions(
   sources: readonly BindingFieldSource[],
   prop: EditableProp
 ): readonly FieldOption[] {
