@@ -374,7 +374,7 @@ describe("a save stored over someone else's change", () => {
     });
     expect(toasts.warning).toHaveLength(1);
     expect(toasts.warning[0]?.message).toBe(
-      "Sam changed My card while you were editing. Your value was kept. Undo puts theirs back."
+      "Sam changed card while you were editing. Your value was kept. Undo puts theirs back."
     );
     expect(toasts.warning[0]?.options?.action?.label).toBe("Reload");
     toasts.warning[0]?.options?.action?.onClick();

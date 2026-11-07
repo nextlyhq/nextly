@@ -232,8 +232,25 @@ describe("naming an entry", () => {
     expect(entryLabel("classes", conflict)).toBe("Promo card");
     const bare = { id: "c1", slug: "card", styles: {} };
     expect(
-      entryLabel("classes", { ...conflict, mine: bare, theirs: bare })
+      entryLabel("classes", {
+        ...conflict,
+        base: bare,
+        mine: bare,
+        theirs: bare,
+      })
     ).toBe("card");
+    // A rename both made names the style as both started from it.
+    expect(
+      entryLabel("classes", {
+        ...conflict,
+        mine: { ...card, label: "Mine" },
+        theirs: { ...card, label: "Theirs" },
+      })
+    ).toBe("Promo card");
+    // One only mine holds is named as mine has it.
+    expect(
+      entryLabel("classes", { ...conflict, base: undefined, theirs: undefined })
+    ).toBe("Promo card");
   });
 
   it("names a font by its family, once for several of its faces", () => {

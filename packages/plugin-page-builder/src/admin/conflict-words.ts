@@ -107,15 +107,16 @@ function labelsByKind(
 /**
  * An entry by the name the author sees it under: a variable's display
  * label, a shared style's label or class name, a font's family, a token
- * setting in words. Read from mine first, as the author last saw it, then
- * theirs, then the base; the stored key when none of them names it.
+ * setting in words. Read from the base first, the name both sides started
+ * from (so a rename both made names the entry as it was, not as either
+ * side left it), then mine, then theirs; the stored key when none names it.
  */
 export function entryLabel(
   section: MergeableSection,
   entry: EntryConflict
 ): string {
   if (entry.setting) return SETTING_LABELS[entry.key] ?? entry.key;
-  for (const side of [entry.mine, entry.theirs, entry.base]) {
+  for (const side of [entry.base, entry.mine, entry.theirs]) {
     const label = sideLabel(section, side);
     if (label !== undefined) return label;
   }
