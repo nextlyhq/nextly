@@ -3047,8 +3047,12 @@ export const pageBuilder = (
                 tx,
                 templatesSlug,
                 {
+                  // Published ones only, filtered by the database: a draft
+                  // design keeps no address, so reading and locking it would
+                  // only slow the write. Each row is still compared exactly.
                   where: {
                     [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection },
+                    status: { equals: "published" },
                   },
                   pagination: { limit: 500, page },
                   // A unique order, so no design moves between pages.
