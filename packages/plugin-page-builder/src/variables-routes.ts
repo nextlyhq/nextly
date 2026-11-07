@@ -104,11 +104,11 @@ import {
   type SharedStyleUsageSource,
   type UsageReason,
 } from "./shared-styles-routes";
-import { resolveSiteStyle, type SiteStyleData } from "./site-style";
-import { readSiteStyleRecord } from "./site-style-record";
+import type { SiteStyleData } from "./site-style";
 import {
   SITE_STYLE_SLUG,
   VARIABLE_REMOVE_WRITE_CONTEXT,
+  sharedStylesOverCode,
   storedVariables,
   suppliedVariableIds,
   type NamedVariable,
@@ -152,8 +152,12 @@ export interface VariableUseSources {
   readonly stillUsed: StillUsedVariables;
 }
 
-/** The reasons the site's shared styles give against removing each variable. */
-function sharedStyleReasons(
+/**
+ * The reasons the site's shared styles give against removing each variable:
+ * the one reading both the in-use check here and the site style's write
+ * under the composition graph lock (`site-style-removal-lock`) refuse by.
+ */
+export function sharedStyleReasons(
   removable: readonly NamedVariable[],
   classes: readonly unknown[]
 ): UsageReason[] {
@@ -549,10 +553,9 @@ export function mergedSharedStyles(
   doc: unknown,
   defaults: SiteStyleData | undefined
 ): readonly unknown[] {
-  const stored = readSiteStyleRecord({
-    classes: storedDocument(doc).classes,
-  });
-  return resolveSiteStyle(defaults, stored).classes ?? [];
+  // The section's one reading, which the Single's guards and its write under
+  // the lock merge by too.
+  return sharedStylesOverCode(defaults, storedDocument(doc).classes);
 }
 
 /** The site-style Single's document as the remove route reads it. */

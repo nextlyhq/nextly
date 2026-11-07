@@ -1,11 +1,8 @@
 import {
   allBlocks,
   createNamedQueryRegistry,
-  breakpointContexts,
   DEFAULT_LIMITS,
   namedQueryDeclaration,
-  resolveSiteTokens,
-  tokenIdentity,
   type DocumentLimits,
   type NamedClass,
   type NamedQueryDefinition,
@@ -22,6 +19,7 @@ import {
   definePlugin,
   NextlyError,
   type HookContext,
+  type PluginCollectionTransaction,
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
   type PluginCollectionView,
@@ -227,7 +225,6 @@ import {
   pageBuilderSchema,
   pageBuilderSchemaPlugin,
 } from "./schema/definition";
-import { stoppedBy } from "./shared-style-rescan";
 import {
   LOCK_SHARED_STYLES_DECLARATION,
   firstReadableTitle,
@@ -248,6 +245,7 @@ import {
   type PageBuilderSiteCodeOptions,
 } from "./site-code/route";
 import { siteCodeSingle } from "./site-code/storage";
+import { siteDefinitionsOfDocument } from "./site-definitions";
 import {
   resolveFontOptions,
   type PageBuilderFontOptions,
@@ -267,13 +265,21 @@ import {
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
 import { siteStyleExpiry } from "./site-style-expiry";
-import { referableClassIds } from "./site-style-record";
-import { registerSiteStyleRemovalLock } from "./site-style-removal-lock";
-import { blocksSurvey, siteStyleRoute } from "./site-style-route";
 import {
-  loadSiteStyle,
+  registerSiteStyleRemovalLock,
+  type SiteStyleRemovalLockSetup,
+} from "./site-style-removal-lock";
+import {
+  blocksSurvey,
+  collectionsTheBuilderOpens,
+  siteLocales as siteLocalesOf,
+  singlesTheBuilderOpens,
+  siteStyleRoute,
+} from "./site-style-route";
+import {
   readStoredSiteStyleVersioned,
   SITE_STYLE_SLUG,
+  siteStyleOfDocument,
   siteStyleSingle,
   suppliedVariableIds,
   type VariablesInUseCheck,
@@ -293,6 +299,7 @@ import {
 } from "./spacing-mode-reader";
 import { spacingModeRoute } from "./spacing-mode-route";
 import { spacingModeStore, type SpacingModeStore } from "./spacing-mode-store";
+import { storedDocumentsOnTransaction } from "./stored-documents-on-transaction";
 import { templateActionsRoute } from "./templates/template-actions-route";
 import {
   registerTemplateGuard,
@@ -1185,6 +1192,81 @@ function installHoldsFor(
   });
 }
 
+/** The context the plugin's `init` is handed. */
+type InitContext = Parameters<
+  NonNullable<Parameters<typeof definePlugin>[0]["init"]>
+>[0];
+
+/**
+ * The Site Style Single's reads a write is judged by: its record as stored,
+ * through the Direct API or on a write's own transaction, and what it
+ * defines, by the one reading of a record (`site-definitions`).
+ */
+function siteStyleReads(
+  ctx: InitContext,
+  defaults: SiteStyleData
+): {
+  documentOn: (transaction: PluginCollectionTransaction) => Promise<unknown>;
+  styleNow: () => Promise<SiteStyleData>;
+  definitions: NonNullable<CompositionSetup["siteDefinitions"]>;
+} {
+  // The Single as the host renamed it.
+  const slug = ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG;
+  // The record as stored now, read through the Direct API when asked.
+  const documentNow = async (): Promise<unknown> => {
+    // Imported at call time, for the reason `defaultLayoutDeps` gives: this
+    // entry reaches a browser bundle, where the Direct API has no place.
+    const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+    const nextly = await getCachedNextly();
+    return nextly.findSingle({ slug });
+  };
+  // On the transaction's own connection, so the read takes no second one
+  // from the pool while the write holds one.
+  const documentOn = (transaction: PluginCollectionTransaction) =>
+    ctx.services.ownCollections.getSingleInTransaction(transaction, slug);
+  return {
+    documentOn,
+    styleNow: async () => siteStyleOfDocument(await documentNow(), defaults),
+    definitions: async transaction =>
+      siteDefinitionsOfDocument(
+        transaction === undefined
+          ? await documentNow()
+          : await documentOn(transaction),
+        defaults
+      ),
+  };
+}
+
+/**
+ * The stored documents a removal walks under the composition graph lock,
+ * read on its write's transaction: the plugin's own reads for the
+ * collections and Singles it declared, the host reads for the others, and
+ * the stored read of the blocks type for each working draft. Which hold a
+ * blocks field is read from the registry, which core reads on no
+ * transaction.
+ */
+function removalDocumentsOn(
+  ctx: InitContext
+): SiteStyleRemovalLockSetup["documentsOn"] {
+  const declared = (slugs: Readonly<Record<string, string | undefined>>) =>
+    new Set(
+      Object.values(slugs).filter((slug): slug is string => slug !== undefined)
+    );
+  const ownCollections = declared(ctx.self.collections);
+  const ownSingles = declared(ctx.self.singles);
+  return write =>
+    storedDocumentsOnTransaction({
+      reads: ctx.services.ownCollections,
+      transaction: write.transaction,
+      readStored: target => write.readStored(BLOCKS_TYPE, target),
+      ownCollections,
+      ownSingles,
+      locales: () => siteLocalesOf(ctx.config),
+      collections: () => collectionsTheBuilderOpens(ctx),
+      singles: () => singlesTheBuilderOpens(ctx),
+    });
+}
+
 /**
  * What the component-delete rewrite reads the installed site through: the
  * live registries, the Direct API (through the SDK, at call time), the
@@ -2018,18 +2100,10 @@ export const pageBuilder = (
           }
         );
       // The site's style as a write is judged against: the code's defaults
-      // and the stored record of the Single as renamed, read when asked.
-      const siteStyleNow = async () => {
-        // Imported at call time, for the reason the readers above give: this
-        // entry reaches a browser bundle, where the Direct API has no place.
-        const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-        const nextly = await getCachedNextly();
-        return loadSiteStyle({
-          nextly: { findSingle: args => nextly.findSingle(args) },
-          defaults: configStyle,
-          slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
-        });
-      };
+      // and the Single's stored record, by the one reading every judgement
+      // uses.
+      const siteStyle = siteStyleReads(ctx, configStyle);
+      const siteStyleNow = siteStyle.styleNow;
       composition = {
         store: {
           // The collection components actually live in, resolved the way the
@@ -2076,33 +2150,9 @@ export const pageBuilder = (
             );
           },
         }),
-        siteDefinitions: async () => {
-          const style = await siteStyleNow();
-          // Imported at call time: it imports `node:async_hooks`, which a
-          // browser bundle reaching this entry cannot resolve.
-          const { withProvisionalTokenIds } = await import(
-            "./transfer/provisional-variables"
-          );
-          return {
-            // Capped and resolved as the compiler reads the library, so a
-            // page may reference exactly the classes it applies.
-            classIds: referableClassIds(style.classes ?? []),
-            // The ones its stylesheet is emitted under.
-            breakpointIds: new Set(
-              breakpointContexts(siteBreakpoints(style)).map(
-                context => context.id
-              )
-            ),
-            // Every tier of variables, as the stylesheet resolves them, so a
-            // page may name exactly the variables it renders with. An
-            // import's judging writes also count the variables it adds, which
-            // the site style holds only once the import applies; no other
-            // write sees any.
-            tokenIds: withProvisionalTokenIds(
-              new Set(resolveSiteTokens(style.tokens).tokens.map(tokenIdentity))
-            ),
-          };
-        },
+        // Through the Direct API for the validation, and on the write's own
+        // transaction for the judgement under the graph lock.
+        siteDefinitions: siteStyle.definitions,
         hostsOf: indexHostFinder({
           rows: () => usageTableRows(ctx.db, usageTableOf(componentUsageIndex)),
           health: () =>
@@ -2184,23 +2234,23 @@ export const pageBuilder = (
       };
       // And every write of the site style dropping a variable or a shared
       // style takes the same lock and reads the stored documents again under
-      // it, so a page cannot commit a first use of what it removes. Read
-      // through the Direct API, by the walks the remove routes' rescans make.
+      // it, so a page cannot commit a first use of what it removes. Read on
+      // the write's own transaction, by the walks the remove routes' rescans
+      // make.
       registerSiteStyleRemovalLock(ctx, {
         suppliedVariables: () => suppliedVariableIds(configStyle),
         // The set the code tier refresh keeps current.
         suppliedClasses: () => configClassIds,
-        // Each walk stops reading once its time has run out.
-        variableUses: (ids, signal) =>
+        defaults: () => configStyle,
+        siteStyleOn: siteStyle.documentOn,
+        documentsOn: removalDocumentsOn(ctx),
+        variableUses: (ids, documents) =>
           variableRemovalChecks({
             ...variableCheckSetup,
-            documents: async () =>
-              stoppedBy(storedDocumentsOf(ctx, await bootedNextly()), signal),
+            documents: () => Promise.resolve(documents),
           }).stillUsed.uses(ids),
-        sharedStyleUses: async (ids, signal) =>
-          storedSharedStyleUses(
-            stoppedBy(storedDocumentsOf(ctx, await bootedNextly()), signal)
-          )(ids),
+        sharedStyleUses: (ids, documents) =>
+          storedSharedStyleUses(documents)(ids),
       });
       seedGraphLock = () =>
         seedCompositionGraphLock(ctx.db, ctx.dialect).catch((error: unknown) =>
@@ -2271,7 +2321,7 @@ export const pageBuilder = (
                 pagesSlug,
                 id
               );
-            return found as unknown as Readonly<Record<string, unknown>>;
+            return found;
           } catch (error) {
             if (NextlyError.isNotFound(error)) return null;
             throw error;

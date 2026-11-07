@@ -72,9 +72,12 @@ const defining = (
   breakpointIds: new Set(),
 });
 
+/** The write's transaction, as the in-transaction phase hands it. */
+const TRANSACTION = { transaction: "the write's own" } as never;
+
 /** The composition's setup, composing nothing, reading `definitions`. */
 const setupReading = (
-  definitions?: () => Promise<SiteDefinitions>
+  definitions?: CompositionSetup["siteDefinitions"]
 ): CompositionSetup => ({
   store: { collection: "components", field: "content" },
   limits: DEFAULT_LIMITS,
@@ -132,6 +135,7 @@ function pageWrite(args: {
       : { originalData: { content: args.original } }),
     context: {},
     db: {} as never,
+    transaction: TRANSACTION,
     readStored,
     fieldPaths: async () => ["content"],
   } as unknown as InTransactionContext & {
@@ -172,6 +176,18 @@ describe("the references a write adds, judged under the lock", () => {
     // for both checks.
     expect(order).toEqual(["lock", "definitions"]);
     expect(definitions).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the definitions on the write's own transaction, which holds the connection", async () => {
+    // Asked with no transaction, the setup reads through the Direct API,
+    // which on a pool of one waits for the connection this write holds.
+    const definitions = vi.fn(async (_transaction?: unknown) => defining());
+    const handler = rejudge(setupReading(definitions));
+    await codesOf(
+      handler(pageWrite({ data: page({ token: "t-gone" }), original: page() }))
+    );
+    expect(definitions).toHaveBeenCalledTimes(1);
+    expect(definitions).toHaveBeenCalledWith(TRANSACTION);
   });
 
   it("refuses a class and a variable added to a blocks field inside a named group", async () => {

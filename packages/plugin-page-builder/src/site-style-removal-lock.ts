@@ -26,25 +26,48 @@
  * early refusal that names a document; this is the one made where nothing can
  * commit in between.
  *
- * ## Read fresh, outside the transaction where there is an outside
+ * ## A shared style's variables, inside the one Single
  *
- * The stored documents are read through the Direct API, as the routes'
- * rescan reads them, not through the write's `db` or `readStored`. On
- * PostgreSQL and MySQL those would read on the write's own transaction, and a
- * Single's write reads at its transaction's isolation: under MySQL's default,
- * REPEATABLE READ, every read answers from the snapshot its first read took,
- * which is before this handler runs, so a page committed after that snapshot
- * and before the lock was taken would be missed. The lock's compare-and-set
- * refuses such a snapshot only when that page wrote the lock row. The Direct
- * API's reads run on pooled connections instead, since this flow's
- * transaction already holds its own (`TransactionFrame.connected`) and the
- * reads hand no executor (`DrizzleAdapter.select` falls back to
- * `getDrizzle()`, the pool's handle), each in a transaction of its own that
- * sees what had committed when it ran. On SQLite the same reads run on the one
- * connection, inside this write's transaction: a plain statement waits for no
- * turn there, only `transaction()` and sessions do, and `BEGIN IMMEDIATE` let
- * this write in only once every other writer had finished, so everything
- * committed is seen.
+ * A shared style naming a variable races its removal inside the Single
+ * itself: a shared-style save adding a `$token` is judged before its
+ * transaction (`site-style-storage`), against the variables as they then
+ * stand. Both are writes of the one row, and every write of a Single locks
+ * its row before it stores anything, so the second waits for the first to
+ * commit; what each is judged against here is `data`, the document as this
+ * write leaves it, built from the row its update stored. So no graph lock is
+ * needed between the two, and none is taken for them:
+ *
+ * - A write whose shared styles ADD a variable the document as it leaves it
+ *   does not define is refused, as the guard before the transaction refuses
+ *   it (`undefinedSharedStyleVariables`), with the same code.
+ * - A write dropping a variable a shared style in that document still names
+ *   is refused as in use, as the remove route's check refuses it
+ *   (`sharedStyleReasons`), before the lock is asked for.
+ *
+ * ## Read on the write's own transaction
+ *
+ * The stored documents are read on this write's transaction, by the same
+ * walk the routes' rescan makes (`stored-documents-on-transaction`), so on a
+ * pool of one connection the read takes none of its own while the write
+ * holds the only one. Per dialect:
+ *
+ * - PostgreSQL and MySQL. Each page of rows, and each row and Single in each
+ *   language, is read with a shared lock (`FOR SHARE`): the latest committed
+ *   rows whatever the transaction's isolation, MySQL's REPEATABLE READ (which
+ *   a Single's write keeps) included, held until this write ends, so a page
+ *   cannot change them before it commits. The working drafts are read without
+ *   a lock, at the transaction's isolation; a draft committed after a
+ *   snapshot this transaction took was written by a page write holding the
+ *   graph lock, so the lock's compare-and-set has refused this write before
+ *   it reads (`composition-graph-lock`).
+ * - SQLite. One connection, on which every read runs inside this write's
+ *   open transaction, which `BEGIN IMMEDIATE` let in only once every other
+ *   writer had finished: everything committed is seen.
+ *
+ * Which collections and Singles hold a blocks field is read from the
+ * registry through the Direct API, since core reads the registry on no
+ * transaction: on a pool of one connection that read waits for the
+ * connection this write holds, and the bound below refuses the removal.
  *
  * ## How long the lock is held
  *
@@ -62,6 +85,7 @@
 import {
   NextlyError,
   type InTransactionContext,
+  type PluginCollectionTransaction,
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
@@ -70,12 +94,25 @@ import {
   holdCompositionGraph,
   isGraphSnapshotRefusal,
 } from "./composition-graph-lock";
-import { refuseStoredUses, type StoredUse } from "./shared-style-rescan";
+import {
+  refuseStoredUses,
+  stoppedBy,
+  type StoredDocuments,
+  type StoredUse,
+} from "./shared-style-rescan";
+import { removalRefusalOf } from "./shared-styles-routes";
+import type { SiteStyleData } from "./site-style";
 import {
   SITE_STYLE_SLUG,
   droppedSharedStyles,
   droppedVariables,
+  sharedStylesOverCode,
+  undefinedSharedStyleVariables,
+  undefinedSharedStyleVariablesRefusal,
+  variableGuardsJudge,
+  type NamedVariable,
 } from "./site-style-storage";
+import { sharedStyleReasons } from "./variables-routes";
 import { readWithinOrRefuse, type UnreadReason } from "./within-time";
 
 /**
@@ -91,6 +128,19 @@ export const REMOVAL_RESCAN_MS = 30_000;
  */
 export const DESIGN_CHANGED = "The design changed while removing. Try again.";
 
+/** The write the removal is judged on, as the in-transaction phase hands it. */
+export type SiteStyleWrite = Pick<
+  InTransactionContext,
+  | "operation"
+  | "data"
+  | "originalData"
+  | "db"
+  | "transaction"
+  | "readStored"
+  | "user"
+  | "context"
+>;
+
 /** What the removal is judged with. */
 export interface SiteStyleRemovalLockSetup {
   /**
@@ -100,19 +150,29 @@ export interface SiteStyleRemovalLockSetup {
   readonly suppliedVariables: () => ReadonlySet<string>;
   /** The ids of the shared styles the site's code supplies, likewise. */
   readonly suppliedClasses: () => ReadonlySet<string>;
+  /** The code's site style, which the stored sections resolve over. */
+  readonly defaults: () => SiteStyleData | undefined;
   /**
-   * Every stored document still naming any of the variables, read through
-   * the Direct API by the walk the remove route's rescan makes. Once `signal`
-   * is aborted (the read's time ran out), the walk makes no further read.
+   * The Single's document as stored, read on the write's transaction: the
+   * section a written document does not carry is the stored one.
+   */
+  readonly siteStyleOn: (
+    transaction: PluginCollectionTransaction
+  ) => Promise<unknown>;
+  /** The stored documents, read on the write's own transaction. */
+  readonly documentsOn: (write: SiteStyleWrite) => StoredDocuments;
+  /**
+   * Every stored document in `documents` still naming any of the variables,
+   * by the walk the remove route's rescan makes.
    */
   readonly variableUses: (
     ids: readonly string[],
-    signal: AbortSignal
+    documents: StoredDocuments
   ) => Promise<readonly StoredUse[]>;
   /** Every stored document still applying any of the shared styles, likewise. */
   readonly sharedStyleUses: (
     ids: readonly string[],
-    signal: AbortSignal
+    documents: StoredDocuments
   ) => Promise<readonly StoredUse[]>;
 }
 
@@ -133,29 +193,26 @@ export function registerSiteStyleRemovalLock(
 
 /**
  * Refuse a write of the site style that drops a variable or a shared style a
- * stored document still uses, read under the lock. A write dropping neither
- * takes no lock and reads nothing: what it drops is compared from the two
- * stored forms in hand.
+ * stored document still uses, read under the lock, or whose shared styles
+ * add or keep a variable the document as it leaves it does not define. A
+ * write dropping neither takes no lock and reads no document: what it drops
+ * is compared from the two stored forms in hand.
  */
 export async function refuseRemovalsInUse(
-  write: Pick<
-    InTransactionContext,
-    "operation" | "data" | "originalData" | "db"
-  >,
+  write: SiteStyleWrite,
   setup: SiteStyleRemovalLockSetup,
   dialect: PluginContext["dialect"]
 ): Promise<void> {
   const data = write.data;
   if (write.operation !== "update" || data === undefined) return;
   const before = write.originalData;
+  const section = sectionAfter(write, setup);
+  await refuseUndefinedSharedStyleVariables(write, setup, section);
   // A section the written document does not carry is one the write left.
-  const variables = Object.hasOwn(data, "tokens")
-    ? droppedVariables(
-        before?.tokens,
-        data.tokens,
-        setup.suppliedVariables()
-      ).map(variable => variable.id)
+  const dropped = Object.hasOwn(data, "tokens")
+    ? droppedVariables(before?.tokens, data.tokens, setup.suppliedVariables())
     : [];
+  const variables = dropped.map(variable => variable.id);
   const classes = Object.hasOwn(data, "classes")
     ? droppedSharedStyles(
         before?.classes,
@@ -164,6 +221,9 @@ export async function refuseRemovalsInUse(
       )
     : [];
   if (variables.length === 0 && classes.length === 0) return;
+  // Judged from the Single as this write leaves it, before the lock: no
+  // other document is asked, and no page can change it.
+  await refuseVariablesSharedStylesName(dropped, setup, section);
 
   // The lock first, then the read: what the read sees is everything a page
   // write holding the lock before this one committed.
@@ -185,12 +245,20 @@ export async function refuseRemovalsInUse(
     });
   }
   const found = await readWithinOrRefuse(
-    async signal => ({
-      variables:
-        variables.length > 0 ? await setup.variableUses(variables, signal) : [],
-      classes:
-        classes.length > 0 ? await setup.sharedStyleUses(classes, signal) : [],
-    }),
+    async signal => {
+      // Each walk stops reading once its time has run out.
+      const documents = stoppedBy(setup.documentsOn(write), signal);
+      return {
+        variables:
+          variables.length > 0
+            ? await setup.variableUses(variables, documents)
+            : [],
+        classes:
+          classes.length > 0
+            ? await setup.sharedStyleUses(classes, documents)
+            : [],
+      };
+    },
     REMOVAL_RESCAN_MS,
     designChanged
   );
@@ -210,6 +278,86 @@ export async function refuseRemovalsInUse(
       "classIds"
     );
   }
+}
+
+/** One section of the Single as this write leaves it. */
+type SectionAfter = (name: "tokens" | "classes") => Promise<unknown>;
+
+/**
+ * The Single's sections as this write leaves them: the written document's,
+ * which the in-transaction phase builds from the row the update stored, so
+ * it holds what a write committed before this one got the Single's row lock.
+ * A section the document does not carry is the stored one, read on the
+ * transaction, once, and only when asked.
+ */
+function sectionAfter(
+  write: SiteStyleWrite,
+  setup: SiteStyleRemovalLockSetup
+): SectionAfter {
+  let stored: Promise<unknown> | undefined;
+  return async name => {
+    const data = write.data;
+    if (data !== undefined && Object.hasOwn(data, name)) return data[name];
+    stored ??= setup.siteStyleOn(write.transaction);
+    const doc = await stored;
+    return typeof doc === "object" && doc !== null
+      ? (doc as Record<string, unknown>)[name]
+      : undefined;
+  };
+}
+
+/**
+ * Refuse a write whose shared styles ADD a variable the Single, as this write
+ * leaves it, does not define: the guard before the transaction's judgement
+ * (`sharedStyleVariableGuard`), made again on what the write stored, after
+ * any write it waited for at the Single's row lock committed. A reference the
+ * shared styles held before this write is kept, as there.
+ *
+ * Judged for the writes that guard judges and no others: a write made as
+ * nobody (server code, an import's take-back) is trusted to say what the site
+ * is, as is the variables remove route's own. This phase is not told a
+ * write's principal, so a plugin principal's write with no user counts as
+ * one made as nobody here; the guard before the transaction still judged it.
+ */
+async function refuseUndefinedSharedStyleVariables(
+  write: SiteStyleWrite,
+  setup: SiteStyleRemovalLockSetup,
+  section: SectionAfter
+): Promise<void> {
+  if (!variableGuardsJudge({ user: write.user, context: write.context })) {
+    return;
+  }
+  const added = undefinedSharedStyleVariables(setup.defaults(), {
+    classes: await section("classes"),
+    held: write.originalData?.classes,
+    tokens: await section("tokens"),
+  });
+  if (added.length > 0) throw undefinedSharedStyleVariablesRefusal(added);
+}
+
+/**
+ * Refuse dropping a variable a shared style still names, in the site's
+ * shared styles as this write leaves them (the code's and the stored ones,
+ * merged): the remove route's own reasons and in-use refusal, filed on the
+ * tokens section as the Single's guard files them. Every write is judged, as
+ * every removal under the lock is.
+ */
+async function refuseVariablesSharedStylesName(
+  dropped: readonly NamedVariable[],
+  setup: SiteStyleRemovalLockSetup,
+  section: SectionAfter
+): Promise<void> {
+  if (dropped.length === 0) return;
+  const reasons = sharedStyleReasons(
+    dropped,
+    sharedStylesOverCode(setup.defaults(), await section("classes"))
+  );
+  if (reasons.length === 0) return;
+  throw removalRefusalOf(
+    reasons,
+    { variableIds: dropped.map(variable => variable.id) },
+    () => "tokens"
+  );
 }
 
 /**

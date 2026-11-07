@@ -407,8 +407,7 @@ function variableRemovalGuard(
   return async hook => {
     const data = hook.data;
     if (data === undefined || !Object.hasOwn(data, "tokens")) return;
-    if (hook.user === undefined && hook.principal === undefined) return;
-    if (hook.context?.[VARIABLE_REMOVE_WRITE] === true) return;
+    if (!variableGuardsJudge(hook)) return;
     const dropped = droppedVariables(
       hook.originalData?.tokens,
       data.tokens,
@@ -422,11 +421,41 @@ function variableRemovalGuard(
     const classes = Object.hasOwn(data, "classes")
       ? data.classes
       : hook.originalData?.classes;
-    await inUse(
-      dropped,
-      resolveSiteStyle(defaults, readSiteStyleRecord({ classes })).classes ?? []
-    );
+    await inUse(dropped, sharedStylesOverCode(defaults, classes));
   };
+}
+
+/**
+ * Whether the variable guards judge a write of this Single: not one made as
+ * nobody (server code, an import's take-back), which is trusted to say what
+ * the site is, and not the variables remove route's own, which has just made
+ * its check. One predicate, so the guards before the transaction and the
+ * judgement inside it (`site-style-removal-lock`) trust the same writes.
+ */
+export function variableGuardsJudge(hook: {
+  user?: unknown;
+  principal?: unknown;
+  context?: Readonly<Record<string, unknown>>;
+}): boolean {
+  if (hook.user === undefined && hook.principal === undefined) return false;
+  return hook.context?.[VARIABLE_REMOVE_WRITE] !== true;
+}
+
+/**
+ * The site's shared styles as the compiler merges them, the code's and the
+ * stored section `classes` (as stored or as written; SQLite hands it back as
+ * text), in that order.
+ */
+export function sharedStylesOverCode(
+  defaults: SiteStyleData | undefined,
+  classes: unknown
+): readonly unknown[] {
+  return (
+    resolveSiteStyle(
+      defaults,
+      readSiteStyleRecord({ classes: readStoredJson(classes) })
+    ).classes ?? []
+  );
 }
 
 /** Every variable the stored shared styles name, the first entry per id. */
@@ -436,6 +465,50 @@ function sharedStylesVariables(raw: unknown): Set<string> {
     for (const identity of sharedStyleVariables(entry)) found.add(identity);
   }
   return found;
+}
+
+/**
+ * The variables the shared styles `classes` ADD, over the ones `held`
+ * already named, that the site does not define with the tokens section
+ * `tokens`: every tier as the stylesheet resolves them. Both sections as
+ * stored or as written; SQLite hands them back as text. Empty, and the
+ * variables not resolved, where the shared styles name no variable.
+ */
+export function undefinedSharedStyleVariables(
+  defaults: SiteStyleData | undefined,
+  sections: { classes: unknown; held: unknown; tokens: unknown }
+): string[] {
+  const used = sharedStylesVariables(sections.classes);
+  // Nothing named, nothing to resolve: an ordinary class save pays nothing.
+  if (used.size === 0) return [];
+  const defined = new Set(
+    resolveSiteTokens(
+      resolveSiteStyle(
+        defaults,
+        readSiteStyleRecord({ tokens: readStoredJson(sections.tokens) })
+      ).tokens
+    ).tokens.map(tokenIdentity)
+  );
+  return newUndefinedIds(used, defined, sharedStylesVariables(sections.held));
+}
+
+/** The refusal of shared styles naming variables the site does not define. */
+export function undefinedSharedStyleVariablesRefusal(
+  added: readonly string[]
+): NextlyError {
+  return NextlyError.validation({
+    errors: [
+      {
+        path: "classes",
+        code: UNKNOWN_TOKEN_CODE,
+        message: undefinedVariablesMessage(
+          "Shared styles",
+          added,
+          "the shared style"
+        ),
+      },
+    ],
+  });
 }
 
 /**
@@ -466,38 +539,18 @@ function sharedStyleVariableGuard(
   return hook => {
     const data = hook.data;
     if (data === undefined || !Object.hasOwn(data, "classes")) return;
-    if (hook.user === undefined && hook.principal === undefined) return;
-    if (hook.context?.[VARIABLE_REMOVE_WRITE] === true) return;
-    const used = sharedStylesVariables(data.classes);
-    // Nothing named, nothing to resolve: an ordinary class save pays nothing.
-    if (used.size === 0) return;
-    const tokens = Object.hasOwn(data, "tokens")
-      ? data.tokens
-      : hook.originalData?.tokens;
-    const defined = new Set(
-      resolveSiteTokens(
-        resolveSiteStyle(defaults, readSiteStyleRecord({ tokens })).tokens
-      ).tokens.map(tokenIdentity)
-    );
-    const added = newUndefinedIds(
-      used,
-      defined,
-      sharedStylesVariables(hook.originalData?.classes)
-    );
-    if (added.length === 0) return;
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "classes",
-          code: UNKNOWN_TOKEN_CODE,
-          message: undefinedVariablesMessage(
-            "Shared styles",
-            added,
-            "the shared style"
-          ),
-        },
-      ],
+    if (!variableGuardsJudge(hook)) return;
+    // The same judgement the site style's write makes again inside its
+    // transaction (`site-style-removal-lock`).
+    const added = undefinedSharedStyleVariables(defaults, {
+      classes: data.classes,
+      held: hook.originalData?.classes,
+      tokens: Object.hasOwn(data, "tokens")
+        ? data.tokens
+        : hook.originalData?.tokens,
     });
+    if (added.length === 0) return;
+    throw undefinedSharedStyleVariablesRefusal(added);
   };
 }
 
@@ -847,8 +900,38 @@ export async function loadSiteStyleVersioned(
       ? {}
       : { bootedReader: args.bootedReader }),
   });
-  return {
-    style: resolveSiteStyle(args.defaults, readSiteStyleRecord(stored)),
-    rev,
-  };
+  return { style: resolvedSiteStyleOf(stored, args.defaults), rev };
+}
+
+/** The site style a stored record resolves to over the code's defaults. */
+function resolvedSiteStyleOf(
+  stored: StoredSiteStyle,
+  defaults: SiteStyleData | undefined
+): SiteStyleData {
+  return resolveSiteStyle(defaults, readSiteStyleRecord(stored));
+}
+
+/**
+ * The site style the Single's document `doc` resolves to over the code's
+ * defaults, as {@link loadSiteStyle} resolves it, with no spacing model: the
+ * one reading for every judgement of a write against the site's definitions,
+ * whether `doc` was read through the Direct API or on a write's own
+ * transaction. The spacing model changes no class, variable or breakpoint.
+ * Each section is read as stored, SQLite's text included.
+ */
+export function siteStyleOfDocument(
+  doc: unknown,
+  defaults: SiteStyleData | undefined
+): SiteStyleData {
+  const stored = storedSiteStyleOf(doc, null);
+  return resolvedSiteStyleOf(
+    {
+      ...stored,
+      tokens: readStoredJson(stored.tokens) ?? null,
+      fonts: readStoredJson(stored.fonts) ?? null,
+      classes: readStoredJson(stored.classes) ?? null,
+      breakpoints: readStoredJson(stored.breakpoints) ?? null,
+    },
+    defaults
+  );
 }

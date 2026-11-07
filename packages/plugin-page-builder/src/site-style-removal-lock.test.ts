@@ -3,7 +3,9 @@
  * judged under the composition graph lock: what it drops is told from the two
  * stored forms in hand, the lock is taken before the stored documents are
  * read, a use found refuses it as in use, and a read that fails or does not
- * answer refuses it too.
+ * answer refuses it too. A shared style's variables are judged from the
+ * Single as the write leaves it, before any lock: one it adds that the site
+ * does not define, and one a removal drops while a shared style names it.
  *
  * The lock itself is the database's, which the integration suite
  * (`__tests__/site-style-removal-lock.integration.test.ts`) drives with two
@@ -16,7 +18,7 @@ import {
   GRAPH_SNAPSHOT_RACED,
   isGraphSnapshotRefusal,
 } from "./composition-graph-lock";
-import type { StoredUse } from "./shared-style-rescan";
+import type { StoredDocuments, StoredUse } from "./shared-style-rescan";
 import {
   DESIGN_CHANGED,
   REMOVAL_RESCAN_MS,
@@ -63,41 +65,84 @@ const style = (id: string) => ({
 
 const HOME: StoredUse = { kind: "collection", slug: "pages", id: "p1" };
 
-/** A setup whose stored documents use what `used` names. */
+/** The write's transaction, as the in-transaction phase hands it. */
+const TRANSACTION = { transaction: "the write's own" } as never;
+
+/** Stored documents holding nothing, each read recorded. */
+function emptyDocuments(): StoredDocuments {
+  return {
+    collections: async () => {
+      order.push("collections");
+      return [];
+    },
+    singles: async () => [],
+    rowsAfter: async () => ({ items: [], hasNext: false }),
+    rowForms: async () => [],
+    singleForms: async () => [],
+  };
+}
+
+/**
+ * A setup whose stored documents use what `used` names, and whose Single
+ * stores `stored` on the transaction.
+ */
 function setupUsing(
   used: { variables?: StoredUse[]; classes?: StoredUse[] } = {},
-  supplied: { variables?: string[]; classes?: string[] } = {}
+  supplied: { variables?: string[]; classes?: string[] } = {},
+  stored: Record<string, unknown> = {}
 ) {
   const variableUses = vi.fn(
-    async (_ids: readonly string[], _signal: AbortSignal) => {
+    async (_ids: readonly string[], _documents: StoredDocuments) => {
       order.push("variable uses");
       return used.variables ?? [];
     }
   );
   const sharedStyleUses = vi.fn(
-    async (_ids: readonly string[], _signal: AbortSignal) => {
+    async (_ids: readonly string[], _documents: StoredDocuments) => {
       order.push("shared style uses");
       return used.classes ?? [];
     }
   );
+  const siteStyleOn = vi.fn(async (_transaction: unknown) => {
+    order.push("site style");
+    return stored;
+  });
+  const documentsOn = vi.fn((_write: unknown) => emptyDocuments());
   const setup: SiteStyleRemovalLockSetup = {
     suppliedVariables: () => new Set(supplied.variables ?? []),
     suppliedClasses: () => new Set(supplied.classes ?? []),
+    defaults: () => undefined,
+    siteStyleOn,
+    documentsOn,
     variableUses,
     sharedStyleUses,
   };
-  return { setup, variableUses, sharedStyleUses };
+  return { setup, variableUses, sharedStyleUses, siteStyleOn, documentsOn };
 }
 
-/** An update of the Single from `before` to `after`. */
+/** An update of the Single from `before` to `after`, made as `user`. */
 const update = (
   before: Record<string, unknown>,
-  after: Record<string, unknown>
+  after: Record<string, unknown>,
+  user?: { id: string }
 ) => ({
   operation: "update" as const,
   originalData: before,
   data: after,
   db: {} as never,
+  transaction: TRANSACTION,
+  readStored: vi.fn(),
+  context: {},
+  ...(user === undefined ? {} : { user: user as never }),
+});
+
+/** An author: a write made as someone, which the variable guards judge. */
+const AUTHOR = { id: "author" };
+
+/** `id` changed to colour with the variable `token`. */
+const styleUsing = (id: string, token: string) => ({
+  ...style(id),
+  styles: { base: { base: { color: { $token: token } } } },
 });
 
 describe("a site style write dropping a variable or a shared style", () => {
@@ -111,10 +156,7 @@ describe("a site style write dropping a variable or a shared style", () => {
       setup,
       "postgresql"
     );
-    expect(variableUses).toHaveBeenCalledWith(
-      ["t-accent"],
-      expect.any(AbortSignal)
-    );
+    expect(variableUses).toHaveBeenCalledWith(["t-accent"], expect.anything());
     expect(order).toEqual(["lock", "variable uses"]);
   });
 
@@ -161,10 +203,7 @@ describe("a site style write dropping a variable or a shared style", () => {
       publicData: { errors: [{ code: "IN_USE" }] },
       logContext: { classIds: ["c-card"] },
     });
-    expect(sharedStyleUses).toHaveBeenCalledWith(
-      ["c-card"],
-      expect.any(AbortSignal)
-    );
+    expect(sharedStyleUses).toHaveBeenCalledWith(["c-card"], expect.anything());
     // Nothing of the variables was dropped, so nothing of them was read.
     expect(variableUses).not.toHaveBeenCalled();
   });
@@ -255,20 +294,22 @@ describe("a site style write dropping a variable or a shared style", () => {
     });
     await vi.advanceTimersByTimeAsync(REMOVAL_RESCAN_MS);
     await settled;
-    // The walk is told its answer is no longer wanted, so it stops reading.
-    const signal = sharedStyleUses.mock.calls[0]?.[1] as AbortSignal;
-    expect(signal.aborted).toBe(true);
+    // The walk's answer is no longer wanted, so its next read is refused
+    // rather than reaching the database.
+    const documents = sharedStyleUses.mock.calls[0]?.[1] as StoredDocuments;
+    await expect(documents.collections()).rejects.toMatchObject({
+      logContext: { reason: "stored-document-walk-stopped" },
+    });
+    expect(order).not.toContain("collections");
   });
 
-  it("leaves the walk's signal alone when it answers in time", async () => {
-    const { setup, sharedStyleUses } = setupUsing();
-    await refuseRemovalsInUse(
-      update({ classes: [style("c-card")] }, { classes: [] }),
-      setup,
-      "postgresql"
-    );
-    const signal = sharedStyleUses.mock.calls[0]?.[1] as AbortSignal;
-    expect(signal.aborted).toBe(false);
+  it("walks the documents read on the write's own transaction, and lets them read when in time", async () => {
+    const { setup, sharedStyleUses, documentsOn } = setupUsing();
+    const write = update({ classes: [style("c-card")] }, { classes: [] });
+    await refuseRemovalsInUse(write, setup, "postgresql");
+    expect(documentsOn).toHaveBeenCalledWith(write);
+    const documents = sharedStyleUses.mock.calls[0]?.[1] as StoredDocuments;
+    await expect(documents.collections()).resolves.toEqual([]);
   });
 
   it("says a lock refused for an old snapshot in its own words, keeping the cause the routes retry on", async () => {
@@ -327,5 +368,175 @@ describe("a site style write dropping a variable or a shared style", () => {
       "single:brand-style",
       expect.any(Function)
     );
+  });
+});
+
+describe("a site style write's shared styles and the variables they name", () => {
+  it("refuses a shared style adding a variable the Single as written does not define, with the guard's code, taking no lock", async () => {
+    const { setup, siteStyleOn } = setupUsing();
+    await expect(
+      refuseRemovalsInUse(
+        update(
+          {
+            tokens: { tokens: [variable("t-accent"), variable("t-spare")] },
+            classes: [style("c-card")],
+          },
+          // The removal of `t-spare` committed first: the document this write
+          // leaves holds its shared style naming it, and no `t-spare`.
+          {
+            tokens: { tokens: [variable("t-accent")] },
+            classes: [styleUsing("c-card", "t-spare")],
+          },
+          AUTHOR
+        ),
+        setup,
+        "postgresql"
+      )
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [{ path: "classes", code: "unknown-token" }],
+      },
+    });
+    expect(order).toEqual([]);
+    expect(siteStyleOn).not.toHaveBeenCalled();
+  });
+
+  it("reads the variables on the transaction when the written document does not carry them", async () => {
+    const { setup, siteStyleOn } = setupUsing(
+      {},
+      {},
+      {
+        tokens: { tokens: [variable("t-accent")] },
+      }
+    );
+    await expect(
+      refuseRemovalsInUse(
+        update(
+          { classes: [style("c-card")] },
+          { classes: [styleUsing("c-card", "t-spare")] },
+          AUTHOR
+        ),
+        setup,
+        "postgresql"
+      )
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ code: "unknown-token" }] },
+    });
+    expect(siteStyleOn).toHaveBeenCalledWith(TRANSACTION);
+    // CONTROL: the same write is let through where the stored tokens define it.
+    const defined = setupUsing(
+      {},
+      {},
+      {
+        tokens: { tokens: [variable("t-spare")] },
+      }
+    );
+    await refuseRemovalsInUse(
+      update(
+        { classes: [style("c-card")] },
+        { classes: [styleUsing("c-card", "t-spare")] },
+        AUTHOR
+      ),
+      defined.setup,
+      "postgresql"
+    );
+  });
+
+  it("keeps a reference the shared styles held before, and trusts a write made as nobody, as the guard does", async () => {
+    const { setup } = setupUsing();
+    const held = {
+      tokens: { tokens: [variable("t-accent")] },
+      classes: [styleUsing("c-card", "t-gone")],
+    };
+    // Held already: an edit beside it is let through.
+    await refuseRemovalsInUse(
+      update(
+        held,
+        {
+          ...held,
+          classes: [{ ...styleUsing("c-card", "t-gone"), label: "Card" }],
+        },
+        AUTHOR
+      ),
+      setup,
+      "postgresql"
+    );
+    // Added, but made as nobody: trusted, as the guard before the
+    // transaction trusts it.
+    await refuseRemovalsInUse(
+      update(
+        {
+          tokens: { tokens: [variable("t-accent")] },
+          classes: [style("c-card")],
+        },
+        {
+          tokens: { tokens: [variable("t-accent")] },
+          classes: [styleUsing("c-card", "t-gone")],
+        }
+      ),
+      setup,
+      "postgresql"
+    );
+    expect(order).toEqual([]);
+  });
+
+  it("refuses dropping a variable a shared style in the Single as written still names, as in use, before the lock", async () => {
+    const { setup, variableUses } = setupUsing();
+    await expect(
+      refuseRemovalsInUse(
+        // A shared style naming `t-spare` committed first; this write, made
+        // as nobody, drops `t-spare` and leaves that shared style as stored.
+        update(
+          {
+            tokens: { tokens: [variable("t-accent"), variable("t-spare")] },
+            classes: [style("c-card")],
+          },
+          {
+            tokens: { tokens: [variable("t-accent")] },
+            classes: [styleUsing("c-card", "t-spare")],
+          }
+        ),
+        setup,
+        "mysql"
+      )
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          {
+            path: "tokens",
+            code: "IN_USE",
+            message: expect.stringContaining("used by the shared style c-card"),
+          },
+        ],
+      },
+      logContext: { variableIds: ["t-spare"] },
+    });
+    // From the document in hand: no lock, no read of other documents.
+    expect(order).toEqual([]);
+    expect(variableUses).not.toHaveBeenCalled();
+  });
+
+  it("reads the shared styles on the transaction for that check when the written document does not carry them", async () => {
+    const { setup, siteStyleOn } = setupUsing(
+      {},
+      {},
+      {
+        classes: [styleUsing("c-card", "t-spare")],
+      }
+    );
+    await expect(
+      refuseRemovalsInUse(
+        update(
+          { tokens: { tokens: [variable("t-accent"), variable("t-spare")] } },
+          { tokens: { tokens: [variable("t-accent")] } }
+        ),
+        setup,
+        "postgresql"
+      )
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ code: "IN_USE" }] },
+    });
+    expect(siteStyleOn).toHaveBeenCalledWith(TRANSACTION);
   });
 });

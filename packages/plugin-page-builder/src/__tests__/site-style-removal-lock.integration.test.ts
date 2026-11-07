@@ -592,8 +592,12 @@ describe.each(getConfiguredTestDialects())(
     // The shared style's save holds the Single's row lock, its `$token` to
     // `t-spare` stored; the removal, made as nobody, passes its validation
     // against the shared styles as committed, without it, and waits at the
-    // row lock. Once the save commits, the removal is judged under the graph
-    // lock, finds the shared style naming `t-spare`, and is refused whole.
+    // row lock. Once the save commits, the removal stores its tokens on the
+    // row as the save left it, so the document it leaves holds the shared
+    // style naming `t-spare`, and it is refused whole as in use. That is
+    // judged from the document in hand, before the graph lock, so on every
+    // dialect alike: MySQL's snapshot never reaches the lock's
+    // compare-and-set, which refuses a page write's race as a conflict.
     it("refuses removing a variable a shared style saved first starts using, and keeps it", async () => {
       const { t } = await boot();
       const userId = await author(t);
@@ -615,7 +619,7 @@ describe.each(getConfiguredTestDialects())(
       expect(two.status).toBe("rejected");
       expect(
         codesOf(two.status === "rejected" ? two.reason : undefined)
-      ).toEqual(refusedRemoval);
+      ).toEqual(["IN_USE"]);
       expect(await storedIds(t, "tokens")).toEqual(["t-accent", "t-spare"]);
       expect(await storedClasses(t)).toContain("t-spare");
     });

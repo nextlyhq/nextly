@@ -844,7 +844,9 @@ export interface RescanDirectApi
 }
 
 /** The top-level fields a row is read with: the id, and each path's first key. */
-function rescanSelect(paths: readonly string[]): Record<string, boolean> {
+export function rescanSelect(
+  paths: readonly string[]
+): Record<string, boolean> {
   return Object.fromEntries([
     ["id", true],
     ...paths.map(path => [path.split(".")[0] ?? path, true]),
@@ -857,7 +859,9 @@ function rescanSelect(paths: readonly string[]): Record<string, boolean> {
  * one document and its draft. The draft is read whether or not a collection
  * keeps drafts, since the draft read answers nothing where none is surfaced.
  */
-function storedFormsOn(locales: readonly string[]): StoredDocumentForm[] {
+export function storedFormsOn(
+  locales: readonly string[]
+): StoredDocumentForm[] {
   return (locales.length > 0 ? locales : [""]).flatMap(locale => [
     { locale, variant: "published" as const },
     { locale, variant: "draft" as const },
@@ -866,6 +870,16 @@ function storedFormsOn(locales: readonly string[]): StoredDocumentForm[] {
 
 /** The form a list read answers: the default language, without the draft. */
 const LISTED_FORM: StoredDocumentForm = { locale: "", variant: "published" };
+
+/**
+ * Whether `form` is the one a list read already answered, which a row's
+ * other forms leave out rather than read again.
+ */
+export function isListedForm(form: StoredDocumentForm): boolean {
+  return (
+    form.locale === LISTED_FORM.locale && form.variant === LISTED_FORM.variant
+  );
+}
 
 /**
  * The stored documents the builder opens, read as the system: the removal's
@@ -905,11 +919,7 @@ export function storedDocumentsOf(
     rowForms: (type, id) =>
       formsOf(
         { scope: "collection", entity: type.slug, entityKey: id },
-        forms().filter(
-          form =>
-            form.locale !== LISTED_FORM.locale ||
-            form.variant !== LISTED_FORM.variant
-        )
+        forms().filter(form => !isListedForm(form))
       ),
     singleForms: type =>
       formsOf({ scope: "single", entity: type.slug, entityKey: "" }, forms()),

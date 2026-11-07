@@ -31,7 +31,8 @@
  * define, but judges it before the transaction, so a removal committing in
  * between would leave the page holding a first use of something gone. Under
  * the lock the references the write adds are judged again, against the site's
- * definitions read fresh. A removal takes the same lock in the site style's
+ * definitions read then, on the write's own transaction. A removal takes the
+ * same lock in the site style's
  * own write (`site-style-removal-lock`), so the two are judged one after the
  * other: a removal that held the lock first committed before this write got
  * it, and is seen; one that comes after waits, then finds this page.
@@ -203,7 +204,9 @@ async function addedReferenceIssues(
   // Where the site's definitions cannot be read at all, the validation judges
   // no reference either.
   if (read === undefined) return [];
-  const definitions = onceAsked(() => definitionsUnderLock(read));
+  const definitions = onceAsked(() =>
+    definitionsUnderLock(() => read(write.transaction))
+  );
   // As the checks answer them; each names its field and code, normalized below.
   const issues: PluginFieldIssue[] = [];
   for (const path of paths) {
@@ -237,31 +240,27 @@ async function addedReferenceIssues(
  * that fails or does not answer never lets the write through and never holds
  * it open.
  *
- * Read fresh through the Direct API (`siteStyleNow` in the plugin, which
- * caches nothing), and where it runs depends on the dialect:
+ * Read on the write's own transaction: the Site Style Single as stored, by
+ * the plugin's own read of a Single it declared (`getSingleInTransaction`),
+ * resolved over the code's defaults by the same reading the validation uses
+ * (`site-definitions`). On the transaction's connection, so on a pool of one
+ * connection the read takes none of its own while the write holds the only
+ * one. Per dialect:
  *
- * - PostgreSQL and MySQL. This write's transaction already holds a connection
- *   of its own (`TransactionFrame.connected`), and the read's statements do
- *   not join it: the adapter's `select` runs on the transaction's executor
- *   only when handed one, and the Single's read hands none, so it runs on
- *   `getDrizzle()`, the handle on the pool. Each statement runs on a pooled
- *   connection in a transaction of its own and sees what had committed when
- *   it ran: a removal that held the lock before this write committed before
- *   the lock was granted, so what it removed is gone here. The read opens a
- *   transaction only to create a Single never stored, which the validation's
- *   same read did already; one opened here would join this transaction as a
- *   savepoint and read at its isolation, where the lock's compare-and-set
- *   refuses a snapshot older than the removal, which writes the lock row too.
- * - SQLite. One connection: only `transaction()` and a session wait their turn
- *   on it, and a plain statement runs at once, inside this write's open
+ * - PostgreSQL and MySQL. The Single's row is read with a shared lock
+ *   (`FOR SHARE`), which answers the latest committed row whatever the
+ *   transaction's isolation, MySQL's REPEATABLE READ included, and holds it
+ *   until this write ends. A removal that held the lock before this write
+ *   committed before the lock was granted, so what it removed is gone here;
+ *   one that comes after waits at the lock, and then finds this page.
+ * - SQLite. One connection, on which the read runs inside this write's open
  *   transaction. It sees everything committed before the transaction began,
- *   which `BEGIN IMMEDIATE` lets in only once every other writer has finished,
- *   and this write's own: so a removal is either committed and seen, or still
- *   waiting behind this write.
+ *   which `BEGIN IMMEDIATE` lets in only once every other writer has
+ *   finished, and this write's own: so a removal is either committed and
+ *   seen, or still waiting behind this write.
  *
- * Bounded because, on the pooled dialects, a pool whose every connection is
- * held by writers waiting at the lock gives the read none until the lock
- * holder finishes, which may be this write.
+ * Bounded all the same: a read that does not answer is refused rather than
+ * left holding every write waiting at the lock.
  */
 function definitionsUnderLock(
   read: () => Promise<SiteDefinitions>
