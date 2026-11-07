@@ -380,6 +380,7 @@ import {
   checkedTemplateAddresses,
   type PageBuilderTemplateOptions,
 } from "./templates/template-addresses";
+import { templateCollectionChoicesRoute } from "./templates/template-collection-choices-route";
 import {
   addressHolderReader,
   registerTemplateGuard,
@@ -3924,6 +3925,10 @@ export const pageBuilder = (
         // what the template form asks before it offers the change, since the
         // collection list leaves out what the author may not read.
         templateCollectionRetargetRoute({ guard: requireTemplateGuard }),
+        // The collections the template form offers: those the caller may
+        // read that the guard lets a template draw, judged by the guard's
+        // own rule, for a caller who may create or change templates.
+        templateCollectionChoicesRoute({ guard: requireTemplateGuard }),
         // A collection's own designs, its template and its names, read as
         // the caller: what the admin's Design section, Design column and the
         // template's own designs list draw from.
