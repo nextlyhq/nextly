@@ -294,8 +294,9 @@ function markStyle(mark: Mark): React.CSSProperties {
     height: mark.rect.height,
     borderRadius: mark.radius,
   };
-  if (mark.kind === "hovered") {
-    // The hovered block's name tag moves in from the side the screen cuts.
+  if (mark.kind === "hovered" || mark.kind === "conditioned") {
+    // The hovered block's name tag, and a conditioned block's tab, move in
+    // from the side the screen cuts.
     return {
       ...box,
       "--nx-tag-inset-side": `${String(mark.tagInset.side)}px`,
@@ -744,6 +745,7 @@ function conditionedMarks(
       condition: "conditional" | "unchecked";
       parts: Outline[];
       selected: boolean;
+      placement: boolean;
     }
   >();
   const copies = new Map<Element | null, number>();
@@ -764,29 +766,47 @@ function conditionedMarks(
     const selected = element.hasAttribute(SELECTED_ATTRIBUTE);
     const gathered = badges.get(key);
     if (gathered === undefined) {
-      badges.set(key, { condition, parts: [outline], selected });
+      badges.set(key, {
+        condition,
+        parts: [outline],
+        selected,
+        placement: placement !== "",
+      });
     } else {
       gathered.parts.push(outline);
       gathered.selected ||= selected;
     }
   });
-  return [...badges.values()].map(({ condition, parts, selected }) => {
-    const outline = placementOutline(parts);
-    return {
-      ...outline,
-      kind: "conditioned",
-      secondary: false,
-      component: false,
-      locked: false,
-      hidden: false,
-      tag: "below",
-      tagEdge: "right",
-      tagInset: NO_INSET,
-      condition,
-      conditionTag: conditionTagOf(outline.rect, onScreen),
-      ...(selected ? { conditionSelected: true } : {}),
-    };
-  });
+  return [...badges.values()].map(
+    ({ condition, parts, selected, placement }) => {
+      const outline = placementOutline(parts);
+      // A selected placement's frame names it in a tab on the same corner, so
+      // the condition tab takes the bottom edge instead of covering the name.
+      const tag = conditionTagOf(outline.rect, onScreen, selected && placement);
+      return {
+        ...outline,
+        kind: "conditioned",
+        secondary: false,
+        component: false,
+        locked: false,
+        hidden: false,
+        tag: "below",
+        tagEdge: "right",
+        // Moved in from the right when the screen cuts the block's right edge,
+        // so the tab stays on what's seen.
+        tagInset: {
+          bottom: 0,
+          side: Math.max(
+            0,
+            outline.rect.x + outline.rect.width - (onScreen.x + onScreen.width)
+          ),
+        },
+        condition,
+        conditionTag: tag,
+        ...(selected ? { conditionSelected: true } : {}),
+      };
+    }
+  );
 }
 
 /** Which copy of a placement an element is part of: its parent, numbered. */
@@ -802,14 +822,16 @@ function copyOf(copies: Map<Element | null, number>, element: Element): number {
 
 /**
  * Where a conditioned block's badge goes: above it where there's room on
- * screen, else below it, else, for a block taller than what's on screen,
- * inside its top edge, so the badge is always seen.
+ * screen and nothing else takes that corner, else below it, else, for a
+ * block taller than what's on screen, inside its top edge, so the badge is
+ * always seen.
  */
 function conditionTagOf(
   rect: Rect,
-  onScreen: Rect
+  onScreen: Rect,
+  topTaken: boolean
 ): "above" | "below" | "inside" {
-  if (rect.y - onScreen.y >= MARK_TAG_HEIGHT) return "above";
+  if (!topTaken && rect.y - onScreen.y >= MARK_TAG_HEIGHT) return "above";
   if (rect.y + rect.height + MARK_TAG_HEIGHT <= onScreen.y + onScreen.height) {
     return "below";
   }

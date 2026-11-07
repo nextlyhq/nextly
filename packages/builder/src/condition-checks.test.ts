@@ -2,7 +2,7 @@
  * Which blocks' visibility conditions the page can't check, read once for the
  * inspector's notice and the canvas's red badge alike.
  */
-import type { BlockNode } from "@nextlyhq/blocks-engine";
+import { DEFAULT_LIMITS, type BlockNode } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { uncheckedConditionIds } from "./condition-checks";
@@ -61,5 +61,24 @@ describe("whether a stored block's conditions decide who sees it", () => {
     expect(
       gatedAsStored(gated("b", [[{ field: "title", op: "exists" }]]))
     ).toBe(true);
+  });
+});
+
+describe("how far the check reads a document", () => {
+  it("stops where a save stops surveying, so an oversized document can't stall the editor", () => {
+    const plain = (id: string) =>
+      ({ id, type: "core/text", version: 1, props: {} }) as BlockNode;
+    const unreadable = gated("late", [{ field: "title", op: "exists" }]);
+    const past = [
+      ...Array.from({ length: DEFAULT_LIMITS.maxNodes }, (_, at) =>
+        plain(`n${String(at)}`)
+      ),
+      unreadable,
+    ];
+    expect(uncheckedConditionIds(past, undefined, "posts").size).toBe(0);
+    // CONTROL: within the limit, the same block is found.
+    expect([
+      ...uncheckedConditionIds([unreadable], undefined, "posts"),
+    ]).toEqual(["late"]);
   });
 });

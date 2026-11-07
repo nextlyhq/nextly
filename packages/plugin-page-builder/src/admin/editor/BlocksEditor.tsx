@@ -361,7 +361,7 @@ type ContentServices = NonNullable<
 
 let contentServices: ContentServices | undefined;
 
-/** Each language's read of the loop collections, one function per language. */
+/** Each person's read of the loop collections, one function per language. */
 const loopCollectionReads = new Map<
   string,
   NonNullable<ContentServices["listLoopCollections"]>
@@ -374,9 +374,12 @@ const loopCollectionReads = new Map<
  * shares a read by the function's identity).
  */
 function loopCollectionsIn(
-  locale: string | undefined
+  locale: string | undefined,
+  userId: string | null
 ): NonNullable<ContentServices["listLoopCollections"]> {
-  const key = locale ?? "";
+  // Per person too: the answer is read with their access, and a read still in
+  // flight when one person signs out must never be handed to the next.
+  const key = JSON.stringify([locale ?? "", userId]);
   let read = loopCollectionReads.get(key);
   if (read === undefined) {
     read = () => listLoopCollections(locale);
@@ -448,7 +451,7 @@ function servicesFor(
       // as the author reads it.
       findLinkTargets: findLinkTargetsIn(locale),
       // The fields a list may name, as a save in this language judges them.
-      listLoopCollections: loopCollectionsIn(locale),
+      listLoopCollections: loopCollectionsIn(locale, userId),
       // The selected list's "N entries match, so M show", taken from the
       // canvas's own read of the list in this language.
       countListEntries: canvasListReadsIn(locale, userId).count,
@@ -1150,10 +1153,10 @@ function EditorBody<TFieldValues extends FieldValues>({
   const conditionServices = useMemo(
     () => ({
       // The inspector's own function, so both share one read of the list.
-      listLoopCollections: loopCollectionsIn(mount.locale),
+      listLoopCollections: loopCollectionsIn(mount.locale, mount.userId),
       ...(entryCollection === undefined ? {} : { entryCollection }),
     }),
-    [mount.locale, entryCollection]
+    [mount.locale, mount.userId, entryCollection]
   );
   const conditionsUnchecked = useConditionsUnchecked(
     componentView.preview.document,

@@ -3926,7 +3926,7 @@
    reads as this block's mark and not the one above. */
 .nx-canvas-mark__condition {
   position: absolute;
-  right: -1px;
+  right: calc(var(--nx-tag-inset-side, 0px) - 1px);
   bottom: 100%;
   display: inline-flex;
   align-items: center;
@@ -3959,7 +3959,6 @@
    corner square with the dash, so it's seen. */
 .nx-canvas-mark[data-condition-tag="inside"] > .nx-canvas-mark__condition {
   top: -1px;
-  right: -1px;
   bottom: auto;
   border-radius: 0 0 0 4px;
 }

@@ -20,7 +20,12 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
-import { CANVAS_ROOT_CLASS, CONDITIONED_ATTRIBUTE, Canvas } from "./canvas";
+import {
+  CANVAS_ROOT_CLASS,
+  CONDITIONED_ATTRIBUTE,
+  Canvas,
+  SELECTED_ATTRIBUTE,
+} from "./canvas";
 import { CanvasMarks } from "./canvas-marks";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import { markLookReach } from "./look-reach";
@@ -378,6 +383,56 @@ describe("selection marks", () => {
       expect(
         container.querySelectorAll('.nx-canvas-mark[data-mark="conditioned"]')
       ).toHaveLength(1)
+    );
+  });
+
+  it("moves a selected placement's condition tab off the corner its name takes, and keeps a wide block's tab on screen", async () => {
+    // The screen shows 500px across; both placements sit well inside it
+    // vertically, and the second runs 500px past its right edge.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 500, 500);
+        }
+        const id = this.getAttribute(NODE_ID_ATTRIBUTE);
+        if (id === "picked") return new DOMRect(0, 100, 300, 50);
+        if (id === "wide") return new DOMRect(0, 300, 1000, 50);
+        return new DOMRect(0, 0, 1000, 2000);
+      }
+    );
+    const placed = (id: string, placement: string, selected: boolean) =>
+      createElement("div", {
+        key: id,
+        [NODE_ID_ATTRIBUTE]: id,
+        [INSTANCE_ATTRIBUTE]: placement,
+        [CONDITIONED_ATTRIBUTE]: "conditional",
+        ...(selected ? { [SELECTED_ATTRIBUTE]: "primary" } : {}),
+      });
+    const { container } = render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <div className={CANVAS_ROOT_CLASS}>
+          {placed("picked", "place-a", true)}
+          {placed("wide", "place-b", false)}
+          <CanvasMarks />
+        </div>
+      </div>
+    );
+    await act(async () => undefined);
+    const badges = () =>
+      Array.from(
+        container.querySelectorAll<HTMLElement>(
+          '.nx-canvas-mark[data-mark="conditioned"]'
+        )
+      );
+    await waitFor(() => expect(badges()).toHaveLength(2));
+    // Selected, its name takes the top corner, so the tab goes below; the
+    // unselected one, CONTROL, keeps the top.
+    expect(
+      badges().map(badge => badge.getAttribute("data-condition-tag"))
+    ).toEqual(["below", "above"]);
+    // The wide one's tab moves in by what the screen cuts off its right.
+    expect(badges()[1]?.style.getPropertyValue("--nx-tag-inset-side")).toBe(
+      "500px"
     );
   });
 

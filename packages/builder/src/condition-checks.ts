@@ -9,6 +9,7 @@
  */
 import {
   conditionIssues,
+  DEFAULT_LIMITS,
   isPlainRecord,
   walkNodes,
   type BlockDocument,
@@ -73,15 +74,22 @@ export function uncheckedConditionIds(
 ): ReadonlySet<string> {
   const found = new Set<string>();
   // The engine's guarded walk, which tolerates a malformed entry and a tree
-  // deeper than a call stack, as a stored document may be.
-  walkNodes([...nodes], node => {
-    if (gatedAsStored(node) && storedGroups(node) === undefined) {
-      found.add(node.id);
-    }
-  });
+  // deeper than a call stack, as a stored document may be, and stops where a
+  // save stops surveying.
+  walkNodes(
+    [...nodes],
+    node => {
+      if (gatedAsStored(node) && storedGroups(node) === undefined) {
+        found.add(node.id);
+      }
+    },
+    { maxNodes: DEFAULT_LIMITS.maxNodes }
+  );
   if (collections === undefined) return found;
   for (const issue of conditionIssues(nodes, {
     fields: fieldSourceOf(collections),
+    // As far as a save surveys a document, and no further.
+    maxNodes: DEFAULT_LIMITS.maxNodes,
     ...(entryCollection === undefined ? {} : { entryCollection }),
   })) {
     if (issue.severity === "error") found.add(issue.nodeId);
