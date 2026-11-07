@@ -278,11 +278,15 @@ export function TemplateCollectionField<
               <span className="min-w-0 truncate text-foreground">
                 {view.label ?? view.slug}
               </span>
-              {/* The slug beside the name, as the API and code name it. */}
+              {/* The slug beside the name, as the API and code name it, with
+                  a space between for a screen reader. */}
               {view.label === null || view.label === view.slug ? null : (
-                <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                  {view.slug}
-                </span>
+                <>
+                  {" "}
+                  <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                    {view.slug}
+                  </span>
+                </>
               )}
             </>
           )}
@@ -315,9 +319,9 @@ export function TemplateCollectionField<
           <SelectContent>
             {view.options.map(option => (
               <SelectItem key={option.slug} value={option.slug}>
-                {option.label}
+                {/* A space between, so the option reads "Posts posts". */}
+                {option.label}{" "}
                 <span className="font-mono text-xs text-muted-foreground">
-                  {" "}
                   {option.slug}
                 </span>
               </SelectItem>

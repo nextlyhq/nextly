@@ -222,7 +222,7 @@ describe("the collection control", () => {
     renderField("posts", "t1");
     const shown = screen.getByRole("textbox", { name: "Collection" });
     expect(shown.getAttribute("aria-readonly")).toBe("true");
-    expect(shown.textContent).toBe("Postsposts");
+    expect(shown.textContent).toBe("Posts posts");
     expect(screen.queryByRole("combobox")).toBeNull();
   });
 

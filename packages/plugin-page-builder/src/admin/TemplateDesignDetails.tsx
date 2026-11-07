@@ -24,7 +24,6 @@ import {
   useWatch,
   type Control,
   type FieldValues,
-  type Path,
 } from "react-hook-form";
 
 import type { EntryDesignsResponse } from "../templates/entry-designs-contract";
@@ -148,10 +147,11 @@ function copiedFromRow(
   };
 }
 
+/** The control of the form the panel sits beside, as its context gives it. */
+type FormControl = Control<FieldValues, unknown, unknown>;
+
 /** The four values on the form, as `control` holds them now. */
-function useDesignValues<TFieldValues extends FieldValues>(
-  control: Control<TFieldValues>
-): DesignDetailValues {
+function useDesignValues(control: FormControl): DesignDetailValues {
   const [entry, entryCollection, entryId, forkedFrom] = useWatch({
     control,
     name: [
@@ -159,7 +159,7 @@ function useDesignValues<TFieldValues extends FieldValues>(
       TEMPLATE_ENTRY_COLLECTION_FIELD,
       TEMPLATE_ENTRY_ID_FIELD,
       TEMPLATE_FORKED_FROM_FIELD,
-    ] as Path<TFieldValues>[],
+    ],
   });
   return {
     entry: filledText(entry),
@@ -170,11 +170,11 @@ function useDesignValues<TFieldValues extends FieldValues>(
 }
 
 /** The rows, read from the form the panel sits beside. */
-function DesignDetails<TFieldValues extends FieldValues>({
+function DesignDetails({
   control,
   templateId,
 }: {
-  control: Control<TFieldValues>;
+  control: FormControl;
   templateId: string;
 }): JSX.Element | null {
   const values = useDesignValues(control);
