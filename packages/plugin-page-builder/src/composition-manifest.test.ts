@@ -38,6 +38,7 @@ function manifestWith(
       components: "components",
       componentField: "content",
       layouts: "layouts",
+      templates: "templates",
     },
     patterns: tier,
     components: { ...tier, items: [component] },
@@ -110,6 +111,18 @@ describe("the manifest schema", () => {
     expect(
       compositionManifestSchema.safeParse(manifestWith(card)).success
     ).toBe(true);
+  });
+
+  it("requires the templates collection, where template ids live", () => {
+    const manifest = manifestWith(card);
+    const { templates: _templates, ...withoutTemplates } =
+      manifest.collections as Record<string, unknown>;
+    expect(
+      compositionManifestSchema.safeParse({
+        ...manifest,
+        collections: withoutTemplates,
+      }).success
+    ).toBe(false);
   });
 
   it("requires each component's variants, even when it has none", () => {

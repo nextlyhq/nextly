@@ -46,6 +46,7 @@ import { z } from "nextly/zod";
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import { PAGES_SLUG } from "./collections/pages";
 import { PATTERNS_SLUG } from "./collections/patterns";
+import { TEMPLATES_SLUG } from "./collections/templates";
 import {
   DEFINITION_ACTIONS_ROUTE_PATH,
   PAGE_ACTIONS_ROUTE_PATH,
@@ -188,6 +189,12 @@ export interface CompositionManifest {
     /** The field of a component row its definition is stored in. */
     readonly componentField: string;
     readonly layouts: string;
+    /**
+     * The collection templates and entries' own designs are kept in, as the
+     * host named it: the collection a page action on a template names, and
+     * where a `templateAction`'s template ids live.
+     */
+    readonly templates: string;
   };
   readonly patterns: ManifestTier<ManifestPattern>;
   readonly components: ManifestTier<ManifestComponent>;
@@ -249,6 +256,7 @@ export const compositionManifestSchema: z.ZodType<CompositionManifest> =
       components: id,
       componentField: id,
       layouts: id,
+      templates: id,
     }),
     patterns: tier(
       z.strictObject({
@@ -355,6 +363,9 @@ export async function readCompositionManifest(
     components: store.collection,
     componentField: store.field,
     layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+    // Named, not read: a client needs the slug to address a template with
+    // the page actions, whether or not it may read the templates.
+    templates: ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG,
   };
   const [patterns, components, layouts] = await Promise.all([
     readableTier(ctx, collections.patterns, () => patternTier(ctx)),

@@ -31,6 +31,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PATTERNS_SLUG } from "../collections/patterns";
+import { TEMPLATES_SLUG } from "../collections/templates";
 import type {
   DefinitionActionResult,
   PageActionResult,
@@ -270,6 +271,7 @@ describe.each(getConfiguredTestDialects())(
         components: COMPONENTS_SLUG,
         componentField: "content",
         layouts: LAYOUTS_SLUG,
+        templates: TEMPLATES_SLUG,
       });
       expect(manifest.patterns.readable).toBe(true);
       expect(manifest.patterns.items).toContainEqual({
