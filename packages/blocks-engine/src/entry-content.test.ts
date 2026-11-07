@@ -326,3 +326,88 @@ describe("the ids the entry's blocks are drawn with", () => {
     );
   });
 });
+
+describe("a minted DOM id the template already publishes", () => {
+  it("is claimed past, so the drawn id is the page's only one", () => {
+    const body = documentOf("page", {
+      ...text("e-hero", "Entry hero"),
+      cssId: "hero",
+    });
+    // The control: what the entry's `hero` is drawn as beside a template
+    // holding nothing of the kind.
+    const plain = composeEntryContent(
+      documentOf("template", text("t", "Template"), entryContent("ec")),
+      { valueOf: () => body }
+    );
+    const minted = plain.nodes[1]?.slots?.[ENTRY_CONTENT_SLOT]?.[0]?.cssId;
+    expect(typeof minted).toBe("string");
+    // The same template, its own block already publishing that very id.
+    const clashing = composeEntryContent(
+      documentOf(
+        "template",
+        { ...text("t", "Template"), cssId: minted },
+        entryContent("ec")
+      ),
+      { valueOf: () => body }
+    );
+    const drawn = clashing.nodes[1]?.slots?.[ENTRY_CONTENT_SLOT]?.[0]?.cssId;
+    expect(clashing.nodes[0]?.cssId).toBe(minted);
+    expect(drawn).toBe(`${String(minted)}-2`);
+  });
+});
+
+describe("an entry larger than the page may draw", () => {
+  /**
+   * An entry forest of `size` text blocks whose entries past `readable`
+   * count each read of them, as an oversized stored Body would cost.
+   */
+  function counted(size: number, readable: number) {
+    const reads = { past: 0 };
+    const nodes: unknown[] = [];
+    for (let at = 0; at < size; at += 1) {
+      if (at < readable) {
+        nodes.push(text(`e${String(at)}`, `Block ${String(at)}`));
+        continue;
+      }
+      const node = text(`e${String(at)}`, `Block ${String(at)}`);
+      Object.defineProperty(nodes, at, {
+        enumerable: true,
+        get: () => {
+          reads.past += 1;
+          return node;
+        },
+      });
+    }
+    // Not spread: spreading would read every entry here.
+    const body = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes,
+    } as BlockDocument;
+    return { body, reads };
+  }
+
+  it("is cut to what the page may still draw, and never read past it", () => {
+    // A cap of 10 with the template's two nodes: eight of the entry's draw.
+    const { body, reads } = counted(200, 8);
+    const composed = composeEntryContent(
+      documentOf("template", text("t", "Template"), entryContent("ec")),
+      { valueOf: () => body, maxNodes: 10 }
+    );
+    const drawn = composed.nodes[1]?.slots?.[ENTRY_CONTENT_SLOT] ?? [];
+    expect(drawn.map(wordsOf)).toEqual(
+      Array.from({ length: 8 }, (_, at) => `Block ${String(at)}`)
+    );
+    expect(reads.past).toBe(0);
+  });
+
+  it("draws every block of an entry within the cap (the control)", () => {
+    const { body, reads } = counted(5, 5);
+    const composed = composeEntryContent(
+      documentOf("template", entryContent("ec")),
+      { valueOf: () => body, maxNodes: 10 }
+    );
+    expect(composed.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT]).toHaveLength(5);
+    expect(reads.past).toBe(0);
+  });
+});
