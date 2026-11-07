@@ -1,11 +1,13 @@
 /**
  * The order the entries' claims take their steps in, with the store and the
  * instance stubbed, for what a real instance cannot show without racing two
- * transactions: a save in a collection not declared in code takes the
- * collection's lock BEFORE it reads whether the collection has a template, so
- * a template being published at the same time either is seen by the save or
- * sees the entry in its own walk. A collection that may not have a template
- * takes no lock at all.
+ * transactions: a save in a collection not declared in code reads its
+ * template on the save's own transaction, holding the template's row before
+ * it takes the collection's lock, the order a template's own write takes
+ * them in, and reads it again under the lock when there was none, so a
+ * template published or created meanwhile either is seen by the save or sees
+ * the entry in its own walk. An entry with no slug in a collection with no
+ * template takes no lock at all, and no save asks the registry.
  *
  * What the claims do once taken is proved against a real instance on every
  * dialect by `__tests__/template-addresses-runtime.integration.test.ts`.
@@ -133,29 +135,38 @@ function harness(options: {
 }
 
 describe("an entry's save in a collection not given an address in code", () => {
-  it("takes the collection's lock before it reads whether there is a template", async () => {
+  it("reads the template on the save's transaction, then takes the collection's lock, and reads it again when there was none", async () => {
     const { steps, save } = harness({ mayHaveTemplate: true });
     await save("events");
-    expect(steps).toEqual(["lock events", "read template of events"]);
+    expect(steps).toEqual([
+      "read template of events",
+      "lock events",
+      "read template of events",
+    ]);
   });
 
-  it("takes no lock, and reads nothing, for an entry with no slug", async () => {
+  it("holds an existing template's row before the collection's lock, as a template's own write does", async () => {
+    const { steps, save } = harness({
+      mayHaveTemplate: true,
+      template: { published: false, address: ["events"] },
+    });
+    await save("events");
+    expect(steps).toEqual(["read template of events", "lock events"]);
+  });
+
+  it("takes no lock for an entry with no slug in a collection with no template", async () => {
     const { steps, save } = harness({ mayHaveTemplate: true });
     await save("users", { id: "u1", email: "a@example.com" });
-    expect(steps).toEqual([]);
+    expect(steps).toEqual(["read template of users"]);
   });
 
-  it("asks whether the collection may still have a template only once it has one", async () => {
+  it("gives addresses up, asking the registry nothing, where entries lost their slug", async () => {
     const { steps, save } = harness({
       mayHaveTemplate: false,
       template: { published: true, address: ["events"] },
     });
-    await save("events");
-    expect(steps).toEqual([
-      "lock events",
-      "read template of events",
-      "ask whether events may have a template",
-    ]);
+    await save("events", { id: "e1", title: "No slug", status: "published" });
+    expect(steps).toEqual(["read template of events", "lock events"]);
   });
 
   it("leaves the page builder's own collections alone", async () => {
