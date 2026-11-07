@@ -40,6 +40,8 @@ import {
 } from "@nextlyhq/ui";
 import { MoreHorizontal } from "lucide-react";
 import {
+  createContext,
+  useContext,
   useMemo,
   useSyncExternalStore,
   type KeyboardEvent,
@@ -57,6 +59,7 @@ import {
   getPluginRowActions,
   resolvePluginColumns,
   subscribeToDataTablePlugins,
+  type DataTablePluginRegistrations,
 } from "./plugin-registry";
 import type { CellContext, NextlyColumn, RowAction } from "./types";
 
@@ -155,6 +158,39 @@ const DEFAULT_GET_ROW_ID = (row: object): string => {
   throw new Error("DataTableView rows require an id or a custom getRowId.");
 };
 
+/**
+ * The plugins' registrations as a parent of the view already holds them,
+ * subscribed. `DataTable` draws plugin contributions of its own beside the
+ * view (the selection bar's bulk actions) and provides its snapshot here, so
+ * the bar and the view read one snapshot and redraw together when a plugin
+ * registers while the list is on screen. Internal: not part of the view's
+ * props, so it is no surface a plugin could hand a stale value through.
+ */
+export const HeldPluginRegistrations = createContext<
+  DataTablePluginRegistrations | undefined
+>(undefined);
+
+/** A subscription that is never told anything, for a snapshot held above. */
+function noSubscription(): () => void {
+  return () => {};
+}
+
+/**
+ * The plugins' registrations, read again when one changes, so a column or
+ * action registered while a list is on screen joins it. Inside a parent that
+ * holds them (`HeldPluginRegistrations`) its snapshot is used as it is and
+ * nothing subscribes here: the parent's redraw carries the change to both.
+ */
+export function useDataTablePluginRegistrations(): DataTablePluginRegistrations {
+  const held = useContext(HeldPluginRegistrations);
+  const read = held === undefined ? dataTablePluginRegistrations : () => held;
+  return useSyncExternalStore(
+    held === undefined ? subscribeToDataTablePlugins : noSubscription,
+    read,
+    read
+  );
+}
+
 export function DataTableView<Row extends object>({
   columns,
   rows,
@@ -178,11 +214,7 @@ export function DataTableView<Row extends object>({
 }: DataTableViewProps<Row>): JSX.Element {
   // The plugins' registrations as they stand, read again when one changes, so
   // a column or action registered while this list is on screen joins it.
-  const registered = useSyncExternalStore(
-    subscribeToDataTablePlugins,
-    dataTablePluginRegistrations,
-    dataTablePluginRegistrations
-  );
+  const registered = useDataTablePluginRegistrations();
   // Merge plugin-contributed columns (and transforms) for this list, if any.
   const resolvedColumns = useMemo(
     () =>

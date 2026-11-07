@@ -17,8 +17,12 @@
  *
  * Which it is, and the own designs, come from the read every own-design
  * surface shares. The delete itself is the template actions route's
- * `delete-template`, judged as the caller like any write; a refusal is shown
- * in the dialog, and a delete that lands leaves the document.
+ * `delete-template`, judged as the caller like any write. Opening the dialog
+ * runs it as a dry run, which rolls the write back, so a delete the site
+ * would refuse (a rule or hook of the templates collection, say) is said
+ * before the author confirms, and the delete is not offered. The confirmed
+ * delete is judged again: a refusal that appears in between is shown in the
+ * dialog too, and a delete that lands leaves the document.
  *
  * Declared as the templates collection's `documentActions.delete`, so the
  * row keeps its place, its permission and every reason it can't run.
@@ -38,7 +42,7 @@ import {
   AlertDialogTitle,
   Button,
 } from "@nextlyhq/ui";
-import { useState, type JSX } from "react";
+import { useEffect, useState, type JSX } from "react";
 
 import {
   inSentence,
@@ -54,6 +58,9 @@ import {
 const TEMPLATE_DELETE_WORDS = {
   checking: "Checking what this template draws…",
   checkFailed: "What this template draws couldn't be checked.",
+  judging: "Checking whether it can be deleted…",
+  judgeFailed: "Whether it can be deleted couldn't be checked.",
+  refused: "This can't be deleted.",
   deleteTitle: (template: string): string => `Delete the ${template} template?`,
   stopShown: (plural: string): string =>
     `${plural} without their own design stop being shown as pages until ${plural} have a published template again.`,
@@ -90,6 +97,63 @@ type TemplateDeleteSubject =
   /** Neither could be told: a template the reader cannot see around. */
   | { readonly kind: "plain" };
 
+/**
+ * What the site says of the delete before it is confirmed: the dry run's
+ * verdict, made as the caller and rolled back.
+ */
+type DeleteVerdict =
+  | { readonly kind: "judging" }
+  | { readonly kind: "allowed" }
+  | { readonly kind: "refused"; readonly refusals: readonly string[] }
+  | { readonly kind: "failed"; readonly message: string };
+
+/**
+ * Run the delete of `id` as a dry run, again each time `attempt` changes,
+ * and answer its verdict. An answer for an earlier template or attempt,
+ * arriving late, changes nothing.
+ */
+function useDeleteVerdict(id: string, attempt: number): DeleteVerdict {
+  const [verdict, setVerdict] = useState<{
+    readonly id: string;
+    readonly attempt: number;
+    readonly verdict: DeleteVerdict;
+  } | null>(null);
+  useEffect(() => {
+    let live = true;
+    const settle = (next: DeleteVerdict): void => {
+      if (live) setVerdict({ id, attempt, verdict: next });
+    };
+    runTemplateAction({ kind: "delete-template", id }, true).then(
+      result => {
+        // An answer without a verdict is not a yes: the delete is offered
+        // only on one that says the site would accept it.
+        if (result === undefined) {
+          settle({
+            kind: "failed",
+            message: TEMPLATE_DELETE_WORDS.judgeFailed,
+          });
+        } else if (result.refusals.length > 0) {
+          settle({ kind: "refused", refusals: result.refusals });
+        } else {
+          settle({ kind: "allowed" });
+        }
+      },
+      (error: unknown) =>
+        settle({
+          kind: "failed",
+          message: reasonOf(error, TEMPLATE_DELETE_WORDS.judgeFailed),
+        })
+    );
+    return () => {
+      live = false;
+    };
+  }, [id, attempt]);
+  // Until this template's and this attempt's answer lands, it is judging.
+  return verdict !== null && verdict.id === id && verdict.attempt === attempt
+    ? verdict.verdict
+    : { kind: "judging" };
+}
+
 /** The document `id` as the read answers it. */
 function templateDeleteSubjectOf(
   answer: EntryDesignsResponse | undefined,
@@ -124,8 +188,17 @@ export function TemplateDeleteAction({
     read.error !== null,
     entryId
   );
+  const [attempt, setAttempt] = useState(0);
+  const verdict = useDeleteVerdict(entryId, attempt);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const known = subject.kind !== "checking" && subject.kind !== "failed";
+
+  // One Retry asks again whatever failed: the read, the dry run, or both.
+  const retry = (): void => {
+    if (read.error !== null) read.refetch();
+    if (verdict.kind === "failed") setAttempt(attempt + 1);
+  };
 
   const confirm = (): void => {
     // Asked at the moment of writing: the document can change hands while
@@ -154,13 +227,14 @@ export function TemplateDeleteAction({
     >
       <AlertDialogContent>
         <DialogWords subject={subject} />
-        {subject.kind === "failed" ? (
+        {known ? <VerdictWords verdict={verdict} /> : null}
+        {subject.kind === "failed" || verdict.kind === "failed" ? (
           <Button
             type="button"
             variant="outline"
             size="sm"
             className="self-start"
-            onClick={read.refetch}
+            onClick={retry}
           >
             {OWN_DESIGN_WORDS.retry}
           </Button>
@@ -174,22 +248,67 @@ export function TemplateDeleteAction({
           <AlertDialogCancel disabled={busy}>
             {subject.kind === "own-design" ? OWN_DESIGN_WORDS.keep : "Cancel"}
           </AlertDialogCancel>
-          {subject.kind === "checking" || subject.kind === "failed" ? null : (
+          {known ? (
             <Button
               type="button"
               variant="destructive"
-              disabled={busy}
+              // Offered only once the dry run says the site would accept it.
+              disabled={busy || verdict.kind !== "allowed"}
               onClick={confirm}
             >
               {busy
                 ? TEMPLATE_DELETE_WORDS.deleting
                 : confirmLabel(subject.kind)}
             </Button>
-          )}
+          ) : null}
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
   );
+}
+
+/**
+ * The dry run's verdict where it is not a plain yes: said while it is out,
+ * the site's own words when it would refuse, or why it couldn't be asked.
+ */
+function VerdictWords({
+  verdict,
+}: {
+  verdict: DeleteVerdict;
+}): JSX.Element | null {
+  switch (verdict.kind) {
+    case "allowed":
+      return null;
+    case "judging":
+      return (
+        <p role="status" className="text-sm text-muted-foreground">
+          {TEMPLATE_DELETE_WORDS.judging}
+        </p>
+      );
+    case "failed":
+      return (
+        <Alert variant="destructive" role="alert">
+          <AlertDescription>{verdict.message}</AlertDescription>
+        </Alert>
+      );
+    case "refused":
+      return (
+        <Alert variant="destructive" role="alert">
+          <AlertDescription>
+            <p className="font-medium">{TEMPLATE_DELETE_WORDS.refused}</p>
+            {verdict.refusals.length === 1 ? (
+              <p>{verdict.refusals[0]}</p>
+            ) : (
+              <ul className="list-disc space-y-0.5 pl-5">
+                {verdict.refusals.map((each, index) => (
+                  <li key={`${String(index)}-${each}`}>{each}</li>
+                ))}
+              </ul>
+            )}
+          </AlertDescription>
+        </Alert>
+      );
+  }
 }
 
 /** The confirming button's words, naming the act. */

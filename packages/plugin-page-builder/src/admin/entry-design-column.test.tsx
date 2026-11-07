@@ -2,12 +2,16 @@
 
 /**
  * The entry list's Design column: offered only on the lists of collections
- * with a template, decided by one read per collection rather than one per
- * list draw, and each cell marking an own design with the one pill.
+ * with a template or own designs, decided by one read per collection rather
+ * than one per list draw, taken back when a later settled read says the
+ * collection has neither, and each cell marking an own design with the one
+ * pill.
  *
  * The property separating this from a plausible broken column is that the
  * provider on every list adds NOTHING itself: a provider that returned the
- * column for every list would put "Design" on the users list too.
+ * column for every list would put "Design" on the users list too. And a
+ * column kept for good once given would go on calling every entry
+ * "Template" after its template was deleted.
  */
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -23,15 +27,23 @@ let answers: Record<string, EntryDesignsResponse | undefined> = {};
 let cellRead: {
   data: EntryDesignsResponse | undefined;
   error: Error | null;
+  fetching?: boolean;
 } = { data: undefined, error: null };
 
+/** `entry` added to `list`, with the removal the registry hands back. */
+function listed<T>(list: T[], entry: T): () => void {
+  list.push(entry);
+  return () => {
+    const at = list.indexOf(entry);
+    if (at !== -1) list.splice(at, 1);
+  };
+}
+
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
-  registerColumns: (target: string, provider: Provider) => {
-    providers.push({ target, provider });
-  },
-  transformColumns: (target: string, transform: Transform) => {
-    transforms.push({ target, transform });
-  },
+  registerColumns: (target: string, provider: Provider) =>
+    listed(providers, { target, provider }),
+  transformColumns: (target: string, transform: Transform) =>
+    listed(transforms, { target, transform }),
   readPluginRoute: ({ path }: { path: string }) => {
     reads.push(path);
     const collection = new URLSearchParams(path.split("?")[1]).get(
@@ -40,10 +52,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     return Promise.resolve(answers[collection ?? ""]);
   },
   usePluginRoute: () => ({
-    ...cellRead,
     pending: false,
     fetching: false,
     refetch: () => {},
+    ...cellRead,
   }),
 }));
 
@@ -159,6 +171,77 @@ describe("the Design column", () => {
     // A list with its column is not asked about again.
     columnsOf("posts");
     expect(reads.filter(path => path.endsWith("=posts"))).toHaveLength(1);
+  });
+
+  it("takes the column back when a settled read says there is no template and no own design", () => {
+    // Continues from above: "users" has its column. Its template is then
+    // deleted, and its list is drawn again.
+    answers = { ...answers, users: answer(null) };
+
+    // A cached answer shown while the read is asked again moves nothing.
+    cellRead = { data: answer(null), error: null, fetching: true };
+    render(<DesignCell collection="users" row={{ id: "u1" }} />);
+    expect(providers.some(each => each.target === "users")).toBe(true);
+    cleanup();
+
+    // The settled answer takes it back, its move with it, and the row is not
+    // called "Template" while it is still drawn.
+    cellRead = { data: answer(null), error: null };
+    const { container } = render(
+      <DesignCell collection="users" row={{ id: "u1" }} />
+    );
+    expect(container.textContent).toBe("");
+    expect(providers.some(each => each.target === "users")).toBe(false);
+    expect(transforms.some(each => each.target === "users")).toBe(false);
+    expect(columnsOf("users")).toEqual([]);
+    // The redraw that follows asks nothing more for a while.
+    expect(reads.filter(path => path.endsWith("=users"))).toHaveLength(2);
+    // Another list keeps its column.
+    expect(columnsOf("posts").map(column => column.header)).toEqual(["Design"]);
+  });
+
+  it("gives the column back when a later view finds a template again", async () => {
+    answers = {
+      ...answers,
+      users: answer({ id: "t3", title: "Profile", status: "published" }),
+    };
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.now() + 31_000);
+      columnsOf("users");
+      await vi.waitFor(() =>
+        expect(providers.some(each => each.target === "users")).toBe(true)
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(reads.filter(path => path.endsWith("=users"))).toHaveLength(3);
+    expect(columnsOf("users").map(column => column.header)).toEqual(["Design"]);
+    expect(transforms.filter(each => each.target === "users").length).toBe(1);
+  });
+
+  it("keeps the column for own designs whose template is gone, marking only them", () => {
+    const kept = answer(null, [
+      {
+        id: "d1",
+        entryId: "p1",
+        title: "Hello",
+        status: "published",
+        updatedAt: null,
+      },
+    ]);
+    cellRead = { data: kept, error: null };
+    render(<DesignCell collection="posts" row={{ id: "p1" }} />);
+    expect(screen.getByText("Own design")).toBeTruthy();
+    expect(providers.some(each => each.target === "posts")).toBe(true);
+    cleanup();
+
+    // An entry without one is drawn with no template at all: no mark.
+    const { container } = render(
+      <DesignCell collection="posts" row={{ id: "p2" }} />
+    );
+    expect(container.textContent).toBe("");
+    expect(providers.some(each => each.target === "posts")).toBe(true);
   });
 
   it("marks an own design with the one pill, dashed while not published", () => {

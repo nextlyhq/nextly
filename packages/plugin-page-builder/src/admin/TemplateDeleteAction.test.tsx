@@ -4,7 +4,8 @@
  * Delete on a template's document screen: what the dialog says for a
  * collection's template (the own designs it keeps, each saying whether it is
  * still shown) and for an entry's own design, and that the delete runs only
- * once confirmed, and only while the document may be written.
+ * once confirmed, only while the document may be written, and is offered only
+ * once its dry run says the site would accept it.
  */
 import {
   cleanup,
@@ -22,6 +23,15 @@ let designs: EntryDesignsResponse | undefined;
 const writes: unknown[] = [];
 let writeAnswer: () => Promise<unknown> = () =>
   Promise.resolve({ message: "", item: {} });
+let dryRunAnswer: () => Promise<unknown> = () => judged([]);
+
+/** A dry run's answer, refusing in `refusals`' words or accepting. */
+function judged(refusals: string[]): Promise<unknown> {
+  return Promise.resolve({
+    message: "",
+    item: { dryRun: true, kind: "delete-template", refusals },
+  });
+}
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginRoute: () => ({
@@ -31,9 +41,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     fetching: false,
     refetch: () => {},
   }),
-  writePluginRoute: (args: { body: unknown }) => {
+  writePluginRoute: (args: { body: { dryRun?: boolean } }) => {
     writes.push(args.body);
-    return writeAnswer();
+    return args.body.dryRun === true ? dryRunAnswer() : writeAnswer();
   },
   apiErrorMessage: (error: Error, fallback: string) =>
     error.message === "" ? fallback : error.message,
@@ -98,11 +108,24 @@ function open(entryId: string, writable = true) {
   return close;
 }
 
+/** The dry run of deleting `id`, as the dialog sends it. */
+function dryRunOf(id: string) {
+  return { action: { kind: "delete-template", id }, dryRun: true };
+}
+
+/** The confirming button, once the dry run has settled it. */
+async function confirmButton(name: string | RegExp): Promise<HTMLElement> {
+  const button = screen.getByRole("button", { name });
+  await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+  return button;
+}
+
 afterEach(() => {
   cleanup();
   designs = undefined;
   writes.length = 0;
   writeAnswer = () => Promise.resolve({ message: "", item: {} });
+  dryRunAnswer = () => judged([]);
 });
 
 describe("deleting a template", () => {
@@ -128,11 +151,12 @@ describe("deleting a template", () => {
     ]);
     expect(within(dialog).getByText("2 · kept")).toBeTruthy();
 
-    fireEvent.click(
-      within(dialog).getByRole("button", { name: "Delete template" })
-    );
+    fireEvent.click(await confirmButton("Delete template"));
     await waitFor(() => expect(close).toHaveBeenCalledWith("deleted"));
-    expect(writes).toEqual([{ action: { kind: "delete-template", id: "t1" } }]);
+    expect(writes).toEqual([
+      dryRunOf("t1"),
+      { action: { kind: "delete-template", id: "t1" } },
+    ]);
   });
 
   it("offers each kept entry's whole title where the list cuts it to one line", () => {
@@ -220,22 +244,24 @@ describe("deleting a template", () => {
     expect(screen.queryByRole("button", { name: /Delete/ })).toBeNull();
   });
 
-  it("refuses while the document may not be written, and writes nothing", () => {
+  it("refuses while the document may not be written, and deletes nothing", async () => {
     designs = answer();
     const close = open("t1", false);
-    fireEvent.click(screen.getByRole("button", { name: "Delete template" }));
+    fireEvent.click(await confirmButton("Delete template"));
     expect(
       screen.getByText("This document's changes are on hold.")
     ).toBeTruthy();
-    expect(writes).toEqual([]);
+    expect(writes).toEqual([dryRunOf("t1")]);
     expect(close).not.toHaveBeenCalled();
   });
 
-  it("shows the site's refusal and stays open", async () => {
+  it("shows a refusal the confirmed delete meets after its dry run, and stays open", async () => {
+    // The dry run accepted, then something changed before the delete: the
+    // delete is judged again, and its refusal is said in the dialog.
     designs = answer();
     writeAnswer = () => Promise.reject(new Error("Refused by a rule."));
     const close = open("t1");
-    fireEvent.click(screen.getByRole("button", { name: "Delete template" }));
+    fireEvent.click(await confirmButton("Delete template"));
     expect(await screen.findByText("Refused by a rule.")).toBeTruthy();
     expect(close).not.toHaveBeenCalled();
   });
@@ -245,6 +271,81 @@ describe("deleting a template", () => {
     const close = open("t1");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(close).toHaveBeenCalledWith();
-    expect(writes).toEqual([]);
+    expect(writes).toEqual([dryRunOf("t1")]);
+  });
+});
+
+describe("the delete's dry run", () => {
+  it("says the site's refusal before anything is confirmed, and offers no delete", async () => {
+    designs = answer();
+    dryRunAnswer = () =>
+      judged(["A template still named by a page can't be deleted."]);
+    const close = open("t1");
+
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("This can't be deleted.")).toBeTruthy();
+    expect(
+      within(alert).getByText(
+        "A template still named by a page can't be deleted."
+      )
+    ).toBeTruthy();
+    const button = screen.getByRole("button", { name: "Delete template" });
+    expect(button.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(button);
+    // Only the dry run was sent: the refused delete is never attempted.
+    expect(writes).toEqual([dryRunOf("t1")]);
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it("lists each refusal when the site gives more than one", async () => {
+    designs = answer({ entry: "p2" });
+    dryRunAnswer = () => judged(["First reason.", "Second reason."]);
+    open("d2");
+    const alert = await screen.findByRole("alert");
+    expect(
+      within(alert)
+        .getAllByRole("listitem")
+        .map(item => item.textContent)
+    ).toEqual(["First reason.", "Second reason."]);
+    expect(
+      screen
+        .getByRole("button", { name: "Remove own design" })
+        .hasAttribute("disabled")
+    ).toBe(true);
+  });
+
+  it("says it is checking, and holds the delete, while the dry run is out", () => {
+    designs = answer();
+    dryRunAnswer = () => new Promise(() => {});
+    open("t1");
+    expect(screen.getByRole("status").textContent).toBe(
+      "Checking whether it can be deleted…"
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Delete template" })
+        .hasAttribute("disabled")
+    ).toBe(true);
+  });
+
+  it("offers a retry when the dry run fails, and the delete once it answers", async () => {
+    designs = answer();
+    dryRunAnswer = () => Promise.reject(new Error(""));
+    open("t1");
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(
+      "Whether it can be deleted couldn't be checked."
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Delete template" })
+        .hasAttribute("disabled")
+    ).toBe(true);
+
+    dryRunAnswer = () => judged([]);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await confirmButton("Delete template");
+    expect(writes).toEqual([dryRunOf("t1"), dryRunOf("t1")]);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

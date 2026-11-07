@@ -8,7 +8,10 @@
  * list). Mirrors the Map-singleton convention of `component-registry` and
  * `cell-registry` (last write wins, warn-never-throw), and is re-exported through
  * `@nextlyhq/plugin-sdk/admin`. A registration made while a list is on screen
- * reaches it: the lists subscribe to the registrations.
+ * reaches it: the lists subscribe to the registrations. Each registration
+ * returns its own removal, for a plugin whose contribution follows something
+ * that can change while the admin is open (whether a collection has what a
+ * column shows, say); the removal reaches an open list the same way.
  *
  * @module components/ui/table/data-table/plugin-registry
  */
@@ -69,6 +72,38 @@ function replace(next: DataTablePluginRegistrations): void {
   for (const listener of listeners) listener();
 }
 
+/** `map` with `value` removed from under `key` once, as a new map. */
+function without<T>(
+  map: ReadonlyMap<string, T[]>,
+  key: string,
+  value: T
+): Map<string, T[]> {
+  const next = new Map(map);
+  const listed = [...(map.get(key) ?? [])];
+  const at = listed.indexOf(value);
+  if (at !== -1) listed.splice(at, 1);
+  if (listed.length === 0) next.delete(key);
+  else next.set(key, listed);
+  return next;
+}
+
+/**
+ * A registration's removal: `take`, run at most once however often the
+ * removal is called, so a second call cannot take back a later registration
+ * of the same contribution.
+ */
+function once(take: () => void): () => void {
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    take();
+  };
+}
+
+/** For a registration refused for want of a target: nothing to take back. */
+function nothingToRemove(): void {}
+
 /** `map` with `value` appended under `key`, as a new map. */
 function appended<T>(
   map: ReadonlyMap<string, T[]>,
@@ -113,29 +148,38 @@ export function subscribeToDataTablePlugins(listener: () => void): () => void {
  */
 export { defineCellRenderer as registerCellRenderer };
 
-/** Append extra columns to a list. */
+/** Append extra columns to a list. Returns the registration's removal. */
 export function registerColumns(
   target: DataTableTarget,
   provider: ColumnProvider
-): void {
+): () => void {
   if (!target) {
     console.warn("registerColumns: a target is required.");
-    return;
+    return nothingToRemove;
   }
   replace({
     ...registrations,
     columnProviders: appended(registrations.columnProviders, target, provider),
   });
+  return once(() =>
+    replace({
+      ...registrations,
+      columnProviders: without(registrations.columnProviders, target, provider),
+    })
+  );
 }
 
-/** Transform (reorder / filter / edit) a list's columns after they are built. */
+/**
+ * Transform (reorder / filter / edit) a list's columns after they are built.
+ * Returns the registration's removal.
+ */
 export function transformColumns(
   target: DataTableTarget,
   transform: ColumnTransform
-): void {
+): () => void {
   if (!target) {
     console.warn("transformColumns: a target is required.");
-    return;
+    return nothingToRemove;
   }
   replace({
     ...registrations,
@@ -145,39 +189,65 @@ export function transformColumns(
       transform
     ),
   });
+  return once(() =>
+    replace({
+      ...registrations,
+      columnTransforms: without(
+        registrations.columnTransforms,
+        target,
+        transform
+      ),
+    })
+  );
 }
 
-/** Add a per-row action (rendered in the row's three-dots menu). */
+/**
+ * Add a per-row action (rendered in the row's three-dots menu). Returns the
+ * registration's removal.
+ */
 export function registerRowAction<Row extends object = Record<string, unknown>>(
   target: DataTableTarget,
   action: RowAction<Row>
-): void {
+): () => void {
   if (!target) {
     console.warn("registerRowAction: a target is required.");
-    return;
+    return nothingToRemove;
   }
+  const registered = action as RowAction;
   replace({
     ...registrations,
-    rowActions: appended(registrations.rowActions, target, action as RowAction),
+    rowActions: appended(registrations.rowActions, target, registered),
   });
+  return once(() =>
+    replace({
+      ...registrations,
+      rowActions: without(registrations.rowActions, target, registered),
+    })
+  );
 }
 
-/** Add a bulk action (rendered in the selection bar). */
+/**
+ * Add a bulk action (rendered in the selection bar). Returns the
+ * registration's removal.
+ */
 export function registerBulkAction<
   Row extends object = Record<string, unknown>,
->(target: DataTableTarget, action: BulkAction<Row>): void {
+>(target: DataTableTarget, action: BulkAction<Row>): () => void {
   if (!target) {
     console.warn("registerBulkAction: a target is required.");
-    return;
+    return nothingToRemove;
   }
+  const registered = action as BulkAction;
   replace({
     ...registrations,
-    bulkActions: appended(
-      registrations.bulkActions,
-      target,
-      action as BulkAction
-    ),
+    bulkActions: appended(registrations.bulkActions, target, registered),
   });
+  return once(() =>
+    replace({
+      ...registrations,
+      bulkActions: without(registrations.bulkActions, target, registered),
+    })
+  );
 }
 
 // ============================================================================
