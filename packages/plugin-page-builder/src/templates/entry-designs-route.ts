@@ -22,21 +22,37 @@
  * read some entries and not others, and an own design names its entry, its
  * title that entry's title when it was given. So the own designs found are
  * kept only where the caller may read their entries, asked of the collection
- * in one read as the caller.
+ * in one read as the caller for each page of own designs.
+ *
+ * ## Read page by page
+ *
+ * Which own designs survive that filter is known only after the rows are
+ * read, so the newest {@link ENTRY_DESIGNS_MAX} rows may hold few the caller
+ * may read, or none, while older ones hold many. The rows are therefore read a
+ * page of {@link ENTRY_DESIGNS_MAX} at a time, each page filtered as above,
+ * until the list holds {@link ENTRY_DESIGNS_MAX} own designs or the rows run
+ * out. A collection whose own designs fill
+ * {@link ENTRY_DESIGNS_SCAN_PAGES} pages stops there, and so does a list cut
+ * at its bound with rows still unread: both answer `meta.hasNext`, which the
+ * surfaces read as "more may exist", never as the whole list.
  *
  * ## Three queries
  *
  * The collection's template is the one row naming the collection; its own
  * designs are the rows naming it as their entry's collection, an indexed
- * field, newest edit first and capped at {@link ENTRY_DESIGNS_MAX}, or the
- * one row holding an entry's unique key; and the entries those name that the
- * caller may read, by id. Each selects only the columns it needs.
+ * field, newest edit first, a page of {@link ENTRY_DESIGNS_MAX} at a time, or
+ * the one row holding an entry's unique key; and, for each page, the entries
+ * those name that the caller may read, by id. Each selects only the columns
+ * it needs.
  *
  * @experimental Settles when collection templates ship.
  * @module templates/entry-designs-route
  */
-import { getCachedNextly, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
-import { respondList } from "nextly";
+import {
+  getCachedNextly,
+  respondList,
+  type PluginRouteContext,
+} from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
 import { labelOf, pluralLabelOf } from "../collection-labels";
@@ -64,6 +80,15 @@ import {
   templateCollectionProblem,
   type TemplateGuardSetup,
 } from "./template-guard";
+
+/**
+ * The most pages of own design rows one read goes through looking for those
+ * the caller may read: {@link ENTRY_DESIGNS_MAX} rows each. Own designs are the
+ * exception in a collection, so a collection past this many is far outside
+ * what the surfaces are for, and the read stops rather than walk every row of
+ * it; `meta.hasNext` then says the list is not the whole.
+ */
+export const ENTRY_DESIGNS_SCAN_PAGES = 10;
 
 /** One slug or id as a query carries it. */
 const QUERY_ID = z.string().trim().min(1).max(512);
@@ -120,6 +145,8 @@ export interface EntryDesignsReads {
     limit: number;
     select: Record<string, true>;
     sort?: string[];
+    /** Which page of `limit` rows, from 1; the first when absent. */
+    page?: number;
   }): Promise<{ rows: Record<string, unknown>[]; hasNext: boolean }>;
   /** Which of `ids` the caller may read in `collection`, in one read. */
   readableEntries(
@@ -286,6 +313,50 @@ function templateOf(
     : { id, title: titleOf(row, id), status: stateOf(row) };
 }
 
+/** The own designs a read found that the caller may read, and if more may. */
+interface ReadableDesigns {
+  readonly items: EntryDesignItem[];
+  readonly hasNext: boolean;
+}
+
+/**
+ * The own designs `ask` is about whose entries the caller may read, newest
+ * edit first: read a page at a time and filtered as each page lands, until
+ * the bound is filled, the rows run out or the page ceiling is reached. An
+ * own design a page repeats, as one edited mid-read can move between pages,
+ * is listed once.
+ */
+async function readableDesigns(
+  ask: EntryDesignsAsk,
+  reads: EntryDesignsReads
+): Promise<ReadableDesigns> {
+  const query = designsQuery(ask);
+  const items: EntryDesignItem[] = [];
+  const seen = new Set<string>();
+  for (let page = 1; ; page += 1) {
+    const designs = await reads.templates({ ...query, page });
+    const found = designs.rows
+      .flatMap(designItemOf)
+      .filter(item => !seen.has(item.id));
+    for (const item of found) seen.add(item.id);
+    const readable = await reads.readableEntries(
+      ask.collection,
+      found.map(item => item.entryId)
+    );
+    items.push(...found.filter(item => readable.has(item.entryId)));
+    // Past the bound, the rest are cut: more exist.
+    if (items.length > query.limit) {
+      return { items: items.slice(0, query.limit), hasNext: true };
+    }
+    if (!designs.hasNext) return { items, hasNext: false };
+    // Rows remain unread, so whether any of them is readable is not known:
+    // the list is honest only as "these, and perhaps more".
+    if (items.length === query.limit || page >= ENTRY_DESIGNS_SCAN_PAGES) {
+      return { items, hasNext: true };
+    }
+  }
+}
+
 /** Answer one read for `ask`, as the module docblock describes. */
 export async function readEntryDesigns(
   ask: EntryDesignsAsk,
@@ -329,17 +400,11 @@ export async function readEntryDesigns(
       limit: 1,
       select: { id: true, title: true, status: true },
     }),
-    reads.templates(designsQuery(ask)),
+    // Only the own designs of entries the caller may read, page by page.
+    readableDesigns(ask, reads),
   ]);
   const template = templateOf(base.rows[0]);
-  const found = designs.rows.flatMap(designItemOf);
-  // Only the own designs of entries the caller may read: one read of the
-  // collection, as the caller, for the ids found.
-  const readable = await reads.readableEntries(
-    collection,
-    found.map(item => item.entryId)
-  );
-  const items = found.filter(item => readable.has(item.entryId));
+  const { items } = designs;
 
   return {
     items,
@@ -413,13 +478,14 @@ function directEntryDesignsReads(
         ? (found as Record<string, unknown>)
         : null;
     },
-    templates: async ({ where, limit, select, sort }) =>
+    templates: async ({ where, limit, select, sort, page }) =>
       rowsOf(
         await readOrNull(async () =>
           (await getCachedNextly()).find({
             collection: templates,
             where,
             limit,
+            ...(page === undefined ? {} : { page }),
             select,
             ...(sort === undefined ? {} : { sort }),
             ...(await readingAsUser(ctx)),

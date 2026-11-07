@@ -56,7 +56,8 @@ const { OwnDesignsChip, TemplateOwnDesigns } = await import(
 function answer(
   items: EntryDesignsResponse["items"],
   templateId = "t1",
-  templateStatus: "draft" | "published" = "published"
+  templateStatus: "draft" | "published" = "published",
+  hasNext = false
 ): EntryDesignsResponse {
   return {
     items,
@@ -65,7 +66,7 @@ function answer(
       page: 1,
       limit: 500,
       totalPages: 1,
-      hasNext: false,
+      hasNext,
       hasPrev: false,
       template: { id: templateId, title: "Blog post", status: templateStatus },
       templateReadable: true,
@@ -165,6 +166,35 @@ describe("a template's own designs, in its document panel", () => {
     expect(screen.queryByRole("link")).toBeNull();
   });
 
+  it("gives a floor, not a count, where more may exist than are listed", () => {
+    designs = answer(TWO, "t1", "published", true);
+    panelSection();
+    expect(
+      screen.getByText("2 or more posts have their own design")
+    ).toBeTruthy();
+    expect(
+      screen.getByText("More may exist that aren't listed here.")
+    ).toBeTruthy();
+    expect(screen.queryByText("2 posts have their own design")).toBeNull();
+  });
+
+  it("does not say none have one where none are listed but more may exist", () => {
+    // The read stopped before it looked at every own design: an empty list
+    // is not "none", so the empty state is not drawn.
+    designs = answer([], "t1", "published", true);
+    panelSection();
+    expect(
+      screen.getByText("Some posts may have their own design")
+    ).toBeTruthy();
+    expect(
+      screen.getByText("More may exist that aren't listed here.")
+    ).toBeTruthy();
+    expect(screen.queryByText("No post has its own design.")).toBeNull();
+    expect(
+      screen.queryByText("Every post is shown with this template.")
+    ).toBeNull();
+  });
+
   it("says a draft own design's entry is not a page while the template is not published", () => {
     designs = answer(TWO, "t1", "draft");
     panelSection();
@@ -216,6 +246,17 @@ describe("the builder's own designs chip", () => {
     const { container } = render(<OwnDesignsChip />);
     expect(container.innerHTML).toBe("");
     expect(asked.some(path => path.startsWith("/templates/"))).toBe(false);
+  });
+
+  it("is drawn where none are listed but more may exist", () => {
+    identity = { kind: "collection", slug: "templates", documentId: "t1" };
+    designs = answer([], "t1", "published", true);
+    render(<OwnDesignsChip />);
+    expect(
+      screen.getByRole("button", {
+        name: "Some posts may have their own design",
+      })
+    ).toBeTruthy();
   });
 
   it("is not drawn while no entry has its own design", () => {

@@ -106,12 +106,30 @@ function isDeclaredSection(entry: unknown): entry is DeclaredPanelSection {
 }
 
 /**
+ * Whether a declared section applies to `entry` of collection `slug`: it is
+ * not narrowed to other collections, and its rule, if any, holds for the
+ * entry as the reader's read returned it.
+ */
+function appliesTo(
+  part: DeclaredPanelSection,
+  slug: string,
+  entry: unknown
+): boolean {
+  if (part.collections !== undefined && !part.collections.includes(slug)) {
+    return false;
+  }
+  return part.visibleWhen === undefined || rowMatches(part.visibleWhen, entry);
+}
+
+/**
  * The document panel's parts for one entry of collection `slug`, in the order
  * the server placed them: the built-in sections, less any a contribution
  * replaces, with the side panel sections plugins declared at the
  * `collection.edit` place among them. A section narrowed to other
  * collections, or whose rule does not hold for `entry` as the reader's read
- * returned it, is left out.
+ * returned it, is left out; where it replaces a built-in section, that
+ * section is drawn in its place instead, as the server answers a replacement
+ * the reader may not see.
  *
  * `undefined` when the place has no list for this reader, so the panel draws
  * its own sections in their usual order.
@@ -126,14 +144,13 @@ export function panelOrderFor(
   return delivered.flatMap((part): PanelOrderEntry[] => {
     if ("builtIn" in part) return [{ kind: "builtIn", name: part.builtIn }];
     if (!isDeclaredSection(part)) return [];
-    if (part.collections !== undefined && !part.collections.includes(slug)) {
-      return [];
-    }
-    if (
-      part.visibleWhen !== undefined &&
-      !rowMatches(part.visibleWhen, entry)
-    ) {
-      return [];
+    if (!appliesTo(part, slug, entry)) {
+      // The server sent the replacement in the built-in's place, so leaving
+      // both out would take the built-in away from every entry the
+      // replacement does not apply to.
+      return part.replaces === undefined
+        ? []
+        : [{ kind: "builtIn", name: part.replaces }];
     }
     return [
       {

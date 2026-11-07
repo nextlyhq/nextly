@@ -9,8 +9,10 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import { ENTRY_DESIGNS_MAX } from "./entry-designs-contract";
 import {
   askOfTemplate,
+  ENTRY_DESIGNS_SCAN_PAGES,
   readEntryDesigns,
   type EntryDesignsAsk,
   type EntryDesignsReads,
@@ -89,6 +91,39 @@ function reads(
 
 const POSTS_ASK: EntryDesignsAsk = { collection: "posts" };
 
+/**
+ * `count` own designs, newest first, served a page at a time as core's find
+ * serves them, with the entries the caller may read chosen by `readable`.
+ */
+function pagedReads(count: number, readable: (index: number) => boolean) {
+  const rows = Array.from({ length: count }, (_, index) =>
+    design(`d${String(index)}`, `p${String(index)}`)
+  );
+  const injected = reads(ALL_RIGHTS).injected;
+  const templates = vi.fn<EntryDesignsReads["templates"]>(args => {
+    if ("collection" in args.where) {
+      return Promise.resolve({ rows: [], hasNext: false });
+    }
+    const start = ((args.page ?? 1) - 1) * args.limit;
+    return Promise.resolve({
+      rows: rows.slice(start, start + args.limit),
+      hasNext: start + args.limit < rows.length,
+    });
+  });
+  const readableEntries = vi.fn<EntryDesignsReads["readableEntries"]>(
+    (_collection, ids) =>
+      Promise.resolve(new Set(ids.filter(id => readable(Number(id.slice(1))))))
+  );
+  return {
+    injected: { ...injected, templates, readableEntries },
+    designPages: () =>
+      templates.mock.calls
+        .map(([args]) => args)
+        .filter(args => !("collection" in args.where))
+        .map(args => args.page),
+  };
+}
+
 describe("readEntryDesigns", () => {
   it("reads nothing of a collection the caller may not read", async () => {
     const { setup, readCollection } = guard();
@@ -134,6 +169,59 @@ describe("readEntryDesigns", () => {
     expect(answer.meta.total).toBe(1);
     expect(readableEntries).toHaveBeenCalledTimes(1);
     expect(readableEntries).toHaveBeenCalledWith("posts", ["p1", "p2"]);
+  });
+
+  it("reads past a first page that holds none the caller may read", async () => {
+    // The newest page is all entries the caller may not read; the next holds
+    // readable ones. A read that filtered one capped page would answer an
+    // empty list, which the template's screens would say as "none".
+    const { setup } = guard();
+    const paged = pagedReads(
+      ENTRY_DESIGNS_MAX + 100,
+      index => index >= ENTRY_DESIGNS_MAX
+    );
+    const answer = await readEntryDesigns(POSTS_ASK, setup, paged.injected);
+
+    expect(answer.items).toHaveLength(100);
+    expect(answer.items[0]?.entryId).toBe(`p${String(ENTRY_DESIGNS_MAX)}`);
+    expect(answer.meta.hasNext).toBe(false);
+    expect(paged.designPages()).toEqual([1, 2]);
+  });
+
+  it("fills the bound across pages, and says more may exist while rows remain", async () => {
+    // Every other entry is readable, so the bound fills on the second page
+    // with a third still unread.
+    const { setup } = guard();
+    const paged = pagedReads(ENTRY_DESIGNS_MAX * 3, index => index % 2 === 0);
+    const answer = await readEntryDesigns(POSTS_ASK, setup, paged.injected);
+
+    expect(answer.items).toHaveLength(ENTRY_DESIGNS_MAX);
+    expect(answer.meta.hasNext).toBe(true);
+    expect(paged.designPages()).toEqual([1, 2]);
+  });
+
+  it("answers the whole list as whole once the rows run out", async () => {
+    const { setup } = guard();
+    const paged = pagedReads(ENTRY_DESIGNS_MAX, () => true);
+    const answer = await readEntryDesigns(POSTS_ASK, setup, paged.injected);
+
+    expect(answer.items).toHaveLength(ENTRY_DESIGNS_MAX);
+    expect(answer.meta.hasNext).toBe(false);
+    expect(paged.designPages()).toEqual([1]);
+  });
+
+  it("stops at the page ceiling and says more may exist, never that there are none", async () => {
+    const { setup } = guard();
+    const paged = pagedReads(
+      ENTRY_DESIGNS_MAX * (ENTRY_DESIGNS_SCAN_PAGES + 1),
+      () => false
+    );
+    const answer = await readEntryDesigns(POSTS_ASK, setup, paged.injected);
+
+    expect(answer.items).toEqual([]);
+    // Not definitive: the surfaces read this as "more may exist".
+    expect(answer.meta.hasNext).toBe(true);
+    expect(paged.designPages()).toHaveLength(ENTRY_DESIGNS_SCAN_PAGES);
   });
 
   it("answers one entry's own design by its key, not from the capped list", async () => {

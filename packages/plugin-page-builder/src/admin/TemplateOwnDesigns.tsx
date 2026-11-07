@@ -60,9 +60,21 @@ function isCollectionTemplate(
   return answer !== undefined && answer.meta.template?.id === id;
 }
 
+/**
+ * Whether there is anything to say beyond "none": own designs listed, or a
+ * list the read says may not be the whole, where none listed is not none.
+ */
+function hasAnyToSay(answer: EntryDesignsResponse): boolean {
+  return answer.items.length > 0 || answer.meta.hasNext;
+}
+
 /** The count, said as a heading would say it. */
 function ownDesignsSummary(answer: EntryDesignsResponse): string {
   const { names } = answer.meta;
+  // A list that may not be the whole gives a floor, never an exact count.
+  if (answer.meta.hasNext) {
+    return WORDS.someHaveOrMore(answer.items.length, names.plural);
+  }
   return answer.items.length === 0
     ? WORDS.noneHave(names.singular)
     : WORDS.someHave(answer.items.length, names.singular, names.plural);
@@ -138,6 +150,12 @@ function OwnDesignsList({
 }): JSX.Element {
   const { meta, items } = answer;
   const templatePublished = meta.template?.status === "published";
+  // Said only where the list is the whole: with more possibly unlisted, an
+  // empty list does not mean no entry has one.
+  const more = meta.hasNext ? (
+    <p className="px-2 text-xs text-muted-foreground">{WORDS.notAllListed}</p>
+  ) : null;
+  if (items.length === 0 && more !== null) return more;
   if (items.length === 0) {
     return (
       <div className="flex flex-col items-center gap-1 px-2 py-5 text-center text-sm text-muted-foreground">
@@ -159,17 +177,23 @@ function OwnDesignsList({
     );
   }
   return (
-    <ul className="-mx-2 flex flex-col" aria-label={ownDesignsSummary(answer)}>
-      {items.map(item => (
-        <OwnDesignRow
-          key={item.id}
-          collection={meta.collection}
-          item={item}
-          templatePublished={templatePublished}
-          now={now}
-        />
-      ))}
-    </ul>
+    <>
+      <ul
+        className="-mx-2 flex flex-col"
+        aria-label={ownDesignsSummary(answer)}
+      >
+        {items.map(item => (
+          <OwnDesignRow
+            key={item.id}
+            collection={meta.collection}
+            item={item}
+            templatePublished={templatePublished}
+            now={now}
+          />
+        ))}
+      </ul>
+      {more}
+    </>
   );
 }
 
@@ -211,7 +235,7 @@ export function TemplateOwnDesigns({
   // what it means come first.
   return (
     <div className="space-y-2">
-      {answer.items.length === 0 ? null : (
+      {!hasAnyToSay(answer) ? null : (
         <>
           <p className="text-sm font-semibold text-foreground">
             {ownDesignsSummary(answer)}
@@ -247,7 +271,7 @@ export function OwnDesignsChip(): JSX.Element | null {
   const [open, setOpen] = useState(false);
   if (id === undefined || !isCollectionTemplate(read.data, id)) return null;
   const answer = read.data;
-  if (answer.items.length === 0) return null;
+  if (!hasAnyToSay(answer)) return null;
   const summary = ownDesignsSummary(answer);
   return (
     <Popover open={open} onOpenChange={setOpen}>

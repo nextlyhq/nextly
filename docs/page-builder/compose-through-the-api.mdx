@@ -262,8 +262,10 @@ GET /admin/api/plugins/@nextlyhq/plugin-page-builder/templates/entry-designs?col
 ```
 
 Answers the collection's own designs in the list envelope, newest edit first, each as
-`id`, `entryId`, `title`, `status` and `updatedAt`, up to 500 (`meta.hasNext` says when
-there are more). Add `&entry=<id>` to answer that one entry's own design, or none, by its
+`id`, `entryId`, `title`, `status` and `updatedAt`, up to 500, and only those whose
+entries the caller may read. `meta.hasNext` says there may be more: the list was cut at
+500, or the read stopped after looking through 5,000 own designs without filling it, so
+treat the list as a floor then, never as the whole. Add `&entry=<id>` to answer that one entry's own design, or none, by its
 key: ask that, not the capped list, whether an entry has one. Ask with `?template=<id>`
 instead to read for the collection that template draws or, for an own design, for its
 entry alone.

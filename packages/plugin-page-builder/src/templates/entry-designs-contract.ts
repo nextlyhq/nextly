@@ -16,12 +16,14 @@
  * collection's names. Everything is read as the caller: a caller who may not
  * read the collection or the templates is answered an empty list and no
  * template, and an own design is listed only when the caller may read its
- * entry.
+ * entry. `meta.hasNext` says the list may not be the whole: cut at its bound,
+ * or stopped before every own design was looked at, so a surface says "and
+ * perhaps more" rather than presenting it, or its emptiness, as definitive.
  *
  * @experimental Settles when collection templates ship.
  * @module templates/entry-designs-contract
  */
-import type { PaginationMeta } from "nextly";
+import type { PaginationMeta } from "@nextlyhq/plugin-sdk";
 
 /** Where the read is served, under the plugin's route prefix. */
 export const ENTRY_DESIGNS_ROUTE_PATH = "/templates/entry-designs";
@@ -36,7 +38,9 @@ export const ENTRY_DESIGNS_PARAMS = {
 /**
  * The most own designs one read lists. Own designs are the exception in a
  * collection, so a list this long is already more than a screen shows; past
- * it, `meta.hasNext` says the list was cut.
+ * it, or where the read stopped before looking at every own design, as it
+ * does for a caller who may read only some of the collection's entries,
+ * `meta.hasNext` says the list may not be the whole.
  */
 export const ENTRY_DESIGNS_MAX = 500;
 

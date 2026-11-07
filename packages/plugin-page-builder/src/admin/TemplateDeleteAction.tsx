@@ -41,6 +41,7 @@ import {
 import { useState, type JSX } from "react";
 
 import {
+  inSentence,
   OWN_DESIGN_WORDS,
   reasonOf,
   runTemplateAction,
@@ -62,6 +63,8 @@ const TEMPLATE_DELETE_WORDS = {
   notShown: "Not shown until its design is published",
   keptSays: "Their own designs are kept, and serve them once published.",
   keptMore: "And more not listed here.",
+  keptUnlisted: (plural: string): string =>
+    `Some ${inSentence(plural)} may have their own design that isn't listed here.`,
   deleteConfirm: "Delete template",
   deleting: "Deleting…",
   plainTitle: "Delete this template?",
@@ -286,7 +289,10 @@ function CollectionTemplateWords({
         title={TEMPLATE_DELETE_WORDS.deleteTitle(meta.template?.title ?? "")}
         says={TEMPLATE_DELETE_WORDS.stopShown(meta.names.plural)}
       />
-      {items.length === 0 ? null : <KeptDesigns answer={answer} />}
+      {/* Nothing listed is "none kept" only where the list is the whole. */}
+      {items.length === 0 && !meta.hasNext ? null : (
+        <KeptDesigns answer={answer} />
+      )}
     </>
   );
 }
@@ -301,24 +307,30 @@ function KeptDesigns({
   const heading = TEMPLATE_DELETE_WORDS.keptHeading(meta.names.plural);
   return (
     <div className="space-y-2 text-sm">
-      <div className="overflow-hidden rounded-md border border-border">
-        <p className="flex justify-between gap-3 bg-muted px-3 py-2 text-xs font-semibold text-muted-foreground">
-          <span>{heading}</span>
-          <span>{TEMPLATE_DELETE_WORDS.kept(items.length)}</span>
-        </p>
-        <ul
-          className="max-h-48 divide-y divide-border overflow-y-auto"
-          aria-label={heading}
-        >
-          {items.map(item => (
-            <KeptDesign key={item.id} item={item} />
-          ))}
-        </ul>
-      </div>
-      {/* The list is capped; past it, the count above is a floor. */}
+      {items.length === 0 ? null : (
+        <div className="overflow-hidden rounded-md border border-border">
+          <p className="flex justify-between gap-3 bg-muted px-3 py-2 text-xs font-semibold text-muted-foreground">
+            <span>{heading}</span>
+            <span>{TEMPLATE_DELETE_WORDS.kept(items.length)}</span>
+          </p>
+          <ul
+            className="max-h-48 divide-y divide-border overflow-y-auto"
+            aria-label={heading}
+          >
+            {items.map(item => (
+              <KeptDesign key={item.id} item={item} />
+            ))}
+          </ul>
+        </div>
+      )}
+      {/* The list may not be the whole: cut at its bound, or read only so
+        far. The count above is then a floor, and with none listed the
+        dialog still says some may be kept. */}
       {meta.hasNext ? (
         <p className="text-muted-foreground">
-          {TEMPLATE_DELETE_WORDS.keptMore}
+          {items.length === 0
+            ? TEMPLATE_DELETE_WORDS.keptUnlisted(meta.names.plural)
+            : TEMPLATE_DELETE_WORDS.keptMore}
         </p>
       ) : null}
       <p className="text-muted-foreground">{TEMPLATE_DELETE_WORDS.keptSays}</p>

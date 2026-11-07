@@ -42,9 +42,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 const { TemplateDeleteAction } = await import("./TemplateDeleteAction");
 
 function answer(
-  options: { entry?: string | null; hasNext?: boolean } = {}
+  options: { entry?: string | null; hasNext?: boolean; none?: boolean } = {}
 ): EntryDesignsResponse {
-  const items: EntryDesignsResponse["items"] = [
+  const listed: EntryDesignsResponse["items"] = [
     {
       id: "d1",
       entryId: "p1",
@@ -60,10 +60,11 @@ function answer(
       updatedAt: null,
     },
   ];
+  const items = options.none === true ? [] : listed;
   return {
     items,
     meta: {
-      total: 2,
+      total: items.length,
       page: 1,
       limit: 500,
       totalPages: 1,
@@ -151,6 +152,35 @@ describe("deleting a template", () => {
     designs = answer({ hasNext: true });
     open("t1");
     expect(screen.getByText("And more not listed here.")).toBeTruthy();
+  });
+
+  it("does not say none are kept when none are listed but more may exist", () => {
+    // The read stopped before it looked at every own design, so an empty
+    // list is not "none": the dialog says some may be kept.
+    designs = answer({ none: true, hasNext: true });
+    open("t1");
+    expect(
+      screen.getByText(
+        "Some posts may have their own design that isn't listed here."
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Their own designs are kept, and serve them once published."
+      )
+    ).toBeTruthy();
+    expect(screen.queryByRole("list")).toBeNull();
+  });
+
+  it("says nothing of kept own designs where the whole list is empty", () => {
+    designs = answer({ none: true });
+    open("t1");
+    expect(screen.queryByText(/may have their own design/)).toBeNull();
+    expect(
+      screen.queryByText(
+        "Their own designs are kept, and serve them once published."
+      )
+    ).toBeNull();
   });
 
   it("asks about an own design as the entry's Design section does", () => {

@@ -132,6 +132,42 @@ describe("panelOrderFor", () => {
     expect(ids).toEqual(["acme.design", "status", "details"]);
   });
 
+  it("draws the built-in a section replaces wherever the section does not apply", () => {
+    // The server sends a replacement in the built-in's place, so a
+    // conditional replacement that does not apply must give the built-in
+    // back, or the Status section vanishes from every other entry.
+    const replacing = {
+      "collection.edit": {
+        sidebarSection: [
+          {
+            id: "acme.status",
+            kind: "sidebarSection",
+            plugin: "@acme/designs",
+            label: "Status",
+            component: "a#Status",
+            replaces: "status",
+            collections: ["pages"],
+            visibleWhen: { field: "featured", equals: true },
+          },
+          { builtIn: "details" },
+        ],
+      },
+    } as unknown as AdminContributionsMeta;
+    const names = (slug: string, entry: unknown) =>
+      panelOrderFor(replacing, slug, entry)?.map(part =>
+        part.kind === "section" ? part.id : part.name
+      );
+
+    // Applies: the plugin's section stands in the built-in's place.
+    expect(names("pages", { featured: true })).toEqual([
+      "acme.status",
+      "details",
+    ]);
+    // Narrowed to another collection, or its rule fails: the built-in.
+    expect(names("posts", { featured: true })).toEqual(["status", "details"]);
+    expect(names("pages", { featured: false })).toEqual(["status", "details"]);
+  });
+
   it("answers nothing when the place has no list, so the panel keeps its own order", () => {
     expect(panelOrderFor({}, "posts", {})).toBeUndefined();
     expect(panelOrderFor(undefined, "posts", {})).toBeUndefined();

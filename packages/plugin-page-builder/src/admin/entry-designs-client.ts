@@ -235,6 +235,15 @@ export const OWN_DESIGN_WORDS = {
     count === 1
       ? `1 ${inSentence(singular)} has its own design`
       : `${String(count)} ${inSentence(plural)} have their own design`,
+  /**
+   * The count where the read says the list may not be the whole: cut at its
+   * bound, or stopped before it looked at every own design.
+   */
+  someHaveOrMore: (count: number, plural: string): string =>
+    count === 0
+      ? `Some ${inSentence(plural)} may have their own design`
+      : `${String(count)} or more ${inSentence(plural)} have their own design`,
+  notAllListed: "More may exist that aren't listed here.",
   noneHave: (singular: string): string =>
     `No ${inSentence(singular)} has its own design.`,
   noneHaveMore: (singular: string): string =>
