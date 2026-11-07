@@ -378,6 +378,7 @@ import { unlinkCopies } from "./templates/unlink-copies";
 import { tokenUsageIndex } from "./token-usage";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
+import { unbindPlanRoute } from "./unbind-plan-route";
 import { usageBackfillJob } from "./usage-backfill-job";
 import {
   backfillScopes,
@@ -3746,6 +3747,9 @@ export const pageBuilder = (
         // The canvas's bound props: the entry being edited, the Singles its
         // bindings read and the site settings, read as the author asking.
         canvasBindingsRoute(),
+        // An unbind's plan for the inspector, against the document it holds:
+        // the same decision as the page actions API's, applied by the editor.
+        unbindPlanRoute(),
         // The documents whose bindings no longer fit, for those who edit
         // pages, each listed only when the caller may read it.
         bindingsToFixRoute({
