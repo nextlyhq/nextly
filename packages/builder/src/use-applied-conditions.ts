@@ -16,6 +16,7 @@ import {
   appliedConditionsOf,
   type AppliedConditions,
   type ConditionsPreview,
+  type DrawnWith,
 } from "./applied-conditions";
 import { useLoopCollections } from "./collection-loop-controls";
 import {
@@ -83,6 +84,8 @@ export interface AppliedConditionsOptions {
   readonly limits?: DocumentLimits;
   /** The definitions of the components the page places. */
   readonly definitions?: DefinitionsById;
+  /** The regions of the page's Layout the canvas draws around it. */
+  readonly regions?: DrawnWith["regions"];
   /** The site's time zone, as the canvas's bindings read it. */
   readonly timeZone?: string;
 }
@@ -105,6 +108,7 @@ export function useAppliedConditions(
     componentTitle,
     limits,
     definitions,
+    regions,
     timeZone,
   }: AppliedConditionsOptions
 ): AppliedConditions | undefined {
@@ -132,8 +136,9 @@ export function useAppliedConditions(
             {
               ...(limits === undefined ? {} : { limits }),
               ...(definitions === undefined ? {} : { definitions }),
+              ...(regions === undefined ? {} : { regions }),
             }
           ),
-    [document, preview, componentTitle, limits, definitions]
+    [document, preview, componentTitle, limits, definitions, regions]
   );
 }

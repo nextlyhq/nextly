@@ -16,13 +16,14 @@
  * @module applied-conditions
  */
 import {
-  COMPONENT_INSTANCE_TYPE,
   CONDITION_HIDDEN_TYPE,
   conditionScopeIn,
   DEFAULT_LIMITS,
+  DOCUMENT_FORMAT_VERSION,
   evaluateConditions,
   isPlainRecord,
   mapForest,
+  resolveComponentInstances,
   revealConditioned,
   storedVisibilityOf,
   type BlockDocument,
@@ -118,36 +119,98 @@ export function appliedConditionsOf(
   document: BlockDocument,
   preview: ConditionsPreview,
   nameOf: (node: BlockNode) => string,
-  drawn: {
-    /** The limits the canvas draws under, so every block it draws is judged. */
-    readonly limits?: DocumentLimits;
-    /** The definitions of the components the page places. */
-    readonly definitions?: DefinitionsById;
-  } = {}
+  drawn: DrawnWith = {}
 ): AppliedConditions {
-  const { shown, hidden, unjudged } = judgedBlocks(
+  const { shown, hidden, markers, unjudged } = judgedBlocks(
     document,
     preview,
     nameOf,
-    drawn
+    drawn.limits
   );
-  const byId = new Map(hidden.map(block => [block.id, block]));
-  // Every conditioned block is drawn, as the canvas draws them while
-  // conditions are not applied; a hidden one then becomes its marker.
-  const revealed = revealConditioned(document);
-  const nodes =
-    byId.size === 0
-      ? revealed.nodes
-      : mapForest(revealed.nodes, node => {
-          const block = byId.get(node.id);
-          return block === undefined ? node : markerFor(block, node);
-        });
+  // A hidden block becomes its marker: matched by its id AND its stored
+  // conditions, so a duplicate id elsewhere (stored data may hold one) with
+  // conditions of its own, or none, is drawn as itself.
+  const marked =
+    markers.size === 0
+      ? document
+      : {
+          ...document,
+          nodes: mapForest(document.nodes, node => {
+            const block = gatedAsStored(node)
+              ? markers.get(occurrenceKey(node))
+              : undefined;
+            return block === undefined ? node : markerFor(block, node);
+          }),
+        };
+  // Every other conditioned block is drawn, as the canvas draws them while
+  // conditions are not applied.
   return {
-    document: nodes === revealed.nodes ? revealed : { ...revealed, nodes },
+    document: revealConditioned(marked),
     shown,
     hidden,
-    unjudged,
+    unjudged: unjudged || drawsUnjudged(document, drawn),
   };
+}
+
+/**
+ * What else the canvas draws the page with, whose conditioned blocks are not
+ * judged here: the definitions of the components it places, and the regions
+ * of its Layout.
+ */
+export interface DrawnWith {
+  /** The limits the canvas draws under, so every block it draws is judged. */
+  readonly limits?: DocumentLimits;
+  /** The definitions of the components the page places. */
+  readonly definitions?: DefinitionsById;
+  /** The regions of the page's Layout, drawn around it, each with its own definitions. */
+  readonly regions?: readonly {
+    readonly document: BlockDocument;
+    readonly definitions?: DefinitionsById;
+  }[];
+}
+
+/**
+ * Whether the canvas draws a conditioned block this does not judge: one in a
+ * component the page reaches, or anything conditioned in a region of its
+ * Layout.
+ */
+function drawsUnjudged(document: BlockDocument, drawn: DrawnWith): boolean {
+  return (
+    reachesConditioned(document, drawn.definitions, drawn.limits) ||
+    (drawn.regions ?? []).some(
+      region =>
+        conditionedBlocksIn(region.document, drawn.limits).any ||
+        reachesConditioned(region.document, region.definitions, drawn.limits)
+    )
+  );
+}
+
+/**
+ * Whether a document reaches a component holding a conditioned block, as the
+ * resolver reaches them: through each placement, the components they place,
+ * and whichever a variant or an override selects.
+ */
+function reachesConditioned(
+  document: BlockDocument,
+  definitions: DefinitionsById | undefined,
+  limits: DocumentLimits | undefined
+): boolean {
+  if (definitions === undefined || definitions.size === 0) return false;
+  const { referenced } = resolveComponentInstances(document, definitions, {
+    conditioned: "carry",
+    ...(limits === undefined ? {} : { limits }),
+  });
+  return referenced.some(id => {
+    const definition = definitions.get(id);
+    return (
+      definition !== undefined && conditionedBlocksIn(definition, limits).any
+    );
+  });
+}
+
+/** One occurrence of a conditioned block: its id and its stored conditions. */
+function occurrenceKey(node: BlockNode): string {
+  return `${node.id}\0${JSON.stringify(storedVisibilityOf(node.visibility) ?? null)}`;
 }
 
 /**
@@ -156,18 +219,24 @@ export function appliedConditionsOf(
  * devices it is hidden on, which the marker is hidden on too, as the block
  * would be whatever its conditions said.
  */
-function markerFor(block: HiddenBlock, drawn: BlockNode): BlockNode {
+function markerFor(block: HiddenBlock, stored: BlockNode): BlockNode {
   const props: ConditionHiddenProps = {
     name: block.name,
     reason: block.reason,
     unchecked: block.unchecked,
   };
+  // Its conditions lifted as the canvas lifts them, keeping its devices.
+  const devices = revealConditioned({
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [{ ...stored, slots: {} }],
+  }).nodes[0]?.visibility;
   return {
     id: block.id,
     type: CONDITION_HIDDEN_TYPE,
     version: 1,
     props,
-    ...(drawn.visibility === undefined ? {} : { visibility: drawn.visibility }),
+    ...(devices === undefined ? {} : { visibility: devices }),
   };
 }
 
@@ -186,18 +255,18 @@ function judgedBlocks(
   document: BlockDocument,
   preview: ConditionsPreview,
   nameOf: (node: BlockNode) => string,
-  drawn: {
-    readonly limits?: DocumentLimits;
-    readonly definitions?: DefinitionsById;
-  }
-): { shown: Set<string>; hidden: HiddenBlock[]; unjudged: boolean } {
+  limits: DocumentLimits | undefined
+): {
+  shown: Set<string>;
+  hidden: HiddenBlock[];
+  markers: Map<string, HiddenBlock>;
+  unjudged: boolean;
+} {
   const shown = new Set<string>();
   const hidden: HiddenBlock[] = [];
+  const markers = new Map<string, HiddenBlock>();
   let unjudged = false;
-  walkScoped(document, drawn.limits, (block, scope) => {
-    // A placed component's own conditioned blocks are drawn from its
-    // definition and not judged here, so nothing claims they all show.
-    unjudged ||= placesConditioned(block, drawn.definitions, drawn.limits);
+  walkScoped(document, limits, (block, scope) => {
     if (!gatedAsStored(block)) return true;
     if (scope.source !== "entry") {
       unjudged = true;
@@ -208,14 +277,16 @@ function judgedBlocks(
       shown.add(block.id);
       return true;
     }
-    hidden.push({
+    const judged: HiddenBlock = {
       id: block.id,
       name: nameOf(block),
       ...reasonOf(block, verdict, preview),
-    });
+    };
+    hidden.push(judged);
+    markers.set(occurrenceKey(block), judged);
     return false;
   });
-  return { shown, hidden, unjudged };
+  return { shown, hidden, markers, unjudged };
 }
 
 /**
@@ -276,48 +347,6 @@ function walkScoped(
       stack.push(...childVisits(next.node, next.scope));
     }
   }
-}
-
-/**
- * Whether a block places a component whose definition holds a conditioned
- * block, at any depth of the components it places in turn. Bounded by the
- * node limit and by each component read once, as the resolver reads them.
- */
-function placesConditioned(
-  block: BlockNode,
-  definitions: DefinitionsById | undefined,
-  limits: DocumentLimits | undefined
-): boolean {
-  if (definitions === undefined || block.type !== COMPONENT_INSTANCE_TYPE) {
-    return false;
-  }
-  const seen = new Set<string>();
-  const queue = [componentIdOf(block)];
-  let left = (limits ?? DEFAULT_LIMITS).maxNodes;
-  while (queue.length > 0 && left > 0) {
-    const id = queue.pop();
-    if (id === undefined || seen.has(id)) continue;
-    seen.add(id);
-    const definition = definitions.get(id);
-    if (definition === undefined) continue;
-    let found = false;
-    walkScoped(definition, limits, node => {
-      left -= 1;
-      if (gatedAsStored(node)) found = true;
-      if (node.type === COMPONENT_INSTANCE_TYPE)
-        queue.push(componentIdOf(node));
-      return !found && left > 0;
-    });
-    if (found) return true;
-  }
-  return false;
-}
-
-/** The component a placement names, or none. */
-function componentIdOf(block: BlockNode): string | undefined {
-  const props: unknown = block.props;
-  if (!isPlainRecord(props)) return undefined;
-  return typeof props.componentId === "string" ? props.componentId : undefined;
 }
 
 /** Whether a stored value is a block this walk can read. */

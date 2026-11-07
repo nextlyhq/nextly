@@ -284,6 +284,86 @@ describe("the page with its conditions applied, as the canvas draws it", () => {
     expect(plain.unjudged).toBe(false);
   });
 
+  it("draws a duplicate id without the hidden block's conditions as itself", () => {
+    // Stored data may repeat an id; only the occurrence whose conditions
+    // fail becomes the marker.
+    const twin = block("worksheet");
+    const applied = appliedConditionsOf(
+      page(worksheet, twin),
+      previewFor({ category: "News" }),
+      nameOf
+    );
+    expect(applied.document.nodes.map(node => node.type)).toEqual([
+      CONDITION_HIDDEN_TYPE,
+      "core/text",
+    ]);
+  });
+
+  it("says a component reached through another, or a Layout region, goes unjudged", () => {
+    const inner = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [worksheet],
+    } as BlockDocument;
+    const outer = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        block("nested", {
+          type: COMPONENT_INSTANCE_TYPE,
+          props: { componentId: "inner" },
+        }),
+      ],
+    } as BlockDocument;
+    const placed = block("placed", {
+      type: COMPONENT_INSTANCE_TYPE,
+      props: { componentId: "outer" },
+    });
+    const definitions = new Map([
+      ["outer", outer],
+      ["inner", inner],
+    ]);
+    // Reached as the resolver reaches it: the page places outer, which
+    // places inner, which holds the conditioned block.
+    expect(
+      appliedConditionsOf(
+        page(placed),
+        previewFor({ category: "Guides" }),
+        nameOf,
+        {
+          definitions,
+        }
+      ).unjudged
+    ).toBe(true);
+    // A region of the page's Layout placing a conditioned component.
+    const region = {
+      document: page(
+        block("region", {
+          type: COMPONENT_INSTANCE_TYPE,
+          props: { componentId: "inner" },
+        })
+      ),
+      definitions: new Map([["inner", inner]]),
+    };
+    expect(
+      appliedConditionsOf(
+        page(block("plain")),
+        previewFor({ category: "Guides" }),
+        nameOf,
+        {
+          regions: [region],
+        }
+      ).unjudged
+    ).toBe(true);
+    expect(
+      appliedConditionsOf(
+        page(block("plain")),
+        previewFor({ category: "Guides" }),
+        nameOf
+      ).unjudged
+    ).toBe(false);
+  });
+
   it("starts a day where the published page does, in the site's zone", () => {
     // Published at 23:30 UTC on 1 March: already 2 March in Tokyo.
     const fields: readonly BindingFieldShape[] = [

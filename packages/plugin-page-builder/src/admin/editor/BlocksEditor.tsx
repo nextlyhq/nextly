@@ -1274,6 +1274,9 @@ function EditorBody<TFieldValues extends FieldValues>({
       limits: canvas.canvasRender.limits,
       // The placed components, whose own conditioned blocks go unchecked.
       definitions: canvas.canvasRender.definitions,
+      // The regions of the page's Layout, whose conditioned blocks go
+      // unchecked too.
+      regions: panels.canvasRegions,
       // The site's zone, as the canvas's bindings read it, for a date a
       // condition compares by day.
       timeZone: canvasRender.bindings.timeZone,
