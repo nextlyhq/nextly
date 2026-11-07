@@ -36,6 +36,7 @@ import {
   LIST_MAX_FILTERS,
   LIST_MAX_SORT_KEYS,
   listKindSortable,
+  listPageCount,
   listQueryIssues,
   locateNode,
   outerListOf,
@@ -67,16 +68,9 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
 } from "@nextlyhq/ui";
-import {
-  ChevronDown,
-  ChevronRight,
-  GripVertical,
-  Link2,
-  MoreHorizontal,
-  Plus,
-  X,
-} from "lucide-react";
+import { GripVertical, Link2, MoreHorizontal, Plus, X } from "lucide-react";
 import * as React from "react";
 
 import { ChoiceList, type ListedChoice } from "./choice-list";
@@ -113,6 +107,11 @@ import {
   type FilterSentence,
 } from "./list-query-model";
 import { RelationControl } from "./relation-control";
+import {
+  SentenceRow,
+  useSentenceRows,
+  type ShownRow as ShownSentenceRow,
+} from "./sentence-row";
 
 /** The props a list's query is stored in, in the order the group draws them. */
 export const LIST_QUERY_PROPS = [
@@ -122,6 +121,7 @@ export const LIST_QUERY_PROPS = [
   "sort",
   "limit",
   "offset",
+  "paginate",
 ] as const;
 
 /** What the group is drawn with: the Content tab's group context. */
@@ -182,7 +182,7 @@ function GroupTitle({
  * so what is said here is what a save would refuse. A host that names none
  * is judged by what it offers, which a save may judge more widely.
  */
-function fieldSourceOf(
+export function fieldSourceOf(
   collections: readonly LoopCollection[]
 ): ListFieldSource {
   const bySlug = new Map(collections.map(each => [each.slug, each]));
@@ -629,7 +629,7 @@ function SourceField({
 }
 
 /** The titles of entries a filter names, read once each through the host. */
-function useEntryTitles(
+export function useEntryTitles(
   find: ContentServices["findEntries"],
   fields: readonly LoopListField[],
   rows: readonly DraftFilter[]
@@ -863,7 +863,7 @@ function ChoiceChecklist({
 }
 
 /** What every value control is given. */
-interface ValueProps {
+export interface ValueProps {
   readonly id: string;
   readonly labelledBy: string;
   readonly field: LoopListField;
@@ -1112,15 +1112,28 @@ const VALUE_CONTROLS: Readonly<
 };
 
 /** The value control a row's field and operator call for; none for exists. */
-function FilterValue(props: ValueProps): React.JSX.Element | null {
+export function FilterValue(props: ValueProps): React.JSX.Element | null {
   if (props.draft.op === "exists") return null;
   const Control = VALUE_CONTROLS[props.field.kind];
   return <Control {...props} />;
 }
 
+/**
+ * A field a menu offers: one a list filters by, or one a condition can only
+ * ask has a value, which names its own kind.
+ */
+export interface OfferedField {
+  readonly name: string;
+  readonly label: string;
+  readonly kind: LoopListField["kind"] | "other";
+  /** What the menu calls its kind, for a field of kind `other`. */
+  readonly kindWords?: string;
+}
+
 /** One field of the field menu, with its kind on the right. */
-interface FieldChoice extends ListedChoice {
-  readonly field: LoopListField;
+export interface FieldChoice<F extends OfferedField = LoopListField>
+  extends ListedChoice {
+  readonly field: F;
 }
 
 /** What a field's kind is called on the right of the menu. */
@@ -1134,23 +1147,24 @@ const KIND_WORDS: Readonly<Record<LoopListField["kind"], string>> = {
 };
 
 /** The field menu's row: the field, and the kind of value it holds. */
-function fieldRow(choice: FieldChoice): React.ReactNode {
+function fieldRow(choice: FieldChoice<OfferedField>): React.ReactNode {
+  const { kind, kindWords } = choice.field;
   return (
     <span className="nx-list-query__field-row">
       <span>{choice.label}</span>
       <span className="nx-list-query__field-kind">
-        {KIND_WORDS[choice.field.kind]}
+        {kindWords ?? (kind === "other" ? "" : KIND_WORDS[kind])}
       </span>
     </span>
   );
 }
 
 /** A field menu's list: the fields, each with its kind on the right. */
-function fieldList(
-  fields: readonly LoopListField[],
+export function fieldList<F extends OfferedField>(
+  fields: readonly F[],
   currentKey: string,
   label: string
-): PickerList<FieldChoice> {
+): PickerList<FieldChoice<F>> {
   return {
     choices: fields.map(each => ({
       key: each.name,
@@ -1167,21 +1181,14 @@ function fieldList(
 }
 
 /** The line under every field menu: what it leaves out, said once. */
-const PUBLIC_ONLY = (
+export const PUBLIC_ONLY: React.JSX.Element = (
   <p className="nx-list-query__menu-foot">
     Only fields visitors can see are listed.
   </p>
 );
 
 /** A filter row as it stands: what is stored, or the draft over it. */
-interface ShownRow {
-  readonly key: string;
-  /** The stored row it edits, or `undefined` for a new one. */
-  readonly index: number | undefined;
-  readonly draft: DraftFilter;
-  /** Whether this is a draft that differs from what is stored. */
-  readonly drafted: boolean;
-}
+type ShownRow = ShownSentenceRow<DraftFilter>;
 
 /** What a filter row is drawn with, closed or open. */
 interface FilterRowProps {
@@ -1229,81 +1236,6 @@ function readRow(props: FilterRowProps): RowReading {
     problem: storedProblem ?? missing,
     errorId: `${props.id}-error`,
   };
-}
-
-/** The button that removes a row, named by its sentence. */
-function RemoveFilter({
-  line,
-  disabled,
-  onRemove,
-}: {
-  line: string;
-  disabled: boolean;
-  onRemove: () => void;
-}): React.JSX.Element {
-  return (
-    <Button
-      type="button"
-      size="icon-sm"
-      variant="ghost"
-      className="nx-list-filter__remove"
-      aria-label={`Remove filter: ${line}`}
-      disabled={disabled}
-      onClick={onRemove}
-    >
-      <X aria-hidden="true" size={14} />
-    </Button>
-  );
-}
-
-/** A closed row: its sentence on one line, which opens it. */
-function ClosedFilter({
-  props,
-  reading,
-  lineRef,
-}: {
-  props: FilterRowProps;
-  reading: RowReading;
-  lineRef: React.RefObject<HTMLButtonElement | null>;
-}): React.JSX.Element {
-  const { sentence, line, problem, errorId } = reading;
-  return (
-    <li
-      className="nx-list-filter"
-      data-invalid={problem === undefined ? undefined : ""}
-    >
-      <button
-        ref={lineRef}
-        type="button"
-        className="nx-list-filter__line"
-        aria-expanded={false}
-        aria-describedby={problem === undefined ? undefined : errorId}
-        title={line}
-        disabled={props.disabled}
-        onClick={props.onOpen}
-      >
-        <ChevronRight aria-hidden="true" size={14} />
-        <span className="nx-list-filter__sentence">
-          <span className="nx-list-filter__field">{sentence.field}</span>{" "}
-          <span className="nx-list-filter__op">{sentence.operator}</span>{" "}
-          <span
-            className="nx-list-filter__said"
-            data-missing={sentence.value === "no value" ? "" : undefined}
-          >
-            {sentence.value}
-          </span>
-        </span>
-      </button>
-      <RemoveFilter
-        line={line}
-        disabled={props.disabled}
-        onRemove={props.onRemove}
-      />
-      {problem === undefined ? null : (
-        <FieldError id={errorId}>{problem}</FieldError>
-      )}
-    </li>
-  );
 }
 
 /** What a row's field picker shows for its stored or chosen field. */
@@ -1407,106 +1339,58 @@ function OperatorPicker({
   );
 }
 
-/** An open row: its field, operator and value, and its error. */
-function OpenFilter({
-  props,
-  reading,
-  onClose,
-}: {
-  props: FilterRowProps;
-  reading: RowReading;
-  onClose: () => void;
-}): React.JSX.Element {
+/** One filter: its sentence, opening in place into its controls. */
+function FilterRow(props: FilterRowProps): React.JSX.Element {
   const { id, row, disabled } = props;
-  const { field, line, problem, errorId } = reading;
-  const labelId = `${id}-label`;
+  const { field, sentence, line, problem } = readRow(props);
   const op = row.draft.op;
   return (
-    <li
-      className="nx-list-filter"
-      data-open=""
-      data-invalid={problem === undefined ? undefined : ""}
-      onKeyDown={event => {
-        // Escape closes the row, unless a menu inside it is taking it.
-        if (event.key !== "Escape" || event.defaultPrevented) return;
-        event.preventDefault();
-        onClose();
-      }}
-    >
-      <span id={labelId} className="nx-sr-only">
-        {`Filter ${line}`}
-      </span>
-      <div className="nx-list-filter__head">
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
-          aria-expanded={true}
-          aria-label={`Close filter: ${line}`}
-          onClick={onClose}
-        >
-          <ChevronDown aria-hidden="true" size={14} />
-        </Button>
+    <SentenceRow
+      id={id}
+      noun="filter"
+      open={props.open}
+      disabled={disabled}
+      sentence={sentence}
+      line={line}
+      problem={problem}
+      field={labelId => (
         <FilterFieldPicker
           id={`${id}-field`}
           labelId={labelId}
           props={props}
           field={field}
         />
-        <RemoveFilter
-          line={line}
-          disabled={disabled}
-          onRemove={props.onRemove}
-        />
-      </div>
-      {field === undefined ? null : (
-        <div className="nx-list-filter__body">
-          <OperatorPicker
-            id={`${id}-op`}
-            field={field}
-            draft={row.draft}
-            disabled={disabled}
-            onChange={props.onChange}
-          />
-          {op === undefined ? null : (
-            <FilterValue
-              id={`${id}-value`}
-              labelledBy={labelId}
+      )}
+      body={(labelId, errorId) =>
+        field === undefined ? null : (
+          <div className="nx-list-filter__body">
+            <OperatorPicker
+              id={`${id}-op`}
               field={field}
-              draft={{ ...row.draft, op }}
+              draft={row.draft}
               disabled={disabled}
-              invalid={problem !== undefined}
-              describedBy={problem === undefined ? undefined : errorId}
-              services={props.services}
-              entryTitle={props.entryTitle}
-              onValue={value => props.onChange({ ...row.draft, value })}
+              onChange={props.onChange}
             />
-          )}
-        </div>
-      )}
-      {problem === undefined ? null : (
-        <FieldError id={errorId}>{problem}</FieldError>
-      )}
-    </li>
-  );
-}
-
-/** One filter: its sentence, opening in place into its controls. */
-function FilterRow(props: FilterRowProps): React.JSX.Element {
-  const reading = readRow(props);
-  const lineRef = React.useRef<HTMLButtonElement>(null);
-  if (!props.open) {
-    return <ClosedFilter props={props} reading={reading} lineRef={lineRef} />;
-  }
-  return (
-    <OpenFilter
-      props={props}
-      reading={reading}
-      onClose={() => {
-        props.onClose();
-        // Back on the line it opened from, so the keyboard keeps its place.
-        requestAnimationFrame(() => lineRef.current?.focus());
-      }}
+            {op === undefined ? null : (
+              <FilterValue
+                id={`${id}-value`}
+                labelledBy={labelId}
+                field={field}
+                draft={{ ...row.draft, op }}
+                disabled={disabled}
+                invalid={problem !== undefined}
+                describedBy={problem === undefined ? undefined : errorId}
+                services={props.services}
+                entryTitle={props.entryTitle}
+                onValue={value => props.onChange({ ...row.draft, value })}
+              />
+            )}
+          </div>
+        )
+      }
+      onOpen={props.onOpen}
+      onClose={props.onClose}
+      onRemove={props.onRemove}
     />
   );
 }
@@ -1540,33 +1424,12 @@ function FiltersGroup({
   // Drafts over stored rows by index, and new rows by their own key. Drafts
   // over stored rows are dropped when the stored rows change underneath
   // them, as an undo does.
-  const [overStored, setOverStored] = React.useState<
-    ReadonlyMap<number, DraftFilter>
-  >(() => new Map());
-  const [added, setAdded] = React.useState<
-    ReadonlyArray<{ key: string; draft: DraftFilter }>
-  >([]);
-  const [openKey, setOpenKey] = React.useState<string | null>(null);
-  const storedText = JSON.stringify(stored);
-  React.useEffect(() => setOverStored(new Map()), [storedText]);
-  const nextKey = React.useRef(0);
-  const rows: ShownRow[] = [
-    ...stored.map((filter, index) => {
-      const draft = overStored.get(index);
-      return {
-        key: `stored:${String(index)}`,
-        index,
-        draft: draft ?? filter,
-        drafted: draft !== undefined,
-      };
-    }),
-    ...added.map(each => ({
-      key: each.key,
-      index: undefined,
-      draft: each.draft,
-      drafted: true,
-    })),
-  ];
+  const editing = useSentenceRows<ListFilter, DraftFilter>(
+    stored,
+    filter => filter,
+    {}
+  );
+  const { rows, openKey, setOpenKey } = editing;
   const entryTitle = useEntryTitles(
     services?.findEntries,
     fields,
@@ -1576,38 +1439,16 @@ function FiltersGroup({
   const change = (row: ShownRow, draft: DraftFilter) => {
     const field = fields.find(each => each.name === draft.field);
     const completed = completedFilter(draft, field);
+    // Written once complete, and a stored row from there on; kept as a draft
+    // until then, while the canvas keeps the last query.
+    const index = editing.change(row, draft, "filter" in completed);
     if ("filter" in completed) {
-      const index = row.index ?? stored.length;
-      // Written once complete: the row is a stored one from here on.
-      setOverStored(current => {
-        const next = new Map(current);
-        next.delete(index);
-        return next;
-      });
-      if (row.index === undefined) {
-        setAdded(current => current.filter(each => each.key !== row.key));
-        if (openKey === row.key) setOpenKey(`stored:${String(index)}`);
-      }
       onFilters(withFilter(stored, index, completed.filter));
-      return;
-    }
-    // Kept here until it is complete; the canvas keeps the last query.
-    if (row.index === undefined) {
-      setAdded(current =>
-        current.map(each => (each.key === row.key ? { ...each, draft } : each))
-      );
-    } else {
-      const index = row.index;
-      setOverStored(current => new Map(current).set(index, draft));
     }
   };
   const remove = (row: ShownRow) => {
-    if (openKey === row.key) setOpenKey(null);
-    if (row.index === undefined) {
-      setAdded(current => current.filter(each => each.key !== row.key));
-      return;
-    }
-    onFilters(withFilter(stored, row.index, undefined));
+    const index = editing.remove(row);
+    if (index !== undefined) onFilters(withFilter(stored, index, undefined));
   };
   const storedProblems = (row: ShownRow): string | undefined => {
     if (row.index === undefined || row.drafted) return undefined;
@@ -1662,13 +1503,7 @@ function FiltersGroup({
         className="nx-list-query__add"
         disabled={disabled || fields.length === 0 || filterLimit.full}
         aria-describedby={filterLimit.describedBy}
-        onClick={() => {
-          nextKey.current += 1;
-          const key = `new:${String(nextKey.current)}`;
-          setAdded(current => [...current, { key, draft: {} }]);
-          // A new filter opens already open, its field menu with it.
-          setOpenKey(key);
-        }}
+        onClick={editing.add}
       >
         <Plus aria-hidden="true" size={14} />
         Add filter
@@ -1681,7 +1516,7 @@ function FiltersGroup({
 }
 
 /** Whether a list holds the most of something it takes, and the note saying so. */
-interface ListLimit {
+export interface ListLimit {
   full: boolean;
   /** The note's id while the limit is reached, for the Add button to name. */
   describedBy: string | undefined;
@@ -1689,14 +1524,14 @@ interface ListLimit {
 }
 
 /** The limit of `count` against `most`, its note under `${id}-limit`. */
-function listLimit(count: number, most: number, id: string): ListLimit {
+export function listLimit(count: number, most: number, id: string): ListLimit {
   const full = count >= most;
   const noteId = `${id}-limit`;
   return { full, describedBy: full ? noteId : undefined, id: noteId };
 }
 
 /** Why an Add button is off: shown only once the list holds the most it takes. */
-function LimitNote({
+export function LimitNote({
   limit,
   children,
 }: {
@@ -2392,7 +2227,31 @@ function codedIssues(issues: Issues, prop: string, code: string): string[] {
     .map(issue => issue.message);
 }
 
-/** The How many group: the number of items, and the entries to skip. */
+/**
+ * What splitting into pages makes of the count: "24 entries match, so 3
+ * pages of 10.", or what a switch turned on will do when nothing is counted.
+ */
+function pagesWords(
+  counted: ListEntriesCount | undefined,
+  values: Readonly<Record<string, unknown>>,
+  limitFallback: unknown
+): string {
+  const stored = values.limit ?? limitFallback;
+  const limit = typeof stored === "number" && stored >= 1 ? stored : 10;
+  const each = `${String(limit)} ${limit === 1 ? "entry" : "entries"}`;
+  if (counted === undefined) {
+    return `Shows ${each} on each page, at /page/2, /page/3 and on.`;
+  }
+  const offset = typeof values.offset === "number" ? values.offset : 0;
+  const pages = listPageCount(counted.matching, offset, limit);
+  const match =
+    counted.matching === 1
+      ? "1 entry matches"
+      : `${String(counted.matching)} entries match`;
+  return `${match}, so ${pages === 1 ? "1 page" : `${String(pages)} pages`} of ${each}.`;
+}
+
+/** The How many group: the number of items, the entries to skip, and pages. */
 /**
  * How many entries the list's query matches and how many it shows, counted
  * once per query: drawn again with the same query, nothing is read again,
@@ -2489,7 +2348,57 @@ function HowManyGroup({
           commit({ offset: offset === 0 ? undefined : offset })
         }
       />
+      <PagesField
+        id={`${id}-pages`}
+        on={values.paginate === true}
+        disabled={disabled}
+        problem={issuesAt(issues, ["paginate"])[0]}
+        hint={
+          values.paginate === true
+            ? pagesWords(counted, values, limitFallback)
+            : undefined
+        }
+        // Off stores nothing, as a list that never paginated holds nothing.
+        onChange={on => commit({ paginate: on ? true : undefined })}
+      />
     </section>
+  );
+}
+
+/**
+ * Whether the list is split into pages, each at its own address: a switch,
+ * with what it makes of the count under it while on, or why the page cannot
+ * serve it.
+ */
+function PagesField({
+  id,
+  on,
+  disabled,
+  problem,
+  hint,
+  onChange,
+}: {
+  id: string;
+  on: boolean;
+  disabled: boolean;
+  problem: string | undefined;
+  hint: string | undefined;
+  onChange: (on: boolean) => void;
+}): React.JSX.Element {
+  const errorId = `${id}-error`;
+  return (
+    <div className="nx-inspector__field" data-content-control="paginate">
+      <Label htmlFor={id}>Split into pages</Label>
+      <Switch
+        id={id}
+        checked={on}
+        disabled={disabled}
+        aria-invalid={problem === undefined ? undefined : true}
+        aria-describedby={problem === undefined ? undefined : errorId}
+        onCheckedChange={onChange}
+      />
+      <BoundFoot errorId={errorId} problem={problem} hint={hint} />
+    </div>
   );
 }
 
@@ -2571,6 +2480,9 @@ function useListQueryReading(
       listQueryIssues(document.nodes, {
         ...(fieldSource === undefined ? {} : { fields: fieldSource }),
         ...(entryCollection === undefined ? {} : { entryCollection }),
+        // So a component's or a Layout region's list is told at once that it
+        // can't be split into pages, as its save would be.
+        documentKind: document.kind,
       }).filter(issue => issue.nodeId === nodeId && issue.severity === "error"),
     [document, nodeId, fieldSource, entryCollection]
   );

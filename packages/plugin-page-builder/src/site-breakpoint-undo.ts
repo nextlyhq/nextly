@@ -37,6 +37,7 @@ import { undoMessage, undoReport } from "./breakpoint-removal/undo-report";
 import type { RewriteReport } from "./host-rewrite/contract";
 import { runStarterOf } from "./host-rewrite/service";
 import {
+  SITE_BREAKPOINT_UNDO_DOES_NOT_FIT,
   SITE_BREAKPOINT_UNDO_ROUTE_PATH,
   type SiteBreakpointRemovalRequest,
   type SiteBreakpointsSaved,
@@ -44,6 +45,7 @@ import {
 import {
   currentStyle,
   MANAGE_SITE_PERMISSION,
+  namedUndo,
   NOT_WALKED,
   refuseReadding,
   removalAnswer,
@@ -109,6 +111,20 @@ function cannotPutBack(message: string, reason: string): NextlyError {
   });
 }
 
+/**
+ * An undo refused because its breakpoints no longer fit the set as it is,
+ * under its own code, so Settings offers editing the breakpoints as the way
+ * on (`SITE_BREAKPOINT_UNDO_DOES_NOT_FIT`).
+ */
+function doesNotFit(message: string, reason: string): NextlyError {
+  return new NextlyError({
+    code: SITE_BREAKPOINT_UNDO_DOES_NOT_FIT,
+    statusCode: 409,
+    publicMessage: message,
+    logContext: { reason: `breakpoint-undo-${reason}` },
+  });
+}
+
 /** Where a width is on its axis: an unbounded definition is the widest. */
 function widthOf(def: BreakpointDef): number {
   return def.maxWidth ?? Number.POSITIVE_INFINITY;
@@ -139,20 +155,20 @@ function refusalToPutBack(
   defined: ReadonlySet<string>
 ): NextlyError | undefined {
   if (defined.has(def.id)) {
-    return cannotPutBack(
+    return doesNotFit(
       `“${def.label}” is one of the site's breakpoints again, so this removal can't be undone.`,
       "defined-again"
     );
   }
   const clash = axis.find(other => widthOf(other) === widthOf(def));
   if (clash !== undefined) {
-    return cannotPutBack(
+    return doesNotFit(
       `“${def.label}” would end at the same width as “${clash.label}”, so this removal can't be undone. Change or remove “${clash.label}” first.`,
       "same-width"
     );
   }
   if (axis.length >= MAX_BREAKPOINTS_PER_AXIS) {
-    return cannotPutBack(
+    return doesNotFit(
       `There's no room to put “${def.label}” back: the site already has ${MAX_BREAKPOINTS_PER_AXIS} breakpoints of that kind. Remove one first.`,
       "axis-full"
     );
@@ -362,8 +378,12 @@ async function undoRemoval(
     );
     report = NOT_WALKED;
   }
-  const answered = (await undoReport(service, undo, report.finished, () =>
-    sharedStylesNow(removal, ctx)
+  const answered = (await namedUndo(
+    removal,
+    ctx,
+    await undoReport(service, undo, report.finished, () =>
+      sharedStylesNow(removal, ctx)
+    )
   )) ?? { undoes: runId };
   return removalAnswer(
     undoMessage(answered),

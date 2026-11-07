@@ -42,3 +42,37 @@ function loadNotFound(): () => never {
 export function triggerNotFound(): never {
   return loadNotFound()();
 }
+
+let cachedPermanentRedirect: ((path: string) => never) | null | undefined;
+
+/**
+ * Answer with a permanent redirect to `path`; never returns.
+ *
+ * Reached the way {@link triggerNotFound} reaches its boundary, and for the
+ * same reason: a module that only MIGHT redirect does not drag Next into a
+ * non-Next consumer. Permanent, because a page reached by a second spelling
+ * of its address (a list's `/page/1`) should be indexed under its first.
+ */
+export function triggerPermanentRedirect(path: string): never {
+  if (cachedPermanentRedirect === undefined) {
+    const mod = loadNextModule("next/navigation");
+    cachedPermanentRedirect = mod
+      ? requireNextApi<(path: string) => never>(
+          mod,
+          "next/navigation",
+          "permanentRedirect"
+        )
+      : null;
+  }
+  if (!cachedPermanentRedirect) {
+    // Without Next.js there is no response to redirect, and returning would
+    // hand the caller a page it believes was answered.
+    throw NextlyError.internal({
+      logContext: {
+        reason:
+          "a Nextly route helper requires next/navigation (use it inside a Next.js app)",
+      },
+    });
+  }
+  return cachedPermanentRedirect(path);
+}
