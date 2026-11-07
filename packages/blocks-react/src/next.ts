@@ -15,21 +15,15 @@
  */
 import {
   bindingDemand,
-  bindingKindOf,
   calendarDayIn,
-  COLLECTION_LIST_TYPE,
-  conditionDemand,
-  conditionFieldKind,
-  DEFAULT_LIMITS,
-  LIST_ENTRY_SLOT,
+  mapForest,
   deriveSeoFromDocument,
   hashId,
+  hasItemBindings,
   isFetchableUrl,
-  isListDay,
   isPlainRecord,
   DOCUMENT_FORMAT_VERSION,
   mayPaginateList,
-  paginatedList,
   type PaginatedList,
   regionDocument,
   resolveDocumentSeo,
@@ -38,7 +32,6 @@ import {
   type BindingRun,
   type BindingFieldShape,
   type BlockDocument,
-  type BlockNode,
   type ConditionDemand,
   type SourceDemand,
   type BlockSeoContribution,
@@ -92,19 +85,22 @@ import type { ReactElement, ReactNode } from "react";
 import { createElement, Fragment, Suspense } from "react";
 
 import { recordedFieldShapes, shapeRefKey } from "./binding-wire";
-import { itemFollowsIn } from "./blocks/list-batch";
 import {
-  conditionDayStart,
+  AHEAD_BATCH_SIZE,
+  fillItemBindings,
+  itemFollowsIn,
+  type ItemPlacement,
+  relatedThrough,
+  relationTarget,
+  rowsById,
+} from "./blocks/list-batch";
+import {
   listEntryCount,
   listPagesOf,
   listWillRead,
   namedListBase,
 } from "./blocks/list-read";
-import {
-  namedQueryFailureLine,
-  queryRowFields,
-  readNamedList,
-} from "./blocks/named-read";
+import { namedQueryFailureLine, readNamedList } from "./blocks/named-read";
 import { url } from "./blocks/props";
 import {
   COMPONENT_DOCUMENT_FIELD,
@@ -114,6 +110,7 @@ import {
   type ComponentSource,
 } from "./component-source";
 import {
+  componentBatches,
   createDefaultDataProvider,
   createQueryBudget,
   createStandaloneContext,
@@ -130,7 +127,6 @@ import type {
   BlocksFieldShapes,
   BlocksPublicReader,
   BlocksSiteSettings,
-  ListPageContext,
   NamedQueryHost,
   NamedQueryLookup,
   PageBindings,
@@ -142,12 +138,7 @@ import type {
   ResolvedMedia,
 } from "./context";
 import { resolveLucideIcon } from "./icons/lucide";
-import {
-  anyListWhere,
-  listCollections,
-  listCollectionsWhere,
-  listPropsAsBound,
-} from "./list-collections";
+import { listCollections } from "./list-collections";
 import {
   cappedLifetime,
   checkedLayoutsProvider,
@@ -156,27 +147,34 @@ import {
   type BlocksLayoutsProvider,
   type LayoutRowReader,
 } from "./next-layouts";
-import { layoutPartSheets, type PagePart } from "./page-parts";
+import {
+  effectiveLimits,
+  listDayInputs,
+  pageTimeZone,
+  pagedListOf,
+  readPageInputs,
+  readPageStages,
+  stagedContext,
+  drawWithRegions,
+  type EntrySource,
+  type PageReadSources,
+  type PageReadTerms,
+  type PageRendererElementProps,
+  type SharedRendererProps,
+} from "./page-read-stages";
 import { PageRenderer } from "./page-renderer";
 import {
   heldConditionsOf,
-  holdsBackConditions,
   pageBindingRun,
-  prepareDocument,
   readingViewOf,
   readStagesFor,
-  regateDocument,
   type DocumentReadStages,
   type PreparedDocument,
 } from "./prepare-document";
 import { registeredBlocks } from "./resolver";
 import type { BlockResolver } from "./resolver";
 import type { PageStyles } from "./styles";
-import {
-  conditionAllows,
-  entrySubjectOf,
-  type ConditionGate,
-} from "./visibility";
+import { conditionAllows } from "./visibility";
 
 // The default stays published here too, where a route's `maxQueries` is set.
 export { DEFAULT_MAX_QUERIES };
@@ -573,121 +571,6 @@ function listPageSlug(slug: string, page: number | undefined): string {
   return [slug, LIST_PAGE_SEGMENT, String(page)]
     .filter(part => part !== "")
     .join("/");
-}
-
-/**
- * The list a page's address pages, found in the page's own document as the
- * renderer presents it: repaired, and held to the route's caps on nodes and
- * depth. A list the renderer would drop (malformed, past a cap) therefore
- * pages nothing, so the route never serves a later page whose HTML has no
- * list. The page's own nodes only, its components left out: a component or a
- * Layout region shows on many pages, so a list in one never pages an
- * address. The one finding the route's count and the render share.
- */
-function pagedListOf(
-  document: BlockDocument,
-  page: DrawnDocument,
-  maxNodes: number,
-  /** The page's binding pass, so a bound query prop is read as drawn. */
-  run: BindingRun | undefined
-): PaginatedList | undefined {
-  if (page.prepared === null) return undefined;
-  // The page's own lists, walked in its stored order, an instance's exposed
-  // slot included, never one a component's definition brings, which shows
-  // on every page placing it. Each is judged by its props as the page's
-  // binding pass fills them, the ones it is drawn with, read from that very
-  // list in the page as drawn (found by its id, so a component's own list
-  // cannot stand in for it): a limit, offset, collection or split bound to
-  // the entry counts as the page shows it, so a list split into pages only
-  // by a bound value pages too, and the route serves exactly the pages the
-  // list's links name. Both walks are held to the route's node cap, as the
-  // renderer's own reading is.
-  const drawn = listsById(page.prepared.presented.nodes, maxNodes);
-  return paginatedList(document.nodes, maxNodes, stored => {
-    const list =
-      typeof stored.id === "string" ? drawn.get(stored.id) : undefined;
-    return list === undefined ? {} : listPropsAsBound(list, run);
-  });
-}
-
-/**
- * The collection lists in `nodes`, as drawn, by id: the first of each id in
- * document order. Bounded by `maxNodes`.
- */
-function listsById(
-  nodes: readonly BlockNode[],
-  maxNodes: number
-): Map<string, BlockNode> {
-  const lists = new Map<string, BlockNode>();
-  const stack: BlockNode[] = [...nodes].reverse();
-  let left = maxNodes;
-  for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
-    if (left <= 0) break;
-    left -= 1;
-    if (node.type === COLLECTION_LIST_TYPE && !lists.has(node.id)) {
-      lists.set(node.id, node);
-    }
-    for (const children of Object.values(node.slots ?? {}).reverse()) {
-      for (let at = children.length - 1; at >= 0; at -= 1) {
-        const child = children[at];
-        if (child !== undefined) stack.push(child);
-      }
-    }
-  }
-  return lists;
-}
-
-/**
- * Which page of its paginated list a render draws, and the address of each
- * page, or nothing when the page splits no list into pages.
- */
-function listPageFor(
-  list: PaginatedList | undefined,
-  context: RenderContext
-): ListPageContext | undefined {
-  // The route's own addresses, its mount included: present where it serves
-  // a list's later pages, so the links name exactly the pages it answers.
-  const listPagePath = context.listPagePath;
-  if (listPagePath === undefined || list === undefined) return undefined;
-  return {
-    nodeId: list.id,
-    page: context.page ?? 1,
-    href: listPagePath,
-    // The route's count, where it served this later page by one.
-    ...(context.listPages === undefined ? {} : { pages: context.listPages }),
-  };
-}
-
-/**
- * The page of its paginated list a render draws, with the list's first read
- * claimed for it, or nothing where the route serves no later pages (a
- * Single's gives no addresses, so its list shows one page and claims its
- * own read) or the list's read cannot be claimed, as the route then serves
- * none of its later pages either.
- *
- * Claimed only for a list that reads: one with no collection yet, or a
- * stored query it cannot run, spends nothing another list needs. A custom
- * source claims nothing ahead: its run claims each read it makes, as the
- * route's count of its pages claimed them.
- */
-function claimedListPage(
-  list: PaginatedList | undefined,
-  context: RenderContext,
-  budget: QueryBudget
-): ListPageContext | undefined {
-  if (
-    list === undefined ||
-    context.listPagePath === undefined ||
-    !listWillRead(list.props)
-  ) {
-    return undefined;
-  }
-  if (namedListBase(list.props) !== undefined) {
-    return listPageFor(list, context);
-  }
-  if (!budget.take({ kind: "entries", nodeId: list.id })) return undefined;
-  const page = listPageFor(list, context);
-  return page === undefined ? undefined : { ...page, claimed: true };
 }
 
 /**
@@ -1155,6 +1038,46 @@ function boundValuesOf(
   return nodeId => stages?.boundValues.get(nodeId);
 }
 
+/** A node outside every list: no item to draw it for. */
+const OUTSIDE_ANY_LIST: ItemPlacement = {};
+
+/**
+ * The document the metadata walk reads, and what each node's bound props
+ * hold, as the page draws the blocks that walk asks about.
+ *
+ * The walk never enters a list's per-entry slot (a list declares it
+ * conditional), so every block it asks that holds a list-item binding is
+ * drawn outside any list: through the same item fill the renderer runs, with
+ * no item, which gives the binding's fallback or the prop's own value. Read
+ * from the page's pass alone, such a block would offer its stored value, a
+ * picture the page never draws. Blocks inside a list are filled the same way
+ * and never read. The fill's issues are the render's to report, so none are
+ * reported twice.
+ */
+function metadataReadOf(
+  prepared: BlockDocument,
+  run: BindingRun | undefined,
+  stages: DocumentReadStages | null
+): {
+  document: BlockDocument;
+  boundOf: (nodeId: string) => BoundValues | undefined;
+} {
+  const fromPage = boundValuesOf(stages);
+  if (run === undefined) return { document: prepared, boundOf: fromPage };
+  const filled = new Map<string, BoundValues>();
+  const nodes = mapForest(prepared.nodes, node => {
+    if (!hasItemBindings(node)) return node;
+    const fill = fillItemBindings(node, OUTSIDE_ANY_LIST, run);
+    if (fill.bound === undefined) return node;
+    filled.set(node.id, { ...fromPage(node.id), ...fill.bound });
+    return { ...node, props: fill.props };
+  });
+  return {
+    document: nodes === prepared.nodes ? prepared : { ...prepared, nodes },
+    boundOf: nodeId => filled.get(nodeId) ?? fromPage(nodeId),
+  };
+}
+
 /**
  * The document's own metadata, with any media id resolved to a URL.
  *
@@ -1254,13 +1177,15 @@ async function derivePageSeo(
   // whose conditions held for the entry describes the page, one a list's item
   // decides does not, since no one item speaks for the page.
   const held = heldConditionsOf(preparation);
+  // What each bound prop holds, as the render is given it, so a bound image
+  // offers the picture the page draws, a list item's binding outside a list
+  // included.
+  const read = metadataReadOf(prepared, run, stages);
   const { image: blockImages, ...derived } = deriveSeoFromDocument(
-    prepared,
+    read.document,
     type => resolver.get(type),
     node => conditionAllows(node, {}, { held }),
-    // What each bound prop holds, as the render is given it, so a bound
-    // image offers the picture the page draws.
-    boundValuesOf(stages)
+    read.boundOf
   );
   // What the document states for the page as a whole wins over what its
   // blocks offer, field by field; its image is tried first, and a block's
@@ -1564,12 +1489,10 @@ function componentSource(
         budget,
       });
     }
-    for (const chunk of chunked(wanted, COMPONENT_BATCH_SIZE)) {
-      // One claim per QUERY. A page embedding twenty components spends one
-      // read because that is what it costs; charging per definition would
-      // refuse a page for an allowance it never spent, and charging nothing
-      // would leave the read on this path that grows with the page unbounded.
-      if (!budget.take(COMPONENT_CLAIM)) break;
+    // One claim per query, by the batches every count of component reads
+    // takes (`componentBatches`); charging nothing would leave the read on
+    // this path that grows with the page unbounded.
+    for (const chunk of componentBatches(wanted, budget)) {
       const page = await readRowsChunk(chunk, {
         reader,
         collection,
@@ -1706,23 +1629,9 @@ function layoutRowReader(
  * 128 satisfies both. A page embedding more components than that costs one
  * extra query per 128, which is the honest price of staying invalidatable.
  */
-const COMPONENT_BATCH_SIZE = 128;
 
 /** What a read of components or Layout rows claims as. */
 const COMPONENT_CLAIM: ReadClaim = { kind: "component" };
-
-/**
- * The caps this route holds its documents to, resolved the way the pipeline
- * resolves them.
- *
- * One answer, because two would be a disagreement about which nodes exist: the
- * fetch decides what to load and the renderer decides what to draw, and a page
- * whose instances sit past one cap but inside the other loses exactly the
- * blocks between them.
- */
-function effectiveLimits(config: BlocksPageConfig): DocumentLimits {
-  return config.limits ?? config.styleContext?.limits ?? DEFAULT_LIMITS;
-}
 
 /** Successive slices of at most `size`. */
 function chunked<T>(items: readonly T[], size: number): T[][] {
@@ -2045,38 +1954,6 @@ function drawnEach(
       return [id, row === undefined ? null : drawnMedia(row)] as const;
     })
   );
-}
-
-/** How many ids one read ahead asks for: the readers' own page cap. */
-const AHEAD_BATCH_SIZE = 100;
-
-/**
- * A batch's rows by the ids asked for, or `undefined` when they cannot be
- * matched to those ids with certainty: the database's own count must equal
- * the rows returned, and every row must carry a distinct id that was asked
- * for. A read hook that rewrote or dropped an id fails that, and the batch
- * is not trusted; the per-id path, which never matches by a returned id,
- * answers instead.
- */
-function rowsById(
-  found: { readonly items: readonly unknown[]; readonly meta?: unknown },
-  asked: readonly string[]
-): Map<string, Record<string, unknown>> | undefined {
-  const total = isPlainRecord(found.meta) ? found.meta.total : undefined;
-  if (typeof total !== "number" || total !== found.items.length) {
-    return undefined;
-  }
-  const wanted = new Set(asked);
-  const rows = new Map<string, Record<string, unknown>>();
-  for (const item of found.items) {
-    if (!isPlainRecord(item)) return undefined;
-    const id = item.id;
-    if (typeof id !== "string" && typeof id !== "number") return undefined;
-    const key = String(id);
-    if (!wanted.has(key) || rows.has(key)) return undefined;
-    rows.set(key, item);
-  }
-  return rows;
 }
 
 /**
@@ -2690,9 +2567,6 @@ async function layoutRegions(args: {
   return { regions, regionDefinitions };
 }
 
-/** Where the entry a page shows lives, which decides how the public reads it. */
-type EntrySource = "collection" | "single";
-
 /** What a source read needs: the reader, the page's budget, the shapes. */
 interface SourceReads {
   readonly reader: BlocksPublicReader;
@@ -2761,20 +2635,6 @@ async function readSingle(
   } catch {
     return undefined;
   }
-}
-
-/** The collection a field leads to, when a path may follow it. */
-function relationTarget(
-  fields: readonly BindingFieldShape[] | undefined,
-  name: string
-): string | undefined {
-  const field = fields?.find(candidate => candidate.name === name);
-  if (field === undefined || field.hasMany === true) return undefined;
-  const kind = bindingKindOf(field);
-  return (kind === "reference" || kind === "media") &&
-    typeof field.relationTo === "string"
-    ? field.relationTo
-    : undefined;
 }
 
 /**
@@ -2915,182 +2775,6 @@ async function readSiteOnce(
 }
 
 /**
- * The collections whose lists need their fields' shapes while they draw: a
- * list filtering by a day, which compares in the site's zone or as a calendar
- * day by the field's shape, and a list whose entries hold a block its item's
- * fields decide the visibility of.
- */
-function listsComparingDays(
-  documents: readonly BlockDocument[],
-  run: BindingRun | undefined,
-  namedQueries: NamedQueryLookup | undefined
-): Set<string> {
-  return listCollectionsWhere(
-    documents,
-    (query, list) =>
-      query.filters.some(row => isListDay(row.value)) ||
-      conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).any,
-    run,
-    namedQueries
-  );
-}
-
-/**
- * Whether any list on the page compares days, and so needs the site's zone:
- * one filtering by a day, or one whose item conditions order a field its
- * collection holds as a date. A list whose item conditions match text, a
- * yes-or-no or a number needs field shapes but no zone, and must not spend
- * the page's query budget reading one. A field whose shape is unknown fails
- * its condition closed, so it compares no day either.
- */
-function listsNeedZone(
-  documents: readonly BlockDocument[],
-  run: BindingRun | undefined,
-  shapesOf: (collection: string) => readonly BindingFieldShape[] | undefined,
-  namedQueries: NamedQueryLookup | undefined
-): boolean {
-  return (
-    listCollectionsWhere(
-      documents,
-      (query, list, collection) =>
-        query.filters.some(row => isListDay(row.value)) ||
-        ordersADay(
-          conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).orderedFields ??
-            new Set(),
-          shapesOf(collection)
-        ),
-      run,
-      namedQueries
-    ).size > 0
-  );
-}
-
-/**
- * Whether a list whose source is a named query with rows of its own schema
- * orders a date in its item conditions, and so needs the site's zone: such a
- * list draws no collection, so the collections' walk never asks about it.
- * Its fields are the ones its conditions are judged by (`queryRowFields`).
- */
-function customRowsNeedZone(
-  documents: readonly BlockDocument[],
-  run: BindingRun | undefined,
-  namedQueries: NamedQueryLookup | undefined
-): boolean {
-  if (namedQueries === undefined) return false;
-  return anyListWhere(
-    documents,
-    (query, list) => {
-      const name = query.namedQuery?.name;
-      const rows =
-        name === undefined ? undefined : namedQueries.definitionOf(name)?.rows;
-      if (name === undefined || rows === undefined || !("fields" in rows)) {
-        return false;
-      }
-      return ordersADay(
-        conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).orderedFields ??
-          new Set(),
-        queryRowFields(namedQueries, name, () => undefined)
-      );
-    },
-    run
-  );
-}
-
-/** Whether any of `fields` is a date in `shapes`, as a condition reads it. */
-function ordersADay(
-  fields: ReadonlySet<string>,
-  shapes: readonly BindingFieldShape[] | undefined
-): boolean {
-  if (fields.size === 0 || shapes === undefined) return false;
-  return shapes.some(
-    shape => fields.has(shape.name) && conditionFieldKind(shape) === "date"
-  );
-}
-
-/**
- * The site's zone and the field shapes of the collections whose lists filter
- * by a day or decide a block's conditions per entry; nothing when no list
- * does. The zone is read only where a list compares days. The page's
- * bindings' answers are used where they were already read.
- */
-async function listDayInputs(args: {
-  config: BlocksPageConfig;
-  documents: readonly BlockDocument[];
-  bindings: PageBindings | undefined;
-  resolver: BlockResolver;
-  budget: QueryBudget;
-  window: number | false | undefined;
-  context: RenderContext;
-}): Promise<Pick<PageContext, "timeZone" | "fieldShapes">> {
-  // The page's binding pass, so a list whose collection is bound is asked
-  // about the collection it will draw.
-  const run =
-    args.bindings === undefined
-      ? undefined
-      : pageBindingRun(args.bindings, args.context.locale, args.resolver);
-  // A custom source's items are read as its rows' collection's.
-  const namedQueries = args.config.namedQueries;
-  const collections = listsComparingDays(args.documents, run, namedQueries);
-  const customDays = customRowsNeedZone(args.documents, run, namedQueries);
-  if (collections.size === 0 && !customDays) return {};
-  const cache: ReadCache = {
-    scope: args.config.cacheScope ?? "",
-    locale: args.context.locale,
-    window: args.window,
-  };
-  const known = new Map<string, readonly BindingFieldShape[] | undefined>();
-  for (const collection of collections) {
-    try {
-      known.set(collection, await cachedFieldShapes({ collection }, cache));
-    } catch {
-      known.set(collection, undefined);
-    }
-  }
-  // Asked once the shapes are known, so only a date compared needs the zone.
-  const timeZone =
-    customDays ||
-    listsNeedZone(
-      args.documents,
-      run,
-      collection => known.get(collection),
-      namedQueries
-    )
-      ? await listZone(args)
-      : undefined;
-  return {
-    ...(timeZone === undefined ? {} : { timeZone }),
-    fieldShapes: {
-      fieldsOf: ref =>
-        "collection" in ref ? known.get(ref.collection) : undefined,
-    },
-  };
-}
-
-/** The zone a page's lists compare days in, the site read only when needed. */
-async function listZone(args: {
-  config: BlocksPageConfig;
-  bindings: PageBindings | undefined;
-  budget: QueryBudget;
-  window: number | false | undefined;
-  context: RenderContext;
-}): Promise<string | undefined> {
-  const site =
-    args.bindings?.site ??
-    (args.config.timeZone === undefined
-      ? await readSite(
-          siteSettingsSourceFor(args.config),
-          args.config.cacheScope,
-          args.budget,
-          args.window
-        )
-      : undefined);
-  return (
-    args.bindings?.timeZone ??
-    pageTimeZone(args.config.timeZone, site ?? undefined, args.context)
-  );
-}
-
-/**
  * One source's field shapes, as `bindingFieldShapes` answers them in the
  * page's language, cached like the page and tagged with the source.
  *
@@ -3187,27 +2871,6 @@ async function readFieldShapes(
 }
 
 /**
- * The time zone a page's date-times are shown in: the route's, else the
- * site's, else UTC. A zone the runtime does not know is said once and UTC is
- * used.
- */
-function pageTimeZone(
-  routeZone: string | undefined,
-  site: BlocksSiteSettings | undefined,
-  where: { readonly collection: string; readonly slug: string }
-): string | undefined {
-  const zone = routeZone ?? site?.timezone ?? undefined;
-  if (routeZone === undefined && zone !== undefined) {
-    if (!safeTimeZone(zone).valid) {
-      console.warn(
-        `[blocks] The site's time zone "${zone}" is not one this runtime knows, so bound date-times on "${where.collection}" page "${where.slug}" are shown in UTC.`
-      );
-    }
-  }
-  return zone;
-}
-
-/**
  * What a binding-source read is given: the documents drawn, where the page's
  * entry is and who reads it.
  *
@@ -3271,16 +2934,6 @@ export interface BindingSourcesArgs {
    * the same one read of the entry as its bindings'.
    */
   readonly conditions?: ConditionDemand;
-}
-
-/** A page's bindings, told which collection the route reads media from. */
-function withMediaCollection(
-  bindings: PageBindings | undefined,
-  mediaCollection: string | undefined
-): PageBindings | undefined {
-  return bindings === undefined || mediaCollection === undefined
-    ? bindings
-    : { ...bindings, mediaCollection };
 }
 
 /**
@@ -3429,250 +3082,6 @@ async function siteAndZone(
   };
 }
 
-/** One document a page draws, and the preparation its reads and render share. */
-interface DrawnDocument {
-  readonly document: BlockDocument;
-  readonly prepared: PreparedDocument | null;
-}
-
-/** One region of the page's Layout, as drawn. */
-interface DrawnRegion extends DrawnDocument {
-  readonly region: LayoutRegion;
-}
-
-/** Prepare one document once, under the arguments the renderer is given. */
-function drawn(
-  config: BlocksPageConfig,
-  resolver: BlockResolver,
-  document: BlockDocument,
-  definitions: DefinitionsById
-): DrawnDocument {
-  return {
-    document,
-    prepared: prepareDocument(document, {
-      resolver,
-      ...(config.limits === undefined ? {} : { limits: config.limits }),
-      ...(config.styleContext === undefined
-        ? {}
-        : { styleContext: config.styleContext }),
-      ...(definitions.size === 0 ? {} : { definitions }),
-    }),
-  };
-}
-
-/** What a page render, and its metadata, work from. */
-interface PageInputs {
-  readonly definitions: DefinitionsById;
-  readonly page: DrawnDocument;
-  readonly regions: readonly DrawnRegion[];
-  readonly regionDefinitions: DefinitionsById;
-  readonly bindings: PageBindings | undefined;
-  /**
-   * The documents as the page presents them: composed, migrated and gated,
-   * the page's and each region's. What the page's reads are asked of, so a
-   * list inside a component is seen where the stored page holds only the
-   * component's instance.
-   */
-  readonly presented: readonly BlockDocument[];
-}
-
-/**
- * Everything a page reads before it renders, in ONE order shared by the
- * render and the metadata: the components the page inlines, its Layout's
- * regions and their components, then what its bindings read. Both spend the
- * budget alike, so under a tight one the page and its metadata cannot
- * disagree about a bound value. Each document is prepared once, and that
- * preparation is what the reads are taken from and what the renderer reuses.
- *
- * Metadata draws no region, so it reads the Layout only when the page holds
- * a binding, whose read must come at the same point of the budget as the
- * render's; a page with none reads nothing more for its metadata.
- */
-async function readPageInputs(args: {
-  config: BlocksPageConfig;
-  /** The blocks the renderer is handed, the same object, so it reuses the preparation. */
-  resolver: BlockResolver;
-  document: BlockDocument;
-  entry: ContentEntry;
-  context: RenderContext;
-  entrySource: EntrySource;
-  layoutsProvider: BlocksLayoutsProvider | undefined;
-  window: number | false | undefined;
-  budget: QueryBudget;
-  /** For metadata, which reads the Layout only when the page binds anything. */
-  regionsOnlyWhenBound?: boolean;
-}): Promise<PageInputs> {
-  const { config, document, entry, context, budget } = args;
-  // Read BEFORE the element is created, because the renderer's pipeline is
-  // synchronous: composition is a pass of it, and a pass cannot await. The
-  // route is the layer that can, which is why the fetch lives here and not
-  // in the renderer.
-  const definitions = await definitionsFor(
-    document,
-    componentSource(config, readerFor(config), budget, context.locale),
-    // The SAME caps the pipeline will read this document under, resolved
-    // once. `prepareDocumentReadStages` falls back to the style context's
-    // when no limits are given directly, so passing the default here made
-    // a route that raised `maxNodes` through `styleContext` fetch for the
-    // first 5,000 nodes while the renderer kept — and tried to draw —
-    // every instance after them.
-    effectiveLimits(config)
-  );
-  const page = drawn(config, args.resolver, document, definitions);
-  // Whether the page's conditions have an entry to judge. A Single's page has
-  // none, as the editor and the save say, so its entry-scoped conditions fail
-  // closed with nothing read, and its conditioned blocks are never kept for
-  // the reads: neither their fields nor what they bind is asked for. The ONE
-  // place this is decided; the reads, the skip and the decision follow it.
-  const conditionsReadEntry = args.entrySource === "collection";
-  // Whether the page reads anything is asked of it with every conditioned
-  // block kept, as its reads are taken below: a conditioned block's bindings
-  // and its conditions' entry read both spend the budget the render spends,
-  // so metadata must read the Layout before them just as the render does.
-  // Only metadata asks, and the kept page it prepares is reused for the reads.
-  const keptPage =
-    conditionsReadEntry &&
-    args.regionsOnlyWhenBound === true &&
-    holdsBackConditions(page.prepared)
-      ? keptForReading(page)
-      : undefined;
-  const pageReading = keptPage ?? page;
-  const skipRegions =
-    args.regionsOnlyWhenBound === true &&
-    (pageReading.prepared === null ||
-      !readsAnything(pageReading.prepared.presented));
-  const { regions, regionDefinitions } = await layoutRegions({
-    config,
-    provider: skipRegions ? undefined : args.layoutsProvider,
-    entry,
-    locale: context.locale,
-    budget,
-  });
-  const drawnRegions = regions.map(region => ({
-    region,
-    ...drawn(
-      config,
-      args.resolver,
-      regionDocument([region]),
-      regionDefinitions
-    ),
-  }));
-  const parts: DrawnDocument[] = [page, ...drawnRegions];
-  // A page holding conditioned blocks is read with all of them kept: a block
-  // that may show asks for what it binds, and its conditions name the entry
-  // fields they check. Read once, then decided against what was read.
-  const conditioned =
-    conditionsReadEntry &&
-    parts.some(part => holdsBackConditions(part.prepared));
-  // The page kept for metadata's question above is the same reading: not
-  // prepared a second time.
-  const reading = conditioned
-    ? parts.map((part, index) =>
-        index === 0 && keptPage !== undefined ? keptPage : keptForReading(part)
-      )
-    : parts;
-  const readingDocs = presentedOf(reading);
-  const read = await readBindingSources({
-    documents: readingDocs,
-    entrySource: args.entrySource,
-    slug: context.collection,
-    entryId: entry.id,
-    page: context.slug,
-    ...(context.locale === undefined ? {} : { locale: context.locale }),
-    reader: publicReaderFor(config, context.locale, args.window),
-    budget,
-    ...(config.cacheScope === undefined
-      ? {}
-      : { cacheScope: config.cacheScope }),
-    // The route's instance, as its records are read through, so the page
-    // shows its own site's settings and never the process's.
-    siteSettings: siteSettingsSourceFor(config),
-    ...(config.timeZone === undefined ? {} : { timeZone: config.timeZone }),
-    ...(args.window === undefined ? {} : { window: args.window }),
-    // A custom source's items bind as entries of its rows' collection.
-    namedQueries: config.namedQueries,
-    ...(conditioned
-      ? { conditions: conditionDemand(readingDocs.flatMap(doc => doc.nodes)) }
-      : {}),
-  });
-  // The collection the route reads media from, so a bound image is filled
-  // only from an upload field pointing there.
-  const bindings = withMediaCollection(read, config.mediaCollection);
-  const decided = conditioned
-    ? decideConditions(parts, bindings, bindingIssueLog(context))
-    : parts;
-  const [decidedPage, ...decidedRegions] = decided;
-  return {
-    definitions,
-    page: decidedPage ?? page,
-    regions: drawnRegions.map((region, index) => ({
-      ...region,
-      prepared: decidedRegions[index]?.prepared ?? region.prepared,
-    })),
-    regionDefinitions,
-    bindings,
-    presented: presentedOf(decided),
-  };
-}
-
-/**
- * Whether a presented tree reads anything at the route: a binding, or an
- * entry field a condition checks. A list's item conditions read nothing more
- * than the list does.
- */
-function readsAnything(presented: BlockDocument): boolean {
-  return (
-    bindingDemand([presented]).any ||
-    conditionDemand(presented.nodes).entryFields.size > 0
-  );
-}
-
-/** The trees a set of drawn documents present, the unreadable left out. */
-function presentedOf(parts: readonly DrawnDocument[]): BlockDocument[] {
-  return parts.flatMap(part =>
-    part.prepared === null ? [] : [part.prepared.presented]
-  );
-}
-
-/** A drawn document with every conditioned block kept, for a route's reads. */
-function keptForReading(part: DrawnDocument): DrawnDocument {
-  const kept =
-    part.prepared === null
-      ? null
-      : regateDocument(part.prepared, "keep-all")?.prepared;
-  return kept === undefined || kept === null
-    ? part
-    : { ...part, prepared: kept };
-}
-
-/**
- * Each drawn document gated by its blocks' conditions against the entry the
- * page shows, as the public reads it: the entry's own published values, and
- * only the fields the public may read. A page whose entry the public may not
- * see, or that has none, fails every entry condition closed. What could not
- * be checked is reported once, through the route's own log.
- */
-function decideConditions(
-  parts: readonly DrawnDocument[],
-  bindings: PageBindings | undefined,
-  report: BindingIssuesHandler
-): DrawnDocument[] {
-  const gate: ConditionGate = {
-    ...entrySubjectOf(bindings),
-    dayStart: conditionDayStart(bindings?.timeZone),
-  };
-  const issues: PageIssue[] = [];
-  const decided = parts.map(part => {
-    const regated =
-      part.prepared === null ? null : regateDocument(part.prepared, gate);
-    if (regated === null) return part;
-    issues.push(...regated.issues);
-    return { ...part, prepared: regated.prepared };
-  });
-  if (issues.length > 0) report(issues);
-  return decided;
-}
-
 /**
  * How a route reports the bindings a render could not use: one warning per
  * report, naming the page and counting each problem, never a value.
@@ -3767,22 +3176,89 @@ function overrunMayBeSaid(page: string, now: number): boolean {
   return true;
 }
 
+/** What a route draws its pages under, beyond what they read. */
+function readTermsOf(
+  config: BlocksPageConfig,
+  resolver: BlockResolver
+): PageReadTerms {
+  return {
+    resolver,
+    limits: config.limits,
+    styleContext: config.styleContext,
+    timeZone: config.timeZone,
+    namedQueries: config.namedQueries,
+    mediaCollection: config.mediaCollection,
+  };
+}
+
 /**
- * The binding pass the renderer fills list items' bindings with, built by
- * the renderer's own function from the renderer's own inputs (the page's
- * bindings, language, blocks and named queries), so a list reads ahead for
- * the props each entry is drawn with. None for a page with no bindings,
- * whose items' bindings are not filled.
+ * The reads a routed page's stages make, through the route's instance and
+ * under its budget: its components and its Layout's rows at the posture the
+ * route reads what it embeds, its bindings' sources and the site settings as
+ * the public reads them, and the public's field shapes, cached like the page.
  */
-function itemBindingRunFor(
-  bindings: PageBindings | undefined,
-  locale: string | undefined,
-  resolver: BlockResolver,
-  namedQueries: NamedQueryHost | undefined
-): BindingRun | undefined {
-  return bindings === undefined
-    ? undefined
-    : pageBindingRun(bindings, locale, resolver, namedQueries);
+function routeReadSources(args: {
+  config: BlocksPageConfig;
+  entry: ContentEntry;
+  context: RenderContext;
+  entrySource: EntrySource;
+  layoutsProvider: BlocksLayoutsProvider | undefined;
+  window: number | false | undefined;
+  budget: QueryBudget;
+}): PageReadSources {
+  const { config, entry, context, budget, window } = args;
+  const cache: ReadCache = {
+    scope: config.cacheScope ?? "",
+    locale: context.locale,
+    window,
+  };
+  return {
+    components: componentSource(
+      config,
+      readerFor(config),
+      budget,
+      context.locale
+    ),
+    layout: async () =>
+      await layoutRegions({
+        config,
+        provider: args.layoutsProvider,
+        entry,
+        locale: context.locale,
+        budget,
+      }),
+    bindings: async ask =>
+      await readBindingSources({
+        documents: ask.documents,
+        entrySource: args.entrySource,
+        slug: context.collection,
+        entryId: entry.id,
+        page: context.slug,
+        ...(context.locale === undefined ? {} : { locale: context.locale }),
+        reader: publicReaderFor(config, context.locale, window),
+        budget,
+        ...(config.cacheScope === undefined
+          ? {}
+          : { cacheScope: config.cacheScope }),
+        // The route's instance, as its records are read through, so the
+        // page shows its own site's settings and never the process's.
+        siteSettings: siteSettingsSourceFor(config),
+        ...(config.timeZone === undefined ? {} : { timeZone: config.timeZone }),
+        ...(window === undefined ? {} : { window }),
+        // A custom source's items bind as entries of its rows' collection.
+        namedQueries: config.namedQueries,
+        ...(ask.conditions === undefined ? {} : { conditions: ask.conditions }),
+      }),
+    fieldShapes: async collection =>
+      await cachedFieldShapes({ collection }, cache),
+    site: async () =>
+      await readSite(
+        siteSettingsSourceFor(config),
+        config.cacheScope,
+        budget,
+        window
+      ),
+  };
 }
 
 /**
@@ -3806,42 +3282,7 @@ function listBatchReads(args: {
 }): ListBatchReads {
   const { data, shapes, budget } = args;
   return {
-    related: async (collection, field, ids, fields, claim) => {
-      // Only a relation the public's shapes say is a to-one relation to one
-      // collection, as an entry binding's path may follow.
-      const target = relationTarget(shapes?.fieldsOf({ collection }), field);
-      if (target === undefined) return undefined;
-      const wanted = [...new Set(ids.map(String))];
-      const found = new Map<string, Readonly<Record<string, unknown>>>();
-      for (const chunk of chunked(wanted, AHEAD_BATCH_SIZE)) {
-        if (!budget.take({ ...claim, kind: "related" })) break;
-        const page = await data
-          .find({
-            collection: target,
-            filters: [{ field: "id", op: "in", value: chunk }],
-            limit: chunk.length,
-            select: [...fields],
-          })
-          .catch(() => undefined);
-        // Rows matched to ids only with certainty; otherwise these items
-        // keep their ids, and their bindings show their fallbacks. A
-        // provider need not count what it matched; then the rows it gave are
-        // taken as its count.
-        const rows =
-          page === undefined
-            ? undefined
-            : rowsById(
-                {
-                  items: page.items,
-                  meta: { total: page.total ?? page.items.length },
-                },
-                chunk
-              );
-        if (rows === undefined) continue;
-        for (const [id, row] of rows) found.set(id, row);
-      }
-      return found;
-    },
+    related: relatedThrough(data, shapes, budget),
     entryPaths: args.entryPaths.ahead,
     media: args.media.ahead,
   };
@@ -4018,15 +3459,19 @@ function blocksRouteConfig(
             // the bindings read. The same order spends the budget alike, so a
             // bound title cannot differ between the page and its metadata.
             const inputs = await readPageInputs({
-              config,
-              resolver,
+              terms: readTermsOf(config, resolver),
+              sources: routeReadSources({
+                config,
+                entry,
+                context,
+                entrySource,
+                layoutsProvider,
+                window: listWindow,
+                budget,
+              }),
               document,
-              entry,
-              context,
               entrySource,
-              layoutsProvider,
-              window: listWindow,
-              budget,
+              onIssues: bindingIssueLog(context),
               regionsOnlyWhenBound: true,
             });
             const derived = await derivePageSeo(
@@ -4073,16 +3518,22 @@ function blocksRouteConfig(
       const budget = createQueryBudget(
         config.maxQueries ?? DEFAULT_MAX_QUERIES
       );
-      const { page, bindings, presented } = await readPageInputs({
+      const terms = readTermsOf(config, resolver);
+      const sources = routeReadSources({
         config,
-        resolver,
-        document,
         entry,
         context,
         entrySource,
         layoutsProvider,
         window: listWindow,
         budget,
+      });
+      const { page, bindings, presented } = await readPageInputs({
+        terms,
+        sources,
+        document,
+        entrySource,
+        onIssues: bindingIssueLog(context),
       });
       // The list as the render draws it: composed with its components'
       // definitions, repaired and held to the caps.
@@ -4098,13 +3549,11 @@ function blocksRouteConfig(
       // A list that makes no read shows one page, and claims nothing.
       if (!listWillRead(list.props)) return 1;
       const days = await listDayInputs({
-        config,
+        terms,
+        sources,
         documents: presented,
         bindings,
-        resolver,
-        budget,
-        window: listWindow,
-        context,
+        where: context,
       });
       // A custom source counts its pages from its run's total, as the
       // render runs it. Its reads claim from the allowance as they are
@@ -4239,59 +3688,37 @@ function blocksRouteConfig(
           ? undefined
           : { ...configuredSiteStyles, breakpoints: siteBreakpoints };
 
-      const {
-        definitions,
-        page,
-        regions,
-        regionDefinitions,
-        bindings,
-        presented,
-      } = await readPageInputs({
-        config,
-        resolver,
+      // Everything the page reads before it draws, in the route's order, by
+      // the stages the editor's count runs too: the components it places,
+      // its Layout's regions, what its bindings and conditions read, the
+      // terms its lists compare days by (the site's zone and the public's
+      // field shapes, read only when a list on the page compares days), then
+      // the paginated list's first read, claimed before any block is drawn,
+      // which is the order the route counted its pages in. Only where the
+      // route serves later pages (a Single's gives no addresses, so its list
+      // shows one page and claims its own read); a list whose read cannot be
+      // claimed draws no links, as the route serves none of its later pages.
+      const terms = readTermsOf(config, resolver);
+      const staged = await readPageStages({
+        terms,
+        sources: routeReadSources({
+          config,
+          entry,
+          context,
+          entrySource,
+          layoutsProvider,
+          window: listWindow,
+          budget,
+        }),
         document,
-        entry,
-        context,
         entrySource,
-        layoutsProvider,
-        window: listWindow,
+        where: context,
         budget,
+        onIssues: bindingIssueLog(context),
       });
-
-      // What every document drawn on this page shares: the context (so the
-      // regions spend the page's ONE budget and read in its locale), the
-      // blocks, the caps, the host's posture and the page's bindings.
-      // What a list's date filter needs to compare whole days: the site's
-      // zone and the public's field shapes, read only when a list on the
-      // page filters by a day. Asked of the documents as presented, as the
-      // bindings are, so a list inside a component is seen.
-      const listDays = await listDayInputs({
-        config,
-        documents: presented,
-        bindings,
-        resolver,
-        budget,
-        window: listWindow,
-        context,
-      });
-      // The paginated list's first read, claimed now: after the page's inputs
-      // and day terms, before any block is drawn, which is the order the
-      // route counted its pages in. So a block drawn before the list cannot
-      // spend the read the count relied on, and the route and the page agree
-      // on whether the list reads at all. Only where the route serves later
-      // pages (a Single's gives no addresses, so its list shows one page and
-      // claims its own read); a list whose read cannot be claimed draws no
-      // links, as the route serves none of its later pages.
-      const pagedList = pagedListOf(
-        document,
-        page,
-        effectiveLimits(config).maxNodes,
-        bindings === undefined
-          ? undefined
-          : pageBindingRun(bindings, context.locale, resolver)
-      );
-      const listPage = claimedListPage(pagedList, context, budget);
-      drawnPage.number = listPage?.page;
+      const { definitions, page, regions, regionDefinitions, bindings } =
+        staged;
+      drawnPage.number = staged.listPage?.page;
       // What a list reads ahead for its entries, through the page's own
       // reads: relations as the public reads them, links as the blocks drawn
       // inside the entries would read them one by one.
@@ -4302,24 +3729,11 @@ function blocksRouteConfig(
         entryPaths,
         media,
       });
+      // What every document drawn on this page shares: the context (so the
+      // regions spend the page's ONE budget and read in its locale), the
+      // blocks, the caps, the host's posture and the page's bindings.
       const shared: SharedRendererProps = {
-        context: {
-          ...pageContext,
-          ...listDays,
-          ...(listPage === undefined ? {} : { listPage }),
-          listReads,
-          // The blocks the renderer keeps for the entry's conditions, from
-          // the same preparation it draws the page with, so a list reads
-          // ahead for exactly the blocks it draws. Each Layout region gets
-          // its own (`drawWithRegions`).
-          heldConditions: heldConditionsOf(page.prepared ?? undefined),
-          itemBindingRun: itemBindingRunFor(
-            bindings,
-            context.locale,
-            resolver,
-            pageContext.namedQueries
-          ),
-        },
+        context: stagedContext(pageContext, staged, terms, listReads),
         blocks: resolver,
         styleContext,
         blockFallback,
@@ -4367,107 +3781,6 @@ function blocksRouteConfig(
       );
     },
   };
-}
-
-/** The renderer props every document drawn on one page shares. */
-type SharedRendererProps = Pick<
-  Parameters<typeof PageRenderer>[0],
-  | "context"
-  | "blocks"
-  | "styleContext"
-  | "blockFallback"
-  | "limits"
-  | "hostPolicy"
-  | "bindings"
-  | "onBindingIssues"
->;
-
-/** The page's own renderer props, less the site sheet decision. */
-type PageRendererElementProps = Omit<
-  Parameters<typeof PageRenderer>[0],
-  "siteStyles"
->;
-
-/**
- * The header region, the page, then the footer region, as sibling elements.
- *
- * Each region is wrapped in its landmark, `<header>` or `<footer>`, carrying
- * `data-nextly-region` naming its area. A landmark rather than a plain `div`
- * because that is what a header and a footer ARE to a screen reader moving by
- * region, and the Layout is the only place that knows which is which; the
- * attribute is the stable hook for a host's own CSS or a test, independent of
- * the markup a component draws inside. Neither wrapper adds a style: the
- * region's own page root carries every rule the component compiled to.
- *
- * The site sheet is emitted ONCE, by whichever document is drawn first. Every
- * document's own rules are anchored at one specificity and settled by source
- * order, so the site sheet (block defaults, named classes) has to come before
- * all of them: emitted by the page with a header above it, the block defaults
- * would land AFTER the header's own rules and beat them. The other documents
- * are rendered with `siteStyles={false}` and the page compile context that
- * sheet implies, so their own rules compile exactly as they would beside it.
- *
- * A region's styles reach the page the way a placed component's do: a
- * composed document never matches a stored stylesheet, so its sheet is
- * compiled during the render from the route's compile context.
- */
-function drawWithRegions(args: {
-  regions: readonly DrawnRegion[];
-  page: PageRendererElementProps;
-  shared: SharedRendererProps;
-  siteStyles: SiteSheetInput | undefined;
-  definitions: DefinitionsById;
-}): ReactElement[] {
-  const { regions, page, shared, siteStyles, definitions } = args;
-  const header = regions.find(part => part.region.area === "header");
-  const footer = regions.find(part => part.region.area === "footer");
-  // In the order they are drawn: header, page, footer.
-  const parts: (DrawnRegion | "page")[] = [
-    ...(header === undefined ? [] : [header]),
-    "page" as const,
-    ...(footer === undefined ? [] : [footer]),
-  ];
-  // One answer for every surface drawing a page inside its Layout: which part
-  // emits the site sheet, and the scope each part compiles under.
-  const sheets = layoutPartSheets({
-    parts: parts.map(
-      (part): PagePart => (part === "page" ? part : part.region.area)
-    ),
-    styleContext: shared.styleContext,
-    siteStyles,
-    pageScope:
-      typeof page.styles?.scope === "string" ? page.styles.scope : undefined,
-  });
-  return parts.map((part, index) => {
-    const sheet = sheets[index] ?? {};
-    if (part === "page") {
-      return createElement(PageRenderer, { ...page, ...sheet, key: "page" });
-    }
-    const area = part.region.area;
-    return createElement(
-      area,
-      { key: area, "data-nextly-region": area },
-      createElement(PageRenderer, {
-        ...shared,
-        // The blocks the renderer keeps for this region's own conditions,
-        // from the preparation it draws the region with, not the page's.
-        ...(shared.context === undefined
-          ? {}
-          : {
-              context: {
-                ...shared.context,
-                heldConditions: heldConditionsOf(part.prepared ?? undefined),
-              },
-            }),
-        ...sheet,
-        // The document the region was prepared from, so the renderer reuses
-        // that preparation rather than running the pipeline again.
-        document: part.document,
-        ...(definitions.size === 0 ? {} : { definitions }),
-        ...(part.prepared === null ? {} : { prepared: part.prepared }),
-      })
-    );
-  });
 }
 
 /**

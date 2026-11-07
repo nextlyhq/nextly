@@ -29,6 +29,7 @@ import {
   type CanvasRegion,
   type LayersRegionRow,
   type LibraryTierState,
+  type VariablesPreview,
 } from "@nextlyhq/builder/shell";
 import {
   useDocumentIdentity,
@@ -44,6 +45,10 @@ import {
   type LibraryReadState,
 } from "../pattern-library-client";
 
+import {
+  useCanvasPreviewMode,
+  type CanvasPreviewMode,
+} from "./canvas-preview-mode";
 import { DesignPanel } from "./design-panel";
 import { useLookEditing, type LookEditingState } from "./look-editing";
 import {
@@ -405,9 +410,14 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   // Which look the inspector edits on its own: chosen in the Design panel,
   // left by selecting a block, by the bar's Back, or by Esc.
   const lookEditing = useLookEditing(editor);
+  // The site mode the canvas is previewed in: picked in the Design panel and
+  // held here, above it, so it outlasts the panel; plain state, never stored,
+  // so a reload draws the page's own mode again.
+  const previewMode = useCanvasPreviewMode();
   return {
     entryFields,
     lookEditing,
+    previewMode,
     search: { open: searchOpen, setOpen: setSearchOpen },
     pages,
     checklist,
@@ -443,6 +453,12 @@ export type EditorPanels = OfferedLibrary &
     pages: PagesPanelMount;
     /** The look edited on its own from the Design panel, with no block. */
     lookEditing: LookEditingState;
+    /**
+     * The site mode the author picked to preview the canvas in, for this
+     * editing session only: the Design panel's switch picks it, the frame is
+     * drawn in it, and the tag over the canvas clears it.
+     */
+    previewMode: CanvasPreviewMode;
   };
 
 /**
@@ -479,9 +495,15 @@ export function editorPanelRenderer({
   layerVerbs,
   documentDirty,
   lookEditing,
+  previewMode,
 }: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
   /** The look edited on its own, which the Design panel's Block looks choose. */
   lookEditing?: LookEditingState;
+  /**
+   * The site mode the canvas is previewed in, which the Design panel's
+   * preview switch picks. Absent, the switch previews the swatches alone.
+   */
+  previewMode?: VariablesPreview;
   /** Whether the editor holds work not yet saved, for the Pages panel's copy note. */
   documentDirty: boolean;
   /** The regions of the page's Layout, as read-only rows in Layers. */
@@ -641,6 +663,9 @@ export function editorPanelRenderer({
                   ? {}
                   : { look: lookEditing.edit }),
               }}
+              // The switch in the panel's header picks the mode the canvas is
+              // drawn in, held by the editor so it outlasts the panel.
+              preview={previewMode}
               // Offered once the stored style is read, so the choice shows
               // the model the canvas is compiled under and nothing earlier.
               {...(siteStylePending || siteStyleError !== null

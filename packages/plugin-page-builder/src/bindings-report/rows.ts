@@ -23,7 +23,6 @@ import {
 
 import {
   currentBindingProblems,
-  type DeclaredShapesReader,
   type ReadRef,
 } from "../fields/binding-judgement";
 
@@ -238,7 +237,7 @@ function rowAt(
 export async function documentBindingReport(
   document: BindingDocument,
   entry: BindingSchemaRef | undefined,
-  site: { readonly shapesOf: DeclaredShapesReader; readonly maxNodes?: number }
+  site: Parameters<typeof currentBindingProblems>[2]
 ): Promise<DocumentBindingReport> {
   const problems = await currentBindingProblems(document, entry, site);
   if (problems.overflowed) {
