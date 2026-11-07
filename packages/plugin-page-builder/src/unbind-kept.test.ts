@@ -183,6 +183,44 @@ describe("an image bound to nothing", () => {
   });
 });
 
+describe("a bound library image visitors are drawn none of", () => {
+  // The id the binding filled finds no image for a visitor: the renderer
+  // goes on to the binding's fallback, or draws nothing.
+  const undrawn = (fallback?: { holds: "address"; value: string }) =>
+    view({
+      filled: { mediaId: "gone-1" },
+      bound: {
+        kind: "image",
+        holds: "media",
+        from: "value",
+        ...(fallback === undefined ? {} : { fallback }),
+      },
+      drawn: false,
+    });
+
+  it("keeps the fallback visitors see, in the image's address", () => {
+    const address = "https://cdn.example.com/default.jpg";
+    expect(
+      unbindPlan(
+        "mediaId",
+        "cover",
+        undrawn({ holds: "address", value: address }),
+        IMAGE
+      )
+    ).toMatchObject({
+      kept: { set: { src: address }, empty: ["mediaId"] },
+      answer: { kept: "fallback", value: address, into: "src" },
+    });
+  });
+
+  it("leaves the image empty where visitors see none", () => {
+    expect(unbindPlan("mediaId", "cover", undrawn(), IMAGE)).toMatchObject({
+      kept: { set: {}, empty: ["mediaId", "src"] },
+      answer: { kept: "visitor" },
+    });
+  });
+});
+
 describe("the list a list child is drawn in", () => {
   const list = (id: string, collection: string, entries: BlockNode[]) =>
     ({
