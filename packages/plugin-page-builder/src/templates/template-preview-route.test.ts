@@ -308,6 +308,51 @@ describe("the list of entries a template may preview", () => {
     expect(answer.meta.labels).toEqual({ singular: "Post", plural: "Posts" });
   });
 
+  it("names the collection's top-level blocks fields, for Entry content's Field menu", async () => {
+    // Body and a blocks field inside a row (presentation only, stored on the
+    // entry itself) count; one inside a named group is stored under the
+    // group and does not, nor does any other kind of field.
+    const withBlocks = {
+      ...POSTS,
+      fields: [
+        ...POSTS.fields,
+        { name: "body", type: "blocks", label: "Body" },
+        {
+          type: "row",
+          fields: [{ name: "sidebar", type: "blocks" }],
+        },
+        {
+          name: "hero",
+          type: "group",
+          fields: [{ name: "intro", type: "blocks" }],
+        },
+      ],
+    };
+    const answer = await readPreviewEntries(
+      { collection: "posts" },
+      listReads({
+        find: callerFind([]),
+        collections: {
+          ...collections,
+          readCollection: async slug =>
+            slug === "posts" ? withBlocks : collections.readCollection(slug),
+        },
+      })
+    );
+    expect(answer.meta.blocksFields).toEqual([
+      { name: "body", label: "Body" },
+      { name: "sidebar", label: "Sidebar" },
+    ]);
+  });
+
+  it("names no blocks field for a collection with none (the control)", async () => {
+    const answer = await readPreviewEntries(
+      { collection: "posts" },
+      listReads({ find: callerFind([]) })
+    );
+    expect(answer.meta.blocksFields).toEqual([]);
+  });
+
   it("refuses an unknown collection with the same words as one the caller may not read", async () => {
     const unknown = await refusalOf(() =>
       readPreviewEntries({ collection: "nope" }, listReads())

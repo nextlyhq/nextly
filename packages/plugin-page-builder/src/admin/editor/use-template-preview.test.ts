@@ -55,6 +55,7 @@ function listed(items: readonly PreviewEntryItem[]): PreviewEntriesResponse {
       hasPrev: false,
       mayCreate: true,
       labels: { singular: "Post", plural: "Posts" },
+      blocksFields: [{ name: "body", label: "Body" }],
     },
   };
 }
@@ -445,6 +446,7 @@ describe("what the strip says, following the canvas's own read", () => {
       collection: "posts",
       fixed: false,
       labels: { singular: "Post", plural: "Posts" },
+      blocksFields: undefined,
       language: undefined,
       list: { state: "ready" as const, items: [NEWEST], mayCreate: true },
       chip: {

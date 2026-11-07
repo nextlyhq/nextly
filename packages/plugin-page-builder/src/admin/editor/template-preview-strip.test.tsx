@@ -108,6 +108,7 @@ function previewOf(
     collection: "posts",
     fixed: false,
     labels: { singular: "Post", plural: "Posts" },
+    blocksFields: undefined,
     language: undefined,
     list: { state: "ready", items: ROWS, mayCreate: true },
     chip:
