@@ -216,10 +216,12 @@ A template is a builder document of kind `template`, stored in the page builder'
 has one template, whatever its state: a second is refused when it is created, naming the
 first by its title, or by its id to someone who may not read it.
 
-| `kind`             | Fields                                  | Rights on templates         |
-| ------------------ | --------------------------------------- | --------------------------- |
-| `create-template`  | `collection`, and `title` and `publish` | **create**, and **publish** |
-| `publish-template` | `id`                                    | **read** and **publish**    |
+| `kind`                | Fields                                  | Rights on templates         |
+| --------------------- | --------------------------------------- | --------------------------- |
+| `create-template`     | `collection`, and `title` and `publish` | **create**, and **publish** |
+| `publish-template`    | `id`                                    | **read** and **publish**    |
+| `give-entry-design`   | `collection`, `entry`, and `title`      | **create**                  |
+| `remove-entry-design` | `collection`, `entry`                   | **delete**                  |
 
 A template is created as a draft unless `publish` is set, and named after its collection
 unless `title` is given. A collection may have a template when it is content the admin
@@ -237,6 +239,22 @@ collection cannot be read there. In the editor a template is previewed with a re
 collection ([Editing a template](/docs/page-builder/editor#editing-a-template)). Which
 entry is previewed is the editor's own state and is not stored, so there is no action for
 it.
+
+### An entry's own design
+
+One entry can be drawn with a design of its own instead of its collection's template.
+`give-entry-design` copies the collection's **published** template into a new draft that
+names the entry, so the entry keeps being drawn with the template until its own design
+is published. Later changes to the template don't reach the copy. An entry has at most
+one own design, held by a unique key even when two requests race. The action is refused
+while the collection has no published template, and when the entry already has its own
+design. The entry is read as the caller, so an entry the caller can't read answers `404`.
+`remove-entry-design` deletes it, and the entry is drawn with the template again.
+Deleting an entry deletes its own design in the same transaction.
+
+An own design is a `templates` document whose `collection` is empty and whose `entry`,
+`entryCollection` and `entryId` name the entry it serves; `forkedFrom` is the template
+it was copied from.
 
 ## Other routes with a dry run
 
