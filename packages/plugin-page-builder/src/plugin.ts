@@ -1896,6 +1896,7 @@ export const pageBuilder = (
               overrideAccess: true,
               status: "all",
               depth: 0,
+              select: { id: true },
             });
             return typeof row === "object" && row !== null;
           } catch (error) {

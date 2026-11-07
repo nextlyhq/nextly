@@ -291,8 +291,18 @@ describe("an entry's own design", () => {
       })
     );
     expect(messagesOf(refused)).toEqual([
-      "An entry's own design serves its entry, not a collection: leave its collection empty.",
+      "An entry's own design serves its entry, not a collection: leave its collection out.",
     ]);
+  });
+
+  it("is refused when it gives its collection an empty value, which the unique index would hold", async () => {
+    const refused = await refusalOf(() =>
+      guardWrite(setup(), {
+        operation: "create",
+        data: design({ collection: "" }),
+      })
+    );
+    expect(refused.code).toBe("VALIDATION_ERROR");
   });
 
   it("is refused under a key its entry does not make", async () => {

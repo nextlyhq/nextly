@@ -73,17 +73,13 @@ export function designShapeProblem(
         };
       }
     }
-    if (
-      isEntryDesign(original) &&
-      has(TEMPLATE_COLLECTION_FIELD) &&
-      filled(data[TEMPLATE_COLLECTION_FIELD])
-    ) {
+    if (isEntryDesign(original) && namesCollection(data)) {
       return collectionNamed();
     }
     return null;
   }
   if (!isEntryDesign(data)) return null;
-  if (filled(data[TEMPLATE_COLLECTION_FIELD])) return collectionNamed();
+  if (namesCollection(data)) return collectionNamed();
   const collection = data[TEMPLATE_ENTRY_COLLECTION_FIELD];
   const id = data[TEMPLATE_ENTRY_ID_FIELD];
   if (
@@ -108,12 +104,23 @@ export function designShapeProblem(
   return null;
 }
 
+/**
+ * Whether a write gives `collection` any value but none: an empty string is
+ * a value too, and the unique index would hold it against every other own
+ * design written the same way, so an own design leaves the field out or
+ * null.
+ */
+function namesCollection(data: Readonly<Record<string, unknown>>): boolean {
+  const value = data[TEMPLATE_COLLECTION_FIELD];
+  return value !== undefined && value !== null;
+}
+
 /** The problem of an own design that also names a collection. */
 function collectionNamed(): DesignShapeProblem {
   return {
     path: TEMPLATE_COLLECTION_FIELD,
     message:
-      "An entry's own design serves its entry, not a collection: leave its collection empty.",
+      "An entry's own design serves its entry, not a collection: leave its collection out.",
   };
 }
 

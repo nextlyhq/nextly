@@ -175,6 +175,12 @@ async function giveEntryDesign(
   const by = await actingCaller(ctx, [["create", templates]], {
     anyEntry: true,
   });
+  // Only what names the entry is read: its id, and its title where the
+  // action gives the design none.
+  const titleField =
+    action.title === undefined
+      ? await titleFieldOf(ctx, action.collection)
+      : null;
   const entry = recordOf(
     await readOrNull(async () =>
       (await getCachedNextly()).findByID({
@@ -183,6 +189,8 @@ async function giveEntryDesign(
         ...(await readingAsUser(ctx)),
         status: "all",
         depth: 0,
+        select:
+          titleField === null ? { id: true } : { id: true, [titleField]: true },
       })
     )
   );
@@ -192,8 +200,7 @@ async function giveEntryDesign(
     });
   }
   const key = entryDesignKey(action.collection, action.entry);
-  const title =
-    action.title ?? (await entryTitle(ctx, action.collection, entry));
+  const title = action.title ?? entryTitle(entry, titleField, action.entry);
   const asked: TemplateSummary = {
     title,
     collection: action.collection,
@@ -369,22 +376,30 @@ async function removeEntryDesign(
   };
 }
 
-/**
- * An own design's default name: its entry's title, read by the field its
- * collection names entries by, or the entry's id where it has none.
- */
-async function entryTitle(
+/** The field `collection` names its entries by, or "title" where it says none. */
+async function titleFieldOf(
   ctx: TemplateActionsContext,
-  collection: string,
-  entry: Record<string, unknown>
+  collection: string
 ): Promise<string> {
-  const config = await readOrNull(() =>
-    ctx.services.collections.getCollection(collection, undefined as never)
+  const record = recordOf(
+    await readOrNull(() =>
+      ctx.services.collections.getCollection(collection, undefined as never)
+    )
   );
-  const record = recordOf(config);
-  const field =
-    record === null ? "title" : (titleFieldIn(record)?.name ?? "title");
-  const title = readableTitleText(entry[field]) ?? idOf(entry) ?? collection;
+  return record === null ? "title" : (titleFieldIn(record)?.name ?? "title");
+}
+
+/**
+ * An own design's default name: its entry's title, read from `field`, or
+ * the entry's id where it has none.
+ */
+function entryTitle(
+  entry: Record<string, unknown>,
+  field: string | null,
+  id: string
+): string {
+  const title =
+    (field === null ? undefined : readableTitleText(entry[field])) ?? id;
   return [...title].slice(0, TITLE_MAX).join("").trimEnd();
 }
 
