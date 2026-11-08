@@ -27,6 +27,36 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const countWithStages = vi.hoisted(() => vi.fn());
 
+/**
+ * The off-screen draws begun, each with the signal it was handed and how it
+ * ended: a draw that is held until its signal aborts, as React's is while a
+ * block on the page has not settled.
+ */
+const draws = vi.hoisted(
+  () => [] as { signal: AbortSignal | undefined; ended: string }[]
+);
+
+vi.mock("react-dom/server", () => ({
+  renderToReadableStream: (
+    _element: unknown,
+    options: { signal?: AbortSignal }
+  ) => {
+    const draw = { signal: options.signal, ended: "drawing" };
+    draws.push(draw);
+    const allReady = new Promise<void>((_resolve, reject) => {
+      options.signal?.addEventListener(
+        "abort",
+        () => {
+          draw.ended = "aborted";
+          reject(options.signal?.reason);
+        },
+        { once: true }
+      );
+    });
+    return Promise.resolve({ allReady, cancel: () => Promise.resolve() });
+  },
+}));
+
 vi.mock("@nextlyhq/blocks-react", async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   countPageReads: countWithStages,
@@ -88,6 +118,7 @@ async function wait(ms: number): Promise<void> {
 beforeEach(() => {
   vi.useFakeTimers();
   countWithStages.mockReset();
+  draws.length = 0;
 });
 
 afterEach(() => {
@@ -281,23 +312,37 @@ describe("a page changing all the while its counts are slow", () => {
       () => new Promise<PageReadReport>(() => undefined)
     );
     const changeFor = changingMeter();
-    await changeFor(20_000);
+    await changeFor(5000);
+    // The count, begun at three seconds, drawing the page: the draw it was
+    // handed, begun and held, as one whose block never settles is.
+    const [[givenUp]] = countWithStages.mock.calls as [
+      [{ draw: (element: React.ReactElement) => Promise<void> }],
+    ];
+    const drawing = givenUp.draw(<div />);
+    const ended = vi.fn();
+    drawing.then(ended, ended);
+    // Once the renderer has loaded and the draw has begun.
+    await vi.waitFor(() => expect(draws).toHaveLength(1));
+    expect(draws[0]?.ended).toBe("drawing");
+    await changeFor(15_000);
     expect(meter().getAttribute("aria-label")).toBe(
       "Couldn't count page reads. Retry"
     );
-    // A minute more of changes: still the one count, given up on.
+    // A minute more of changes: still the one count, given up on, and its
+    // draw still held.
     await changeFor(60_000);
     expect(countWithStages).toHaveBeenCalledTimes(1);
     expect(meter().getAttribute("aria-label")).toBe(
       "Couldn't count page reads. Retry"
     );
-    // What the count given up on draws with, as the count was handed it.
-    const [[givenUp]] = countWithStages.mock.calls as [
-      [{ draw: (element: React.ReactElement) => Promise<void> }],
-    ];
+    expect(draws[0]?.signal?.aborted).toBe(false);
+    expect(ended).not.toHaveBeenCalled();
     fireEvent.click(meter());
-    // Retry aborts it: what it would still draw, it no longer draws.
-    await expect(givenUp.draw(<div />)).rejects.toThrow();
+    // Retry aborts the draw in flight: its signal fires, its stream is
+    // aborted, and the draw ends rejected.
+    expect(draws[0]?.signal?.aborted).toBe(true);
+    await expect(drawing).rejects.toThrow();
+    expect(draws[0]?.ended).toBe("aborted");
     await wait(0);
     expect(countWithStages).toHaveBeenCalledTimes(2);
   });
