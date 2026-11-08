@@ -559,8 +559,10 @@ export function fieldFitsProp(
 }
 
 /**
- * Fields every entry carries that a schema need not list. A binding to one
- * is judged by the value it reads, as a binding with no schema is.
+ * Fields every entry carries that a schema need not list: the source's own,
+ * and a related entry's across the one relation a path may follow, so
+ * `author.id` names the entry a link points at. A binding to one is judged by
+ * the value it reads, as a binding with no schema is.
  */
 const SYSTEM_FIELDS: ReadonlySet<string> = new Set([
   "id",
@@ -618,23 +620,59 @@ function shapelessRest(remaining: number): PathWalk {
  * carries is judged by its value, any other is missing. A timestamp is one
  * only where the shapes do not list timestamps: where they do, a source
  * without them has none.
+ *
+ * A related entry carries them too (see {@link relatedEntryField}). A group
+ * is not an entry and carries none.
  */
 function unlistedField(
   name: string,
-  index: number,
+  at: { readonly index: number; readonly relation?: CrossedRelation },
   segments: readonly string[],
   schema: BindingSchemaSource
 ): PathWalk {
   const carried =
     name === "id" ||
     (SYSTEM_FIELDS.has(name) && schema.listsTimestamps !== true);
-  if (index === 0 && carried) {
+  if (at.index === 0 && carried) {
     return shapelessRest(segments.length - MAX_SEGMENTS_WITHOUT_SCHEMA + 1);
+  }
+  // The level right past the relation is the related entry's own.
+  if (carried && at.relation?.segment === at.index - 1) {
+    return relatedEntryField(name, at.index, segments);
   }
   return walkFailure(
     "binding-field-missing",
     `The source has no field "${name}" a visitor may read.`
   );
+}
+
+/**
+ * A field every entry carries, named on the related entry a path's relation
+ * leads to (`author.id`), read as the public reads that entry, so one a
+ * visitor may not read gives nothing and the binding falls back.
+ *
+ * Only through a relation that starts the path: the page reads a relation
+ * its bindings follow by the path's first field, so one inside a group
+ * (`meta.author.id`) is never read, and its id would never be filled.
+ * Nothing is walked past it: it holds a single value.
+ */
+function relatedEntryField(
+  name: string,
+  index: number,
+  segments: readonly string[]
+): PathWalk {
+  if (index !== 1) {
+    return walkFailure(
+      "binding-path-unsupported",
+      `A related entry's "${name}" is read only through a relation at the start of the path, not one inside a group.`
+    );
+  }
+  return index === segments.length - 1
+    ? { ok: true }
+    : walkFailure(
+        "binding-field-missing",
+        `"${name}" holds a single value with no fields of its own.`
+      );
 }
 
 /**
@@ -667,7 +705,7 @@ function walkPath(
       candidate => candidate.name === name
     );
     if (field === undefined) {
-      return crossed(unlistedField(name, index, segments, schema));
+      return crossed(unlistedField(name, { index, relation }, segments, schema));
     }
     if (last) return crossed({ ok: true, field });
     const step = stepInto(field, hops, schema);

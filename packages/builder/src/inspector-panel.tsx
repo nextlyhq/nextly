@@ -24,6 +24,7 @@
  */
 
 import {
+  authoredText,
   BASE_BREAKPOINT,
   breakpointContexts,
   findNode,
@@ -108,7 +109,11 @@ import { InstanceInspectorPanel } from "./instance-inspector-panel";
 import { commitLinkChanges } from "./link-control";
 import { LookInspector, type LookEditing } from "./look-inspector";
 import { useCanvasTokenModeAt } from "./prefers-dark";
-import { propGroupsOf, type BindableWrapper } from "./prop-groups";
+import {
+  propGroupsOf,
+  type BindableOptions,
+  type BindableWrapper,
+} from "./prop-groups";
 import { selectionLock } from "./selection-ops";
 import { StyleStateField } from "./state-switcher";
 import {
@@ -569,6 +574,33 @@ function surfaceFor(
     };
   }
   return { block: inspection };
+}
+
+/**
+ * The prop whose binding a link group's lead is drawn with: the entry's,
+ * where the link follows its bound entry, else the address's.
+ *
+ * The same precedence the renderer reads a link by (`linkFor` in
+ * blocks-react's `blocks/props.ts`): an entry reference, both its halves
+ * given, before the address. So a block whose entry is bound and whose
+ * collection is set is drawn, and changed, as its entry, whether or not its
+ * address is bound too; with no collection the renderer follows the address,
+ * and so does the panel. A half counts as given stored or bound, as the
+ * render fills a bound one before reading the link.
+ */
+function drawnBinding(
+  lead: string,
+  entry: BindableOptions["entryLink"],
+  bindings: Readonly<Record<string, unknown>> | undefined,
+  props: readonly EditableProp[]
+): string {
+  if (entry === undefined || bindings?.[entry.id] === undefined) return lead;
+  const collection = props.find(prop => prop.name === entry.collection);
+  // Read as the renderer reads it (`text`, which is `authoredText`).
+  const given =
+    bindings[entry.collection] !== undefined ||
+    authoredText(collection?.value) !== "";
+  return given ? entry.id : lead;
 }
 
 /**
@@ -1503,9 +1535,12 @@ function ContentFields({
   // row gets, for the props the group offers: one chip, one menu and one
   // note for every bindable prop, wherever it is drawn.
   const bindableIn = (offered: ReadonlySet<string>): BindableWrapper =>
-    function wrapBindable(name, field, options) {
+    function wrapBindable(lead, field, options) {
+      const entry = options?.entryLink;
+      const name = drawnBinding(lead, entry, bindings, inspection.props);
       const prop = inspection.props.find(each => each.name === name);
-      if (prop === undefined || !prop.offered || !offered.has(name)) {
+      // Offered by the group's lead: a bound entry id is drawn in its place.
+      if (prop === undefined || !prop.offered || !offered.has(lead)) {
         return field;
       }
       const clears = options?.clearsOnBind ?? [];
@@ -1515,6 +1550,7 @@ function ContentFields({
           prop={prop}
           blockLabel={inspection.label}
           binding={bindings?.[name]}
+          entryLink={entry}
           document={document}
           services={services}
           disabled={!writable(name)}

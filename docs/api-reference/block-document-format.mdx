@@ -189,6 +189,15 @@ its children. A binding to a source nobody read renders its fallback.
   claim. A path through a field that holds a list, or past a second relation,
   renders the fallback. A relation on a list item's binding is not followed
   yet: it renders the fallback.
+- **A related entry's id.** `author.id` is the id of the entry the relation
+  names, which a schema need not declare. Bind a link's `entryId` to it and set
+  its `entryCollection` to the relation's collection, and the link points at
+  that entry's page. The id is read from the related entry as the public reads
+  it, so an entry a visitor may not read, or one not published, gives no link,
+  and the block keeps its own `href`. The relation itself (`author`) does not
+  fill `entryId`, and neither does a relation to many entries or to entries of
+  several collections. The relation must start the path: one inside a group
+  (`meta.author.id`) is refused, since the page does not read it.
 - **Empty values.** Absent, `null`, `""`, an empty list and rich text with
   nothing in it render the fallback, or the prop's own value when there is no
   fallback. `false` and `0` are values.
