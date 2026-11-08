@@ -7,12 +7,13 @@
  * the control for every other kind, so a rule refusing the block everywhere
  * (or nowhere) fails one half.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
   type BlockDocument,
+  type BlockNode,
 } from "./document";
 import {
   composeEntryContent,
@@ -22,7 +23,7 @@ import {
   holdsEntryContent,
 } from "./entry-content";
 import { DEFAULT_LIMITS } from "./limits";
-import { resolveComponentInstances } from "./resolve-instances";
+import { hostIdsIn, resolveComponentInstances } from "./resolve-instances";
 import { walkNodes } from "./tree";
 import { validate, type ValidationContext } from "./validation";
 import { FIXTURE_BREAKPOINTS } from "./validation.fixtures";
@@ -460,67 +461,339 @@ describe("an entry nested deeper than the page may draw", () => {
   });
 });
 
-describe("an entry beside a template that places a component", () => {
-  // A two-node template: a placement of a two-node component, and the block.
-  const card = documentOf(
-    "component",
-    text("c1", "Card title"),
-    text("c2", "Card body")
-  );
-  const definitions = new Map([["card", card]]);
-  const template = documentOf(
-    "template",
-    {
-      id: "placed",
-      type: COMPONENT_INSTANCE_TYPE,
-      version: 1,
-      props: { componentId: "card" },
-    },
-    entryContent("ec")
-  );
-  const body = documentOf(
-    "page",
-    text("e1", "One"),
-    text("e2", "Two"),
-    text("e3", "Three"),
-    text("e4", "Four")
-  );
-  const limits = { ...DEFAULT_LIMITS, maxNodes: 5 };
+/**
+ * What the resolver says of a page drawn under `limits`: whether it draws
+ * whole (its survey reads every node within the cap, and no placement is
+ * refused for want of room), what it refused, and the page it resolved to.
+ * The resolver's own answer, so the cut is held to it and to no count kept
+ * beside it.
+ */
+function resolvedUnder(
+  page: BlockDocument,
+  definitions: ReadonlyMap<string, BlockDocument>,
+  limits: typeof DEFAULT_LIMITS
+) {
+  const resolved = resolveComponentInstances(page, definitions, {
+    limits,
+    conditioned: "carry",
+  });
+  const truncated = hostIdsIn(page.nodes, limits.maxNodes).truncated;
+  return {
+    whole:
+      !truncated &&
+      !resolved.unresolved.some(instance => instance.reason === "budget"),
+    unresolved: resolved.unresolved,
+    document: resolved.document,
+  };
+}
 
-  /** The page as the renderer resolves it under the cap of 5. */
-  function resolvedUnderCap(composed: BlockDocument) {
-    const resolved = resolveComponentInstances(composed, definitions, {
-      limits,
-      conditioned: "carry",
-    });
-    let nodes = 0;
-    walkNodes(resolved.document.nodes, () => {
-      nodes += 1;
-    });
-    return { unresolved: resolved.unresolved, nodes };
+/** The blocks a composed template's Entry content block holds. */
+function slotOf(page: BlockDocument, at: number): readonly BlockNode[] {
+  return page.nodes[at]?.slots?.[ENTRY_CONTENT_SLOT] ?? [];
+}
+
+/**
+ * The entry composed into `template` (its Entry content block at `at`)
+ * under `limits` with `definitions`, held to the resolver: the page draws
+ * whole, and one more of the entry's blocks would not, so the cut is the
+ * longest the resolver accepts. Returns the composed page and what it
+ * resolved to.
+ */
+function composedAsTheResolverAllows(
+  template: BlockDocument,
+  body: BlockDocument,
+  at: number,
+  definitions: ReadonlyMap<string, BlockDocument>,
+  limits: typeof DEFAULT_LIMITS
+) {
+  const source = {
+    valueOf: () => body,
+    maxNodes: limits.maxNodes,
+    maxDepth: limits.maxDepth,
+  };
+  const composed = composeEntryContent(template, { ...source, definitions });
+  // Every block the stored cut alone keeps, so one past the cut can be put
+  // to the resolver.
+  const candidates = slotOf(composeEntryContent(template, source), at);
+  const kept = slotOf(composed, at);
+  const resolved = resolvedUnder(composed, definitions, limits);
+  expect(resolved.whole).toBe(true);
+  if (kept.length < candidates.length) {
+    const oneMore: BlockDocument = {
+      ...composed,
+      nodes: composed.nodes.map((node, index) =>
+        index === at
+          ? {
+              ...node,
+              slots: {
+                ...node.slots,
+                [ENTRY_CONTENT_SLOT]: candidates.slice(0, kept.length + 1),
+              },
+            }
+          : node
+      ),
+    };
+    expect(resolvedUnder(oneMore, definitions, limits).whole).toBe(false);
   }
+  return { composed, kept, candidates, resolved };
+}
 
-  it("keeps the room the component's expansion needs, and cuts the entry to what remains", () => {
-    const composed = composeEntryContent(template, {
-      valueOf: () => body,
-      maxNodes: 5,
-      definitions,
-    });
-    const drawn = composed.nodes[1]?.slots?.[ENTRY_CONTENT_SLOT] ?? [];
-    // The entry is cut, but not dropped.
-    expect(drawn.length).toBeGreaterThan(0);
-    expect(drawn.length).toBeLessThan(4);
-    const resolved = resolvedUnderCap(composed);
-    // The placement resolves, and the page fills exactly the room it has.
+/** Every text a resolved page draws, in document order. */
+function textsIn(page: BlockDocument): unknown[] {
+  const found: unknown[] = [];
+  walkNodes(page.nodes, node => {
+    if (node.props.text !== undefined) found.push(node.props.text);
+  });
+  return found;
+}
+
+const card = documentOf(
+  "component",
+  text("c1", "Card title"),
+  text("c2", "Card body")
+);
+
+/** A placement of `componentId`, with `slots` handed to it where given. */
+function placed(
+  id: string,
+  componentId: string,
+  slots?: Record<string, unknown[]>
+): Record<string, unknown> {
+  return {
+    id,
+    type: COMPONENT_INSTANCE_TYPE,
+    version: 1,
+    props: { componentId },
+    ...(slots === undefined ? {} : { slots }),
+  };
+}
+
+/** `count` text blocks, `prefix`ed. */
+function texts(prefix: string, count: number): unknown[] {
+  return Array.from({ length: count }, (_, at) =>
+    text(`${prefix}${String(at)}`, `${prefix} ${String(at)}`)
+  );
+}
+
+describe("an entry beside a template that places a component", () => {
+  it("leaves the room the template's placement needs, as the resolver measures it", () => {
+    const template = documentOf(
+      "template",
+      placed("p", "card"),
+      entryContent("ec")
+    );
+    const { kept, candidates, resolved } = composedAsTheResolverAllows(
+      template,
+      documentOf("page", ...texts("e", 4)),
+      1,
+      new Map([["card", card]]),
+      { ...DEFAULT_LIMITS, maxNodes: 5 }
+    );
     expect(resolved.unresolved).toEqual([]);
-    expect(resolved.nodes).toBe(5);
+    // Cut below what the stored nodes alone would allow, but not dropped.
+    expect(kept.length).toBeGreaterThan(0);
+    expect(kept.length).toBeLessThan(candidates.length);
   });
 
-  it("leaves the placement unresolved when each instance is charged as one node (the control)", () => {
+  it("leaves the placement unresolved where no definitions are given (the control)", () => {
+    const template = documentOf(
+      "template",
+      placed("p", "card"),
+      entryContent("ec")
+    );
     const composed = composeEntryContent(template, {
-      valueOf: () => body,
+      valueOf: () => documentOf("page", ...texts("e", 4)),
       maxNodes: 5,
     });
-    expect(resolvedUnderCap(composed).unresolved).toHaveLength(1);
+    const resolved = resolvedUnder(composed, new Map([["card", card]]), {
+      ...DEFAULT_LIMITS,
+      maxNodes: 5,
+    });
+    expect(resolved.whole).toBe(false);
+  });
+});
+
+describe("an entry that places a component of its own", () => {
+  it("draws the placement at its full size, and the page whole", () => {
+    const { kept, resolved } = composedAsTheResolverAllows(
+      documentOf("template", entryContent("ec")),
+      documentOf("page", placed("own", "card"), ...texts("e", 3)),
+      0,
+      new Map([["card", card]]),
+      { ...DEFAULT_LIMITS, maxNodes: 4 }
+    );
+    expect(kept[0]?.type).toBe(COMPONENT_INSTANCE_TYPE);
+    expect(resolved.unresolved).toEqual([]);
+    expect(textsIn(resolved.document)).toEqual(
+      expect.arrayContaining(["Card title", "Card body"])
+    );
+  });
+});
+
+describe("the page's own depth", () => {
+  it("measures a template placement below the format's default depth under the raised limit", () => {
+    // Thirteen boxes deep, past the format's own depth of 12, a placement.
+    let deep: unknown = placed("deep", "card");
+    for (let level = 12; level >= 0; level -= 1) {
+      deep = box(`b${String(level)}`, [deep]);
+    }
+    const { kept, candidates, resolved } = composedAsTheResolverAllows(
+      documentOf("template", deep, entryContent("ec")),
+      documentOf("page", ...texts("e", 10)),
+      1,
+      new Map([["card", card]]),
+      { ...DEFAULT_LIMITS, maxNodes: 20, maxDepth: 30 }
+    );
+    expect(resolved.unresolved).toEqual([]);
+    expect(kept.length).toBeGreaterThan(0);
+    expect(kept.length).toBeLessThan(candidates.length);
+  });
+
+  it("leaves to the resolver a definition deeper than the depth left below the block", () => {
+    // A definition nine boxes deep, placed in the entry two levels down: the
+    // resolver's own depth rules decide it, and nothing about it is cut for
+    // room the page has.
+    let inner: unknown = text("leaf", "Leaf");
+    for (let level = 8; level >= 0; level -= 1) {
+      inner = box(`d${String(level)}`, [inner]);
+    }
+    const deepCard = documentOf("component", inner);
+    const { kept, candidates } = composedAsTheResolverAllows(
+      documentOf("template", entryContent("ec")),
+      documentOf("page", placed("own", "deep"), ...texts("e", 3)),
+      0,
+      new Map([["deep", deepCard]]),
+      { ...DEFAULT_LIMITS, maxNodes: 100 }
+    );
+    // Room for all of it: whatever the resolver makes of the depth, the
+    // entry is never cut for it.
+    expect(kept).toHaveLength(candidates.length);
+  });
+});
+
+describe("placements the resolver charges less than they store", () => {
+  it("does not charge a one-node expansion for the slots it discards", () => {
+    const single = documentOf("component", text("s1", "Single"));
+    composedAsTheResolverAllows(
+      documentOf("template", entryContent("ec")),
+      documentOf(
+        "page",
+        // Handed blocks for a slot its component does not have.
+        placed("own", "single", { nowhere: texts("x", 3) }),
+        ...texts("e", 4)
+      ),
+      0,
+      new Map([["single", single]]),
+      { ...DEFAULT_LIMITS, maxNodes: 8 }
+    );
+  });
+
+  it("keeps a page of zero-node placements to the cap", () => {
+    const empty = documentOf("component");
+    const { kept } = composedAsTheResolverAllows(
+      documentOf("template", entryContent("ec")),
+      documentOf(
+        "page",
+        ...Array.from({ length: 50 }, (_, at) =>
+          placed(`z${String(at)}`, "empty")
+        )
+      ),
+      0,
+      new Map([["empty", empty]]),
+      { ...DEFAULT_LIMITS, maxNodes: 10 }
+    );
+    // Never more than the page stores beside the block itself.
+    expect(kept.length).toBeLessThanOrEqual(9);
+  });
+});
+
+describe("an oversized entry measured against its components", () => {
+  it("is never read past the cap, however often the resolver is asked", () => {
+    const reads = { past: 0 };
+    const nodes: unknown[] = [];
+    for (let at = 0; at < 200; at += 1) {
+      const node =
+        at === 0 ? placed("own", "card") : text(`e${String(at)}`, "x");
+      if (at < 9) {
+        nodes.push(node);
+        continue;
+      }
+      Object.defineProperty(nodes, at, {
+        enumerable: true,
+        get: () => {
+          reads.past += 1;
+          return node;
+        },
+      });
+    }
+    const body = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes,
+    } as BlockDocument;
+    composeEntryContent(documentOf("template", entryContent("ec")), {
+      valueOf: () => body,
+      maxNodes: 10,
+      definitions: new Map([["card", card]]),
+    });
+    expect(reads.past).toBe(0);
+  });
+});
+
+describe("how often the resolver measures the page", () => {
+  /**
+   * The card's definition behind a lookup that counts each time it is read:
+   * once per resolution, since a resolution reads a definition once however
+   * often the page places it, and the template places it in every probe.
+   */
+  function counted() {
+    const reads = { card: 0 };
+    const lookup = {
+      has: (id: string) => id === "card",
+      get: (id: string) => {
+        if (id !== "card") return undefined;
+        reads.card += 1;
+        return card;
+      },
+    };
+    return { lookup, reads };
+  }
+
+  const template = documentOf(
+    "template",
+    placed("p", "card"),
+    entryContent("ec")
+  );
+
+  it("resolves the page once where it draws whole", () => {
+    const { lookup, reads } = counted();
+    const valueOf = vi.fn(() => documentOf("page", ...texts("e", 6)));
+    composeEntryContent(template, {
+      valueOf,
+      maxNodes: 100,
+      definitions: lookup,
+    });
+    expect(reads.card).toBe(1);
+    // The entry is read once, before anything is measured.
+    expect(valueOf).toHaveBeenCalledTimes(1);
+  });
+
+  it("searches only past the cap, in at most 1 + ceil(log2(N + 1)) resolutions", () => {
+    const { lookup, reads } = counted();
+    const blocks = 16;
+    const valueOf = vi.fn(() => documentOf("page", ...texts("e", blocks)));
+    const composed = composeEntryContent(template, {
+      valueOf,
+      // The stored page fits (2 + 16 = 18); expanding the card does not.
+      maxNodes: 18,
+      definitions: lookup,
+    });
+    // Over budget: the whole page, then a halving search.
+    expect(reads.card).toBeGreaterThan(1);
+    expect(reads.card).toBeLessThanOrEqual(
+      1 + Math.ceil(Math.log2(blocks + 1))
+    );
+    expect(valueOf).toHaveBeenCalledTimes(1);
+    expect(slotOf(composed, 1).length).toBeLessThan(blocks);
   });
 });
