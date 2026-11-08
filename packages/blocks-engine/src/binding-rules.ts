@@ -260,6 +260,12 @@ export interface CheckedBinding {
   readonly propSchema?: PropSchema;
   /** The field the path ends at, when the source's schema was known. */
   readonly field?: BindingFieldShape;
+  /**
+   * The one relation the path crosses, when the source's schema was known,
+   * and the index of its segment: `author` at 0 in `author.id`, at 1 in
+   * `details.author.id`.
+   */
+  readonly relation?: CrossedRelation;
   readonly format: CheckedFormat | null;
   /** A stored format this release does not apply. */
   readonly unsupportedFormat?: BindingFormatType;
@@ -566,8 +572,24 @@ const SYSTEM_FIELDS: ReadonlySet<string> = new Set([
 const MAX_SEGMENTS_WITHOUT_SCHEMA = 2;
 
 /** What walking a path through a source's fields found. */
+/**
+ * The relation a path crosses, as its walk found it, and the index of the
+ * segment naming it.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export interface CrossedRelation {
+  readonly field: BindingFieldShape;
+  readonly segment: number;
+}
+
 type PathWalk =
-  | { readonly ok: true; readonly field?: BindingFieldShape }
+  | {
+      readonly ok: true;
+      readonly field?: BindingFieldShape;
+      /** The relation the walk crossed on the way, when it crossed one. */
+      readonly relation?: CrossedRelation;
+    }
   | {
       readonly ok: false;
       readonly code: BindingIssueCode;
@@ -629,23 +651,32 @@ function walkPath(
 ): PathWalk {
   let fields: readonly BindingFieldShape[] | undefined = root;
   let hops = 0;
+  // The relation crossed so far, carried into what the walk answers, so a
+  // judgement of what the path reads through it asks the walk, never walks
+  // the path again.
+  let relation: CrossedRelation | undefined;
+  const crossed = (walk: PathWalk): PathWalk =>
+    walk.ok && relation !== undefined ? { ...walk, relation } : walk;
   for (let index = 0; index < segments.length; index += 1) {
     const name = segments[index] ?? "";
     const last = index === segments.length - 1;
-    if (fields === undefined) return shapelessRest(segments.length - index);
+    if (fields === undefined) {
+      return crossed(shapelessRest(segments.length - index));
+    }
     const field: BindingFieldShape | undefined = fields.find(
       candidate => candidate.name === name
     );
     if (field === undefined) {
-      return unlistedField(name, index, segments, schema);
+      return crossed(unlistedField(name, index, segments, schema));
     }
-    if (last) return { ok: true, field };
+    if (last) return crossed({ ok: true, field });
     const step = stepInto(field, hops, schema);
     if (!step.ok) return step;
+    if (step.hops > hops) relation = { field, segment: index };
     fields = step.fields;
     hops = step.hops;
   }
-  return { ok: true };
+  return crossed({ ok: true });
 }
 
 /** One step of a path past a field: into a group, or across a relation. */
@@ -954,10 +985,11 @@ function checkedBinding(
   input: BindingCheckInput,
   stored: StoredBinding,
   prop: PropFit,
-  field: BindingFieldShape | undefined,
+  walked: Extract<PathWalk, { ok: true }>,
   format: Extract<FormatCheck, { ok: true }>,
   fallback: { readonly value: unknown } | undefined
 ): CheckedBinding {
+  const { field, relation } = walked;
   return {
     prop: input.prop,
     source: stored.source,
@@ -967,6 +999,7 @@ function checkedBinding(
     ...(prop.kind === undefined ? {} : { kind: prop.kind }),
     ...(prop.schema === undefined ? {} : { propSchema: prop.schema }),
     ...(field === undefined ? {} : { field }),
+    ...(relation === undefined ? {} : { relation }),
     format: format.format,
     ...(format.unsupported === undefined
       ? {}
@@ -1023,13 +1056,6 @@ export function checkBinding(input: BindingCheckInput): BindingCheck {
   return {
     outcome: "resolve",
     issues,
-    binding: checkedBinding(
-      input,
-      stored,
-      prop,
-      walked.field,
-      format,
-      fallback
-    ),
+    binding: checkedBinding(input, stored, prop, walked, format, fallback),
   };
 }

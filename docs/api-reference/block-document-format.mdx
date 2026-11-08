@@ -224,6 +224,13 @@ Each one is reported to `onBindingIssues` with a code from
 `BINDING_ISSUE_CODES`, never with the value its source holds. The routes log
 one warning per report, naming the page.
 
+Saving a document also refuses a link whose `entryId` is bound to a related
+entry's `id` (`author.id`) while its `entryCollection` is not the collection
+that relation points at, or is not set
+(`binding-entry-collection-mismatch`): the link would look the entry up in the
+wrong collection and draw no link. A stored page that already held one keeps
+saving, with a warning.
+
 #### Image bindings
 
 An image prop (`media` or `upload`) binds to a media field or a URL field:
