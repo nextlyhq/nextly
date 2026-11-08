@@ -13,6 +13,7 @@
  * @module domains/flush-content-change
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 
 import { NextlyError } from "../errors/nextly-error";
 import {
@@ -163,6 +164,8 @@ interface GrantsExpiryRetry {
   delayMs: number;
   /** The jobs queued for the changes whose expiry failed, withdrawn once one lands. */
   queued: Set<string>;
+  /** The write-ahead chains of those changes, whose pending links go with them. */
+  chains: Set<string>;
   /** Whether a change's expiry failed while its job could not be queued either. */
   unqueued: boolean;
   /** Moved on by each failed change, so a try can tell whether one failed while it ran. */
@@ -179,13 +182,48 @@ interface GrantsExpiryRetry {
  * finish, leaving nothing owed if the expiry after the change then failed. Minutes, so far longer
  * than any grants write (a transaction or a seeding sweep) and than clock drift between
  * instances: by then the write has committed, or failed and the row is one spare expiry.
+ *
+ * A write can still outlast it (a transaction waiting on a lock with no timeout), so a row
+ * queued ahead does not end when it runs: until the expiry after the write confirms it, each run
+ * queues the next link of its chain, its delay doubling from this margin, so a row still waits
+ * whenever the write commits.
  */
-const WRITE_AHEAD_MARGIN_MS = 5 * 60 * 1000;
+export const WRITE_AHEAD_MARGIN_MS = 5 * 60 * 1000;
+
+/**
+ * How long a write-ahead chain goes on unconfirmed. It bounds what a write that rolled back, or a
+ * process that stopped before confirming, costs: about eight extra expiries over a day, the delay
+ * doubling each time. No grants write is still open after a day, so by then it has committed and
+ * one of those expiries followed it, or it never will.
+ */
+export const WRITE_AHEAD_HORIZON_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The last link a chain may reach: past the horizon by then with the delay doubling from the
+ * margin, however promptly each link ran. A bound for the keys a confirmation withdraws.
+ */
+export const WRITE_AHEAD_LAST_LINK =
+  Math.ceil(Math.log2(WRITE_AHEAD_HORIZON_MS / WRITE_AHEAD_MARGIN_MS)) + 1;
+
+/**
+ * What a write-ahead row carries: its chain, which link of it it is, and when the chain began.
+ * A row without it (one queued after a commit, or to replace a taken row) ends at its run.
+ */
+export type WriteAheadInput = {
+  ahead: { chain: string; link: number; startedAt: number };
+};
+
+/** One dedupe key per link of a chain, so a link is queued once however often it is asked for. */
+export function writeAheadKey(chain: string, link: number): string {
+  return `${GRANTS_CONTENT_EXPIRY_JOB}:ahead:${chain}:${link}`;
+}
 
 /** A grants write under way, and the row queued ahead of it. */
 interface GrantsWriteAhead {
   /** The row queued ahead of the writes so far and not yet taken by an expiry. */
   row?: Promise<string | undefined>;
+  /** The chain that row begins. */
+  chain?: string;
 }
 
 // One per process, across module copies, like the expiry hand-off: a gate entered through one
@@ -235,7 +273,9 @@ export async function aheadOfGrantsChange<T>(
     const left = ahead.row;
     if (left !== undefined && !threw) {
       const job = await left;
-      if (job !== undefined) await withdrawGrantsExpiries([job]);
+      if (job !== undefined) {
+        await withdrawGrantsExpiries([job], chainOf(ahead.chain));
+      }
     }
   }
 }
@@ -252,10 +292,16 @@ async function queueAhead(ahead: GrantsWriteAhead): Promise<void> {
     // Where there is no jobs queue at all (a CLI path, no registered services) nothing durable
     // can be queued, and the write goes ahead with the expiry owed by this process alone.
     if (!container.has("jobsRepository")) return undefined;
+    const chain = randomUUID();
+    ahead.chain = chain;
     try {
       return await enqueueGrantsExpiry(
         container.get<JobsRepository>("jobsRepository"),
-        new Date(Date.now() + WRITE_AHEAD_MARGIN_MS)
+        new Date(Date.now() + WRITE_AHEAD_MARGIN_MS),
+        {
+          input: { ahead: { chain, link: 0, startedAt: Date.now() } },
+          dedupeKey: writeAheadKey(chain, 0),
+        }
       );
     } catch (error) {
       // Where the queue exists but refused the row, the write is refused too: made now, it would
@@ -274,17 +320,28 @@ async function queueAhead(ahead: GrantsWriteAhead): Promise<void> {
 }
 
 /** The row queued ahead of the write this flow is in, taken so no later expiry reuses it. */
-function takeWriteAhead(): Promise<string | undefined> | undefined {
+function takeWriteAhead():
+  | { row: Promise<string | undefined>; chain?: string }
+  | undefined {
   const ahead = writeAheadScope().getStore();
   const row = ahead?.row;
-  if (ahead !== undefined) ahead.row = undefined;
-  return row;
+  if (ahead === undefined || row === undefined) return undefined;
+  const taken = { row, chain: ahead.chain };
+  ahead.row = undefined;
+  ahead.chain = undefined;
+  return taken;
+}
+
+/** A chain as a list, for the withdrawals that take any number. */
+function chainOf(chain: string | undefined): string[] {
+  return chain === undefined ? [] : [chain];
 }
 
 function grantsExpiryRetry(): GrantsExpiryRetry {
   globalForGrantsExpiry.__nextly_grants_expiry_retry ??= {
     delayMs: GRANTS_EXPIRY_FIRST_RETRY_MS,
     queued: new Set(),
+    chains: new Set(),
     unqueued: false,
     failures: 0,
   };
@@ -316,38 +373,80 @@ function grantsExpiryRetry(): GrantsExpiryRetry {
 export async function expireContentAfterGrantsChange(): Promise<void> {
   // Loaded here rather than at the top, for the reason `flushContentChange` gives: the permission
   // writers that call this are reached from CLI paths that never load the service registry.
-  const [{ languageChangeContentCache }, { getNextlyLogger }] =
-    await Promise.all([
-      import("../di/registrations/language-change-content-cache"),
-      import("../observability/logger"),
-    ]);
-  const queuedAhead = takeWriteAhead();
-  const wroteAhead = queuedAhead === undefined ? undefined : await queuedAhead;
+  const { languageChangeContentCache } = await import(
+    "../di/registrations/language-change-content-cache"
+  );
+  const { wroteAhead, chains } = await resolveWriteAhead();
   // A process that caches nothing has nothing to expire, here or later, as before.
   if (!languageChangeContentCache().revalidator()) {
-    if (wroteAhead !== undefined) await withdrawGrantsExpiries([wroteAhead]);
+    if (wroteAhead !== undefined) {
+      await withdrawGrantsExpiries([wroteAhead], chains);
+    }
     return;
   }
-  let job = wroteAhead ?? (await queueGrantsExpiry());
-  let failure: unknown;
+  const job = wroteAhead ?? (await queueGrantsExpiry());
+  const failure = await expireTwice(languageChangeContentCache);
+  if (failure === undefined) {
+    // Confirmed: the row and every link of its chain still waiting go.
+    if (job !== undefined) await withdrawGrantsExpiries([job], chains);
+    return;
+  }
+  await oweAfterFailure(failure.error, job, wroteAhead, chains);
+}
+
+/**
+ * The row queued ahead of the write this flow is in, taken, with the chain it began, whose links
+ * a jobs run may have queued meanwhile.
+ */
+async function resolveWriteAhead(): Promise<{
+  wroteAhead: string | undefined;
+  chains: string[];
+}> {
+  const taken = takeWriteAhead();
+  const wroteAhead = taken === undefined ? undefined : await taken.row;
+  return {
+    wroteAhead,
+    chains: wroteAhead === undefined ? [] : chainOf(taken?.chain),
+  };
+}
+
+/** Tries the expiry twice; why the second try failed, or nothing once one lands. */
+async function expireTwice(
+  cache: () => LanguageChangeContentCache
+): Promise<{ error: unknown } | undefined> {
+  let failure: { error: unknown } | undefined;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      await expireEveryContentScopeForGood(languageChangeContentCache());
-      if (job !== undefined) await withdrawGrantsExpiries([job]);
-      return;
+      await expireEveryContentScopeForGood(cache());
+      return undefined;
     } catch (error) {
-      failure = error;
+      failure = { error };
     }
   }
-  // Still owed, so a row that waits must hold it: the one queued ahead may have been taken by a
-  // jobs run that expired the pages before the change committed.
-  if (wroteAhead !== undefined && !(await stillWaiting(wroteAhead))) {
-    job = await queueGrantsExpiry();
-  }
+  return failure;
+}
+
+/**
+ * What an expiry that failed twice leaves: a pending row holding it, this process's retry, and
+ * the error said. The row queued ahead may have been taken by a jobs run that expired the pages
+ * before the change committed, so one no longer waiting is replaced by a fresh one.
+ */
+async function oweAfterFailure(
+  failure: unknown,
+  queued: string | undefined,
+  wroteAhead: string | undefined,
+  chains: readonly string[]
+): Promise<void> {
+  const { getNextlyLogger } = await import("../observability/logger");
+  const job =
+    wroteAhead !== undefined && !(await stillWaiting(wroteAhead))
+      ? await queueGrantsExpiry()
+      : queued;
   const retry = grantsExpiryRetry();
   retry.failures += 1;
   if (job === undefined) retry.unqueued = true;
   else retry.queued.add(job);
+  for (const chain of chains) retry.chains.add(chain);
   getNextlyLogger().error({
     kind: "grants-change-content-expiry-failed",
     message: `What a role grants changed, but cached pages could not be expired yet: ${failureText(
@@ -381,19 +480,23 @@ async function queueGrantsExpiry(
   }
 }
 
-/** Queues the expiry as a job on `jobs`, due from `runAt`; rejects when the queue refuses it. */
+/**
+ * Queues the expiry as a job on `jobs`, due from `runAt`; rejects when the queue refuses it. A
+ * write-ahead row carries its chain (`ahead`) and its link's key.
+ */
 async function enqueueGrantsExpiry(
   jobs: Pick<JobsRepository, "enqueue">,
-  runAt: Date | null
+  runAt: Date | null,
+  ahead?: { input: WriteAheadInput; dedupeKey: string }
 ): Promise<string> {
   const { id } = await jobs.enqueue({
     slug: GRANTS_CONTENT_EXPIRY_JOB,
-    input: null,
+    input: ahead?.input ?? null,
     runAt,
     runAsUserId: null,
-    // One row per change: a key would fold a change into a job already running, whose
-    // expiry may have landed before this change committed.
-    dedupeKey: null,
+    // One row per change: a key shared between changes would fold one into a job already
+    // running, whose expiry may have landed before it committed. A link's key is its own.
+    dedupeKey: ahead?.dedupeKey ?? null,
     now: new Date(),
   });
   return id;
@@ -421,13 +524,26 @@ async function stillWaiting(job: string): Promise<boolean> {
  * left to finish, and one that could not be removed runs again: an expiry made twice only
  * refreshes the pages once more.
  */
-async function withdrawGrantsExpiries(jobs: readonly string[]): Promise<void> {
+async function withdrawGrantsExpiries(
+  jobs: readonly string[],
+  chains: readonly string[] = []
+): Promise<void> {
   const { container } = await import("../di/container");
   if (!container.has("jobsRepository")) return;
   const repository = container.get<JobsRepository>("jobsRepository");
-  await Promise.all(
-    jobs.map(job => repository.withdrawUnclaimed(job).catch(() => false))
+  // Every link a chain can reach, each by its key: a link a jobs run queued after this change's
+  // row ran is as owed as the row was, and the change it waited for has now been confirmed.
+  const links = chains.flatMap(chain =>
+    Array.from({ length: WRITE_AHEAD_LAST_LINK + 1 }, (_, link) =>
+      writeAheadKey(chain, link)
+    )
   );
+  await Promise.all([
+    ...jobs.map(job => repository.withdrawUnclaimed(job).catch(() => false)),
+    links.length === 0
+      ? Promise.resolve(0)
+      : repository.withdrawUnclaimedByDedupeKeys(links).catch(() => 0),
+  ]);
 }
 
 /** Arms this process's next try, unless one is armed or under way. */
@@ -478,6 +594,7 @@ async function tryGrantsExpiryAgain(retry: GrantsExpiryRetry): Promise<void> {
   if (retry.stopped) return;
   const failuresBefore = retry.failures;
   const jobs = [...retry.queued];
+  const chains = [...retry.chains];
   try {
     await expireEveryContentScopeForGood(languageChangeContentCache());
   } catch {
@@ -493,12 +610,13 @@ async function tryGrantsExpiryAgain(retry: GrantsExpiryRetry): Promise<void> {
     return;
   }
   for (const job of jobs) retry.queued.delete(job);
+  for (const chain of chains) retry.chains.delete(chain);
   retry.delayMs = GRANTS_EXPIRY_FIRST_RETRY_MS;
   if (retry.failures === failuresBefore) {
     retry.failures = 0;
     retry.unqueued = false;
   }
-  await withdrawGrantsExpiries(jobs);
+  await withdrawGrantsExpiries(jobs, chains);
   getNextlyLogger().info({
     kind: "grants-change-content-expiry-recovered",
     message:

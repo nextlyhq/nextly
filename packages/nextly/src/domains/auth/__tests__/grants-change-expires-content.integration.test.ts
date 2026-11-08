@@ -23,6 +23,8 @@
  * SQLite needs no URL, and the flush is post-commit bookkeeping that no
  * dialect changes.
  */
+import { randomUUID } from "node:crypto";
+
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -119,6 +121,11 @@ describe("a change to a role's grants and the cached content reads (sqlite)", ()
     await t?.destroy();
     t = undefined;
   });
+
+  /** The states of `jobs`, sorted, so a set of rows reads the same in any order. */
+  function states(jobs: readonly JobRow[]): string[] {
+    return jobs.map(job => job.state).sort();
+  }
 
   /** The grants expiry jobs in the queue, whatever their state. */
   async function grantsExpiryJobs(nextly: TestNextly): Promise<JobRow[]> {
@@ -301,9 +308,8 @@ describe("a change to a role's grants and the cached content reads (sqlite)", ()
     expect(spy.tags).toEqual(
       expect.arrayContaining(["nextly:posts", "nextly:single:header"])
     );
-    expect((await grantsExpiryJobs(nextly)).map(job => job.state)).toEqual([
-      "done",
-    ]);
+    // Done, and, never confirmed by the process that is gone, its chain goes on.
+    expect(states(await grantsExpiryJobs(nextly))).toEqual(["done", "pending"]);
   });
 
   it("tries again in a process still running until the expiry lands, and withdraws the job", async () => {
@@ -378,7 +384,11 @@ describe("a change to a role's grants and the cached content reads (sqlite)", ()
     const rows = await grantsExpiryJobs(nextly);
     expect(rows.find(job => job.id === owed.id)?.state).toBe("failed");
     const successors = rows.filter(job => job.id !== owed.id);
-    expect(successors.map(job => job.state)).toEqual(["pending"]);
+    expect(successors.map(job => job.state)).toEqual(["pending", "pending"]);
+    // The row's own successor, beside the next link of its chain.
+    expect(successors.map(job => job.dedupeKey)).toContain(
+      `${GRANTS_EXPIRY_JOB}:after:${owed.id}`
+    );
   });
 
   it("leaves a pending job when the process stops right after the grants write commits", async () => {
@@ -423,15 +433,22 @@ describe("a change to a role's grants and the cached content reads (sqlite)", ()
     expect(spy.tags).toEqual(
       expect.arrayContaining(["nextly:posts", "nextly:single:header"])
     );
-    expect((await grantsExpiryJobs(nextly)).map(job => job.state)).toEqual([
-      "done",
-    ]);
+    // The row ran before the expiry after the write confirmed it, so the next
+    // link of its chain waits, for a write that commits later still.
+    const ran = await grantsExpiryJobs(nextly);
+    expect(states(ran)).toEqual(["done", "pending"]);
+    const next = ran.find(job => job.state === "pending");
+    expect(next?.dedupeKey).toMatch(
+      /^nextly:grants-content-expiry:ahead:.+:1$/
+    );
 
+    // The step after the commit gets on, expires, and confirms: the chain goes.
     resume();
     await writing;
+    expect(states(await grantsExpiryJobs(nextly))).toEqual(["done"]);
   });
 
-  it("leaves one job for a grants write that rolls back, which a jobs run completes", async () => {
+  it("leaves a job for a grants write that rolls back, which jobs runs perform until the horizon", async () => {
     const nextly = await boot();
     const { id } = await publicRole(nextly);
     spy.flushed.length = 0;
@@ -455,9 +472,8 @@ describe("a change to a role's grants and the cached content reads (sqlite)", ()
       }
     );
     expect(spy.tags).toContain("nextly:posts");
-    expect((await grantsExpiryJobs(nextly)).map(job => job.state)).toEqual([
-      "done",
-    ]);
+    // Never confirmed, so its chain goes on, each link later, to the horizon.
+    expect(states(await grantsExpiryJobs(nextly))).toEqual(["done", "pending"]);
   });
 
   it("refuses the grants write when its expiry cannot be queued ahead of it", async () => {
@@ -511,5 +527,58 @@ describe("a change to a role's grants and the cached content reads (sqlite)", ()
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
 
     expect(await grantsExpiryJobs(nextly)).toEqual([]);
+  });
+
+  it("edits a role's name without the gate, so a refused jobs queue does not refuse it", async () => {
+    const nextly = await boot();
+    const { roles } = getDialectTables();
+    const db = nextly.adapter.getDrizzle() as unknown as {
+      insert(table: unknown): {
+        values(rows: Record<string, unknown>[]): Promise<unknown>;
+      };
+    };
+    const now = new Date();
+    // Role ids are UUIDs, which the update checks.
+    const editedRole = randomUUID();
+    await db.insert(roles).values([
+      {
+        id: editedRole,
+        slug: "grants-test-edited",
+        name: "Edited",
+        level: 10,
+        isSystem: false,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ]);
+    vi.spyOn(
+      container.get<JobsRepository>("jobsRepository"),
+      "enqueue"
+    ).mockRejectedValue(new Error("jobs table locked"));
+
+    // A name changes no grants: made, and nothing queued.
+    await nextly.nextly.roles.update({
+      id: editedRole,
+      data: { name: "Renamed" },
+    });
+    expect(await grantsExpiryJobs(nextly)).toEqual([]);
+
+    // A slug does: refused while the queue refuses its expiry.
+    await expect(
+      nextly.nextly.roles.update({
+        id: editedRole,
+        data: { slug: "grants-test-moved" },
+      })
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+    const [stored] = await nextly.adapter.select<{
+      name: string;
+      slug: string;
+    }>("roles", {
+      where: { and: [{ column: "id", op: "=", value: editedRole }] },
+    });
+    expect(stored).toMatchObject({
+      name: "Renamed",
+      slug: "grants-test-edited",
+    });
   });
 });

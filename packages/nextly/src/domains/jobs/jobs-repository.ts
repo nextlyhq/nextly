@@ -600,6 +600,25 @@ export class JobsRepository {
   }
 
   /**
+   * {@link withdrawUnclaimed} for the jobs holding any of `keys` as their
+   * dedupe key: work queued under known keys that got done another way. How
+   * many were removed; one a runner holds, or one already finished (which no
+   * longer holds its key), is left.
+   */
+  async withdrawUnclaimedByDedupeKeys(
+    keys: readonly string[]
+  ): Promise<number> {
+    if (keys.length === 0) return 0;
+    return this.db.delete(JOBS, {
+      and: [
+        { column: "dedupeKey", op: "IN", value: [...keys] },
+        { column: "state", op: "=", value: "pending" },
+        { column: "lockedBy", op: "IS NULL", value: null },
+      ],
+    });
+  }
+
+  /**
    * Whether a job is still pending with no runner holding it: the state
    * {@link withdrawUnclaimed} removes. One a runner holds or has finished, or
    * that is gone, is not.

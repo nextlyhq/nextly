@@ -36,9 +36,12 @@ const definition = createGrantsContentExpiryJob({
 const LAST = definition.retry.maxAttempts;
 
 /** Runs the handler as the queue would on `attempt` of the row `job-7`. */
-function run(attempt: number): Promise<void> {
+function run(
+  attempt: number,
+  input: Parameters<typeof definition.handler>[0] = null
+): Promise<void> {
   return Promise.resolve(
-    definition.handler(null, {
+    definition.handler(input, {
       jobId: "job-7",
       attempt,
       user: null,
@@ -115,5 +118,37 @@ describe("the grants content expiry job", () => {
     content.mockResolvedValue(SCOPES);
     flush.mockResolvedValue({ deferredTags: ["nextly:posts"] });
     await expect(run(1)).resolves.toBeUndefined();
+  });
+
+  it("queues the next link of a write-ahead row's chain before its expiry", async () => {
+    content.mockResolvedValue(SCOPES);
+    const startedAt = NOW.getTime() - 6 * 60_000;
+    await run(1, { ahead: { chain: "c1", link: 0, startedAt } });
+    expect(enqueue).toHaveBeenCalledWith({
+      slug: "nextly:grants-content-expiry",
+      input: { ahead: { chain: "c1", link: 1, startedAt } },
+      // The delay doubles from the five-minute margin.
+      runAt: new Date(NOW.getTime() + 10 * 60_000),
+      runAsUserId: null,
+      dedupeKey: "nextly:grants-content-expiry:ahead:c1:1",
+      now: NOW,
+    });
+    expect(enqueue.mock.invocationCallOrder[0]).toBeLessThan(
+      content.mock.invocationCallOrder[0] ?? 0
+    );
+    expect(flush).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends a chain past the horizon, at its last link, and a plain row at its run", async () => {
+    content.mockResolvedValue(SCOPES);
+    await run(1, {
+      ahead: { chain: "c1", link: 2, startedAt: NOW.getTime() - 25 * HOUR_MS },
+    });
+    await run(1, {
+      ahead: { chain: "c1", link: 99, startedAt: NOW.getTime() },
+    });
+    await run(1, null);
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(flush).toHaveBeenCalledTimes(3);
   });
 });

@@ -854,9 +854,17 @@ export class RoleMutationService extends BaseService {
       // and refuses one that returns a promise, so the edit failed there
       // before it changed anything.
       try {
-        // The content expiry this change owes is queued before it is written.
-        await changingRoleGrants(async () => {
-          await this.adapter.transaction(async tx => {
+        // A new slug changes the roles a code-defined rule reads, as new
+        // grants change the permissions it reads; a name, description or
+        // level changes neither, so an edit of those alone owes no content
+        // expiry and does not enter the gate, which would refuse it when the
+        // jobs queue cannot take the expiry.
+        const grantsChange =
+          changes.permissionIds !== undefined ||
+          changes.childRoleIds !== undefined ||
+          changes.slug !== undefined;
+        const update = () =>
+          this.adapter.transaction(async tx => {
             // First, in the same transaction: inheriting a role that confers
             // super-admin gives super-admin to everyone who holds this one.
             // And what this one stops inheriting may be how the last
@@ -959,18 +967,17 @@ export class RoleMutationService extends BaseService {
             }
           });
 
-          // Invalidate cache after successful transaction. A new slug changes
-          // the roles a code-defined rule reads, as new grants change the
-          // permissions it reads. Named by the role's own id, as the caches
-          // holding its grants keep it.
-          if (
-            changes.permissionIds !== undefined ||
-            changes.childRoleIds !== undefined ||
-            changes.slug !== undefined
-          ) {
+        if (grantsChange) {
+          // The content expiry this change owes is queued before it is
+          // written; the caches are invalidated after the transaction, by the
+          // role's own id, as the caches holding its grants keep it.
+          await changingRoleGrants(async () => {
+            await update();
             await afterRoleGrantsChanged(storedRoleId);
-          }
-        });
+          });
+        } else {
+          await update();
+        }
 
         return;
       } catch (e: unknown) {

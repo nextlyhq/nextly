@@ -454,4 +454,39 @@ describe.each(getConfiguredTestDialects())("JobsRepository (%s)", dialect => {
       [held.id, finished.id].sort()
     );
   });
+
+  it("withdraws the waiting jobs that hold any of the given keys, and only those", async () => {
+    // A chain of work under known keys, confirmed another way: the links still
+    // waiting go, one a runner holds stays, and a job under another key stays.
+    const app = await boot(dialect);
+    const repo = new JobsRepository(app.adapter);
+    const keyed = (dedupeKey: string) =>
+      repo.enqueue({
+        slug: "test:noop",
+        input: {},
+        runAt: null,
+        runAsUserId: null,
+        dedupeKey,
+        now: NOW,
+      });
+    const waiting = await keyed("chain:0");
+    const held = await keyed("chain:1");
+    const other = await keyed("elsewhere:0");
+    expect(await repo.claim(held.id, "runner-a", NOW, 30_000)).not.toBeNull();
+
+    expect(
+      await repo.withdrawUnclaimedByDedupeKeys([
+        "chain:0",
+        "chain:1",
+        "chain:2",
+      ])
+    ).toBe(1);
+    expect(await repo.withdrawUnclaimedByDedupeKeys([])).toBe(0);
+
+    const left = await app.adapter.select<{ id: string }>("nextly_jobs", {
+      columns: ["id"],
+    });
+    expect(left.map(row => row.id).sort()).toEqual([held.id, other.id].sort());
+    expect(left.map(row => row.id)).not.toContain(waiting.id);
+  });
 });

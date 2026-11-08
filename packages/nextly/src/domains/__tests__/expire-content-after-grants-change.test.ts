@@ -45,6 +45,7 @@ const JOB_SLUG = "nextly:grants-content-expiry";
 const enqueue = vi.fn();
 const withdrawUnclaimed = vi.fn();
 const isUnclaimed = vi.fn();
+const withdrawUnclaimedByDedupeKeys = vi.fn();
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -64,10 +65,13 @@ beforeEach(() => {
   withdrawUnclaimed.mockResolvedValue(true);
   isUnclaimed.mockReset();
   isUnclaimed.mockResolvedValue(true);
+  withdrawUnclaimedByDedupeKeys.mockReset();
+  withdrawUnclaimedByDedupeKeys.mockResolvedValue(0);
   container.register("jobsRepository", () => ({
     enqueue,
     withdrawUnclaimed,
     isUnclaimed,
+    withdrawUnclaimedByDedupeKeys,
   }));
 });
 
@@ -218,10 +222,20 @@ describe("the content expiry after a change to grants", () => {
       await expireContentAfterGrantsChange();
     });
     expect(enqueue).toHaveBeenCalledTimes(1);
-    const [queued] = enqueue.mock.calls[0] as [{ runAt: Date }];
+    const [queued] = enqueue.mock.calls[0] as [
+      { runAt: Date; dedupeKey: string; input: unknown },
+    ];
     expect(queued.runAt.getTime()).toBeGreaterThanOrEqual(before + 4 * 60_000);
     expect(flush).toHaveBeenCalledTimes(1);
     expect(withdrawUnclaimed.mock.calls).toEqual([["job-1"]]);
+    // The row begins a chain, and confirming it withdraws every link of it.
+    expect(queued).toMatchObject({
+      input: { ahead: { link: 0 } },
+      dedupeKey: expect.stringMatching(/:ahead:.+:0$/),
+    });
+    const [keys] = withdrawUnclaimedByDedupeKeys.mock.calls[0] as [string[]];
+    expect(keys).toContain(queued.dedupeKey);
+    expect(keys.length).toBeGreaterThan(8);
   });
 
   it("withdraws the row queued ahead when the gate announces no change", async () => {
