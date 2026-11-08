@@ -19,7 +19,6 @@ import {
   CONDITION_HIDDEN_TYPE,
   conditionScopeIn,
   DEFAULT_LIMITS,
-  DOCUMENT_FORMAT_VERSION,
   evaluateConditions,
   isPlainRecord,
   mapForest,
@@ -40,6 +39,7 @@ import {
   type NodeVisibility,
 } from "@nextlyhq/blocks-engine";
 import {
+  liftedNode,
   sanitizeDocument,
   type HidingItem,
   type ItemHiddenAs,
@@ -252,7 +252,7 @@ function markerFor(block: HiddenBlock, stored: BlockNode): BlockNode {
     unchecked: block.unchecked,
   };
   // Its conditions lifted as the canvas lifts them, keeping its devices.
-  const devices = liftedSelf(stored).visibility;
+  const devices = liftedNode(stored).visibility;
   return {
     id: block.id,
     type: CONDITION_HIDDEN_TYPE,
@@ -437,24 +437,9 @@ function liftedExcept(
     nodes: mapForest(document.nodes, node =>
       gatedAsStored(node) && kept.has(occurrenceKey(node))
         ? node
-        : liftedSelf(node)
+        : liftedNode(node)
     ),
   };
-}
-
-/**
- * One block with its own conditions lifted as the canvas lifts them, keeping
- * its devices; its slots as given, for the walk that maps them.
- */
-function liftedSelf(node: BlockNode): BlockNode {
-  const { slots, ...self } = node;
-  const lifted =
-    revealConditioned({
-      formatVersion: DOCUMENT_FORMAT_VERSION,
-      kind: "page",
-      nodes: [self],
-    }).nodes[0] ?? self;
-  return slots === undefined ? lifted : { ...lifted, slots };
 }
 
 /**

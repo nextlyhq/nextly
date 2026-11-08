@@ -1,8 +1,10 @@
 import {
   conditionScopeIn,
   declaresNoMarkup,
+  DOCUMENT_FORMAT_VERSION,
   evaluateConditions,
   isConditionGated,
+  revealConditioned,
   type BindingFieldShape,
   type BlockDocument,
   type BlockNode,
@@ -105,35 +107,64 @@ function pruneNodesIn<Scope>(
   keep: (node: BlockNode, scope: Scope) => boolean,
   within: (node: BlockNode, slot: string, scope: Scope) => Scope
 ): BlockDocument {
+  return rewriteNodesIn(
+    document,
+    root,
+    (node, scope) => (keep(node, scope) ? { node, descend: true } : null),
+    within
+  );
+}
+
+/**
+ * What a rewrite does with one node: drop it (`null`), or put `node` in its
+ * place, walking on into the slots of the node put there when `descend` says
+ * so and leaving it whole when it doesn't.
+ */
+type Rewrite = { readonly node: BlockNode; readonly descend: boolean } | null;
+
+/**
+ * The walk every pruning and marking pass takes: each node visited with the
+ * scope its conditions read, dropped, kept or replaced as `visit` says.
+ * Returns the ORIGINAL document when nothing changed, as `pruneNodes` does.
+ */
+function rewriteNodesIn<Scope>(
+  document: BlockDocument,
+  root: Scope,
+  visit: (node: BlockNode, scope: Scope) => Rewrite,
+  within: (node: BlockNode, slot: string, scope: Scope) => Scope
+): BlockDocument {
   let changed = false;
 
-  const prune = (nodes: BlockNode[], scope: Scope): BlockNode[] => {
+  const rewrite = (nodes: BlockNode[], scope: Scope): BlockNode[] => {
     const kept: BlockNode[] = [];
     for (const node of nodes) {
-      if (!keep(node, scope)) {
+      const result = visit(node, scope);
+      if (result === null) {
         changed = true;
         continue;
       }
-
-      const slots = node.slots;
-      if (slots === undefined) {
-        kept.push(node);
-        continue;
-      }
-
-      let slotsChanged = false;
-      const nextSlots: Record<string, BlockNode[]> = {};
-      for (const [name, children] of Object.entries(slots)) {
-        const prunedChildren = prune(children, within(node, name, scope));
-        if (prunedChildren !== children) slotsChanged = true;
-        nextSlots[name] = prunedChildren;
-      }
-      kept.push(slotsChanged ? { ...node, slots: nextSlots } : node);
+      if (result.node !== node) changed = true;
+      kept.push(
+        result.descend ? withSlotsRewritten(result.node, scope) : result.node
+      );
     }
     return changed ? kept : nodes;
   };
 
-  const nodes = prune(document.nodes, root);
+  /** `node` with each slot's children rewritten in the scope they read. */
+  const withSlotsRewritten = (node: BlockNode, scope: Scope): BlockNode => {
+    if (node.slots === undefined) return node;
+    let slotsChanged = false;
+    const nextSlots: Record<string, BlockNode[]> = {};
+    for (const [name, children] of Object.entries(node.slots)) {
+      const rewritten = rewrite(children, within(node, name, scope));
+      if (rewritten !== children) slotsChanged = true;
+      nextSlots[name] = rewritten;
+    }
+    return slotsChanged ? { ...node, slots: nextSlots } : node;
+  };
+
+  const nodes = rewrite(document.nodes, root);
   return changed ? { ...document, nodes } : document;
 }
 
@@ -189,24 +220,108 @@ export function gateByConditions(
   }
   const held = new Set<string>();
   const issues: ConditionIssue[] = [];
-  const page: ConditionScope = { source: "entry", collection: undefined };
   const gated = pruneNodesIn(
     document,
-    page,
+    PAGE_SCOPE,
     (node, scope) => {
-      if (!isConditionGated(node) || scope.source === "item") return true;
-      const evaluation = evaluateConditions(node, {
-        source: "entry",
-        ...(gate.entry === undefined ? {} : { subject: gate.entry }),
-        ...(gate.dayStart === undefined ? {} : { dayStart: gate.dayStart }),
-      });
-      issues.push(...evaluation.issues);
-      if (evaluation.shown) held.add(node.id);
-      return evaluation.shown;
+      const verdict = entryVerdictOf(node, scope, gate, issues);
+      if (verdict === "shown") held.add(node.id);
+      return verdict !== "hidden";
     },
-    (node, slot, scope) => conditionScopeIn(node, slot, scope)
+    conditionScopeIn
   );
   return { document: gated, held, issues };
+}
+
+/** Where a page's own blocks read: the entry it is drawn for. */
+const PAGE_SCOPE: ConditionScope = { source: "entry", collection: undefined };
+
+/**
+ * One block's verdict under the page's gate, in the scope its conditions
+ * read: `free` with no conditions restricting anyone, `item` where a list's
+ * item decides it, else `shown` or `hidden` as its conditions hold for the
+ * page's entry, what could not be checked added to `issues`. The one
+ * judgement both the route's gate and the editor's marking pass make.
+ */
+function entryVerdictOf(
+  node: BlockNode,
+  scope: ConditionScope,
+  gate: ConditionGate,
+  issues: ConditionIssue[]
+): "free" | "item" | "shown" | "hidden" {
+  if (!isConditionGated(node)) return "free";
+  if (scope.source === "item") return "item";
+  const evaluation = evaluateConditions(node, {
+    source: "entry",
+    ...(gate.entry === undefined ? {} : { subject: gate.entry }),
+    ...(gate.dayStart === undefined ? {} : { dayStart: gate.dayStart }),
+  });
+  issues.push(...evaluation.issues);
+  return evaluation.shown ? "shown" : "hidden";
+}
+
+/**
+ * How an editor judges a page's conditions while it shows the page as a
+ * visitor reading an entry gets it: the route's gate for that entry, what to
+ * draw in place of a block it hides, and where to say what it judged.
+ *
+ * @experimental
+ */
+export interface EntryJudgement extends ConditionGate {
+  /** The node drawn in a hidden block's place; nothing drops the block. */
+  readonly hiddenAs: (node: BlockNode) => BlockNode | undefined;
+  /** Told each block judged, by id, and whether it shows. */
+  readonly onJudged?: (nodeId: string, shown: boolean) => void;
+}
+
+/**
+ * The page as an editor draws it with its conditions judged for an entry,
+ * each block judged exactly as {@link gateByConditions} judges it: one whose
+ * conditions hold is drawn with them lifted, one they hide is replaced by
+ * what `judgement.hiddenAs` gives, and one a list's item decides is left for
+ * the list. Never for a published page, which the route gates itself.
+ *
+ * @experimental
+ */
+export function markByConditions(
+  document: BlockDocument,
+  judgement: EntryJudgement
+): GatedDocument {
+  const issues: ConditionIssue[] = [];
+  const marked = rewriteNodesIn(
+    document,
+    PAGE_SCOPE,
+    (node, scope): Rewrite => {
+      const verdict = entryVerdictOf(node, scope, judgement, issues);
+      if (verdict === "free" || verdict === "item") {
+        return { node, descend: true };
+      }
+      judgement.onJudged?.(node.id, verdict === "shown");
+      if (verdict === "shown") return { node: liftedNode(node), descend: true };
+      const instead = judgement.hiddenAs(node);
+      return instead === undefined ? null : { node: instead, descend: false };
+    },
+    conditionScopeIn
+  );
+  return { document: marked, held: new Set(), issues };
+}
+
+/**
+ * One block with its own conditions lifted, as an editor draws a block they
+ * hold for, keeping its devices and everything else it carries; its slots
+ * as given, for a walk to go on into.
+ *
+ * @experimental
+ */
+export function liftedNode(node: BlockNode): BlockNode {
+  const { slots, ...self } = node;
+  const lifted =
+    revealConditioned({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [self],
+    }).nodes[0] ?? self;
+  return slots === undefined ? lifted : { ...lifted, slots };
 }
 
 /**
