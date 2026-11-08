@@ -14,6 +14,7 @@ import {
   type BlockDocument,
   type BlockNode,
   type BuilderOp,
+  type NamedQueryDeclaration,
 } from "@nextlyhq/blocks-engine";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -25,6 +26,7 @@ import type {
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
+import type { CustomSource } from "./named-query-model";
 
 beforeAll(() => {
   // What Radix's select asks of an element, which jsdom does not draw.
@@ -58,14 +60,20 @@ const SOURCES: readonly BindingFieldSource[] = [
   { binding: { source: "entry" }, label: "Post", fields: FIELDS },
 ];
 
+/** The list an item binding's block sits in: a collection's or a named query's. */
+interface ListOf {
+  readonly collection?: string;
+  /** The named query feeding the list, in place of a collection. */
+  readonly namedQuery?: string;
+  readonly services: Partial<ContentServices>;
+}
+
 /**
  * A block with one text prop, bound as given, over a mocked editor; inside a
- * list of `inList`'s collection when given, for an item binding.
+ * list of `inList`'s collection or named query when given, for an item
+ * binding.
  */
-function mount(
-  bindings: BlockNode["bindings"],
-  inList?: { collection: string; services: Partial<ContentServices> }
-): EditorState {
+function mount(bindings: BlockNode["bindings"], inList?: ListOf): EditorState {
   return mountRebindable(bindings, inList).editor;
 }
 
@@ -76,7 +84,7 @@ function mount(
  */
 function mountRebindable(
   bindings: BlockNode["bindings"],
-  inList?: { collection: string; services: Partial<ContentServices> }
+  inList?: ListOf
 ): {
   editor: EditorState;
   rebind: (next: BlockNode["bindings"]) => void;
@@ -108,7 +116,10 @@ function mountRebindable(
     id: "list",
     type: COLLECTION_LIST_TYPE,
     version: 1,
-    props: { collection: inList?.collection },
+    props:
+      inList?.namedQuery === undefined
+        ? { collection: inList?.collection }
+        : { namedQuery: { name: inList.namedQuery } },
     slots: { [LIST_ENTRY_SLOT]: [badge] },
   } as BlockNode;
   const document = {
@@ -396,4 +407,103 @@ describe("a bound prop's Format", () => {
     });
     expect(screen.queryByRole("combobox", { name: "Format" })).toBeNull();
   });
+
+  it("is offered for an item of a named query's own rows, by the fields it declares", async () => {
+    // A named query's rows of its own are in no collection: the fields it
+    // declares for them are the item's, as a save judges the binding.
+    mount(
+      { label: { $bind: "price", source: "item" } },
+      {
+        namedQuery: "events.upcoming",
+        services: {
+          listLoopCollections: async () => [],
+          listCustomSources: async () => [
+            customSource({
+              key: "id",
+              fields: [
+                { name: "title", type: "text" },
+                { name: "price", type: "number" },
+              ],
+            }),
+          ],
+        },
+      }
+    );
+    fireEvent.click(await formatMenu());
+    expect(listed()).toContain("Currency");
+  });
+
+  it("is offered for an item of a named query whose rows are a collection's entries", async () => {
+    // Rows that are entries of a collection have that collection's fields,
+    // as visitors may read them, and are named by it.
+    mount(
+      { label: { $bind: "price", source: "item" } },
+      {
+        namedQuery: "events.upcoming",
+        services: {
+          listLoopCollections: async () => [
+            {
+              slug: "bound-entries",
+              label: "Blog posts",
+              singular: "Blog post",
+              fields: [],
+              readable: [
+                { name: "title", type: "text" },
+                { name: "price", label: "Price", type: "number" },
+              ],
+            },
+          ],
+          listCustomSources: async () => [
+            customSource({ collection: "bound-entries" }),
+          ],
+        },
+      }
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Text: bound to Price of each blog post in the list",
+      })
+    ).toBeTruthy();
+    fireEvent.click(await formatMenu());
+    expect(listed()).toContain("Currency");
+  });
+
+  it("is not offered for an item of a named query's own rows bound to text", async () => {
+    // The control for the rows above: the same query, a text field.
+    mount(
+      { label: { $bind: "title", source: "item" } },
+      {
+        namedQuery: "events.upcoming",
+        services: {
+          listLoopCollections: async () => [],
+          listCustomSources: async () => [
+            customSource({
+              key: "id",
+              fields: [
+                { name: "title", type: "text" },
+                { name: "price", type: "number" },
+              ],
+            }),
+          ],
+        },
+      }
+    );
+    await screen.findByRole("button", {
+      name: /^Text: bound to Title of each/,
+    });
+    expect(screen.queryByRole("combobox", { name: "Format" })).toBeNull();
+  });
 });
+
+/** The site's one named query, `events.upcoming`, with the rows given. */
+function customSource(rows: NamedQueryDeclaration["rows"]): CustomSource {
+  return {
+    declaration: {
+      name: "events.upcoming",
+      label: "Upcoming events",
+      reads: { collections: ["bound-entries"] },
+      rows,
+    },
+    readsHidden: [],
+  };
+}
