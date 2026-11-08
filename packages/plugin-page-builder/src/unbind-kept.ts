@@ -142,9 +142,12 @@ export function unbindPlan(
   declared: DeclaredProps
 ): UnbindPlan {
   if (view.unreadable !== undefined) {
-    return unreadablePlan(prop, path, view.unreadable.fallback, declared);
+    return asUnreadable(
+      unreadablePlan(prop, path, view.unreadable.fallback, declared)
+    );
   }
   const bound = view.bound;
+
   const value = view.filled[prop];
   if (bound === undefined) {
     return {
@@ -173,6 +176,13 @@ export function unbindPlan(
           : "The prop keeps what visitors saw.",
     },
   };
+}
+
+/** The plan's answer marked as kept in place of a field visitors can't read. */
+function asUnreadable(plan: UnbindPlan): UnbindPlan {
+  return "refusal" in plan
+    ? plan
+    : { ...plan, answer: { ...plan.answer, unreadable: true } };
 }
 
 /**

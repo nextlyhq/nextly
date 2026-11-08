@@ -31,6 +31,7 @@ import {
   type BlockInspectorProps,
   type BreakpointId,
   type BreakpointSet,
+  type BuilderOp,
   type ComponentLookup,
   type ComponentPath,
   type NodeStyles,
@@ -49,6 +50,7 @@ import { ChevronRight } from "lucide-react";
 import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
+import { BindableField } from "./binding-controls";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
 import {
   blockLookGroups,
@@ -1210,6 +1212,9 @@ function ContentSurface({
       onCommitMany={changes =>
         commitLinkChanges(editor, inspection.nodeId, changes)
       }
+      // A binding's edits, applied as any other edit of the block.
+      // Whether the editor took it: a refused edit is said, not assumed.
+      onApply={op => editor.apply(op) !== null}
       document={editor.document}
       listView={listViewOf(editor, inspection.nodeId)}
     />
@@ -1434,8 +1439,11 @@ function ContentFields({
   onCommitMany,
   document,
   listView,
+  onApply,
 }: {
   inspection: BlockInspection;
+  /** Apply one op as an edit: a binding's, which writes props and bindings at once. */
+  onApply: (op: BuilderOp) => boolean;
   /** The document the block is in, for a group that reads around it. */
   document: BlockDocument;
   /** Whether the canvas draws this block's empty state, and the switch. */
@@ -1461,6 +1469,9 @@ function ContentFields({
   // The bindings on this block a visitor will not see filled, each said under
   // the field that draws its prop.
   const unreadable = useVisitorUnreadable(inspection.nodeId);
+  // The block's bindings as the document holds them, so a bound prop draws
+  // its chip in place of its own control.
+  const bindings = findNode(document.nodes, inspection.nodeId)?.bindings;
   // A prop the inspector leaves out draws no control, but in a component's
   // view keeps its expose icon: a page may clear what hides it.
   const drawn = inspection.props.filter(
@@ -1549,13 +1560,24 @@ function ContentFields({
               // A held field points at the reason in the card.
               reasonId={writable(prop.name) ? undefined : reasonId}
             >
-              <PropField
+              <BindableField
+                nodeId={inspection.nodeId}
                 prop={prop}
-                disabled={!writable(prop.name)}
-                onCommit={onCommit}
+                blockLabel={inspection.label}
+                binding={bindings?.[prop.name]}
+                document={document}
                 services={services}
-                values={values}
-              />
+                disabled={!writable(prop.name)}
+                onApply={onApply}
+              >
+                <PropField
+                  prop={prop}
+                  disabled={!writable(prop.name)}
+                  onCommit={onCommit}
+                  services={services}
+                  values={values}
+                />
+              </BindableField>
             </HeldByLock>
           ))
         );
