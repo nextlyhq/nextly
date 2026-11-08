@@ -21,10 +21,16 @@ const registered = {
   "@/plugins/widget-kit-fixture/admin#ThrowingCard": _p2.ThrowingCard, // widget "widget-kit-fixture/throws" of plugin "widget-kit-fixture"
   "@/plugins/widget-kit-fixture/admin#UnlabelledControlCard": _p2.UnlabelledControlCard, // widget "widget-kit-fixture/unlabelled-control" of plugin "widget-kit-fixture"
   "@nextlyhq/plugin-form-builder/admin#NewSubmissionsCard": _p3.NewSubmissionsCard, // widget "form-builder/new-submissions" of plugin "@nextlyhq/plugin-form-builder"
+  "@nextlyhq/plugin-page-builder/admin#BindingsToFixCard": _p4.BindingsToFixCard, // widget "page-builder/bindings-to-fix" of plugin "@nextlyhq/plugin-page-builder"
+  "@nextlyhq/plugin-page-builder/admin#BindingsToFixPage": _p4.BindingsToFixPage,
   "@nextlyhq/plugin-page-builder/admin#BlocksField": _p4.BlocksField,
   "@nextlyhq/plugin-page-builder/admin#DeleteComponentReplacement": _p4.DeleteComponentReplacement,
+  "@nextlyhq/plugin-page-builder/admin#EntryDesignSection": _p4.EntryDesignSection,
   "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p4.PageBuilderView,
   "@nextlyhq/plugin-page-builder/admin#RemoveLayoutToolbarSlot": _p4.RemoveLayoutToolbarSlot,
+  "@nextlyhq/plugin-page-builder/admin#TemplateDeleteAction": _p4.TemplateDeleteAction,
+  "@nextlyhq/plugin-page-builder/admin#TemplateDesignDetails": _p4.TemplateDesignDetails,
+  "@nextlyhq/plugin-page-builder/admin#TemplateOwnDesigns": _p4.TemplateOwnDesigns,
 } satisfies DeclaredComponentMap<typeof siteConfig>;
 
 /** The modules exporting each plugin's block definitions, for the page builder's editor. */

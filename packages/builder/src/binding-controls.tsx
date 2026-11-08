@@ -24,6 +24,7 @@ import {
   type Binding,
   type BindingFieldShape,
   type BindingFormat,
+  type BindingRunInput,
   type BlockDocument,
   type BuilderOp,
 } from "@nextlyhq/blocks-engine";
@@ -82,6 +83,78 @@ interface FieldOption extends ListedChoice {
    * which reaches it only through one; named in the option.
    */
   readonly format?: { readonly label: string; readonly format: BindingFormat };
+}
+
+/**
+ * A link's props, where the prop being bound is a link's destination: its
+ * address and the two halves of the entry reference it follows first.
+ */
+interface EntryLink {
+  readonly link: string;
+  readonly collection: string;
+  readonly id: string;
+  /**
+   * Whether a related entry's pick may be written where the block sits: it
+   * writes both halves of the reference and removes the address's binding,
+   * so it is offered only where all three may change.
+   */
+  readonly writable: boolean;
+}
+
+/** The edit a pick makes, and the prop it binds, whose chip is drawn after. */
+interface PickEdit {
+  readonly op: BuilderOp | null;
+  readonly bound: string;
+}
+
+/**
+ * The edit a pick makes. A related entry's id fills the link's entry: its
+ * collection is set to the relation's in the same edit, since a pick writes
+ * both halves of the reference at once, and a stored entry id is emptied.
+ * The address the link was bound to is unbound, since the entry replaces it,
+ * as is a bound collection, which would otherwise overlay the one set,
+ * and its fallback is not carried over, being an address rather than an id;
+ * the address stored on the block is kept, so the link still goes there
+ * where the entry is not read. Any other pick binds `prop`, emptying
+ * `clearsOnBind`.
+ */
+function pickOp(
+  at: {
+    readonly document: BlockDocument;
+    readonly nodeId: string;
+    readonly prop: string;
+    readonly clearsOnBind: readonly string[] | undefined;
+    readonly entryLink: EntryLink | undefined;
+  },
+  picked: FieldOption,
+  kept: Binding | undefined
+): PickEdit {
+  const entry = at.entryLink;
+  const collection = picked.field.linksTo;
+  if (entry === undefined || collection === undefined) {
+    const op = bindOp(
+      at.document,
+      at.nodeId,
+      at.prop,
+      bindingFor(picked, kept),
+      at.clearsOnBind
+    );
+    return { op, bound: at.prop };
+  }
+  const op = bindOp(
+    at.document,
+    at.nodeId,
+    entry.id,
+    bindingFor(picked, at.prop === entry.id ? kept : undefined),
+    [entry.id],
+    {
+      set: { [entry.collection]: collection },
+      // The collection is set, so a binding of it, which the page would fill
+      // over the value set, goes too.
+      unbind: [entry.link, entry.collection],
+    }
+  );
+  return { op, bound: entry.id };
 }
 
 /**
@@ -164,27 +237,38 @@ function sourceName(source: BindingFieldSource): string {
 /**
  * The fields of `sources` that fit `prop`, one step into a relation or a
  * group, in the order the picker lists them. A relation or group whose own
- * value does not fit is not offered itself, only what is inside it.
+ * value does not fit is not offered itself, only what is inside it. A value
+ * shown formatted is formatted in `formatIn`, as the page's render formats it.
+ *
+ * A related entry's id (`linksTo`) is offered only for a link, whose entry it
+ * fills; the link's entry id, bound, is changed only to another such id.
  */
 function fittingOptions(
   sources: readonly BindingFieldSource[],
-  prop: EditableProp
+  prop: EditableProp,
+  formatIn: PreviewFormatIn,
+  entryLink: EntryLink | undefined
 ): readonly FieldOption[] {
+  const offered = (field: BindingFieldChoice): boolean =>
+    field.linksTo !== undefined
+      ? entryLink?.writable === true
+      : prop.name !== entryLink?.id && fits(field, prop);
   const options: FieldOption[] = [];
   sources.forEach((source, index) => {
     const group = String(index);
     for (const field of source.fields) {
       const label = choiceLabel(field);
-      if (fits(field, prop)) {
+      if (offered(field)) {
         options.push(
           withFormatOnBind(
             option(source, group, field, field.name, label),
-            prop
+            prop,
+            formatIn
           )
         );
       }
       for (const inner of field.fields ?? []) {
-        if (!fits(inner, prop)) continue;
+        if (!offered(inner)) continue;
         options.push(
           withFormatOnBind(
             option(
@@ -195,7 +279,8 @@ function fittingOptions(
               choiceLabel(inner),
               label
             ),
-            prop
+            prop,
+            formatIn
           )
         );
       }
@@ -231,10 +316,15 @@ function formatOnBind(
   return defaultFormatFor(bindablePropKind(prop.schema), field);
 }
 
-/** An option with the format its pick writes, where it writes one. */
+/**
+ * An option with the format its pick writes, where it writes one, its value
+ * previewed in that format in `formatIn`: the page's language and the site's
+ * time zone.
+ */
 function withFormatOnBind(
   choice: FieldOption,
-  prop: EditableProp
+  prop: EditableProp,
+  formatIn: PreviewFormatIn
 ): FieldOption {
   const format = formatOnBind(choice.field, prop);
   if (format === undefined) return choice;
@@ -245,7 +335,8 @@ function withFormatOnBind(
     preview,
     format.format,
     bindablePropKind(prop.schema),
-    choice.field
+    choice.field,
+    formatIn
   );
   return {
     ...choice,
@@ -308,6 +399,51 @@ function OptionRow({ option }: { option: FieldOption }): React.JSX.Element {
   );
 }
 
+/** The language and time zone the picker previews a formatted value in. */
+type PreviewFormatIn = Pick<BindingRunInput, "locale" | "timeZone">;
+
+/**
+ * The language and zone the picker previews in: the page's language, and the
+ * site's zone, asked of the host when the picker opens rather than with the
+ * canvas, which reads it only for a page already formatting a date. Until
+ * the zone is in, and where the host has none or its read fails, the preview
+ * is in UTC, as a page rendered with no zone; it is drawn again once it is.
+ */
+function usePreviewFormatIn(
+  services: ContentServices | undefined
+): PreviewFormatIn {
+  const locale = services?.bindingLocale;
+  const readZone = services?.readSiteTimeZone;
+  const [read, setRead] = React.useState<{
+    readonly from: () => Promise<string | undefined>;
+    readonly zone: string | undefined;
+  }>();
+  React.useEffect(() => {
+    if (readZone === undefined) return;
+    let current = true;
+    readZone().then(
+      zone => {
+        if (current) setRead({ from: readZone, zone });
+      },
+      () => {
+        // No zone to show: the previews stay in UTC.
+      }
+    );
+    return () => {
+      current = false;
+    };
+  }, [readZone]);
+  // Only the zone this host's read gave, so another host's is never shown.
+  const timeZone = read?.from === readZone ? read?.zone : undefined;
+  return React.useMemo(
+    () => ({
+      ...(locale === undefined ? {} : { locale }),
+      ...(timeZone === undefined ? {} : { timeZone }),
+    }),
+    [locale, timeZone]
+  );
+}
+
 /** The fields a binding can read, as the host reads them; read once per open. */
 function useBindingSources(
   services: ContentServices | undefined,
@@ -342,16 +478,20 @@ function BindingPicker({
   blockLabel,
   services,
   current,
+  entryLink,
   onPick,
 }: {
   prop: EditableProp;
   blockLabel: string;
   services: ContentServices | undefined;
+  /** The link's entry, where the prop is a link's destination. */
+  entryLink: EntryLink | undefined;
   /** The prop's binding when it has one, marked in the list. */
   current: Binding | undefined;
   onPick: (option: FieldOption) => void;
 }): React.JSX.Element {
   const sources = useBindingSources(services, true);
+  const formatIn = usePreviewFormatIn(services);
   const name = propLabel(prop.name, prop.schema);
   if (sources === "loading") {
     return <p className="nx-binding-picker__note">Reading the fields…</p>;
@@ -363,7 +503,8 @@ function BindingPicker({
       </p>
     );
   }
-  const options = fittingOptions(sources, prop);
+  // Previewed in the page's language and the site's zone.
+  const options = fittingOptions(sources, prop, formatIn, entryLink);
   // A source with nothing to offer this prop is not listed: an empty group
   // only lengthens the list.
   const offering = new Set(options.map(option => option.group));
@@ -435,6 +576,12 @@ export interface BindingControlProps {
    * bind or a change of field that would empty one is held.
    */
   readonly clearsLocked?: readonly string[] | undefined;
+  /**
+   * Where the prop is a link's destination, or its bound entry id: the
+   * link's props. The picker then offers the entries a relation names, and a
+   * pick of one binds the link's entry (see `pickOp`).
+   */
+  readonly entryLink?: EntryLink | undefined;
   /** The prop's own control, drawn while it is not bound. */
   readonly children: React.ReactNode;
 }
@@ -488,6 +635,7 @@ function BindButton({
   onApply,
   clearsOnBind,
   clearsLocked,
+  entryLink,
   onBound,
   onRefused,
 }: BindingControlProps & {
@@ -498,8 +646,11 @@ function BindButton({
   const name = propLabel(prop.name, prop.schema);
   const trigger = React.useRef<HTMLButtonElement>(null);
   // The inspector's fields, taken from the button before a pick replaces it
-  // with the chip: the picker is drawn in a portal, outside them.
+  // with the chip: the picker is drawn in a portal, outside them. And the
+  // prop the pick bound, whose chip that is: a related entry binds the
+  // link's entry, not this prop.
   const pickedIn = React.useRef<Element | null>(null);
+  const boundProp = React.useRef(prop.name);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -528,7 +679,7 @@ function BindButton({
           requestAnimationFrame(() => {
             fields
               .querySelector<HTMLElement>(
-                `[data-binding-chip="${CSS.escape(`${nodeId}:${prop.name}`)}"]`
+                `[data-binding-chip="${CSS.escape(`${nodeId}:${boundProp.current}`)}"]`
               )
               ?.focus();
           });
@@ -539,16 +690,16 @@ function BindButton({
           blockLabel={blockLabel}
           services={services}
           current={undefined}
+          entryLink={entryLink}
           onPick={picked => {
             pickedIn.current =
               trigger.current?.closest(".nx-inspector__fields") ?? null;
-            const op = bindOp(
-              document,
-              nodeId,
-              prop.name,
-              bindingFor(picked, undefined),
-              clearsOnBind
+            const { op, bound } = pickOp(
+              { document, nodeId, prop: prop.name, clearsOnBind, entryLink },
+              picked,
+              undefined
             );
+            boundProp.current = bound;
             setOpen(false);
             if (op === null || !onApply(op)) {
               pickedIn.current = null;
@@ -807,18 +958,49 @@ function OpenSourceItem({
   );
 }
 
+/**
+ * When a bound image's fallback is shown, in the words of its source and
+ * field: "Shown when a post has no cover image." Said so only for one entry
+ * of a collection (the page's own, or a list's item) and a field named in one
+ * step; anywhere else, in the plain words that fit every binding.
+ */
+function fallbackShownWhen(
+  binding: Binding,
+  sources: readonly BindingFieldSource[] | "loading" | "failed",
+  item: ItemSource | undefined,
+  field: string
+): string {
+  const found =
+    binding.source === undefined || binding.source === "entry"
+      ? boundSource(binding, sources)?.label.toLowerCase()
+      : undefined;
+  const one = item?.one ?? found;
+  // A path's names joined with "›" read badly inside a sentence.
+  if (one === undefined || field.includes("›")) {
+    return "Shown when the bound field has no image.";
+  }
+  const article = /^[aeiou]/i.test(one) ? "an" : "a";
+  return `Shown when ${article} ${one} has no ${field.toLowerCase()}.`;
+}
+
 /** A bound prop's own rows under its chip: its Fallback, and its Format. */
 function BoundValueRows({
   prop,
   binding,
   field,
+  shownWhen,
   services,
   disabled,
   labelId,
+  textFallback,
   onRebind,
 }: {
   prop: EditableProp;
   binding: Binding;
+  /** Whether a text fallback is offered where the prop's value is text. */
+  textFallback: boolean;
+  /** When an image's fallback is shown, said under its library picker. */
+  shownWhen: string;
   /** The field the binding reads, once its source's fields are read. */
   field: NamedField | undefined;
   services: ContentServices | undefined;
@@ -836,15 +1018,17 @@ function BoundValueRows({
   return (
     <>
       {kind === "image" ? (
-        // An image's fallback is an address, with its picture shown.
+        // An image's fallback: an address with its picture shown, or a file
+        // chosen from the media library, shown by its name.
         <ImageBindingFallback
           binding={binding}
+          shownWhen={shownWhen}
           services={services}
           disabled={disabled}
           describedBy={labelId}
           onFallback={next => onRebind(withFallback(binding, next))}
         />
-      ) : takesTextFallback(prop) ? (
+      ) : textFallback && takesTextFallback(prop) ? (
         // A text input writes text: offered for a prop whose value is text
         // alone, so a number's, a choice's or a passage's fallback is never
         // rewritten.
@@ -1211,6 +1395,7 @@ function BoundField({
   onApply,
   clearsOnBind,
   clearsLocked,
+  entryLink,
   onUnbound,
 }: Omit<BindingControlProps, "binding" | "children"> & {
   binding: Binding;
@@ -1287,13 +1472,12 @@ function BoundField({
               blockLabel={blockLabel}
               services={services}
               current={binding}
+              entryLink={entryLink}
               onPick={picked => {
-                const op = bindOp(
-                  document,
-                  nodeId,
-                  prop.name,
-                  bindingFor(picked, binding),
-                  clearsOnBind
+                const { op } = pickOp(
+                  { document, nodeId, prop: prop.name, clearsOnBind, entryLink },
+                  picked,
+                  binding
                 );
                 close();
                 // A refusal said of the earlier field is no longer true; one
@@ -1307,9 +1491,13 @@ function BoundField({
           prop={prop}
           binding={binding}
           field={boundField(binding, from)}
+          shownWhen={fallbackShownWhen(binding, sources, item, names.field)}
           services={services}
           disabled={disabled}
           labelId={labelId}
+          // A link's entry id has no fallback a person could type: with no
+          // entry read, the link keeps its own address.
+          textFallback={prop.name !== entryLink?.id}
           // One write for the fallback and the format alike: the binding
           // replaced, as a pick replaces it.
           onRebind={next => {

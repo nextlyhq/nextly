@@ -482,14 +482,20 @@ const PUBLIC_BOUNDARY = {
   showHiddenFields: false,
 } as const;
 
-/** The fields each row carries, with its id; none named means every public one. */
-function selectOf(query: PublicReadQuery): FindArgs["select"] | undefined {
+/**
+ * The fields each row or document carries, with its id; none named means
+ * every public one. One spelling for the list's read and the Single's, so a
+ * selection asks core for the same fields on both.
+ */
+function selectOf(query: {
+  select?: readonly string[];
+}): Record<string, boolean> | undefined {
   const fields = query.select ?? [];
   if (fields.length === 0) return undefined;
   return Object.fromEntries([
     ["id", true],
     ...fields.map(field => [field, true]),
-  ]) as FindArgs["select"];
+  ]);
 }
 
 /**
@@ -570,18 +576,26 @@ export function toPublicFindSingle(
 ): FindSingleArgs & { createIfMissing: false } {
   assertPublicSingleQuery(query, binding);
   const locale = binding.locale ?? query.locale;
+  // Sent to the read, as a list's is, so a read that honours a selection
+  // fetches only these fields rather than the whole document.
+  const select = selectOf(query);
   return {
     slug: query.slug,
     ...(locale === undefined ? {} : { locale }),
+    ...(select === undefined ? {} : { select }),
     createIfMissing: false,
     ...PUBLIC_BOUNDARY,
   };
 }
 
 /**
- * The document narrowed to its id and the fields named. A Single's read
- * returns the whole document, so the selection is kept here; a field the
- * read left out stays out.
+ * The document narrowed to its id and the fields named; a field the read
+ * left out stays out.
+ *
+ * Kept though the read is asked for the same fields: the Direct API's
+ * `findSingle` does not yet hand `select` to the Singles service, which reads
+ * whole documents, and a source a route hands over may ignore it too. Without
+ * this a page would be answered fields it never asked for.
  */
 export function selectedFrom(
   document: Record<string, unknown>,

@@ -26,6 +26,7 @@ function appliedHiding(...names: string[]): AppliedConditions {
   return {
     document: { formatVersion: 1, kind: "template", nodes: [] },
     unjudged: false,
+    byEntry: false,
     shown: new Set(),
     hidden: names.map(name => ({
       id: name,
@@ -68,6 +69,49 @@ describe("what the conditions did, in words", () => {
     expect(
       conditionsCountWords({ ...appliedHiding(), unjudged: true }, "post")
     ).toBe("Every block checked shows for this post");
+  });
+
+  it("says a list's blocks are checked for each entry, claiming nothing of them", () => {
+    // Only blocks inside a list's entries: each is checked, and marked, where
+    // its entry is drawn.
+    expect(
+      conditionsCountWords({ ...appliedHiding(), byEntry: true }, "page")
+    ).toBe("Conditions checked for each entry in the list");
+    // Beside the page's own blocks, all shown: said of those, on the page.
+    expect(
+      conditionsCountWords(
+        { ...appliedHiding(), byEntry: true, shown: new Set(["intro"]) },
+        "page"
+      )
+    ).toBe("Every conditioned block shows on this page");
+    expect(
+      conditionsCountWords({ ...appliedHiding("a"), byEntry: true }, "page")
+    ).toBe("1 block hidden for this page");
+    // A placed component's block left unchecked beside them: the list's
+    // checks claimed nothing of, the unchecked blocks said.
+    expect(
+      conditionsCountWords(
+        {
+          ...appliedHiding(),
+          byEntry: true,
+          unjudged: true,
+          shown: new Set(["intro"]),
+        },
+        "page"
+      )
+    ).toBe(
+      "Conditions checked for each entry in the list; some blocks aren’t checked"
+    );
+    // Only list blocks checked, and a placed component's left unchecked:
+    // never "every block shows", which an entry's marker would contradict.
+    expect(
+      conditionsCountWords(
+        { ...appliedHiding(), byEntry: true, unjudged: true },
+        "page"
+      )
+    ).toBe(
+      "Conditions checked for each entry in the list; some blocks aren’t checked"
+    );
   });
 });
 

@@ -74,7 +74,7 @@ import {
   type LinkPick,
   type LinkValue,
 } from "./link-group";
-import type { BindableWrapper } from "./prop-groups";
+import type { BindableOptions, BindableWrapper } from "./prop-groups";
 
 /** How long typing pauses before the host is asked again. */
 const SEARCH_PAUSE_MS = 150;
@@ -1018,6 +1018,63 @@ export interface LinkGroupFieldProps {
 }
 
 /**
+ * Whether the link is bound: its address, or its entry. A bound link goes
+ * where its field says, so it is a link to qualify even with no address of
+ * its own stored.
+ */
+function isLinkBound(
+  group: LinkGroup,
+  bound: Readonly<Record<string, unknown>> | undefined
+): boolean {
+  if (bound?.[group.link] !== undefined) return true;
+  return group.entry !== undefined && bound?.[group.entry.id] !== undefined;
+}
+
+/** The block's bindings, where the group knows its document and block. */
+function bindingsOfBlock(
+  document: BlockDocument | undefined,
+  nodeId: string | undefined
+): Readonly<Record<string, unknown>> | undefined {
+  return document === undefined || nodeId === undefined
+    ? undefined
+    : findNode(document.nodes, nodeId)?.bindings;
+}
+
+/**
+ * What binding the link's address says: a button follows a complete entry
+ * reference before its address, so binding the address empties the
+ * reference in the same edit, or the button would keep going to the entry;
+ * and where the block has an entry reference, the picker also offers the
+ * entries a relation names, whose pick binds the reference.
+ */
+function bindOptions(
+  group: LinkGroup,
+  destination: readonly string[],
+  writable: (name: string) => boolean,
+  bound: Readonly<Record<string, unknown>> | undefined
+): BindableOptions {
+  const entry = group.entry;
+  // A related entry's pick removes the address's binding, so where that
+  // binding is held it is not offered either.
+  const addressHeld = bound?.[group.link] !== undefined && !writable(group.link);
+  return {
+    clearsOnBind: destination.filter(name => name !== group.link),
+    ...(entry === undefined
+      ? {}
+      : {
+          entryLink: {
+            link: group.link,
+            ...entry,
+            // A related entry's pick writes both halves, so where either is
+            // held (an area that keeps the block's design) none is offered.
+            writable:
+              writable(entry.collection) && writable(entry.id) && !addressHeld,
+          },
+        }),
+  };
+}
+
+/**
  * A block's link group, drawn where its link prop sits: the link, and under
  * a set link its new-tab switch and its Link options. The link's address
  * offers binding through the inspector's wrapper; a bound link counts as set,
@@ -1046,12 +1103,8 @@ export function LinkGroupField({
   const label =
     linkProp === undefined ? "Link" : propLabel(linkProp.name, linkProp.schema);
   const value = linkValueOf(group, values);
-  // A bound link goes where its field says, so it is a link to qualify even
-  // with no address of its own stored.
-  const linkBound =
-    document !== undefined &&
-    nodeId !== undefined &&
-    findNode(document.nodes, nodeId)?.bindings?.[group.link] !== undefined;
+  const bound = bindingsOfBlock(document, nodeId);
+  const linkBound = isLinkBound(group, bound);
   const linked = value.kind !== "none" || linkBound;
   const held = (name: string | undefined): string | undefined =>
     name === undefined || writable(name) ? undefined : reasonId;
@@ -1110,10 +1163,7 @@ export function LinkGroupField({
             />
           </div>
         </HeldByLock>,
-        // A button follows a complete entry reference before its address, so
-        // binding the address empties the reference in the same edit, or the
-        // button would keep going to the entry.
-        { clearsOnBind: destination.filter(name => name !== group.link) }
+        bindOptions(group, destination, writable, bound)
       )}
       {!linked || group.target === undefined ? null : (
         <HeldByLock reasonId={held(group.target)}>

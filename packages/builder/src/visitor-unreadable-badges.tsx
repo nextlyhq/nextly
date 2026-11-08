@@ -8,7 +8,9 @@
  * falls back on the published page, so the author is told on the block itself:
  * the block is outlined in a faint amber dash, and a small "Visitors won't see
  * this" badge sits on that outline's top-right edge, a tab of it, with the
- * field and what a visitor sees instead in a tooltip. The outline is what makes
+ * field and what a visitor sees instead in a tooltip: a fallback chosen from
+ * the media library named by its file, with a small picture of it, as the
+ * host's `readMedia` reads it, never by its raw id. The outline is what makes
  * the badge plainly this block's: on blocks stacked tight, a badge alone above
  * a block reads as the mark of the one above it.
  *
@@ -40,7 +42,10 @@
  * @module visitor-unreadable-badges
  */
 
-import type { VisitorUnreadableBinding } from "@nextlyhq/blocks-engine";
+import {
+  imageValueOf,
+  type VisitorUnreadableBinding,
+} from "@nextlyhq/blocks-engine";
 import { EyeOff } from "lucide-react";
 import {
   Fragment,
@@ -55,6 +60,7 @@ import {
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
+import { useMediaSummary, type MediaSummary } from "./content-controls";
 import { watchCanvasFor, watchScreenBand } from "./canvas-geometry-watch";
 import {
   overlaps,
@@ -87,6 +93,22 @@ const BADGE_HEIGHT_PX = 22;
  * icon and padding, erring wide. Once drawn, its own width is used.
  */
 const BADGE_WIDTH_ESTIMATE_PX = 170;
+/**
+ * The tooltip's widest, as the stylesheet caps it (18rem). Right-aligned with
+ * the badge it runs this far left at most; a badge nearer the screen's left
+ * edge than this has its tooltip start at its own left edge instead, so the
+ * tooltip is never cut by the canvas's edge.
+ */
+const TIP_MAX_WIDTH_PX = 288;
+
+/**
+ * Whether a badge whose right edge is at `right` has its tooltip run right
+ * from its left edge: the screen, starting at `screenLeft`, has too little
+ * room left of `right` for the widest tooltip to run left from there.
+ */
+export function tipRunsFromStart(right: number, screenLeft: number): boolean {
+  return right - screenLeft < TIP_MAX_WIDTH_PX;
+}
 
 /** The badge's drawn width for `id`, or the estimate before it is drawn. */
 function badgeWidthOf(
@@ -115,6 +137,11 @@ interface BadgePlace {
    * where there is no room above it on screen.
    */
   readonly at: TabAt;
+  /**
+   * The tooltip runs right from the badge's left edge: too little room on
+   * screen to the badge's left for it to run left from the badge's right.
+   */
+  readonly tipFromStart: boolean;
 }
 
 /** One marked block as measured: its outline, and its badge to place. */
@@ -205,12 +232,46 @@ export interface VisitorUnreadableBadgesProps {
   readonly onSelect?: (nodeId: string) => void;
   /** Hidden while the canvas is mid-drag, as the other controls over it are. */
   readonly hidden?: boolean;
+  /**
+   * A media item by its id, as the inspector reads one, so a fallback chosen
+   * from the library is named by its file. Absent, such a fallback is said
+   * to be a library image, without its name.
+   */
+  readonly readMedia?: (mediaId: string) => Promise<MediaSummary | null>;
 }
 
-/** A fallback as a reader sees it: text quoted, anything else named. */
-function fallbackWords(binding: VisitorUnreadableBinding): string {
+/**
+ * The media id an image binding's fallback names, when it is a file from the
+ * library rather than an address. Asked only of an image prop, by the
+ * engine's reading of an image value: the same text on a heading is text.
+ */
+function fallbackMediaId(
+  binding: VisitorUnreadableBinding
+): string | undefined {
+  if (binding.kind !== "image" || binding.fallback === undefined) {
+    return undefined;
+  }
+  const read = imageValueOf(binding.fallback.value);
+  return read?.holds === "media" ? read.value : undefined;
+}
+
+/**
+ * A fallback as a reader sees it: text quoted, a library file named by its
+ * file name (`fileName`, once read), anything else named.
+ */
+function fallbackWords(
+  binding: VisitorUnreadableBinding,
+  fileName: string | undefined
+): string {
   if (binding.fallback === undefined) {
     return "They see the block's own value instead.";
+  }
+  // A media id is no word a reader knows: the file it names, or that it is
+  // a file, while that is read or where it can't be.
+  if (fallbackMediaId(binding) !== undefined) {
+    return fileName === undefined
+      ? "They see a fallback image from the library."
+      : `They see the fallback image “${fileName}”.`;
   }
   const value = binding.fallback.value;
   return typeof value === "string" && value.trim() !== ""
@@ -218,11 +279,50 @@ function fallbackWords(binding: VisitorUnreadableBinding): string {
     : "They see the fallback instead.";
 }
 
-/** One sentence per binding: the field, and what a visitor sees instead. */
+/**
+ * One sentence per binding: the field, and what a visitor sees instead.
+ * Synchronous, so a library file's name is handed in once read
+ * (`fileName`); without it the file is said to be a library image.
+ */
 export function visitorUnreadableSentence(
-  binding: VisitorUnreadableBinding
+  binding: VisitorUnreadableBinding,
+  fileName?: string
 ): string {
-  return `Visitors can't read “${binding.path}”. ${fallbackWords(binding)}`;
+  return `Visitors can't read “${binding.path}”. ${fallbackWords(binding, fileName)}`;
+}
+
+/**
+ * One binding's sentence, its library fallback read by its id through
+ * `readMedia` and named by its file; with `pictured`, a small picture of
+ * that file before it, where the badge's tooltip has room for one.
+ */
+export function VisitorUnreadableLine({
+  binding,
+  readMedia,
+  pictured = false,
+}: {
+  readonly binding: VisitorUnreadableBinding;
+  readonly readMedia:
+    | ((mediaId: string) => Promise<MediaSummary | null>)
+    | undefined;
+  readonly pictured?: boolean;
+}): ReactElement {
+  const summary = useMediaSummary(readMedia, fallbackMediaId(binding) ?? null);
+  const sentence = visitorUnreadableSentence(binding, summary?.name);
+  const thumbnail = pictured ? summary?.thumbnail : undefined;
+  if (thumbnail === undefined) return <>{sentence}</>;
+  return (
+    <span className="nx-visitor-unreadable__pictured">
+      {/* Decorative: the sentence names the file. */}
+      <img
+        className="nx-visitor-unreadable__thumb"
+        src={thumbnail}
+        alt=""
+        decoding="async"
+      />
+      <span>{sentence}</span>
+    </span>
+  );
 }
 
 /**
@@ -235,6 +335,7 @@ export function VisitorUnreadableBadges({
   marked,
   onSelect,
   hidden = false,
+  readMedia,
 }: VisitorUnreadableBadgesProps): ReactElement | null {
   const layer = useRef<HTMLDivElement | null>(null);
   const [places, setPlaces] = useState<ReadonlyMap<string, BadgePlace>>(
@@ -250,12 +351,14 @@ export function VisitorUnreadableBadges({
   const measured = useRef<{
     readonly root: HTMLElement | null;
     readonly badges: readonly MeasuredBadge[];
-  }>({ root: null, badges: [] });
+    /** The left edge of what of the canvas is on screen, as last measured. */
+    readonly screenLeft: number;
+  }>({ root: null, badges: [], screenLeft: 0 });
 
   // The badges as last measured, placed where the board puts them now, with
   // the canvas's other tabs and the block toolbar.
   const placeBadges = useCallback(() => {
-    const { root, badges } = measured.current;
+    const { root, badges, screenLeft } = measured.current;
     const placements =
       root === null ? [] : tabBoardOf(root).placesOf("visitor");
     const next = new Map<string, BadgePlace>();
@@ -264,11 +367,15 @@ export function VisitorUnreadableBadges({
         at: tab.places[0] ?? "inside",
         side: tab.side,
       };
+      const right = outline.x + outline.width - side;
       next.set(id, {
         outline,
-        right: outline.x + outline.width - side,
+        right,
         top: badgeTopOf(outline, at),
         at,
+        // Read from where the badge is placed, which a step left to keep
+        // clear of another tab moves, so its tooltip still fits on screen.
+        tipFromStart: tipRunsFromStart(right, screenLeft),
       });
     });
     setPlaces(next);
@@ -280,7 +387,7 @@ export function VisitorUnreadableBadges({
     const space =
       element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
     if (space === null) {
-      measured.current = { root: null, badges: [] };
+      measured.current = { root: null, badges: [], screenLeft: 0 };
       postTabs(null);
       setPlaces(current => (current.size === 0 ? current : new Map()));
       return;
@@ -290,7 +397,7 @@ export function VisitorUnreadableBadges({
       const badge = measuredBadgeOf(element, space, onScreen, id);
       return badge === undefined ? [] : [badge];
     });
-    measured.current = { root: space.root, badges };
+    measured.current = { root: space.root, badges, screenLeft: onScreen.x };
     postTabs(space.root, { tabs: badges.map(({ tab }) => tab), taken: [] });
     placeBadges();
   }, [marked, postTabs, placeBadges]);
@@ -353,6 +460,7 @@ export function VisitorUnreadableBadges({
               data-badge-node={id}
               data-inside={place.at === "inside" ? "" : undefined}
               data-below={place.at === "below" ? "" : undefined}
+              data-tip-start={place.tipFromStart ? "" : undefined}
               data-dismissed={dismissed === id ? "" : undefined}
               style={{ left: place.right, top: place.top }}
               onMouseLeave={() => {
@@ -388,7 +496,11 @@ export function VisitorUnreadableBadges({
                     key={binding.prop}
                     className="nx-visitor-unreadable__line"
                   >
-                    {visitorUnreadableSentence(binding)}
+                    <VisitorUnreadableLine
+                      binding={binding}
+                      readMedia={readMedia}
+                      pictured
+                    />
                   </span>
                 ))}
               </span>

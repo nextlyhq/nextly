@@ -23,6 +23,17 @@
  * - An own design's publish claims its entry's address, waiting where it is
  *   held, and its unpublish or removal gives the address up, each only where
  *   the collection's template does not serve the entry anyway.
+ * - Where the design drawing an entry (its published own design, else its
+ *   collection's published template) splits a list into pages, the entry
+ *   also holds that list's later pages (`<address>/<slug>/page/*`) as one
+ *   space, as a page does: its save is refused where a document is published
+ *   among them, and a template's or own design's write that starts the list
+ *   paging leaves the entry waiting for them, as it does an entry left
+ *   waiting for its address, which is given both together. Until the
+ *   start-up pass has claimed every page, the pages published among them are
+ *   claimed first, as those at the entry's address are. Paging or unpaging a
+ *   published template's list settles every entry it draws, and an own
+ *   design's publish, republish, unpublish or removal settles its entry.
  * - A collection created at runtime is addressed only by its template, so
  *   once the template is deleted its entries hold nothing, own designs or
  *   not: there is no address left to serve them at.
@@ -48,9 +59,10 @@
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
+import { drawingDesign } from "../templates/entry-designs";
 import { addressSegments } from "../templates/template-addresses";
 
-import { claimKey, type ServedAddress } from "./claim-key";
+import { claimKey, spaceKeyHolding, type ServedAddress } from "./claim-key";
 import {
   claimAddress,
   claimOrWait,
@@ -79,6 +91,7 @@ import {
   type EntryServing,
   type PageCandidates,
 } from "./entry-claims";
+import { splitsList } from "./page-claims";
 
 /** How many entries one read of a walk takes. */
 const BATCH = 100;
@@ -94,6 +107,19 @@ export interface ServingTemplate {
   readonly published: boolean;
   /** The address it stores, as segments, or null for none. */
   readonly address: readonly string[] | null;
+}
+
+/** An entry's published own design as the claims read it. */
+export interface OwnDesign {
+  /** Whether it splits a list into pages (see `splitsList`). */
+  readonly paginates: boolean;
+}
+
+/** A published page as the pre-claim reads it: its id and what it holds. */
+interface PageHolding {
+  readonly id: string;
+  readonly addresses: readonly ServedAddress[];
+  readonly spaces: readonly ServedAddress[];
 }
 
 /** What entries' claims need, resolved per save. */
@@ -116,23 +142,31 @@ export interface EntryClaimsDeps {
     tx?: Tx
   ) => Promise<ServingTemplate | null>;
   /**
-   * Whether the entry `id` of `collection` has a published own design, read
-   * on `tx`, the write's own transaction, as the template is, so a save
-   * asking takes no second connection from the pool while it holds one.
+   * The entry `id` of `collection`'s own design, or null when it has no
+   * published one, read on `tx`, the write's own transaction, as the
+   * template is, so a save asking takes no second connection from the pool
+   * while it holds one.
    */
-  readonly ownDesignPublished: (
+  readonly publishedOwnDesign: (
     collection: string,
     id: string,
     tx: Tx
-  ) => Promise<boolean>;
+  ) => Promise<OwnDesign | null>;
   /**
-   * The ids of `collection`'s entries that have a published own design,
-   * read on `tx`, the write's own transaction.
+   * The published own designs of `collection`'s entries, by entry id, read
+   * on `tx`, the write's own transaction.
    */
   readonly publishedDesigns: (
     collection: string,
     tx: Tx
-  ) => Promise<ReadonlySet<string>>;
+  ) => Promise<ReadonlyMap<string, OwnDesign>>;
+  /**
+   * Whether `collection`'s published template splits a list into pages
+   * (false where it has none published), read on `tx`, the write's own
+   * transaction, so a template's write is read as it leaves the template.
+   * Asked only for an entry its template draws.
+   */
+  readonly templatePaginates: (collection: string, tx: Tx) => Promise<boolean>;
   /**
    * The entries of `collection` among `ids`, published or not, as the
    * write's transaction `tx` sees them, in one read: the hook asks at most
@@ -195,13 +229,16 @@ export interface EntryClaimsDeps {
   readonly pagesWithSlugs: (
     slugs: readonly string[],
     tx: Tx
-  ) => Promise<
-    readonly {
-      id: string;
-      addresses: readonly ServedAddress[];
-      spaces: readonly ServedAddress[];
-    }[]
-  >;
+  ) => Promise<readonly PageHolding[]>;
+  /**
+   * Every published page, a batch at a time, with what each holds, read on
+   * `tx`, the write's own transaction, so a write holding the pool's last
+   * connection never waits for a second one: the pages an entry's list's
+   * later pages could fall on before the start-up pass has claimed them.
+   * Every one is read, since under a host's page path (`/{slug}/{title}`) a
+   * page's slug says nothing about where it is served.
+   */
+  readonly publishedPagesOn: (tx: Tx) => AsyncIterable<readonly PageHolding[]>;
   /**
    * One page (from 1) of `collection`'s published entries, by id, `size` to
    * a page: every entry where the collection has no Draft/Published
@@ -420,7 +457,12 @@ async function releaseEntry(
   await releaseClaims(deps.claims, tx, holder);
 }
 
-/** Bring a saved entry's claims to what `data` should hold. */
+/**
+ * Bring a saved entry's claims to what `data` should hold: its addresses,
+ * and their later pages where the design drawing it splits a list into
+ * pages. Either is refused where another document holds it, as a page's
+ * save is, naming that document.
+ */
 async function claimEntry(
   deps: EntryClaimsDeps,
   tx: Tx,
@@ -429,20 +471,90 @@ async function claimEntry(
   first?: ServingTemplate | null
 ): Promise<void> {
   const template = await templateUnderLock(deps, tx, holder.collection, first);
-  const address = await servingAddress(deps, tx, holder, template, data);
+  const designs = drawingDesigns(deps, tx, holder.collection);
+  const address = await servingAddress(deps, tx, holder, template, data, () =>
+    designs.own(holder.id)
+  );
   if (address === undefined) return;
   const wanted =
     address === null
       ? []
       : await wantedAddresses(deps, tx, holder.collection, address, data);
-  await claimPagesAt(deps, tx, wanted, "refuse");
+  const spaces = await listSpaces(designs, holder.id, wanted);
+  await claimPagesAt(
+    deps,
+    tx,
+    { addresses: wanted, spaces },
+    { mode: "refuse", pages: publishedPagesRead(deps, tx) }
+  );
   await reconcileHolder(
     deps.claims,
     tx,
     holder,
-    { addresses: wanted, spaces: [] },
+    { addresses: wanted, spaces },
     deps.describe(tx)
   );
+}
+
+/**
+ * The designs that may draw a collection's entries, each read at most once
+ * per write, on its transaction: an entry's own published design, and the
+ * collection's template.
+ */
+interface DrawingDesigns {
+  readonly own: (id: string) => Promise<OwnDesign | null>;
+  readonly templatePaginates: () => Promise<boolean>;
+}
+
+/** Read once and kept: `read`'s answer, asked for on first use. */
+function once<T>(read: () => Promise<T>): () => Promise<T> {
+  let answer: Promise<T> | undefined;
+  return () => (answer ??= read());
+}
+
+/**
+ * The designs that may draw `collection`'s entries, read on `tx`: each
+ * entry's own design read by itself, or, given `designs` (every published
+ * one, read together for a walk), looked up there.
+ */
+function drawingDesigns(
+  deps: EntryClaimsDeps,
+  tx: Tx,
+  collection: string,
+  designs?: ReadonlyMap<string, OwnDesign>
+): DrawingDesigns {
+  const own = new Map<string, () => Promise<OwnDesign | null>>();
+  return {
+    own: id => {
+      if (designs !== undefined)
+        return Promise.resolve(designs.get(id) ?? null);
+      let read = own.get(id);
+      if (read === undefined) {
+        read = once(() => deps.publishedOwnDesign(collection, id, tx));
+        own.set(id, read);
+      }
+      return read();
+    },
+    templatePaginates: once(() => deps.templatePaginates(collection, tx)),
+  };
+}
+
+/**
+ * The later pages an entry served at `addresses` holds: the same addresses,
+ * as spaces, where the design drawing it (its own published design, else
+ * its collection's template, as `drawingDesign` decides) splits a list into
+ * pages, and none where it splits none or the entry is served nowhere.
+ */
+async function listSpaces(
+  designs: DrawingDesigns,
+  id: string,
+  addresses: readonly ServedAddress[]
+): Promise<readonly ServedAddress[]> {
+  if (addresses.length === 0) return [];
+  const drawn = await drawingDesign(await designs.own(id), async () => ({
+    paginates: await designs.templatePaginates(),
+  }));
+  return drawn?.paginates === true ? addresses : [];
 }
 
 /**
@@ -476,27 +588,28 @@ function collectionServing(
 /**
  * Where the entry `holder` is served now, as `servedAt` decides from its
  * collection's `template`, read under the collection's lock, and its own
- * design, read on `tx`, the save's own transaction; null where it is served
- * nowhere, and undefined where its collection holds nothing to reconcile
- * (see `collectionServing`). Whether the entry itself is published is judged
- * of `data` by `entryAddresses`, at the address this answers. An own design
- * serves the entry only while the collection may still have a template (see
- * `servable`), asked only once a published design is found, so a save with
- * none reads no registry.
+ * design (`ownDesign`), read on `tx`, the save's own transaction; null where
+ * it is served nowhere, and undefined where its collection holds nothing to
+ * reconcile (see `collectionServing`). Whether the entry itself is
+ * published is judged of `data` by `entryAddresses`, at the address this
+ * answers. An own design serves the entry only while the collection may
+ * still have a template (see `servable`), asked only once a published design
+ * is found, so a save with none reads no registry.
  */
 async function servingAddress(
   deps: EntryClaimsDeps,
   tx: Tx,
   holder: Holder,
   template: ServingTemplate | null,
-  data: Row
+  data: Row,
+  ownDesign: () => Promise<OwnDesign | null>
 ): Promise<readonly string[] | null | undefined> {
   const serving = collectionServing(deps, holder.collection, template, data);
   if (serving === undefined) return undefined;
   return await servedAt({
     ...serving,
     ownDesignPublished: async () =>
-      (await deps.ownDesignPublished(holder.collection, holder.id, tx)) &&
+      (await ownDesign()) !== null &&
       (await servable(deps, holder.collection, tx)),
   });
 }
@@ -539,30 +652,100 @@ function noAddressRefusal(
   });
 }
 
+/** A published page's address that is a later page of some list. */
+interface PageInSpace {
+  /** The page's id. */
+  readonly id: string;
+  readonly address: ServedAddress;
+}
+
+/**
+ * The published pages that may stand among an entry's list's later pages,
+ * read on `tx` at most once per write, however many entries it settles:
+ * each address of theirs that is a later page of some list, the only ones a
+ * list's space can hold, by the key of that list's space, so each entry
+ * looks up its own lists' spaces rather than going over every page.
+ */
+type PublishedPages = () => Promise<
+  ReadonlyMap<string, readonly PageInSpace[]>
+>;
+
+/** {@link PublishedPages}, read through `deps` on `tx` when first asked. */
+function publishedPagesRead(deps: EntryClaimsDeps, tx: Tx): PublishedPages {
+  return once(async () => {
+    const bySpace = new Map<string, PageInSpace[]>();
+    for await (const batch of deps.publishedPagesOn(tx)) {
+      for (const page of batch) indexBySpace(bySpace, page);
+    }
+    return bySpace;
+  });
+}
+
+/**
+ * Add each of `page`'s addresses that is a later page of some list to
+ * `bySpace`, under the key of that list's space.
+ */
+function indexBySpace(
+  bySpace: Map<string, PageInSpace[]>,
+  page: PageHolding
+): void {
+  for (const address of page.addresses) {
+    const space = spaceKeyHolding(address);
+    if (space === null) continue;
+    const inSpace = bySpace.get(space) ?? [];
+    inSpace.push({ id: page.id, address });
+    bySpace.set(space, inSpace);
+  }
+}
+
 /**
  * Until the start-up pass has claimed every existing page, a page already
- * published at one of `addresses` may hold no claim yet, and an entry
- * taking the address would push the page out of it. So such pages claim
- * their addresses first, in this transaction, and the entry is then refused
- * naming them, or waits for them.
+ * published at one of an entry's addresses, or among its list's later
+ * pages, may hold no claim yet, and an entry taking the address or the
+ * space would push the page out of it, the page then waiting behind the
+ * entry once the pass reaches it. So such pages claim those addresses
+ * first, in this transaction, and the entry is then refused naming them, or
+ * waits for them.
  */
 async function claimPagesAt(
   deps: EntryClaimsDeps,
   tx: Tx,
-  addresses: readonly ServedAddress[],
-  mode: "refuse" | "wait"
+  wanted: {
+    readonly addresses: readonly ServedAddress[];
+    readonly spaces: readonly ServedAddress[];
+  },
+  read: { readonly mode: "refuse" | "wait"; readonly pages: PublishedPages }
 ): Promise<void> {
-  if (deps.pagesBackfilled() || addresses.length === 0) return;
-  const candidates = pageCandidates(addresses);
+  if (deps.pagesBackfilled() || wanted.addresses.length === 0) return;
+  const candidates = pageCandidates(wanted.addresses);
   for (const page of await deps.pagesWithSlugs(candidates.slugs, tx)) {
-    await claimForPage(deps, tx, page, candidates, mode);
+    await claimForPage(deps, tx, page, candidates, read.mode);
   }
+  await claimPagesIn(deps, tx, wanted.spaces, read.pages);
 }
 
-/** A page as the pre-claim reads it: its id and what it should hold. */
-type CandidatePage = Awaited<
-  ReturnType<EntryClaimsDeps["pagesWithSlugs"]>
->[number];
+/**
+ * Claim, for the page each belongs to, every published page's address
+ * among the later pages of `spaces`, as `spaceKeyHolding` places them,
+ * waiting where another document holds it, as the start-up pass would have
+ * claimed it: the entry's list then waits for the page, or its save is
+ * refused naming it, as where the page had been claimed already.
+ */
+async function claimPagesIn(
+  deps: EntryClaimsDeps,
+  tx: Tx,
+  spaces: readonly ServedAddress[],
+  pages: PublishedPages
+): Promise<void> {
+  if (spaces.length === 0) return;
+  const bySpace = await pages();
+  for (const key of new Set(spaces.map(list => claimKey("space", list)))) {
+    for (const { id, address } of bySpace.get(key) ?? []) {
+      const holder: Holder = { collection: deps.pages, id };
+      await claimOrWait(deps.claims, tx, { address, holder });
+    }
+  }
+}
 
 /**
  * Claim for `page` the list space and the addresses among `candidates` it
@@ -572,7 +755,7 @@ type CandidatePage = Awaited<
 async function claimForPage(
   deps: EntryClaimsDeps,
   tx: Tx,
-  page: CandidatePage,
+  page: PageHolding,
   candidates: PageCandidates,
   mode: "refuse" | "wait"
 ): Promise<void> {
@@ -660,9 +843,14 @@ async function settleTemplateClaims(
  * publish claims its address, waiting where it is held, since nobody is
  * saving the entry; an unpublish or a delete gives it up. Each only where
  * `servedAt` answers differently with the design published and without it,
- * so a design published or removed under a published template changes no
- * claim, and a design deleted with its entry never claims for the entry
- * being deleted. Read on the write's transaction and under the collection's
+ * or where the design drawing the entry, before the write and after it,
+ * differs in splitting a list into pages (its own design republished with a
+ * list paged or no longer, or published, unpublished or removed over a
+ * template that pages differently), whose later pages it then takes, waits
+ * for or gives up. So a design published or removed under a published
+ * template that pages alike changes no claim, and a design deleted with its
+ * entry never claims for the entry being deleted. Read on the write's
+ * transaction and under the collection's
  * lock, as an entry's save reads, so the two never commit past each other
  * unseen. A collection that may no longer have a template is served
  * nowhere (see `servable`): the write gives the entry's address up, and
@@ -675,11 +863,8 @@ async function settleDesignClaims(
   data: Row,
   before: Row | null
 ): Promise<void> {
-  const was =
-    write.operation !== "create" && designedEntry(before)?.published === true;
-  const now =
-    write.operation !== "delete" && designedEntry(data)?.published === true;
-  if (was === now) return;
+  const { was, now, repaged } = designPublishing(write.operation, data, before);
+  if (was === now && !repaged) return;
   const { collection, id } = designed;
   const tx = write.transaction;
   // The template read on the write's own transaction, then the collection's
@@ -695,8 +880,55 @@ async function settleDesignClaims(
   }
   const from = await servedAt({ ...serving, ownDesignPublished: () => was });
   const to = await servedAt({ ...serving, ownDesignPublished: () => now });
-  if (sameAddress(from, to)) return;
-  await settleDesigned(deps, tx, collection, to, [id]);
+  const designs = drawingDesigns(deps, tx, collection);
+  const change = { from, to, was, now, before, data };
+  if (!(await entryRedrawn(change, designs))) return;
+  await settleDesigned(deps, tx, { collection, address: to, designs }, [id]);
+}
+
+/**
+ * Whether an own design was published before its write (`was`) and is after
+ * it (`now`), and, published throughout, whether the write starts or stops
+ * it splitting a list into pages (`repaged`).
+ */
+function designPublishing(
+  operation: HostWrite["operation"],
+  data: Row,
+  before: Row | null
+): { readonly was: boolean; readonly now: boolean; readonly repaged: boolean } {
+  const was =
+    operation !== "create" && designedEntry(before)?.published === true;
+  const now = operation !== "delete" && designedEntry(data)?.published === true;
+  const repaged =
+    was && now && splitsList(before?.content) !== splitsList(data.content);
+  return { was, now, repaged };
+}
+
+/**
+ * Whether an own design's write changes what its entry holds: where it is
+ * served (`from` before the write, `to` after), or, served at one address
+ * throughout, whether the design drawing it splits a list into pages (the
+ * own design while it is published, else the collection's template).
+ */
+async function entryRedrawn(
+  change: {
+    readonly from: readonly string[] | null;
+    readonly to: readonly string[] | null;
+    readonly was: boolean;
+    readonly now: boolean;
+    readonly before: Row | null;
+    readonly data: Row;
+  },
+  designs: DrawingDesigns
+): Promise<boolean> {
+  if (!sameAddress(change.from, change.to)) return true;
+  if (change.to === null) return false;
+  const paged = (published: boolean, row: Row | null) =>
+    published ? splitsList(row?.content) : designs.templatePaginates();
+  return (
+    (await paged(change.was, change.before)) !==
+    (await paged(change.now, change.data))
+  );
 }
 
 /**
@@ -721,32 +953,56 @@ async function settleDesignClaims(
 async function settleDesigned(
   deps: EntryClaimsDeps,
   tx: Tx,
-  collection: string,
-  address: readonly string[] | null,
+  target: {
+    readonly collection: string;
+    readonly address: readonly string[] | null;
+    readonly designs: DrawingDesigns;
+  },
   ids: Iterable<string>
 ): Promise<void> {
+  const { collection, address, designs } = target;
   const all = [...ids];
   if (address === null) {
     await releaseEach(deps, tx, collection, all);
     return;
   }
-  const served: ServedBatchContext = {
-    collection,
-    address,
-    locales: deps.locales(),
-    lifecycle: await deps.lifecycle(collection, tx),
-  };
+  const served = await servedContext(deps, tx, collection, address, designs);
   for (let at = 0; at < all.length; at += BATCH) {
     await settleBatch(deps, tx, served, all.slice(at, at + BATCH));
   }
 }
 
-/** What every batch of one `settleDesigned` call is settled against. */
+/**
+ * What every entry of one walk is settled against: where its collection is
+ * served, in which languages, whether its entries have a lifecycle, the
+ * designs that may draw them, and the pages that may stand among their
+ * lists' later pages, read once for the whole walk.
+ */
 interface ServedBatchContext {
   readonly collection: string;
   readonly address: readonly string[];
   readonly locales: ReturnType<EntryClaimsDeps["locales"]>;
   readonly lifecycle: Awaited<ReturnType<EntryClaimsDeps["lifecycle"]>>;
+  readonly designs: DrawingDesigns;
+  readonly pages: PublishedPages;
+}
+
+/** The context a walk of `collection`'s entries at `address` settles against. */
+async function servedContext(
+  deps: EntryClaimsDeps,
+  tx: Tx,
+  collection: string,
+  address: readonly string[],
+  designs: DrawingDesigns
+): Promise<ServedBatchContext> {
+  return {
+    collection,
+    address,
+    locales: deps.locales(),
+    lifecycle: await deps.lifecycle(collection, tx),
+    designs,
+    pages: publishedPagesRead(deps, tx),
+  };
 }
 
 /** Give up the address of each of `collection`'s entries `ids`. */
@@ -771,13 +1027,13 @@ async function settleBatch(
   served: ServedBatchContext,
   batch: readonly string[]
 ): Promise<void> {
-  const { collection, address, locales, lifecycle } = served;
+  const { collection, lifecycle } = served;
   const rows = rowsById(await deps.entriesWithIds(collection, batch, tx));
   for (const id of batch) {
     const row = rows.get(id);
     await (row === undefined || !isPublished(row, lifecycle)
       ? releaseClaims(deps.claims, tx, { collection, id })
-      : settleEntry(deps, tx, collection, address, locales, row, lifecycle));
+      : settleEntry(deps, tx, served, row));
   }
 }
 
@@ -840,17 +1096,26 @@ async function settleUnserved(
     }
   }
   const served: string[] = [];
-  for (const id of designs) {
+  for (const id of designs.keys()) {
     if ((await servedHere(id)) !== null) served.push(id);
   }
-  await settleDesigned(deps, tx, collection, address, served);
+  await settleDesigned(
+    deps,
+    tx,
+    {
+      collection,
+      address,
+      designs: drawingDesigns(deps, tx, collection, designs),
+    },
+    served
+  );
   // Last, once every lock taken above is held: an entry whose claim the read
   // of holders missed is refused rather than left holding an address its
   // collection no longer serves. Those with a published own design were
-  // settled above, so they are dealt with too.
+  // settled above, their later pages with them, so they are dealt with too.
   await refuseUnseenHolders(deps.claims, tx, where, keep, [
     ...holders,
-    ...[...designs].map(id => ({ collection, id })),
+    ...[...designs.keys()].map(id => ({ collection, id })),
   ]);
 }
 
@@ -930,15 +1195,37 @@ function servingChanges(
   const collection = data.collection;
   if (typeof collection !== "string") return [];
   const now = addressAfter(collection);
-  return sameAddress(addressOf(before, collection), now)
-    ? []
-    : [
+  // A published template that starts or stops splitting a list into pages
+  // changes the later pages every entry it draws holds.
+  const moved = !sameAddress(addressOf(before, collection), now);
+  return moved || (now !== null && templateRepaged(operation, data, before))
+    ? [
         {
           collection,
           served: operation !== "delete" && data.status === "published",
           address: now,
         },
-      ];
+      ]
+    : [];
+}
+
+/**
+ * Whether an update leaves a template published, serving the collection it
+ * served, while it starts or stops splitting a list into pages.
+ */
+function templateRepaged(
+  operation: HostWrite["operation"],
+  data: Row,
+  before: Row | null
+): boolean {
+  return (
+    operation === "update" &&
+    before !== null &&
+    before.status === "published" &&
+    data.status === "published" &&
+    before.collection === data.collection &&
+    splitsList(before.content) !== splitsList(data.content)
+  );
 }
 
 /**
@@ -947,9 +1234,10 @@ function servingChanges(
  * is held waits for it; one with no address holds nothing. Takes the
  * collection's lock first. The entries are read on `tx`, held for share: an
  * entry's save in flight holds its row and waits for the template's row or
- * this write's lock, and the database refuses one of the two as a deadlock,
- * which the adapter runs again, so the second reads what the first
- * committed.
+ * this write's lock, and the database refuses one of the two as a deadlock:
+ * that save fails and rolls back, nothing of it kept, and its caller may save
+ * again, then reading what the other committed: the adapter does not run a
+ * deadlocked transaction again itself.
  */
 async function settleEntries(
   deps: EntryClaimsDeps,
@@ -957,48 +1245,62 @@ async function settleEntries(
   collection: string,
   address: readonly string[]
 ): Promise<void> {
-  const locales = deps.locales();
   await lockCollection(deps.claims, tx, collection);
-  const lifecycle = await deps.lifecycle(collection, tx);
+  // Every published own design read together, so a walk reads none per
+  // entry: an entry with one is drawn by it, the others by the template.
+  const designs = drawingDesigns(
+    deps,
+    tx,
+    collection,
+    await deps.publishedDesigns(collection, tx)
+  );
+  const served = await servedContext(deps, tx, collection, address, designs);
   for (let page = 1; ; page += 1) {
     const rows = await deps.publishedEntries(
       collection,
       page,
       BATCH,
       tx,
-      lifecycle
+      served.lifecycle
     );
-    for (const row of rows) {
-      await settleEntry(deps, tx, collection, address, locales, row, lifecycle);
-    }
+    for (const row of rows) await settleEntry(deps, tx, served, row);
     if (rows.length < BATCH) return;
   }
 }
 
-/** One entry's claims, as a template's publish or the start-up pass sets them. */
+/**
+ * One entry's claims, as a template's or an own design's write, or the
+ * start-up pass, sets them: its addresses, and their later pages where the
+ * design drawing it splits a list into pages, each waited for where another
+ * document holds it, since nobody is saving the entry.
+ */
 async function settleEntry(
   deps: EntryClaimsDeps,
   tx: Tx,
-  collection: string,
-  address: readonly string[],
-  locales: readonly string[],
-  row: Row,
-  lifecycle: boolean
+  served: ServedBatchContext,
+  row: Row
 ): Promise<void> {
   const id = row.id;
   if (typeof id !== "string" && typeof id !== "number") return;
+  const { collection, address, locales, lifecycle } = served;
   const found = isPublished(row, lifecycle)
     ? entryAddresses(row, address, locales, lifecycle)
     : [];
   // An entry with no address holds nothing; its next save is refused,
   // which tells its author.
   const wanted = found === NO_ADDRESS ? [] : found;
-  await claimPagesAt(deps, tx, wanted, "wait");
+  const spaces = await listSpaces(served.designs, String(id), wanted);
+  await claimPagesAt(
+    deps,
+    tx,
+    { addresses: wanted, spaces },
+    { mode: "wait", pages: served.pages }
+  );
   await reconcileHolder(
     deps.claims,
     tx,
     { collection, id: String(id) },
-    { addresses: wanted, spaces: [] },
+    { addresses: wanted, spaces },
     deps.describe(tx),
     { wait: true }
   );

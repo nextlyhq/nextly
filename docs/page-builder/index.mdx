@@ -488,9 +488,25 @@ preview it in the editor. Publishing, unpublishing or
 removing an own design refreshes the entry's cached page, as a change to the template
 does. The design is read with the template in one query, through
 `pageBuilderContent()`'s `templates.readFor`; a provider written by hand without it
-draws every entry with its collection's template. A design that splits a list into
-pages draws its first page only, as a template does, since an entry's list does not
-page yet.
+draws every entry with its collection's template.
+
+#### An entry's list split into pages
+
+Where the design drawing an entry (its published own design, else its collection's
+published template) splits a Collection list into pages, the entry holds that list's
+later pages beside its address, as a page does: `/blog/hello/page/2`,
+`/blog/hello/page/3` and on, as one claim, and the route serves each by drawing the
+entry with that page of the list. `/blog/hello/page/1` redirects to `/blog/hello`,
+and a page past the list's last is not found. Saving an entry where a document is
+published among those later pages is refused, naming it. Publishing a paged template,
+turning on Split into pages in a published one, or publishing a paged own design
+leaves an entry whose later pages a page already holds at its own address, waiting:
+its list shows one page, linking to no later page, until the page frees the address,
+then pages without the entry being saved. An entry left waiting for its own address,
+because another document holds it, waits for its later pages as well, and is given both
+together once that document frees the address. Turning Split into pages off, unpublishing the paged design, or
+removing it frees the later pages and keeps the entry's address. Later pages are not
+pre-rendered by `createPublicContentPage`; each renders on its first request.
 
 An entry keeps its address while its own design is published, even when its
 collection's template is unpublished or deleted: those entries stay served, and
@@ -643,10 +659,16 @@ database, for letters outside ASCII too (the Turkish "İ" matches a plain "i").
 
 ### Singles, site settings and field shapes
 
-The same reader also reads one Single, as an anonymous visitor would:
+The public reader also reads one Single, as an anonymous visitor would:
 
 ```ts
-const banner = await reader.findSingle({
+import { createPublicReader, type PublicReaderSource } from "nextly/runtime";
+
+// A Nextly instance, such as the one `getNextly()` answers.
+declare const nextly: PublicReaderSource;
+
+const publicReader = createPublicReader(nextly);
+const banner = await publicReader.findSingle({
   slug: "banner",
   select: ["headline"],
 });

@@ -4,7 +4,8 @@
  * them yet. The start-up pass (`settleEntryClaimsAtStart`, run once the pages'
  * pass has claimed every page) claims each published entry's address; an
  * entry whose address a page holds is left unserved, waiting on the page's
- * claim, and reported as waiting; and starting again writes nothing.
+ * claim, and reported as waiting; starting again writes nothing; and once
+ * the page lets the address go, the entry is served there.
  *
  * The install is made by a first boot of the site as it is now: the entries
  * saved before their template was published, a page published at one of
@@ -35,6 +36,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ADDRESS_WAITING_ROUTE_PATH } from "../address-claims/waiting-report-route";
 import { ADDRESS_CLAIMS_SLUG } from "../collections/address-claims";
+import { asOverwrite } from "../document-version";
 
 import {
   blogPageBuilder,
@@ -172,7 +174,7 @@ describe.each(getConfiguredTestDialects())(
       return current;
     }
 
-    it("claims every entry's address once the site starts, leaves the one a page holds waiting and reports it, and changes nothing when it starts again", async () => {
+    it("claims every entry's address once the site starts, leaves the one a page holds waiting and reports it, changes nothing when it starts again, and serves it once the page lets the address go", async () => {
       database = await siteDatabase(dialect);
 
       // The install. Saved before their template is published, the entries
@@ -237,6 +239,23 @@ describe.each(getConfiguredTestDialects())(
       const settled = await storedClaims(t);
       const again = await boot(database);
       expect(await storedClaims(again)).toEqual(settled);
+
+      // The page unpublished: the waiting entry is handed the address it
+      // waited for, and served there.
+      await again.nextly.update({
+        collection: "pages",
+        id: page,
+        data: asOverwrite({ status: "draft" }),
+        overrideAccess: true,
+      });
+      expect(await held(again)).toEqual([
+        `address /blog/hello ${POSTS}:${hello}`,
+        `address /blog/taken ${POSTS}:${taken}`,
+        `address /blog/world ${POSTS}:${world}`,
+      ]);
+      expect(
+        await pageContent(again).resolveAddress(undefined, "/blog/taken")
+      ).toEqual({ collection: POSTS, id: taken, kind: "address" });
     });
   }
 );

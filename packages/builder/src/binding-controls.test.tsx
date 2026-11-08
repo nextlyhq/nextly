@@ -28,7 +28,7 @@ import {
   within,
 } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { BindingFieldSource, UnbindPlanAnswer } from "./binding-services";
 import type { ContentServices } from "./content-controls";
@@ -36,6 +36,25 @@ import type { EditorState } from "./editor-state";
 import { inspectSelection } from "./inspector";
 import { InspectorPanel } from "./inspector-panel";
 import { propGroupsOf } from "./prop-groups";
+
+beforeAll(() => {
+  // What the picker asks of an element and of CSS, which jsdom does not
+  // draw: its active option scrolled into view, and a chip found by an
+  // escaped id once a pick closes it.
+  const element = window.Element.prototype as unknown as Record<
+    string,
+    unknown
+  >;
+  element.scrollIntoView = function scrollIntoView(): void {};
+  const css = (globalThis as { CSS?: { escape?: (text: string) => string } })
+    .CSS;
+  if (css?.escape === undefined) {
+    Object.defineProperty(globalThis, "CSS", {
+      value: { ...css, escape: (text: string) => text.replace(/["\\]/g, "\\$&") },
+      configurable: true,
+    });
+  }
+});
 
 afterEach(() => {
   cleanup();
@@ -53,13 +72,23 @@ const SOURCES: readonly BindingFieldSource[] = [
       // A date reaches text only through a format: offered with the one a
       // pick writes, named beside it.
       { name: "publishedOn", type: "date", public: true },
-      // A relation itself can't fill text, but its own fields can.
+      // A relation itself can't fill text, but its own fields can; the
+      // entry's own id fills only a link's entry, never a text prop.
       {
         name: "author",
         type: "relationship",
         relationTo: "users",
         public: true,
-        fields: [{ name: "name", type: "text", public: true, preview: "Ada" }],
+        fields: [
+          { name: "name", type: "text", public: true, preview: "Ada" },
+          {
+            name: "id",
+            type: "text",
+            label: "Link to this entry",
+            linksTo: "users",
+            public: true,
+          },
+        ],
       },
     ],
   },
@@ -285,22 +314,114 @@ describe("a date or a number picked for a text prop", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Bind Text to a field" })
     );
-    // As the browser's language and zone write them, which the picker uses.
-    const zone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const longDate = new Intl.DateTimeFormat(undefined, {
-      dateStyle: "long",
-      timeZone: zone,
-    }).format(new Date(UPDATED));
+    // A host that names no language or zone: English and UTC, as a page
+    // rendered with neither.
     const date = await screen.findByRole("option", { name: /^Updated at/ });
     expect(date.textContent).toContain("Long date");
-    expect(date.textContent).toContain(longDate);
+    expect(date.textContent).toContain("November 8, 2026");
     expect(date.textContent).not.toContain("2026-11-08T");
     const price = screen.getByRole("option", { name: /^Price/ });
     expect(price.textContent).toContain("Number");
-    expect(price.textContent).toContain(new Intl.NumberFormat().format(1234.5));
+    expect(price.textContent).toContain("1,234.5");
     expect(screen.getByRole("option", { name: /^Code/ }).textContent).toBe(
       "Code2026-11-08"
     );
+  });
+
+  it("previews in the page's language and the site's zone, read when the picker opens, not the browser's", async () => {
+    // 21:30 UTC on 8 November: the 9th in Karachi, the 8th in Los Angeles.
+    const UPDATED = "2026-11-08T21:30:00.000Z";
+    // The browser's own defaults, in Los Angeles and in English, unlike the
+    // page's, so a preview read from them shows it.
+    const RealDateTimeFormat = Intl.DateTimeFormat;
+    class BrowserDateTimeFormat extends RealDateTimeFormat {
+      constructor(
+        locales?: Intl.LocalesArgument,
+        options?: Intl.DateTimeFormatOptions
+      ) {
+        super(locales ?? "en-US", {
+          timeZone: "America/Los_Angeles",
+          ...options,
+        });
+      }
+    }
+    Object.defineProperty(Intl, "DateTimeFormat", {
+      value: BrowserDateTimeFormat,
+      configurable: true,
+      writable: true,
+    });
+    try {
+      // The control: the stub is what a read of the browser's defaults gets.
+      expect(new Intl.DateTimeFormat().resolvedOptions()).toMatchObject({
+        locale: "en-US",
+        timeZone: "America/Los_Angeles",
+      });
+      // The site's zone as the host reads it, held until the test lets it
+      // in, so the preview is seen before and after.
+      let letZoneIn: (zone: string) => void = () => {};
+      const readSiteTimeZone = vi.fn(
+        () =>
+          new Promise<string | undefined>(resolve => {
+            letZoneIn = resolve;
+          })
+      );
+      // A page holding no date binding: the canvas has read no zone for it.
+      mount(undefined, {
+        bindingLocale: "ar-EG",
+        readSiteTimeZone,
+        listBindingFields: async () => [
+          {
+            binding: { source: "entry" },
+            label: "Post",
+            fields: [
+              {
+                name: "updatedAt",
+                type: "date",
+                public: true,
+                preview: UPDATED,
+              },
+              {
+                name: "price",
+                type: "number",
+                public: true,
+                preview: "1234.5",
+              },
+            ],
+          },
+        ],
+      });
+      // The control: drawing the inspector reads no zone; opening the picker
+      // does.
+      expect(readSiteTimeZone).not.toHaveBeenCalled();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Bind Text to a field" })
+      );
+      const date = await screen.findByRole("option", { name: /^Updated at/ });
+      expect(readSiteTimeZone).toHaveBeenCalledTimes(1);
+      // Until the zone is in: the page's language, in UTC, the 8th.
+      expect(date.textContent).toContain("٨ نوفمبر ٢٠٢٦");
+      const price = screen.getByRole("option", { name: /^Price/ });
+      expect(price.textContent).toContain("١٬٢٣٤٫٥");
+      await act(async () => {
+        letZoneIn("Asia/Karachi");
+      });
+      // The 9th in Arabic digits once the zone is in: the browser's zone or
+      // UTC would show the 8th, and its language Latin digits.
+      await waitFor(() =>
+        expect(
+          screen.getByRole("option", { name: /^Updated at/ }).textContent
+        ).toContain("٩ نوفمبر ٢٠٢٦")
+      );
+      expect(
+        screen.getByRole("option", { name: /^Updated at/ }).textContent
+      ).not.toContain("November");
+    } finally {
+      Object.defineProperty(Intl, "DateTimeFormat", {
+        value: RealDateTimeFormat,
+        configurable: true,
+        writable: true,
+      });
+    }
   });
 
   it("writes the binding with Long date, in one edit", async () => {
@@ -553,6 +674,355 @@ describe("a link's address bound inside its group", () => {
       id: "b",
       patch: { bindings: { href: { $bind: "website" } } },
     });
+  });
+});
+
+describe("a link's entry bound to the entry a relation names", () => {
+  /** A call to action's props, as `core/button` declares its link. */
+  const CTA_PROPS = {
+    label: { label: "Label", role: "content", type: "text" },
+    href: { label: "Link", role: "content", type: "url" },
+    entryCollection: {
+      label: "Entry collection",
+      role: "content",
+      type: "text",
+    },
+    entryId: { label: "Entry", role: "content", type: "text" },
+  };
+
+  /**
+   * A button whose link may point at an entry, drawn by an editor that
+   * applies each edit and draws the result, as the editor does; `held` names
+   * props an area around it keeps, which are then declared without the
+   * content role.
+   */
+  function mountButton(
+    props: Record<string, unknown>,
+    bindings?: BlockNode["bindings"],
+    held: readonly string[] = []
+  ): EditorState {
+    const declared = Object.fromEntries(
+      Object.entries(CTA_PROPS).map(([name, schema]) => {
+        if (!held.includes(name)) return [name, schema];
+        const { role: _content, ...rest } = schema;
+        return [name, rest];
+      })
+    );
+    registerBlocks(
+      [
+        {
+          name: "acme/cta",
+          version: 1,
+          description: "A call to action.",
+          example: { props: {} },
+          editor: { label: "Call to action" },
+          props: declared,
+          defaultProps: {},
+          render: () => null,
+        },
+        {
+          name: "acme/area",
+          version: 1,
+          description: "An area whose blocks keep their design.",
+          example: { props: {} },
+          editor: { label: "Area" },
+          props: {},
+          slots: {
+            children: { lock: "contentOnly", defaultBlock: [{ type: "acme/cta" }] },
+          },
+          render: () => null,
+        },
+      ] as never,
+      { source: "binding-controls-entry-link-test" }
+    );
+    const button = {
+      id: "b",
+      type: "acme/cta",
+      version: 1,
+      props,
+      ...(bindings === undefined ? {} : { bindings }),
+    } as BlockNode;
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes:
+        held.length === 0
+          ? [button]
+          : [
+              {
+                id: "area",
+                type: "acme/area",
+                version: 1,
+                props: {},
+                slots: { children: [button] },
+              } as BlockNode,
+            ],
+    } as BlockDocument;
+    let current = document;
+    const editor = {
+      document,
+      selectedId: "b",
+      selection: { ids: ["b"], primary: "b" },
+      applyAll: vi.fn(() => document),
+      select: vi.fn(),
+      apply: vi.fn((op: BuilderOp) => {
+        current = applyOp(current, op).document;
+        view.rerender(
+          <InspectorPanel
+            editor={{ ...editor, document: current } as EditorState}
+            contentServices={services}
+          />
+        );
+        return current;
+      }),
+      undo: vi.fn(),
+      redo: vi.fn(),
+      canUndo: false,
+      canRedo: false,
+      undoDepth: 0,
+      composed: () => undefined,
+    } as unknown as EditorState;
+    const services = { listBindingFields: async () => SOURCES };
+    const view = render(
+      <InspectorPanel editor={editor} contentServices={services} />
+    );
+    return editor;
+  }
+
+  /** The picker's option naming the author's entry, once the picker lists it. */
+  async function authorEntry(listbox: string): Promise<HTMLElement> {
+    const list = await screen.findByRole("listbox", { name: listbox });
+    const entry = within(list)
+      .getAllByRole("option")
+      .find(option => option.textContent === "Author › Link to this entry");
+    if (entry === undefined) throw new Error("The author's entry is not offered.");
+    return entry;
+  }
+
+  /** The one edit the editor was handed. */
+  function onlyEdit(editor: EditorState): BuilderOp | undefined {
+    expect(vi.mocked(editor.apply)).toHaveBeenCalledTimes(1);
+    return vi.mocked(editor.apply).mock.calls[0]?.[0];
+  }
+
+  it("offers the author's entry for the link, and not for the label", async () => {
+    mountButton({ label: "Read more" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Link to a field" })
+    );
+    expect(await authorEntry("Fields for Link")).toBeTruthy();
+    cleanup();
+    clearBlocks();
+    // The control: the label, a text prop the id would fit by type alone.
+    mountButton({ label: "Read more" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Label to a field" })
+    );
+    const label = await screen.findByRole("listbox", {
+      name: "Fields for Label",
+    });
+    const names = within(label)
+      .getAllByRole("option")
+      .map(option => option.textContent);
+    expect(names).toContain("Author › NameAda");
+    expect(names.some(name => name?.includes("Link to this entry"))).toBe(
+      false
+    );
+  });
+
+  it("binds the entry's id and sets its collection, keeping the stored address, in one edit", async () => {
+    const editor = mountButton({
+      label: "Read more",
+      href: "/about",
+      entryId: "p1",
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Link to a field" })
+    );
+    fireEvent.click(await authorEntry("Fields for Link"));
+    // The address stays, where the link goes when the entry is not read; the
+    // stored entry id, which the bound one replaces, goes.
+    expect(onlyEdit(editor)).toEqual({
+      kind: "update",
+      id: "b",
+      patch: {
+        bindings: { entryId: { $bind: "author.id" } },
+        props: { label: "Read more", href: "/about", entryCollection: "users" },
+      },
+    });
+  });
+
+  it("changes a bound address to the entry: the address's binding and its fallback go, its stored value stays", async () => {
+    const editor = mountButton(
+      { label: "Read more", href: "/about" },
+      {
+        href: {
+          $bind: "siteUrl",
+          source: "site",
+          fallback: "https://example.test/",
+        },
+      }
+    );
+    const chip = await screen.findByRole("button", {
+      name: /^Link: bound to Site URL/,
+    });
+    fireEvent.keyDown(chip, { key: "Enter" });
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Change field…" })
+    );
+    fireEvent.click(await authorEntry("Fields for Link"));
+    expect(onlyEdit(editor)).toEqual({
+      kind: "update",
+      id: "b",
+      patch: {
+        bindings: { entryId: { $bind: "author.id" } },
+        props: { label: "Read more", href: "/about", entryCollection: "users" },
+      },
+    });
+  });
+
+  it("hands focus to the entry's chip after the pick", async () => {
+    mountButton({ label: "Read more" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Link to a field" })
+    );
+    fireEvent.click(await authorEntry("Fields for Link"));
+    const chip = await screen.findByRole("button", {
+      name: "Entry: bound to Author › Link to this entry of this post",
+    });
+    await waitFor(() => {
+      expect(window.document.activeElement).toBe(chip);
+    });
+  });
+
+  it("offers no entry where an area holds either half of the reference", async () => {
+    mountButton({ label: "Read more" }, undefined, ["entryCollection"]);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Link to a field" })
+    );
+    const list = await screen.findByRole("listbox", { name: "Fields for Link" });
+    const names = within(list)
+      .getAllByRole("option")
+      .map(option => option.textContent);
+    // The control: the link's own address fields are still offered.
+    expect(names).toContain("Site URL");
+    expect(names.some(name => name?.includes("Link to this entry"))).toBe(
+      false
+    );
+  });
+
+  it("draws a link bound both ways as its entry, which the page follows first, and changes the entry", async () => {
+    // Both bound, as an import or the API may store it: the page follows the
+    // entry, so the panel shows and edits the entry.
+    const both = {
+      href: { $bind: "siteUrl", source: "site" as const },
+      entryId: { $bind: "author.id" },
+    };
+    const editor = mountButton(
+      { label: "Read more", href: "/about", entryCollection: "users" },
+      both
+    );
+    const chip = await screen.findByRole("button", {
+      name: "Entry: bound to Author › Link to this entry of this post",
+    });
+    expect(
+      screen.queryByRole("button", { name: /^Link: bound to/ })
+    ).toBeNull();
+    fireEvent.keyDown(chip, { key: "Enter" });
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Change field…" })
+    );
+    // Only entries are offered for the entry: the address's fields are not.
+    const list = await screen.findByRole("listbox", {
+      name: "Fields for Entry",
+    });
+    expect(
+      within(list)
+        .getAllByRole("option")
+        .map(option => option.textContent)
+    ).toEqual(["Author › Link to this entry"]);
+    fireEvent.click(within(list).getAllByRole("option")[0] as HTMLElement);
+    expect(onlyEdit(editor)).toEqual({
+      kind: "update",
+      id: "b",
+      patch: {
+        bindings: { entryId: { $bind: "author.id" } },
+        props: { label: "Read more", href: "/about", entryCollection: "users" },
+      },
+    });
+    cleanup();
+    clearBlocks();
+    // The control: with no collection the page follows the address, and so
+    // does the panel.
+    mountButton({ label: "Read more", href: "/about" }, both);
+    expect(
+      await screen.findByRole("button", { name: /^Link: bound to Site URL/ })
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /^Entry: bound to/ })
+    ).toBeNull();
+  });
+
+  it("unbinds a bound collection when a pick sets one, so the page reads the one set", async () => {
+    const editor = mountButton(
+      { label: "Read more" },
+      { entryCollection: { $bind: "title" } }
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Link to a field" })
+    );
+    fireEvent.click(await authorEntry("Fields for Link"));
+    expect(onlyEdit(editor)).toEqual({
+      kind: "update",
+      id: "b",
+      patch: {
+        bindings: { entryId: { $bind: "author.id" } },
+        props: { label: "Read more", entryCollection: "users" },
+      },
+    });
+  });
+
+  it("offers no entry where an area holds the address's binding, which a pick would remove", async () => {
+    const both = {
+      href: { $bind: "siteUrl", source: "site" as const },
+      entryId: { $bind: "author.id" },
+    };
+    const props = { label: "Read more", entryCollection: "users" };
+    /** The options the entry chip's Change field lists, once it says so. */
+    const changeOptions = async (): Promise<(string | null)[]> => {
+      const chip = await screen.findByRole("button", {
+        name: "Entry: bound to Author › Link to this entry of this post",
+      });
+      fireEvent.keyDown(chip, { key: "Enter" });
+      fireEvent.click(
+        await screen.findByRole("menuitem", { name: "Change field…" })
+      );
+      await screen.findByText(/^(No field can fill|Only fields)/);
+      return screen.queryAllByRole("option").map(option => option.textContent);
+    };
+    mountButton(props, both, ["href"]);
+    expect(await changeOptions()).toEqual([]);
+    cleanup();
+    clearBlocks();
+    // The control: the same block where the address may change.
+    mountButton(props, both);
+    expect(await changeOptions()).toEqual(["Author › Link to this entry"]);
+  });
+
+  it("draws the bound entry's chip in the link's place, with no fallback to type", async () => {
+    mountButton(
+      { label: "Read more", entryCollection: "users" },
+      { entryId: { $bind: "author.id" } }
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Entry: bound to Author › Link to this entry of this post",
+      })
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Bind Link to a field" })
+    ).toBeNull();
+    expect(screen.queryByLabelText("Fallback")).toBeNull();
   });
 });
 

@@ -4,14 +4,17 @@
  * and keeping a break the stored page already held.
  */
 import {
+  clearBlocks,
   COMPONENT_INSTANCE_TYPE,
+  defineBlock,
+  registerBlocks,
   type BindingFieldShape,
 } from "@nextlyhq/blocks-engine";
 import type {
   PluginFieldValidateArgs,
   PluginFieldWrite,
 } from "@nextlyhq/plugin-sdk";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   composedBindingIssues,
@@ -284,6 +287,74 @@ describe("a write's bindings judged against the declared schema", () => {
       { shapesOf, storedForms: async () => ({ readable: true, forms: [] }) }
     );
     expect(issues).toEqual([]);
+  });
+});
+
+describe("a link to the entry a to-one relation names", () => {
+  // A linking block, its link props as the core blocks declare them.
+  beforeEach(() => {
+    registerBlocks(
+      [
+        defineBlock({
+          name: "acme/link",
+          version: 1,
+          description: "A link.",
+          props: {
+            entryCollection: { type: "text" },
+            entryId: { type: "text" },
+          },
+          example: { props: {} },
+          render: () => null,
+        }),
+      ],
+      { source: "acme" }
+    );
+  });
+
+  afterEach(() => {
+    clearBlocks();
+  });
+
+  const link = (id: string, path: string) => ({
+    id,
+    type: "acme/link",
+    version: 1,
+    props: { entryCollection: "users" },
+    bindings: { entryId: { $bind: path } },
+  });
+
+  const judge = async (...nodes: unknown[]) =>
+    await newBindingIssues(page(...nodes), args(), "Content", {
+      shapesOf,
+      storedForms: async () => ({ readable: true, forms: [] }),
+    });
+
+  it("saves a link bound to the related entry's id, which the users never declare", async () => {
+    expect(await judge(link("l", "author.id"))).toEqual([]);
+  });
+
+  it("refuses a related entry's id through a relation inside a group", async () => {
+    // The page reads a relation by the path's first field, so the editor's
+    // id inside `meta` would never be filled.
+    const issues = await judge(link("l", "meta.editor.id"));
+    expect(issues.map(issue => issue.code)).toEqual([
+      "binding-path-unsupported",
+    ]);
+  });
+
+  it("still refuses the relation itself, and a field the related entry lacks", async () => {
+    const issues = await judge(
+      link("relation", "author"),
+      link("missing", "author.nickname"),
+      // The control: the related id beside them saves.
+      link("id", "author.id")
+    );
+    expect(issues.map(issue => issue.code)).toEqual([
+      "binding-type-misfit",
+      "binding-field-missing",
+    ]);
+    expect(issues[0]?.message).toContain("/nodes/0/bindings/entryId");
+    expect(issues[1]?.message).toContain("/nodes/1/bindings/entryId");
   });
 });
 

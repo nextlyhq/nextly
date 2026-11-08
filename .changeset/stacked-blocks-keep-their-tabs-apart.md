@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-On the page builder canvas, the tabs on blocks no longer cover each other. A block drawn shorter than its "Conditional", Entry content or "Visitors won't see this" tab, under another marked block, now carries its tab on its bottom edge, so each block's tab stays readable and on its own outline. A block that is both conditional and read by a field visitors can't read keeps both tabs in view, and a selected block's "Visitors won't see this" tab no longer sits under the block toolbar.
+On the page builder canvas, the tabs on blocks no longer cover each other. A block drawn shorter than its "Conditional", Entry content or "Visitors won't see this" tab, under another marked block, now carries its tab on its bottom edge, so each block's tab stays readable and on its own outline. A selected block's "Visitors won't see this" tab no longer sits under the block toolbar.

@@ -42,6 +42,7 @@ import { version as PLUGIN_VERSION } from "../package.json";
 import {
   backfillPageClaims,
   publishedPagesInTransaction,
+  type PagesInTransactionRead,
   type PagesReader,
 } from "./address-claims/backfill";
 import { committedClaims, type Tx } from "./address-claims/claim-store";
@@ -50,6 +51,7 @@ import {
   contentAddressService,
   type ContentAddressService,
 } from "./address-claims/content-addresses";
+import { entryDesignReads } from "./address-claims/design-reads";
 import { ENTRY_SLUG_FIELD } from "./address-claims/entry-claims";
 import {
   registerEntryAddressClaims,
@@ -144,14 +146,7 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
-import {
-  entryDesignKey,
-  TEMPLATE_ENTRY_COLLECTION_FIELD,
-  TEMPLATE_ENTRY_FIELD,
-  TEMPLATE_ENTRY_ID_FIELD,
-  templatesCollection,
-  TEMPLATES_SLUG,
-} from "./collections/templates";
+import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
 import {
@@ -2960,6 +2955,16 @@ export const pageBuilder = (
           throw error;
         }
       };
+      // The Pages collection read on a write's transaction, for the walk a
+      // save makes over every published page while the start-up pass runs,
+      // whether a page's save or an entry's.
+      const readPagesOn: PagesInTransactionRead = (on, options, opts) =>
+        ctx.services.ownCollections.listEntriesInTransaction(
+          on,
+          pagesSlug,
+          options,
+          opts
+        );
       registerPageAddressClaims(ctx.hooks, {
         pages: pagesSlug,
         claims: claimsStore,
@@ -2972,17 +2977,7 @@ export const pageBuilder = (
         // Hook-free and as the system, as the pages' start-up pass reads
         // them, on the save's own transaction: a save holding the pool's
         // last connection never waits for a second one.
-        publishedPages: tx =>
-          publishedPagesInTransaction(
-            (on, options, opts) =>
-              ctx.services.ownCollections.listEntriesInTransaction(
-                on,
-                pagesSlug,
-                options,
-                opts
-              ),
-            tx
-          ),
+        publishedPages: tx => publishedPagesInTransaction(readPagesOn, tx),
       });
       pageClaimsBackfill = async () => {
         const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
@@ -3080,6 +3075,18 @@ export const pageBuilder = (
           if (rows.length === 0 || page * 500 >= total) return waiting.size;
         }
       };
+      // Each published page among `rows`, with the claims it holds.
+      const pageHoldings = (rows: readonly unknown[]) =>
+        (rows as Readonly<Record<string, unknown>>[]).flatMap(row =>
+          typeof row.id === "string" || typeof row.id === "number"
+            ? [
+                {
+                  id: String(row.id),
+                  ...pageClaims(row, siteLocales(), opts.pagePreviewPath),
+                },
+              ]
+            : []
+        );
       const claimsDeps: EntryClaimsDeps = {
         claims: claimsStore,
         addresses: templateAddresses,
@@ -3111,17 +3118,17 @@ export const pageBuilder = (
                 depth: 0,
               }
             );
-          return (found.data as Readonly<Record<string, unknown>>[]).flatMap(
-            row =>
-              typeof row.id === "string" || typeof row.id === "number"
-                ? [
-                    {
-                      id: String(row.id),
-                      ...pageClaims(row, siteLocales(), opts.pagePreviewPath),
-                    },
-                  ]
-                : []
-          );
+          return pageHoldings(found.data);
+        },
+        // The walk a page's save makes while the start-up pass runs (see
+        // `publishedPagesInTransaction`), on the write's own transaction.
+        publishedPagesOn: async function* (tx) {
+          for await (const batch of publishedPagesInTransaction(
+            readPagesOn,
+            tx
+          )) {
+            yield pageHoldings(batch);
+          }
         },
         // Hook-free and as the system, as the template guard reads it, so a
         // read hook cannot hide a template that serves entries.
@@ -3160,77 +3167,9 @@ export const pageBuilder = (
             address: address === null ? null : addressSegments(address),
           };
         },
-        // Hook-free and as the system, as the template is read, and on the
-        // write's own transaction: the routing columns of the entry's own
-        // design alone.
-        ownDesignPublished: async (collection, id, tx) => {
-          const key = entryDesignKey(collection, id);
-          const found =
-            await ctx.services.ownCollections.listEntriesInTransaction(
-              tx,
-              templatesSlug,
-              {
-                where: { [TEMPLATE_ENTRY_FIELD]: { equals: key } },
-                pagination: { limit: 1 },
-                select: {
-                  id: true,
-                  [TEMPLATE_ENTRY_FIELD]: true,
-                  status: true,
-                },
-                depth: 0,
-              }
-            );
-          const row = found.data[0] as Record<string, unknown> | undefined;
-          // Compared again exactly: a database may compare text loosely.
-          return (
-            row?.[TEMPLATE_ENTRY_FIELD] === key && row.status === "published"
-          );
-        },
-        // On the write's own transaction, a page at a time, stopping on a
-        // short page: the total beside a page is an unlocked count.
-        publishedDesigns: async (collection, tx) => {
-          const ids = new Set<string>();
-          for (let page = 1; ; page += 1) {
-            const found =
-              await ctx.services.ownCollections.listEntriesInTransaction(
-                tx,
-                templatesSlug,
-                {
-                  // Published ones only, filtered by the database: a draft
-                  // design keeps no address, so reading and locking it would
-                  // only slow the write. Each row is still compared exactly.
-                  where: {
-                    [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection },
-                    status: { equals: "published" },
-                  },
-                  pagination: { limit: 500, page },
-                  // A unique order, so no design moves between pages.
-                  sort: { field: "id", direction: "asc" },
-                  select: {
-                    id: true,
-                    [TEMPLATE_ENTRY_FIELD]: true,
-                    [TEMPLATE_ENTRY_ID_FIELD]: true,
-                    status: true,
-                  },
-                  depth: 0,
-                }
-              );
-            for (const value of found.data) {
-              const row = value as Record<string, unknown>;
-              const id = row[TEMPLATE_ENTRY_ID_FIELD];
-              // The key its entry makes, compared exactly, so a design
-              // matched loosely by collection is never counted.
-              if (
-                typeof id === "string" &&
-                row[TEMPLATE_ENTRY_FIELD] === entryDesignKey(collection, id) &&
-                row.status === "published"
-              ) {
-                ids.add(id);
-              }
-            }
-            if (found.data.length < 500) return ids;
-          }
-        },
+        // The entry's own design and the collection's template, judged for a
+        // list split into pages, on the write's own transaction.
+        ...entryDesignReads(ctx.services.ownCollections, templatesSlug),
         // The host's collection, read as the system, as a template's walk
         // reads it, but on the write's own transaction: a write holding the
         // pool's last connection never waits for a second one. One read
@@ -4005,7 +3944,10 @@ export const pageBuilder = (
         // reads them, drafts included, for a collection they may read. A
         // list whose source is a named query runs it here, on the server,
         // where its run function lives.
-        listEntriesRoute(name => namedQueries.definitionOf(name)),
+        listEntriesRoute(
+          name => namedQueries.definitionOf(name),
+          requireTemplateGuard
+        ),
         // The canvas's bound props: the entry being edited, the Singles its
         // bindings read and the site settings, read as the author asking.
         canvasBindingsRoute(),

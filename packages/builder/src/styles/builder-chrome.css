@@ -6161,12 +6161,12 @@ fieldset.nx-inspector__fields {
  * A number field's label drags its value: the resize cursor says so, and the
  * words are not selected by the drag. Touch is left to scroll and tap.
  *
- * Important because the admin gives every `[data-slot="label"]` a pointer
- * cursor with `!important`, which reads as "click me" here and outranks any
- * plain rule; this selector is the more specific of the two.
+ * A plain declaration is enough: a draggable label carries no
+ * `data-slot="label"` (`label-scrub.tsx`), so the admin's pointer cursor for
+ * every such label does not reach it.
  */
 .nx-style-inspector .nx-inspector__field > label[data-scrub] {
-  cursor: ew-resize !important;
+  cursor: ew-resize;
   user-select: none;
   /* A pen's horizontal drag is the scrub's, where the browser would take it
      and cancel the pointer; a finger still scrolls the panel and taps. */
@@ -10486,6 +10486,12 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   pointer-events: none;
 }
 
+/* Near the screen's left edge: from the badge's left edge, running right. */
+.nx-visitor-unreadable__badge[data-tip-start] .nx-visitor-unreadable__tip {
+  inset-inline-start: 0;
+  inset-inline-end: auto;
+}
+
 .nx-visitor-unreadable__badge:hover .nx-visitor-unreadable__tip,
 .nx-visitor-unreadable__button:focus ~ .nx-visitor-unreadable__tip {
   display: flex;
@@ -10493,6 +10499,22 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-visitor-unreadable__badge[data-dismissed] .nx-visitor-unreadable__tip {
   display: none;
+}
+
+/* A line naming a library fallback: its small picture before the words. */
+.nx-visitor-unreadable__pictured {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.375rem;
+}
+
+.nx-visitor-unreadable__thumb {
+  flex: none;
+  inline-size: 2rem;
+  block-size: 1.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  object-fit: cover;
 }
 
 /*
@@ -11348,7 +11370,9 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   grid-column: 1 / -1;
 }
 
-.nx-binding-row__bind {
+/* The bind button, and the image Fallback's library button drawn as it. */
+.nx-binding-row__bind,
+.nx-image-fallback__library {
   display: inline-grid;
   place-items: center;
   inline-size: 1.5rem;
@@ -11488,6 +11512,19 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   margin: 0;
 }
 
+/*
+ * An image's Fallback: its name above it rather than beside it, so a file's
+ * picture, its name and the row's buttons have the whole width of the value.
+ */
+.nx-binding__fallback.nx-image-fallback {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.nx-image-fallback > .nx-inspector__error,
+.nx-image-fallback > .nx-inspector__note {
+  grid-column: 1;
+}
+
 /* An image's fallback: the address, its picture inside the field's start. */
 .nx-image-fallback__value {
   display: flex;
@@ -11528,6 +11565,330 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 /* The place kept for more ways to fill it, drawn only once it holds one. */
 .nx-image-fallback__actions:empty {
   display: none;
+}
+
+.nx-image-fallback__actions {
+  display: flex;
+  flex: none;
+}
+
+/* The library button's hover: neutral, since it binds nothing. */
+.nx-image-fallback__library:hover,
+.nx-image-fallback__library[data-open] {
+  color: var(--nx-foreground);
+  border-color: var(--nx-border);
+  background: var(--nx-muted);
+}
+
+.nx-image-fallback__library:focus-visible,
+.nx-image-fallback__clear:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-image-fallback__library:disabled,
+.nx-image-fallback__clear:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/*
+ * A fallback chosen from the library, in the address field's place: its
+ * picture and its file name in a box of the field's height, a clear button
+ * at its end.
+ */
+.nx-image-fallback__media {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  /* Tight, so the name keeps the width the library button gave up outside. */
+  gap: 0.375rem;
+  min-inline-size: 0;
+  block-size: var(--nx-control-height);
+  padding-inline: 0.375rem 0.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font-size: 0.8125rem;
+}
+
+.nx-image-fallback__media-thumb {
+  flex: none;
+  inline-size: 1.5rem;
+  block-size: 1.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--nx-muted);
+}
+
+/*
+ * A file name cut in its middle (the row's chosen file):
+ * the start shrinks with an ellipsis, the end (the extension and a few
+ * letters before it) is never cut.
+ */
+.nx-middle-cut {
+  display: flex;
+  min-inline-size: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.nx-middle-cut__head {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nx-middle-cut__tail {
+  flex: none;
+}
+
+.nx-image-fallback__media-name {
+  flex: 1;
+}
+
+/*
+ * The library button inside the chosen file's box, at its end, against
+ * Remove with no gap between them: the pair take no more of the row than
+ * Remove and the button outside the box did, less the space between them,
+ * which goes to the name.
+ */
+.nx-image-fallback__media > .nx-image-fallback__library {
+  flex: none;
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  margin-inline-start: -0.375rem;
+}
+
+/* A file the library no longer has: said in the muted voice of a note. */
+.nx-image-fallback__media[data-missing] .nx-image-fallback__media-name {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-image-fallback__clear {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--nx-muted-foreground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.nx-image-fallback__clear:hover {
+  color: var(--nx-foreground);
+  background: var(--nx-muted);
+}
+
+/*
+ * The library picker under the Fallback row: a search, a three-column grid of
+ * the images it finds, each captioned with its file name, and the hint with
+ * the way to the full library below.
+ */
+.nx-library-pick__body {
+  display: flex;
+  flex-direction: column;
+  max-block-size: 26rem;
+}
+
+.nx-library-pick__search {
+  position: relative;
+  padding: 0.5rem 0.625rem;
+  border-block-end: 1px solid var(--nx-border);
+}
+
+.nx-library-pick__search > svg {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 1.125rem;
+  transform: translateY(-50%);
+  color: var(--nx-muted-foreground);
+  pointer-events: none;
+}
+
+.nx-library-pick__search input {
+  block-size: 2rem;
+  padding-inline-start: 1.75rem;
+  font-size: 0.8125rem;
+  /* A placeholder longer than a narrow popover is cut, never clipped. */
+  text-overflow: ellipsis;
+}
+
+.nx-library-pick__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.375rem;
+  min-block-size: 0;
+  padding: 0.5rem;
+  overflow-y: auto;
+}
+
+/* Nothing found or not read: the message below says so in its place. */
+.nx-library-pick__grid:empty {
+  display: none;
+}
+
+.nx-library-pick__tile {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-muted);
+  cursor: pointer;
+}
+
+/* Standing in for the images while they are read. */
+.nx-library-pick__tile[data-loading] {
+  cursor: default;
+  animation: nx-library-pick-loading 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes nx-library-pick-loading {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.5;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-library-pick__tile[data-loading] {
+    animation: none;
+  }
+}
+
+.nx-library-pick__image {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+}
+
+/* The file name over the tile's foot, on a plate of the surface it sits on. */
+.nx-library-pick__caption {
+  position: absolute;
+  inset-inline-start: 0.25rem;
+  inset-block-end: 0.1875rem;
+  max-inline-size: calc(100% - 0.5rem);
+  padding: 0 0.1875rem;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  color: var(--nx-foreground);
+  background: color-mix(in oklch, var(--nx-background) 85%, transparent);
+  /* The admin's smallest text: a tile's name is how it is told apart. */
+  font-size: 0.75rem;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * The tile the arrows moved to, which Enter picks, and one under the pointer:
+ * a firmer edge. None is drawn before either, so no tile reads as chosen.
+ */
+.nx-library-pick__tile[data-active],
+.nx-library-pick__tile:hover,
+.nx-library-pick__address[data-active] {
+  border-color: var(--nx-foreground);
+}
+
+/* The file the row stores: ringed, as a chosen option is across the editor. */
+.nx-library-pick__tile[aria-selected="true"] {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+/* An address typed into the search, offered as the fallback across the grid. */
+.nx-library-pick__address {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 0.5rem;
+  min-inline-size: 0;
+  padding: 0.375rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.nx-library-pick__address[data-active] {
+  background: var(--nx-muted);
+}
+
+.nx-library-pick__address-thumb {
+  flex: none;
+  inline-size: 2.5rem;
+  block-size: 1.875rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--nx-muted);
+}
+
+.nx-library-pick__address-text {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+  color: var(--nx-foreground);
+  font-size: 0.8125rem;
+}
+
+.nx-library-pick__address-text > small {
+  overflow: hidden;
+  color: var(--nx-muted-foreground);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-library-pick__note {
+  margin: 0;
+  padding: 0.75rem;
+  color: var(--nx-muted-foreground);
+  font-size: 0.75rem;
+}
+
+.nx-library-pick__foot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  padding: 0.5rem 0.625rem;
+  border-block-start: 1px solid var(--nx-border);
+}
+
+.nx-library-pick__hint {
+  margin: 0;
+  color: var(--nx-muted-foreground);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+/* A link in look: the way out to the full library dialog. */
+.nx-library-pick__browse {
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--nx-foreground);
+  background: transparent;
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.nx-library-pick__browse:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
 }
 
 /* An unbind's note: what was kept, or why it could not be. */

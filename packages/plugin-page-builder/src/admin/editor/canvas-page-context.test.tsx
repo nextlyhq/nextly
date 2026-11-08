@@ -29,8 +29,13 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   writePluginRoute: vi.fn(),
 }));
 
-const { listEntryCollectionOf, namedHostRetryDelay, useCanvasPageContext } =
-  await import("./canvas-page-context");
+const {
+  drawnListsOf,
+  listEntryCollectionOf,
+  namedHostRetryDelay,
+  useCanvasPageContext,
+  visitorListWords,
+} = await import("./canvas-page-context");
 const { canvasListReadsIn } = await import("../list-entries-client");
 
 describe("the collection a document's lists read the entry of", () => {
@@ -191,5 +196,105 @@ describe("the canvas's host for named queries", () => {
     expect(namedHostRetryDelay(1)).toBe(2000);
     expect(namedHostRetryDelay(2)).toBe(4000);
     expect(namedHostRetryDelay(10)).toBe(60_000);
+  });
+});
+
+describe("a list the canvas reads as a visitor reads it", () => {
+  const list = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    type: "core/collection-loop",
+    version: 1,
+    props: { collection: "posts", limit: 10 },
+    ...extra,
+  });
+
+  it("is counted once for each list the page draws, none inside another's entries", () => {
+    const nested = list("inner");
+    // A list in another's empty state is drawn once, so it counts.
+    const outer = list("outer", {
+      slots: { children: [nested], empty: [list("when-empty")] },
+    });
+    const box = {
+      id: "box",
+      type: "core/container",
+      version: 1,
+      props: {},
+      slots: { children: [list("boxed")] },
+    };
+    expect(drawnListsOf([outer, box]).map(found => found.id)).toEqual([
+      "outer",
+      "when-empty",
+      "boxed",
+    ]);
+  });
+
+  it("says so only where a visitor sees fewer entries", () => {
+    expect(visitorListWords(6, 4)).toBe(
+      "Showing what visitors see: 4 of 6 entries"
+    );
+    expect(visitorListWords(1, 0)).toBe(
+      "Showing what visitors see: 0 of 1 entry"
+    );
+    expect(visitorListWords(4, 4)).toBeUndefined();
+    expect(visitorListWords(undefined, 4)).toBeUndefined();
+  });
+
+  it("wears the words on the canvas: what the list drew as a visitor reads it, beside the person's own rows", async () => {
+    const { writePluginRoute } = await import("@nextlyhq/plugin-sdk/admin");
+    vi.mocked(writePluginRoute).mockReset();
+    vi.mocked(writePluginRoute).mockImplementation(async request => {
+      const body = (request as { body: Record<string, unknown> }).body;
+      const total = body.visitor === undefined ? 6 : 4;
+      return {
+        items: Array.from({ length: total }, (_, at) => ({ id: `p${at}` })),
+        meta: {
+          total,
+          page: 1,
+          limit: 10,
+          totalPages: 1,
+          hasNext: false,
+          hasPrev: false,
+        },
+      };
+    });
+    userId.mockReturnValue("visitor-notes");
+    const asVisitor = {
+      visitor: { collection: "pages", id: "p1" },
+      nodes: [list("posts-list")],
+    };
+    const { result } = renderHook(() =>
+      useCanvasPageContext(
+        undefined,
+        "en",
+        undefined,
+        undefined,
+        undefined,
+        asVisitor
+      )
+    );
+    // The canvas's lists read as a visitor.
+    await result.current.data.find({ collection: "posts" });
+    expect(
+      vi
+        .mocked(writePluginRoute)
+        .mock.calls.some(
+          ([request]) =>
+            (request as { body: Record<string, unknown> }).body.visitor !==
+            undefined
+        )
+    ).toBe(true);
+    // Nothing is said before the list has drawn.
+    expect(result.current.listsShowingVisitors).toBeUndefined();
+    // The list tells what it drew; a list drawing nothing (its allowance
+    // spent, say) is said to show none, however many a read would find.
+    act(() => {
+      result.current.listShown?.("posts-list", 0);
+    });
+    await waitFor(() => {
+      expect(result.current.listsShowingVisitors?.get("posts-list")).toBe(
+        "Showing what visitors see: 0 of 6 entries"
+      );
+    });
+    userId.mockReturnValue("u1");
   });
 });

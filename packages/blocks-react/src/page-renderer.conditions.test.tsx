@@ -3,6 +3,10 @@
  * conditions, and still serves the rules of the blocks an item shows: the
  * rules are held out of the page's sheet whether or not the page has
  * bindings to fill, so they have to reach the list either way.
+ *
+ * Drawn as its route draws it, prepared and gated for its entry: a render
+ * the route has not prepared holds every conditioned block back, a list
+ * item's among them, until something decides them.
  */
 import {
   DOCUMENT_FORMAT_VERSION,
@@ -16,6 +20,7 @@ import { describe, expect, it } from "vitest";
 import { coreBlocks } from "./blocks";
 import { createStandaloneContext } from "./context";
 import { PageRenderer } from "./page-renderer";
+import { prepareDocument, regateDocument } from "./prepare-document";
 import { createBlockResolver } from "./resolver";
 
 async function renderToHtml(element: ReactElement): Promise<string> {
@@ -63,14 +68,22 @@ const document: BlockDocument = {
   ],
 };
 
+/** The page as its route prepares it, gated for a page with no entry. */
+function routePrepared(page: BlockDocument) {
+  const prepared = prepareDocument(page, { resolver });
+  return prepared === null ? undefined : regateDocument(prepared, {})?.prepared;
+}
+
 async function renderWith(
   items: readonly Record<string, unknown>[]
 ): Promise<string> {
+  const prepared = routePrepared(document);
   return await renderToHtml(
     <PageRenderer
       document={document}
       blocks={resolver}
       siteStyles={false}
+      {...(prepared === undefined ? {} : { prepared })}
       context={createStandaloneContext({
         data: { find: () => Promise.resolve({ items: [...items] }) },
         fieldShapes: {

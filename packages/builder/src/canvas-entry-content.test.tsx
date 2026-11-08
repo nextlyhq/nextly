@@ -339,6 +339,7 @@ describe("a conditioned block inside the entry's Body", () => {
     expect(conditionedBlocksIn(composedFor(PLAIN, GATED_ARTICLE))).toEqual({
       any: true,
       readingEntry: true,
+      readingItems: false,
     });
   });
 

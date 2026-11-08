@@ -484,9 +484,16 @@ export function componentUses(
   plugins: readonly PluginDefinition[],
   // The site config's `admin.dashboard`, whose own widgets draw through the
   // map as a plugin's do.
-  siteDashboard?: unknown
+  siteDashboard?: unknown,
+  /**
+   * Contributed components whose module has no file behind it
+   * (`unbackedContributions`), left out: importing a module that is not there
+   * would stop the app compiling, where a contribution left out of the map
+   * only draws its place's fallback.
+   */
+  unbacked?: ReadonlySet<string>
 ): ComponentMapEntry[] {
-  return [
+  const uses = [
     ...plugins.flatMap(plugin => collectAdminComponentEntries(plugin)),
     ...siteWidgetEntries(siteDashboard),
     // Block editor components register through the same map, so the editor
@@ -494,6 +501,13 @@ export function componentUses(
     // import -- the same guarantee admin contributions already have.
     ...collectBlockEditorEntries(plugins),
   ];
+  // Only a contribution is left out: every other use keeps its path, so a
+  // missing widget component still reaches the checks that name its card.
+  return unbacked === undefined || unbacked.size === 0
+    ? uses
+    : uses.filter(
+        each => !(each.use === "contribution" && unbacked.has(each.path))
+      );
 }
 
 /**
@@ -512,10 +526,12 @@ export function componentUses(
  */
 export function componentImportMapEntries(
   plugins: readonly PluginDefinition[],
-  siteDashboard?: unknown
+  siteDashboard?: unknown,
+  /** Contributed components left out, as {@link componentUses} leaves them out. */
+  unbacked?: ReadonlySet<string>
 ): ComponentMapEntry[] {
   const byPath = new Map<string, ComponentMapEntry>();
-  for (const each of componentUses(plugins, siteDashboard)) {
+  for (const each of componentUses(plugins, siteDashboard, unbacked)) {
     const kept = byPath.get(each.path);
     if (
       kept === undefined ||
@@ -530,9 +546,10 @@ export function componentImportMapEntries(
 /** The paths of {@link componentImportMapEntries}, in its order. */
 export function componentImportMapPaths(
   plugins: readonly PluginDefinition[],
-  siteDashboard?: unknown
+  siteDashboard?: unknown,
+  unbacked?: ReadonlySet<string>
 ): string[] {
-  return componentImportMapEntries(plugins, siteDashboard).map(
+  return componentImportMapEntries(plugins, siteDashboard, unbacked).map(
     each => each.path
   );
 }
@@ -709,9 +726,11 @@ export function configImportOf(mapCode: string): string | undefined {
 export function buildComponentImportMap(
   plugins: PluginDefinition[],
   configImport?: string,
-  siteDashboard?: unknown
+  siteDashboard?: unknown,
+  /** Contributed components with no file behind them, left out of the map. */
+  unbacked?: ReadonlySet<string>
 ): string {
-  const entries = componentImportMapEntries(plugins, siteDashboard);
+  const entries = componentImportMapEntries(plugins, siteDashboard, unbacked);
   const blockEditor = blockEditorHandOff(plugins, entries);
   // An editor entry exports block definitions, not a component, so it is
   // handed to the page builder alone and never put in the component registry,
@@ -886,9 +905,11 @@ const PATHS_HEADER = [
  */
 export function buildComponentPathsModule(
   plugins: readonly PluginDefinition[],
-  siteDashboard?: unknown
+  siteDashboard?: unknown,
+  /** Left out of the list as the map leaves them out, so the two agree. */
+  unbacked?: ReadonlySet<string>
 ): string {
-  return `${PATHS_HEADER}\n\n${pathListExport(componentImportMapPaths(plugins, siteDashboard))}\n`;
+  return `${PATHS_HEADER}\n\n${pathListExport(componentImportMapPaths(plugins, siteDashboard, unbacked))}\n`;
 }
 
 /**
@@ -905,17 +926,24 @@ export function buildImportMapArtifacts(
   plugins: PluginDefinition[],
   typesOutputPath: string,
   configImport?: string,
-  siteDashboard?: unknown
+  siteDashboard?: unknown,
+  /** Contributed components with no file behind them, left out of both files. */
+  unbacked?: ReadonlySet<string>
 ): { path: string; code: string }[] {
   const dir = dirname(typesOutputPath);
   return [
     {
       path: join(dir, COMPONENT_IMPORT_MAP_FILENAME),
-      code: buildComponentImportMap(plugins, configImport, siteDashboard),
+      code: buildComponentImportMap(
+        plugins,
+        configImport,
+        siteDashboard,
+        unbacked
+      ),
     },
     {
       path: join(dir, COMPONENT_PATHS_FILENAME),
-      code: buildComponentPathsModule(plugins, siteDashboard),
+      code: buildComponentPathsModule(plugins, siteDashboard, unbacked),
     },
   ];
 }

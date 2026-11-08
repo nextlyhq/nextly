@@ -286,6 +286,37 @@ function throughRelation(
   };
 }
 
+/**
+ * The related entry's own id, under a relation to one entry of one
+ * collection, as a link's entry is bound to it (`author.id`): no schema
+ * declares an id, so it is listed here, named for what a pick does. A
+ * visitor reads it as they read that entry, so it is public where the
+ * related collection is, through the relation, and a draft's where the entry
+ * is not published. Not listed under an upload, whose record has no page to
+ * link to, nor where the collection declares a field called `id`, which is
+ * listed as its own.
+ */
+function relatedEntryLink(
+  shape: BindingFieldShape,
+  target: string,
+  related: SourceRead,
+  relation: PickerField
+): readonly PickerField[] {
+  if (shape.type !== "relationship") return [];
+  if (related.shapes.some(inner => inner.name === "id")) return [];
+  const link: PickerField = {
+    name: "id",
+    type: "text",
+    label: "Link to this entry",
+    linksTo: target,
+    public: related.publicSource,
+    ...(related.publicSource && related.published === null
+      ? { draft: true as const }
+      : {}),
+  };
+  return [throughRelation(link, relation)];
+}
+
 /** How many relations the ask has followed, shared by every source. */
 interface FollowBudget {
   followed: number;
@@ -310,9 +341,12 @@ async function sourceFields(
       if (related === undefined || related === "failed") return field;
       return {
         ...field,
-        fields: related.shapes.map(inner =>
-          throughRelation(pickerField(inner, related), field)
-        ),
+        fields: [
+          ...related.shapes.map(inner =>
+            throughRelation(pickerField(inner, related), field)
+          ),
+          ...relatedEntryLink(shape, target, related, field),
+        ],
       };
     })
   );

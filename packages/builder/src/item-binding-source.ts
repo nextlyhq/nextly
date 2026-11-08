@@ -35,6 +35,8 @@ export type ItemField = BindingFieldShape & { readonly label?: string };
 export interface ItemSource {
   /** "Each post in the list". */
   readonly name: string;
+  /** One of the list's entries, as the name says it: "post". */
+  readonly one: string;
   /** Its fields, once the host has listed the collection; none before. */
   readonly fields: readonly ItemField[];
 }
@@ -120,5 +122,5 @@ export function useItemSource(
     customs
   );
   const one = (found?.singular ?? found?.label ?? "entry").toLowerCase();
-  return { name: `Each ${one} in the list`, fields };
+  return { name: `Each ${one} in the list`, one, fields };
 }

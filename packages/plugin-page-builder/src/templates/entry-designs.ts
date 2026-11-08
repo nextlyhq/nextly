@@ -199,3 +199,20 @@ export function designShapeRefusal(problem: DesignShapeProblem): NextlyError {
     logContext: { reason: "template-shape-refused", field: problem.path },
   });
 }
+
+/**
+ * What draws an entry on the site: its own published design where it has
+ * one, else its collection's published template, else nothing. `template`
+ * is asked only where there is no own design, so a caller holding the own
+ * design reads no template.
+ *
+ * The one answer the content route's read of an entry's design and the
+ * entry's claims on its list's later pages ask, so an entry holds the later
+ * pages of exactly the list it is drawn with.
+ */
+export async function drawingDesign<T>(
+  own: T | null | undefined,
+  template: () => T | null | undefined | Promise<T | null | undefined>
+): Promise<T | null> {
+  return own ?? (await template()) ?? null;
+}
