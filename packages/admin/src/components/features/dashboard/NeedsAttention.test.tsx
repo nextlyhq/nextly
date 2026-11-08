@@ -396,4 +396,43 @@ describe("NeedsAttention", () => {
     // Two rows high, one item fills the body, so neither the loading card nor its answer asks.
     expect(loadingAsks(2)).toBeUndefined();
   });
+
+  it("keeps its full skeleton where no cell takes its one-item height, as in a preview", () => {
+    // 🔴 Fails where the loading card draws one skeleton row whether or not a cell took the
+    // request: a preview drawn at its stored height with no cell to tell stood tall and mostly
+    // blank under one row until its answer arrived.
+    const skeletonRows = (inCell: boolean) => {
+      const card = (
+        <CardHeightContext.Provider value={4}>
+          <WidgetCard
+            title="Needs your attention"
+            widgetId="core/needs-attention"
+            h={4}
+            state={{ kind: "loading" }}
+            skeleton="rows"
+          >
+            {null}
+          </WidgetCard>
+        </CardHeightContext.Provider>
+      );
+      const { unmount } = render(
+        inCell ? (
+          <CardFitContext.Provider value={vi.fn()}>
+            {card}
+          </CardFitContext.Provider>
+        ) : (
+          card
+        )
+      );
+      // Every child of the skeleton but its "Loading" words is a row.
+      const rows = screen
+        .getByTestId("card-skeleton")
+        .querySelectorAll(":scope > :not(.sr-only)").length;
+      unmount();
+      return rows;
+    };
+    // The must-differ half: in a cell that takes the request, one row.
+    expect(skeletonRows(true)).toBe(1);
+    expect(skeletonRows(false)).toBeGreaterThan(1);
+  });
 });

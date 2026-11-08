@@ -113,7 +113,11 @@ export function useLoadingFitsOneItem(widgetId: string | undefined): boolean {
   const report = useContext(CardFitContext);
   const storedRows = useContext(CardHeightContext);
   const density = useListDensity();
+  // Only where a cell takes the request: a card drawn with no cell to tell, as the settings
+  // sheet's preview is at its stored height, keeps its full skeleton rather than one row in a
+  // tall, mostly blank card.
   const fits =
+    report !== undefined &&
     widgetId !== undefined &&
     CONTENT_SIZED_WIDGETS.has(widgetId) &&
     leavesRowsEmpty(1, storedRows, density);
