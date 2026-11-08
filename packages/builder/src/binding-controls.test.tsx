@@ -80,7 +80,11 @@ function mount(
         description: "A badge.",
         example: { props: {} },
         editor: { label: "Badge" },
-        props: { label: { label: "Text", role: "content", type: "text" } },
+        props: {
+          label: { label: "Text", role: "content", type: "text" },
+          // A second prop, which an edit made during an unbind's plan changes.
+          tone: { label: "Tone", role: "content", type: "text" },
+        },
         defaultProps: {},
         render: () => null,
       },
