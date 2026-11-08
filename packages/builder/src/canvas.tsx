@@ -381,9 +381,17 @@ function entryContentMarkFor(
 
 /**
  * Marks the drawn element of each of the entry's own blocks this canvas draws
- * in Entry content as ours to make `inert`.
+ * in Entry content as ours to make `inert`. Its value says whether the `inert`
+ * is ours to give back ({@link INERT_ADDED}) or was the block's own before the
+ * canvas marked it ({@link INERT_KEPT}).
  */
-const ENTRY_CONTENT_INERT_ATTRIBUTE = "data-nx-entry-content-inert";
+export const ENTRY_CONTENT_INERT_ATTRIBUTE = "data-nx-entry-content-inert";
+
+/** The canvas made the element inert, and takes that back when it leaves. */
+const INERT_ADDED = "added";
+
+/** The element was inert already, by its own block, and stays so. */
+const INERT_KEPT = "kept";
 
 /**
  * Make the entry's blocks an Entry content block draws on this canvas inert,
@@ -392,9 +400,11 @@ const ENTRY_CONTENT_INERT_ATTRIBUTE = "data-nx-entry-content-inert";
  * element, stays the one a click lands on and selects. The page's markup is
  * not changed, so the canvas lays the blocks out as the published page does.
  * An element no longer drawn there gives back the inert this set, and only
- * that. Written only where it changes, as every mark here is.
+ * that: one a block rendered inert itself (a custom block whose root is inert)
+ * keeps its `inert` when it leaves, as the canvas frame keeps a site's own.
+ * Written only where it changes, as every mark here is.
  */
-function markEntryContentInert(container: HTMLElement): void {
+export function markEntryContentInert(container: HTMLElement): void {
   const wanted = new Set<Element>();
   container
     .querySelectorAll(`[${ENTRY_CONTENT_DRAWN_ATTRIBUTE}]`)
@@ -409,11 +419,20 @@ function markEntryContentInert(container: HTMLElement): void {
       // to set: a canvas drawn inside this one (a component's own view) keeps
       // its entry's blocks inert whatever this one re-marks.
       if (wanted.has(element) || !ownedByCanvas(element, container)) return;
+      const ours =
+        element.getAttribute(ENTRY_CONTENT_INERT_ATTRIBUTE) !== INERT_KEPT;
       element.removeAttribute(ENTRY_CONTENT_INERT_ATTRIBUTE);
-      element.removeAttribute("inert");
+      if (ours) element.removeAttribute("inert");
     });
   wanted.forEach(element => {
-    setFlag(element, ENTRY_CONTENT_INERT_ATTRIBUTE, true);
+    // Marked once: whether the inert was the block's own is read when the
+    // canvas first marks the element, before it adds any.
+    if (!element.hasAttribute(ENTRY_CONTENT_INERT_ATTRIBUTE)) {
+      element.setAttribute(
+        ENTRY_CONTENT_INERT_ATTRIBUTE,
+        element.hasAttribute("inert") ? INERT_KEPT : INERT_ADDED
+      );
+    }
     setFlag(element, "inert", true);
   });
 }
