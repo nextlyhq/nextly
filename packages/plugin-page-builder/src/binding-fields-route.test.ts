@@ -180,16 +180,19 @@ describe("the picker's fields", () => {
   });
 
   it("names the collection a related entry waits for, where it has no page yet", async () => {
+    const pagesFor = vi.fn(
+      async (entry: { readonly collection: string; readonly id: string }) => ({
+        served: false,
+        label: entry.collection === "users" ? "Users" : entry.collection,
+      })
+    );
     const answer = await readBindingFields(
       { source: { kind: "collection", slug: "posts", id: "p1" } },
-      {
-        ...reads(),
-        pagesFor: async collection => ({
-          served: false,
-          label: collection === "users" ? "Users" : collection,
-        }),
-      }
+      { ...reads(), pagesFor }
     );
+    // Asked of the entry itself, as the public page finds its design: its
+    // own design may outlive its collection's template.
+    expect(pagesFor).toHaveBeenCalledWith({ collection: "users", id: "u1" });
     const author = named(fieldsOf(answer, "Post"), "author");
     // Still listed, so the author sees why it can't be picked yet.
     expect(named(author?.fields ?? [], "id")).toMatchObject({
