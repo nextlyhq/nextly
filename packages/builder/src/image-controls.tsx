@@ -590,10 +590,14 @@ function BoundPictureAltNote({
     );
   }
   if (kind === "url" || kind === "text") {
+    // An empty field, or an address the page refuses, shows what the binding
+    // falls back to instead, which may well be a described library file.
     return (
       <p className="nx-inspector__note" data-bound-picture="address">
-        This image comes from an address, which carries no alt text. Choose
-        Custom to describe it for screen readers.
+        This image comes from an address, which carries no alt text. Where the
+        field holds no usable address, visitors see{" "}
+        {instead("fallback" in binding && binding.fallback !== undefined)}.
+        Choose Custom to describe it for screen readers.
       </p>
     );
   }

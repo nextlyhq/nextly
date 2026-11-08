@@ -366,8 +366,14 @@ describe("a bound image", () => {
     ]);
     const note = await screen.findByText(/comes from an address/);
     // It says what to do, not only what is lost.
+    expect(note.textContent).toMatch(/carries no alt text\./);
     expect(note.textContent).toMatch(
-      /carries no alt text\. Choose Custom to describe it for screen readers\./
+      /Choose Custom to describe it for screen readers\./
+    );
+    // An entry's empty or unusable address shows the block's own image here
+    // (no fallback kept), which the note names rather than denying all alt.
+    expect(note.textContent).toMatch(
+      /Where the field holds no usable address, visitors see the block's own image\./
     );
     expect(screen.queryByText(/its own alt text is used/)).toBeNull();
   });
