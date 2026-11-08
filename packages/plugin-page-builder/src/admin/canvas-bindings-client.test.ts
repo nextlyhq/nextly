@@ -29,8 +29,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   writePluginRoute,
 }));
 
-const { canvasBindingsFor, canvasBindingsRequest, useCanvasBindings } =
-  await import("./canvas-bindings-client");
+const {
+  canvasBindingsFor,
+  canvasBindingsRequest,
+  siteTimeZoneFor,
+  useCanvasBindings,
+} = await import("./canvas-bindings-client");
 const { CanvasEntryProvider } = await import("./editor/canvas-entry");
 
 /** The retries the editor has asked for, which a wrapper hands the canvas. */
@@ -327,6 +331,71 @@ describe("the canvas's binding sources", () => {
       vi.useRealTimers();
       editing.identity = null;
     }
+  });
+});
+
+describe("the site's time zone, for the inspector's previews", () => {
+  /** The route's answer for a page that formats a date in a zone. */
+  const zoned = (timeZone?: string) => ({
+    entryRef: { collection: "posts" },
+    singles: [],
+    shapes: [],
+    ...(timeZone === undefined ? {} : { timeZone }),
+  });
+
+  it("is not asked by a canvas whose page formats no date, though it binds", () => {
+    // The control the inspector's own read exists for: a page binding only
+    // text asks the canvas's read for no zone, so the canvas has none.
+    const request = canvasBindingsRequest(
+      [page({ text: { $bind: "title" } })],
+      identity,
+      "en"
+    );
+    expect(request?.demand.formatsDates).toBe(false);
+  });
+
+  it("is asked as a page that formats a date and reads nothing else", async () => {
+    const ask = vi.fn(async () => zoned("Asia/Karachi"));
+    const zone = await siteTimeZoneFor({}, identity, "author-a", ask);
+    expect(zone).toBe("Asia/Karachi");
+    expect(ask).toHaveBeenCalledWith({
+      source: { kind: "collection", slug: "posts", id: "p1" },
+      demand: { singles: {}, site: false, formatsDates: true },
+      lists: [],
+    });
+  });
+
+  it("is read once per editor session and person", async () => {
+    const session = {};
+    const ask = vi.fn(async () => zoned("Asia/Karachi"));
+    await siteTimeZoneFor(session, identity, "author-a", ask);
+    await siteTimeZoneFor(session, identity, "author-a", ask);
+    expect(ask).toHaveBeenCalledTimes(1);
+    // Another person in the same editor, or another editor: read again.
+    await siteTimeZoneFor(session, identity, "author-b", ask);
+    await siteTimeZoneFor({}, identity, "author-b", ask);
+    expect(ask).toHaveBeenCalledTimes(3);
+  });
+
+  it("is none for a site with no zone set", async () => {
+    expect(
+      await siteTimeZoneFor({}, identity, "author-a", async () => zoned())
+    ).toBeUndefined();
+  });
+
+  it("is read again after a read that failed", async () => {
+    const session = {};
+    const ask = vi
+      .fn<() => Promise<ReturnType<typeof zoned>>>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(zoned("Asia/Karachi"));
+    await expect(
+      siteTimeZoneFor(session, identity, "author-a", ask)
+    ).rejects.toThrow("offline");
+    expect(await siteTimeZoneFor(session, identity, "author-a", ask)).toBe(
+      "Asia/Karachi"
+    );
+    expect(ask).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -299,7 +299,7 @@ describe("a date or a number picked for a text prop", () => {
     );
   });
 
-  it("previews in the page's language and the site's zone the host names, not the browser's", async () => {
+  it("previews in the page's language and the site's zone, read when the picker opens, not the browser's", async () => {
     // 21:30 UTC on 8 November: the 9th in Karachi, the 8th in Los Angeles.
     const UPDATED = "2026-11-08T21:30:00.000Z";
     // The browser's own defaults, in Los Angeles and in English, unlike the
@@ -327,8 +327,19 @@ describe("a date or a number picked for a text prop", () => {
         locale: "en-US",
         timeZone: "America/Los_Angeles",
       });
+      // The site's zone as the host reads it, held until the test lets it
+      // in, so the preview is seen before and after.
+      let letZoneIn: (zone: string) => void = () => {};
+      const readSiteTimeZone = vi.fn(
+        () =>
+          new Promise<string | undefined>(resolve => {
+            letZoneIn = resolve;
+          })
+      );
+      // A page holding no date binding: the canvas has read no zone for it.
       mount(undefined, {
-        bindingFormatIn: { locale: "ar-EG", timeZone: "Asia/Karachi" },
+        bindingLocale: "ar-EG",
+        readSiteTimeZone,
         listBindingFields: async () => [
           {
             binding: { source: "entry" },
@@ -350,16 +361,31 @@ describe("a date or a number picked for a text prop", () => {
           },
         ],
       });
+      // The control: drawing the inspector reads no zone; opening the picker
+      // does.
+      expect(readSiteTimeZone).not.toHaveBeenCalled();
       fireEvent.click(
         screen.getByRole("button", { name: "Bind Text to a field" })
       );
       const date = await screen.findByRole("option", { name: /^Updated at/ });
-      // The 9th in Arabic digits: the browser's zone or UTC would show the
-      // 8th, and its language Latin digits.
-      expect(date.textContent).toContain("٩ نوفمبر ٢٠٢٦");
-      expect(date.textContent).not.toContain("November");
+      expect(readSiteTimeZone).toHaveBeenCalledTimes(1);
+      // Until the zone is in: the page's language, in UTC, the 8th.
+      expect(date.textContent).toContain("٨ نوفمبر ٢٠٢٦");
       const price = screen.getByRole("option", { name: /^Price/ });
       expect(price.textContent).toContain("١٬٢٣٤٫٥");
+      await act(async () => {
+        letZoneIn("Asia/Karachi");
+      });
+      // The 9th in Arabic digits once the zone is in: the browser's zone or
+      // UTC would show the 8th, and its language Latin digits.
+      await waitFor(() =>
+        expect(
+          screen.getByRole("option", { name: /^Updated at/ }).textContent
+        ).toContain("٩ نوفمبر ٢٠٢٦")
+      );
+      expect(
+        screen.getByRole("option", { name: /^Updated at/ }).textContent
+      ).not.toContain("November");
     } finally {
       Object.defineProperty(Intl, "DateTimeFormat", {
         value: RealDateTimeFormat,
