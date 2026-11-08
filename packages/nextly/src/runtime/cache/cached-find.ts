@@ -85,7 +85,10 @@ export interface CachedFindOptions {
  * A read refused by access (`isReadRefusal`) is cached too, as the refusal, and
  * every read of the entry throws it again until a bust or the entry's lifetime
  * reads it afresh. So a read that comes to be refused, when its entry is read
- * again, replaces the answer it gave while it was allowed.
+ * again, replaces the answer it gave while it was allowed. The refusal thrown
+ * again is a `NextlyError` made without reading the clock, so a prerender
+ * under Cache Components can answer it; its `timestamp` is taken when it is
+ * first read.
  *
  * @example
  * // Public entry detail — cached and busted when any post changes. Tag with the
@@ -201,17 +204,17 @@ const KEPT_KEY_PART = "nextly:kept-v1";
  */
 type Kept<T> =
   | { readonly kept: "answer"; readonly answer: T }
-  | {
-      readonly kept: "refusal";
-      readonly refusal: {
-        readonly code: string;
-        readonly statusCode: number;
-        readonly publicMessage: string;
-        readonly publicData?: PublicData;
-        readonly messageKey?: string;
-        readonly reason?: string;
-      };
-    };
+  | { readonly kept: "refusal"; readonly refusal: KeptRefusal };
+
+/** A refusal as an entry keeps it: plain values, and no time. */
+interface KeptRefusal {
+  readonly code: string;
+  readonly statusCode: number;
+  readonly publicMessage: string;
+  readonly publicData?: PublicData;
+  readonly messageKey?: string;
+  readonly reason?: string;
+}
 
 /**
  * `reader`, answering a refusal by access with the refusal as a value rather
@@ -262,11 +265,59 @@ function keepingRefusal<T>(reader: () => Promise<T>): () => Promise<Kept<T>> {
 function answerOf<T>(value: Kept<T> | T): T {
   if (!isKept(value)) return value;
   if (value.kept === "answer") return value.answer;
-  const { reason, ...refusal } = value.refusal;
-  throw new NextlyError({
-    ...refusal,
-    logContext: { kept: true, ...(reason === undefined ? {} : { reason }) },
+  throw refusalOf(value.refusal);
+}
+
+/**
+ * The refusal an entry kept, as the `NextlyError` it was, made without reading
+ * the clock.
+ *
+ * It is thrown outside the cache, on every read of the entry. `NextlyError`'s
+ * constructor records when it was made (`timestamp`), and under Cache
+ * Components a prerender refuses the current time outside a cache scope, so a
+ * public route answering a kept refusal as not found failed its build. The
+ * error is therefore made as an instance of the class without running that
+ * constructor: `Error`'s own, with `NextlyError` as the new target, which
+ * gives the message and stack every error has and reads no clock. Every field
+ * the constructor sets is set here as it sets it, so a catch sees the same
+ * class (`instanceof`, `NextlyError.is`), code, status, messages and methods
+ * as before. Only `timestamp` differs: it is taken the first time something
+ * reads it, which is a log line (`toLogJSON`), written at request time rather
+ * than in a prerender. Every other `NextlyError` keeps its constructor's.
+ */
+function refusalOf(refusal: KeptRefusal): NextlyError {
+  const { reason, ...kept } = refusal;
+  const error = Reflect.construct(
+    Error,
+    [kept.publicMessage],
+    NextlyError
+  ) as NextlyError;
+  let timestamp: Date | undefined;
+  Object.defineProperties(error, {
+    name: ownField("NextlyError"),
+    code: ownField(kept.code),
+    statusCode: ownField(kept.statusCode),
+    publicMessage: ownField(kept.publicMessage),
+    publicData: ownField(kept.publicData),
+    messageKey: ownField(kept.messageKey),
+    logMessage: ownField(undefined),
+    logContext: ownField({
+      kept: true,
+      ...(reason === undefined ? {} : { reason }),
+    }),
+    cause: ownField(undefined),
+    timestamp: {
+      configurable: true,
+      enumerable: true,
+      get: () => (timestamp ??= new Date()),
+    },
   });
+  return error;
+}
+
+/** A field as a class's constructor defines it on the instance. */
+function ownField(value: unknown): PropertyDescriptor {
+  return { value, writable: true, enumerable: true, configurable: true };
 }
 
 function isKept<T>(value: Kept<T> | T): value is Kept<T> {

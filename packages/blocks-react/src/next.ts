@@ -2256,10 +2256,11 @@ interface MediaReadCache {
  * so a later render of the page reads nothing for it until the id or the
  * collection is written.
  *
- * A refusal is answered as `refused` inside the read for the same reason:
- * `cachedFind` keeps a refusal as one and throws it again on every hit,
- * outside the cache, where building that error takes the clock too. Any other
- * failure still throws and is not kept, so a fault never stands as a miss.
+ * A refusal is answered as `refused` inside the read, so the answer kept is
+ * the one every caller of this read wants, with no throw to catch on each hit
+ * (`cachedFind` would keep the refusal and throw it again, now without taking
+ * the clock). Any other failure still throws and is not kept, so a fault never
+ * stands as a miss.
  */
 async function cachedMediaRead<T>(
   config: BlocksPageConfig,

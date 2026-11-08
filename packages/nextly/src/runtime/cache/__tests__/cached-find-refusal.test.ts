@@ -8,13 +8,14 @@
  * nothing when the read throws, and an expired entry is served once more while
  * it is read again, keeping the earlier answer when that read throws.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../di/container", () => ({
   container: { has: () => false, get: () => undefined },
 }));
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { isReadRefusal } from "../../routing/miss-or-denied";
 import { applyCache, type UnstableCache } from "../cached-find";
 
 /** One entry's cache, as Next keeps it, and a way to expire it. */
@@ -57,6 +58,37 @@ const refused = () =>
   NextlyError.authRequired({
     logContext: { reason: "read on posts requires an authenticated user" },
   });
+
+/**
+ * Counts every read of the current time (`new Date()` with no arguments, and
+ * `Date.now()`) while it is on, as a Cache Components prerender refuses them
+ * outside a cache scope.
+ */
+function watchClock() {
+  const RealDate = Date;
+  const clock = { on: false, reads: 0 };
+  vi.stubGlobal(
+    "Date",
+    new Proxy(RealDate, {
+      construct(target, args, newTarget) {
+        if (clock.on && args.length === 0) clock.reads += 1;
+        return Reflect.construct(target, args, newTarget) as object;
+      },
+      get(target, property, receiver) {
+        if (property !== "now") return Reflect.get(target, property, receiver);
+        return () => {
+          if (clock.on) clock.reads += 1;
+          return target.now();
+        };
+      },
+    })
+  );
+  return clock;
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("a cached read refused by access", () => {
   it("replaces the answer it gave while allowed, once read again", async () => {
@@ -208,5 +240,55 @@ describe("a cached read refused by access", () => {
       code: "TOKEN_EXPIRED",
     });
     expect(reader).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws a kept refusal again without reading the clock, and takes its time when a log reads it", async () => {
+    const { cache } = nextLikeCache();
+    const reader = vi.fn(async () => {
+      throw refused();
+    });
+    await applyCache(cache, reader, options).catch(() => undefined);
+
+    // A hit: the reader is not run, so any time read here is the refusal's
+    // own making, outside every cache, which a prerender refuses.
+    const clock = watchClock();
+    clock.on = true;
+    const error = await applyCache(cache, reader, options).catch(
+      (thrown: unknown) => thrown
+    );
+    clock.on = false;
+    expect(reader).toHaveBeenCalledTimes(1);
+    expect(clock.reads).toBe(0);
+
+    // The same refusal every catch reads, class and methods included.
+    expect(error).toBeInstanceOf(NextlyError);
+    expect(NextlyError.is(error)).toBe(true);
+    expect(isReadRefusal(error)).toBe(true);
+    const kept = error as NextlyError;
+    expect(kept).toMatchObject({
+      name: "NextlyError",
+      message: "Authentication required.",
+      code: "AUTH_REQUIRED",
+      statusCode: 401,
+      publicMessage: "Authentication required.",
+      logContext: {
+        kept: true,
+        reason: "read on posts requires an authenticated user",
+      },
+    });
+    expect(kept.toResponseJSON("r1")).toEqual({
+      code: "AUTH_REQUIRED",
+      message: "Authentication required.",
+      requestId: "r1",
+    });
+
+    // The control: the clock is watched, and the time is taken once, when a
+    // log line first asks for it, and kept.
+    clock.on = true;
+    const logged = kept.toLogJSON("r1");
+    expect(kept.toLogJSON("r1").timestamp).toBe(logged.timestamp);
+    clock.on = false;
+    expect(clock.reads).toBe(1);
+    expect(kept.timestamp).toBeInstanceOf(Date);
   });
 });
