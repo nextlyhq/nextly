@@ -352,33 +352,34 @@ export class RolePermissionService extends BaseService {
     roleId: string,
     permissionIds: string[]
   ): Promise<Array<{ id: string; action: string; resource: string }>> {
-    // The content expiry this change owes is queued before it is written.
+    // A retired `manage-` permission is stored as the plain four it stands
+    // for, so a role set with one, a preset's at each boot included, never
+    // holds it again once converted. Read here only to see whether anything
+    // changes; a change is stored as normalized again under the locks below.
+    const unchangedIf = new Set(
+      await storedAsPlain(
+        this.adapter,
+        permissionIds,
+        this.adapter.getCapabilities().maxParamsPerQuery
+      )
+    );
+
+    // Read first, outside any transaction: once a preset has settled, every
+    // boot of every instance asks this with nothing to change, and the answer
+    // costs one read rather than a lock and a rewrite. Compared by the rows'
+    // own permission ids, so an assignment whose permission no longer exists
+    // counts as held and is removed below. MySQL's table declares no foreign
+    // key, so such a row can be there.
+    const before = await this.readAssignments(roleId);
+    if (
+      sameMembers(new Set(before.map(row => row.permissionId)), unchangedIf)
+    ) {
+      return named(before);
+    }
+
+    // The content expiry this change owes is queued before it is written; the
+    // reads above return before anything is queued when there is nothing to change.
     return changingRoleGrants(async () => {
-      // A retired `manage-` permission is stored as the plain four it stands
-      // for, so a role set with one, a preset's at each boot included, never
-      // holds it again once converted. Read here only to see whether anything
-      // changes; a change is stored as normalized again under the locks below.
-      const unchangedIf = new Set(
-        await storedAsPlain(
-          this.adapter,
-          permissionIds,
-          this.adapter.getCapabilities().maxParamsPerQuery
-        )
-      );
-
-      // Read first, outside any transaction: once a preset has settled, every
-      // boot of every instance asks this with nothing to change, and the answer
-      // costs one read rather than a lock and a rewrite. Compared by the rows'
-      // own permission ids, so an assignment whose permission no longer exists
-      // counts as held and is removed below. MySQL's table declares no foreign
-      // key, so such a row can be there.
-      const before = await this.readAssignments(roleId);
-      if (
-        sameMembers(new Set(before.map(row => row.permissionId)), unchangedIf)
-      ) {
-        return named(before);
-      }
-
       // Each statement binds no more parameters than the adapter says one query
       // may: one per id plus the role's for a removal, and up to one per column
       // for each inserted row, defaults included (`insertAssignments`).

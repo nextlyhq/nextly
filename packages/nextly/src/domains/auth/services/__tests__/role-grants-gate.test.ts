@@ -89,19 +89,32 @@ function isAnnouncement(source: Source, n: Node): boolean {
 /** The nearest enclosing named function or method, for naming a site. */
 function enclosingName(source: Source, ancestors: readonly Node[]): string {
   for (let i = ancestors.length - 1; i >= 0; i--) {
-    const n = ancestors[i];
-    if (n.type === "FunctionDeclaration" && n.id) return n.id.name;
-    if (n.type === "MethodDefinition") return textOf(source, n.key);
-    if (
-      n.type === "VariableDeclarator" &&
-      n.id.type === "Identifier" &&
-      (n.init?.type === "ArrowFunctionExpression" ||
-        n.init?.type === "FunctionExpression")
-    ) {
-      return n.id.name;
-    }
+    const name = nameAt(source, ancestors[i]);
+    if (name !== null) return name;
   }
   return "<top level>";
+}
+
+/** The name this node gives a function: declared, a method's key, or what holds it. */
+function nameAt(source: Source, n: Node): string | null {
+  if (n.type === "FunctionDeclaration") return n.id?.name ?? null;
+  if (n.type === "MethodDefinition") return textOf(source, n.key);
+  return heldFunctionName(n);
+}
+
+/** A function held by a variable, named by the variable. */
+function heldFunctionName(n: Node): string | null {
+  if (n.type !== "VariableDeclarator" || n.id.type !== "Identifier") {
+    return null;
+  }
+  return isFunction(n.init) ? n.id.name : null;
+}
+
+function isFunction(value: Node | null | undefined): boolean {
+  return (
+    value?.type === "ArrowFunctionExpression" ||
+    value?.type === "FunctionExpression"
+  );
 }
 
 function announcements(

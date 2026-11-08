@@ -175,21 +175,22 @@ export class RoleMutationService extends BaseService {
    * made so does not last past the next.
    */
   async unlinkPublicRole(publicRoleId: string): Promise<void> {
-    // The content expiry this change owes is queued before it is written.
+    const { roleInherits } = this.tables;
+    const touching = or(
+      eq(roleInherits.parentRoleId, publicRoleId),
+      eq(roleInherits.childRoleId, publicRoleId)
+    );
+    const links = await this.db
+      .select({
+        parentRoleId: roleInherits.parentRoleId,
+        childRoleId: roleInherits.childRoleId,
+      })
+      .from(roleInherits)
+      .where(touching);
+    if (links.length === 0) return;
+    // The content expiry this change owes is queued before it is written; the
+    // reads above return before anything is queued when there is nothing to change.
     return changingRoleGrants(async () => {
-      const { roleInherits } = this.tables;
-      const touching = or(
-        eq(roleInherits.parentRoleId, publicRoleId),
-        eq(roleInherits.childRoleId, publicRoleId)
-      );
-      const links = await this.db
-        .select({
-          parentRoleId: roleInherits.parentRoleId,
-          childRoleId: roleInherits.childRoleId,
-        })
-        .from(roleInherits)
-        .where(touching);
-      if (links.length === 0) return;
       await this.db.delete(roleInherits).where(touching);
       const roles = new Set<string>();
       for (const { parentRoleId, childRoleId } of links) {
@@ -226,15 +227,16 @@ export class RoleMutationService extends BaseService {
    * @returns The slug the role now has, or `null` where there is no such role
    */
   async moveRoleOffPublicSlug(id: string): Promise<string | null> {
-    // The content expiry this change owes is queued before it is written.
+    const { roles } = this.tables;
+    const [role] = await this.db
+      .select({ slug: roles.slug })
+      .from(roles)
+      .where(eq(roles.id, id))
+      .limit(1);
+    if (!role) return null;
+    // The content expiry this change owes is queued before it is written; the
+    // reads above return before anything is queued when there is nothing to change.
     return changingRoleGrants(async () => {
-      const { roles } = this.tables;
-      const [role] = await this.db
-        .select({ slug: roles.slug })
-        .from(roles)
-        .where(eq(roles.id, id))
-        .limit(1);
-      if (!role) return null;
       let slug = String(role.slug);
       // The slug in any case: MySQL's collation finds a role whose slug is
       // `Public` when asked for `public`, so that one holds it there too.

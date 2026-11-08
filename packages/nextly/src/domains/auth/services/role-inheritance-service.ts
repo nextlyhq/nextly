@@ -65,30 +65,30 @@ export class RoleInheritanceService extends BaseService {
     requestedChildRoleId: string,
     requestedParentRoleId: string
   ): Promise<void> {
-    // The content expiry this change owes is queued before it is written.
-    return changingRoleGrants(async () => {
-      // Judged and written as the roles' rows spell their ids. MySQL matches
-      // ids case-insensitively, so a request can name a role in another case:
-      // compared as given, a role named twice in two spellings would pass as
-      // two roles, and the row written would carry an id other than the role's.
-      const childRoleId = await this.storedRoleId(requestedChildRoleId);
-      const parentRoleId = await this.storedRoleId(requestedParentRoleId);
-      if (childRoleId === parentRoleId)
-        throw new Error("INHERIT_SELF_FORBIDDEN");
-      // The Public role is never joined to inheritance, on either side: it
-      // would pass visitors' grants to another role, or another role's to
-      // visitors.
-      await refuseLinkingPublicRole(
-        this.db as LastSuperAdminTx,
-        this.dialect,
-        [childRoleId, parentRoleId],
-        "inherit",
-        { childRoleId, parentRoleId }
-      );
-      await this.refuseEditingSystemRole(parentRoleId);
-      if (await this.willCreateCycle(childRoleId, parentRoleId))
-        throw new Error("INHERIT_CYCLE_FORBIDDEN");
+    // Judged and written as the roles' rows spell their ids. MySQL matches
+    // ids case-insensitively, so a request can name a role in another case:
+    // compared as given, a role named twice in two spellings would pass as
+    // two roles, and the row written would carry an id other than the role's.
+    const childRoleId = await this.storedRoleId(requestedChildRoleId);
+    const parentRoleId = await this.storedRoleId(requestedParentRoleId);
+    if (childRoleId === parentRoleId) throw new Error("INHERIT_SELF_FORBIDDEN");
+    // The Public role is never joined to inheritance, on either side: it
+    // would pass visitors' grants to another role, or another role's to
+    // visitors.
+    await refuseLinkingPublicRole(
+      this.db as LastSuperAdminTx,
+      this.dialect,
+      [childRoleId, parentRoleId],
+      "inherit",
+      { childRoleId, parentRoleId }
+    );
+    await this.refuseEditingSystemRole(parentRoleId);
+    if (await this.willCreateCycle(childRoleId, parentRoleId))
+      throw new Error("INHERIT_CYCLE_FORBIDDEN");
 
+    // The content expiry this change owes is queued before it is written; the
+    // checks above refuse a request before anything is queued.
+    return changingRoleGrants(async () => {
       // One transaction for the decision and the write. The parent comes to
       // confer whatever the child does, so inheriting a role that confers
       // super-admin is giving it: asked first, under the lock every change to
@@ -151,9 +151,10 @@ export class RoleInheritanceService extends BaseService {
     childRoleId: string,
     parentRoleId: string
   ): Promise<void> {
-    // The content expiry this change owes is queued before it is written.
+    await this.refuseEditingSystemRole(parentRoleId);
+    // The content expiry this change owes is queued before it is written; the
+    // checks above refuse a request before anything is queued.
     return changingRoleGrants(async () => {
-      await this.refuseEditingSystemRole(parentRoleId);
       // In a transaction of its own, under the lock every change to who is a
       // super-admin takes: the role's holders may be super-admins only through
       // this inheritance, and the last of them is kept.

@@ -284,4 +284,38 @@ describe("the content expiry after a change to grants", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(withdrawUnclaimed.mock.calls).toEqual([["job-2"]]);
   });
+
+  it("refuses the write when the queue refuses the row queued ahead of it", async () => {
+    enqueue.mockRejectedValue(new Error("jobs table locked"));
+    const write = vi.fn(async () => undefined);
+    await expect(aheadOfGrantsChange(write)).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+    });
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("lets the write through where there is no jobs queue at all", async () => {
+    container.clear();
+    const write = vi.fn(async () => undefined);
+    await aheadOfGrantsChange(write);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("stops retrying once the services it flushes through are cleared", async () => {
+    content.mockRejectedValue(new Error("database down"));
+    await expireContentAfterGrantsChange();
+    expect(content).toHaveBeenCalledTimes(2);
+
+    const { clearServices } = await import("../../di/register");
+    clearServices();
+    // What the next registration would flush through, reachable again.
+    const nextFlush = vi.fn(async () => undefined);
+    revalidator.mockReturnValue({ flush: nextFlush });
+    content.mockResolvedValue(SCOPES);
+
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(content).toHaveBeenCalledTimes(2);
+    expect(nextFlush).not.toHaveBeenCalled();
+  });
 });

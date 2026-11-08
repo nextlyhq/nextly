@@ -169,6 +169,8 @@ interface GrantsExpiryRetry {
   failures: number;
   /** A try under way. */
   running?: Promise<void>;
+  /** Set when the services it belongs to are released, so a try under way schedules no more. */
+  stopped?: boolean;
 }
 
 /**
@@ -246,7 +248,27 @@ async function queueAhead(ahead: GrantsWriteAhead): Promise<void> {
     );
     // A process that caches nothing owes no expiry, as `expireContentAfterGrantsChange` says.
     if (!languageChangeContentCache().revalidator()) return undefined;
-    return queueGrantsExpiry(new Date(Date.now() + WRITE_AHEAD_MARGIN_MS));
+    const { container } = await import("../di/container");
+    // Where there is no jobs queue at all (a CLI path, no registered services) nothing durable
+    // can be queued, and the write goes ahead with the expiry owed by this process alone.
+    if (!container.has("jobsRepository")) return undefined;
+    try {
+      return await enqueueGrantsExpiry(
+        container.get<JobsRepository>("jobsRepository"),
+        new Date(Date.now() + WRITE_AHEAD_MARGIN_MS)
+      );
+    } catch (error) {
+      // Where the queue exists but refused the row, the write is refused too: made now, it would
+      // commit with nothing durable owing its expiry, which is what queueing ahead prevents.
+      throw NextlyError.serviceUnavailable({
+        publicMessage:
+          "The change was not made, because the cache refresh it needs could not " +
+          "be recorded. Try again.",
+        logMessage:
+          "A grants write was refused: the content expiry it owes could not be queued ahead of it",
+        cause: error instanceof Error ? error : undefined,
+      });
+    }
   })();
   await ahead.row;
 }
@@ -350,22 +372,31 @@ async function queueGrantsExpiry(
   const { container } = await import("../di/container");
   if (!container.has("jobsRepository")) return undefined;
   try {
-    const { id } = await container
-      .get<JobsRepository>("jobsRepository")
-      .enqueue({
-        slug: GRANTS_CONTENT_EXPIRY_JOB,
-        input: null,
-        runAt,
-        runAsUserId: null,
-        // One row per change: a key would fold a change into a job already running, whose
-        // expiry may have landed before this change committed.
-        dedupeKey: null,
-        now: new Date(),
-      });
-    return id;
+    return await enqueueGrantsExpiry(
+      container.get<JobsRepository>("jobsRepository"),
+      runAt
+    );
   } catch {
     return undefined;
   }
+}
+
+/** Queues the expiry as a job on `jobs`, due from `runAt`; rejects when the queue refuses it. */
+async function enqueueGrantsExpiry(
+  jobs: Pick<JobsRepository, "enqueue">,
+  runAt: Date | null
+): Promise<string> {
+  const { id } = await jobs.enqueue({
+    slug: GRANTS_CONTENT_EXPIRY_JOB,
+    input: null,
+    runAt,
+    runAsUserId: null,
+    // One row per change: a key would fold a change into a job already running, whose
+    // expiry may have landed before this change committed.
+    dedupeKey: null,
+    now: new Date(),
+  });
+  return id;
 }
 
 /**
@@ -401,6 +432,7 @@ async function withdrawGrantsExpiries(jobs: readonly string[]): Promise<void> {
 
 /** Arms this process's next try, unless one is armed or under way. */
 function scheduleGrantsExpiry(retry: GrantsExpiryRetry): void {
+  if (retry.stopped) return;
   if (retry.timer !== undefined || retry.running !== undefined) return;
   retry.timer = setTimeout(() => {
     retry.timer = undefined;
@@ -417,6 +449,21 @@ function scheduleGrantsExpiry(retry: GrantsExpiryRetry): void {
 }
 
 /**
+ * Stops this process's retries of failed grants expiries, when the services they flush through
+ * are released (`clearServices`, `shutdownServices`): a later registration has its own container,
+ * and an earlier one's retry must not run through it. What is owed stays owed in the jobs queue,
+ * whose rows the next registration's jobs runs perform.
+ */
+export function stopGrantsExpiryRetry(): void {
+  const retry = globalForGrantsExpiry.__nextly_grants_expiry_retry;
+  if (retry === undefined) return;
+  retry.stopped = true;
+  if (retry.timer !== undefined) clearTimeout(retry.timer);
+  retry.timer = undefined;
+  globalForGrantsExpiry.__nextly_grants_expiry_retry = undefined;
+}
+
+/**
  * One more try at every owed expiry, as one: every expiry expires every scope, so one that lands
  * settles each change that failed before it began. One that failed while it ran is kept for the
  * next try, from the first wait.
@@ -427,6 +474,8 @@ async function tryGrantsExpiryAgain(retry: GrantsExpiryRetry): Promise<void> {
       import("../di/registrations/language-change-content-cache"),
       import("../observability/logger"),
     ]);
+  // Released while it waited for the imports: the services it would flush through are gone.
+  if (retry.stopped) return;
   const failuresBefore = retry.failures;
   const jobs = [...retry.queued];
   try {

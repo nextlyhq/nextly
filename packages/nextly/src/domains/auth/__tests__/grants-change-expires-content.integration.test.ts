@@ -26,12 +26,16 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { testLogger } from "../../../__tests__/fixtures/db";
 import { defineCollection, defineSingle, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { getDialectTables } from "../../../database/index";
 import { container } from "../../../di/container";
 import type { JobRegistry } from "../../../domains/jobs/job-registry";
-import type { JobRow } from "../../../domains/jobs/jobs-repository";
+import type {
+  JobRow,
+  JobsRepository,
+} from "../../../domains/jobs/jobs-repository";
 import { runJobsPass } from "../../../domains/jobs/jobs-runner";
 import {
   createTestNextly,
@@ -48,6 +52,7 @@ import {
 } from "../../../services/lib/permissions";
 import type { CollectionRegistryService } from "../../../services/collections/collection-registry-service";
 import { PUBLIC_ROLE_SLUG } from "../services/public-role";
+import { RoleInheritanceService } from "../services/role-inheritance-service";
 
 /** The slug the queued expiry carries, as stored: a row an earlier process queued must match. */
 const GRANTS_EXPIRY_JOB = "nextly:grants-content-expiry";
@@ -453,5 +458,58 @@ describe("a change to a role's grants and the cached content reads (sqlite)", ()
     expect((await grantsExpiryJobs(nextly)).map(job => job.state)).toEqual([
       "done",
     ]);
+  });
+
+  it("refuses the grants write when its expiry cannot be queued ahead of it", async () => {
+    const nextly = await boot();
+    spy.flushed.length = 0;
+    vi.spyOn(
+      container.get<JobsRepository>("jobsRepository"),
+      "enqueue"
+    ).mockRejectedValue(new Error("jobs table locked"));
+
+    await expect(removePublicRead(nextly)).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+    });
+
+    // Not made: Public still reads posts, and nothing was expired or queued.
+    const { held } = await publicRole(nextly);
+    expect(held.map(permission => permission.slug)).toContain("read-posts");
+    expect(spy.flushed).toEqual([]);
+    expect(await grantsExpiryJobs(nextly)).toEqual([]);
+  });
+
+  it("queues no job for a request its checks refuse", async () => {
+    const nextly = await boot();
+    // A built-in role and another, as raw rows: the refusal below is about
+    // the built-in one, and inserting it writes no grants through any gate.
+    const { roles } = getDialectTables();
+    const db = nextly.adapter.getDrizzle() as unknown as {
+      insert(table: unknown): {
+        values(rows: Record<string, unknown>[]): Promise<unknown>;
+      };
+    };
+    const now = new Date();
+    await db.insert(roles).values(
+      [
+        { id: "built-in-role", slug: "grants-test-built-in", isSystem: true },
+        { id: "other-role", slug: "grants-test-other", isSystem: false },
+      ].map(role => ({
+        ...role,
+        name: role.slug,
+        level: 10,
+        createdAt: now,
+        updatedAt: now,
+      }))
+    );
+
+    await expect(
+      new RoleInheritanceService(
+        nextly.adapter,
+        testLogger
+      ).removeRoleInheritance("other-role", "built-in-role")
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    expect(await grantsExpiryJobs(nextly)).toEqual([]);
   });
 });
