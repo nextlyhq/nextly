@@ -71,7 +71,8 @@ describe("unbindPlan", () => {
     );
     expect(withFallback).toMatchObject({
       kept: { set: { text: "Ask us at the front desk" } },
-      answer: { kept: "fallback" },
+      // Marked, so the inspector says why the field's value wasn't kept.
+      answer: { kept: "fallback", unreadable: true },
     });
     expect(
       "answer" in withFallback ? withFallback.answer.reason : ""

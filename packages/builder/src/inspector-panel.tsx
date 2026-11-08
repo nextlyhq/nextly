@@ -31,6 +31,7 @@ import {
   type BlockInspectorProps,
   type BreakpointId,
   type BreakpointSet,
+  type BuilderOp,
   type ComponentLookup,
   type ComponentPath,
   type NodeStyles,
@@ -49,6 +50,7 @@ import { ChevronRight } from "lucide-react";
 import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
+import { BindableField } from "./binding-controls";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
 import {
   blockLookGroups,
@@ -106,7 +108,7 @@ import { InstanceInspectorPanel } from "./instance-inspector-panel";
 import { commitLinkChanges } from "./link-control";
 import { LookInspector, type LookEditing } from "./look-inspector";
 import { useCanvasTokenModeAt } from "./prefers-dark";
-import { propGroupsOf } from "./prop-groups";
+import { propGroupsOf, type BindableWrapper } from "./prop-groups";
 import { selectionLock } from "./selection-ops";
 import { StyleStateField } from "./state-switcher";
 import {
@@ -1210,6 +1212,9 @@ function ContentSurface({
       onCommitMany={changes =>
         commitLinkChanges(editor, inspection.nodeId, changes)
       }
+      // A binding's edits, applied as any other edit of the block.
+      // Whether the editor took it: a refused edit is said, not assumed.
+      onApply={op => editor.apply(op) !== null}
       document={editor.document}
       listView={listViewOf(editor, inspection.nodeId)}
     />
@@ -1434,8 +1439,11 @@ function ContentFields({
   onCommitMany,
   document,
   listView,
+  onApply,
 }: {
   inspection: BlockInspection;
+  /** Apply one op as an edit: a binding's, which writes props and bindings at once. */
+  onApply: (op: BuilderOp) => boolean;
   /** The document the block is in, for a group that reads around it. */
   document: BlockDocument;
   /** Whether the canvas draws this block's empty state, and the switch. */
@@ -1461,6 +1469,9 @@ function ContentFields({
   // The bindings on this block a visitor will not see filled, each said under
   // the field that draws its prop.
   const unreadable = useVisitorUnreadable(inspection.nodeId);
+  // The block's bindings as the document holds them, so a bound prop draws
+  // its chip in place of its own control.
+  const bindings = findNode(document.nodes, inspection.nodeId)?.bindings;
   // A prop the inspector leaves out draws no control, but in a component's
   // view keeps its expose icon: a page may clear what hides it.
   const drawn = inspection.props.filter(
@@ -1486,6 +1497,36 @@ function ContentFields({
   const groups = propGroupsOf(inspection.props.filter(prop => prop.offered));
   const leads = new Map(groups.map(group => [group.lead, group]));
   const grouped = new Set(groups.flatMap(group => [...group.drawn]));
+  // A group's prop wrapped in the same binding controls a prop on its own
+  // row gets, for the props the group offers: one chip, one menu and one
+  // note for every bindable prop, wherever it is drawn.
+  const bindableIn = (offered: ReadonlySet<string>): BindableWrapper =>
+    function wrapBindable(name, field, options) {
+      const prop = inspection.props.find(each => each.name === name);
+      if (prop === undefined || !prop.offered || !offered.has(name)) {
+        return field;
+      }
+      const clears = options?.clearsOnBind ?? [];
+      return (
+        <BindableField
+          nodeId={inspection.nodeId}
+          prop={prop}
+          blockLabel={inspection.label}
+          binding={bindings?.[name]}
+          document={document}
+          services={services}
+          disabled={!writable(name)}
+          onApply={onApply}
+          clearsOnBind={clears}
+          // The props a bind would empty that may not be written here: a
+          // bind or a change that would empty one is held, while the
+          // fallback and the unbind, which empty nothing, stay offered.
+          clearsLocked={clears.filter(each => !writable(each))}
+        >
+          {field}
+        </BindableField>
+      );
+    };
   return (
     <div className="nx-inspector__fields">
       {drawn.map(prop => {
@@ -1523,6 +1564,7 @@ function ContentFields({
                 document,
                 nodeId: inspection.nodeId,
                 ...listGroupView(listView),
+                bindable: bindableIn(group.bindable),
               })}
             </React.Fragment>
           );
@@ -1549,13 +1591,24 @@ function ContentFields({
               // A held field points at the reason in the card.
               reasonId={writable(prop.name) ? undefined : reasonId}
             >
-              <PropField
+              <BindableField
+                nodeId={inspection.nodeId}
                 prop={prop}
-                disabled={!writable(prop.name)}
-                onCommit={onCommit}
+                blockLabel={inspection.label}
+                binding={bindings?.[prop.name]}
+                document={document}
                 services={services}
-                values={values}
-              />
+                disabled={!writable(prop.name)}
+                onApply={onApply}
+              >
+                <PropField
+                  prop={prop}
+                  disabled={!writable(prop.name)}
+                  onCommit={onCommit}
+                  services={services}
+                  values={values}
+                />
+              </BindableField>
             </HeldByLock>
           ))
         );

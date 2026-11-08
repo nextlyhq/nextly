@@ -948,6 +948,20 @@ function warnOfStandIn(standIn: ProcessSiteSettings): void {
 }
 
 /**
+ * The route's media library, for a binding that follows into it; none where
+ * the route draws its images from a collection of its own
+ * (`mediaCollection`), whose rows the public reader finds, or where its
+ * reader has no library.
+ */
+function mediaLibraryOf(
+  config: BlocksPageConfig
+): Pick<BindingSourcesArgs, "media"> {
+  if (config.mediaCollection !== undefined) return {};
+  const library = mediaNamespaceOf(readerFor(config));
+  return library === undefined ? {} : { media: library };
+}
+
+/**
  * Where a route's pages read the site settings: the instance the route reads
  * its records through, chosen by {@link readerFor} and nowhere else, so a
  * page's site name and time zone come from the same instance as its content.
@@ -2769,6 +2783,8 @@ interface SourceReads {
   readonly reader: BlocksPublicReader;
   readonly budget: QueryBudget;
   readonly shapes: BlocksFieldShapes;
+  /** The media library, which a relation into `media` is read from. */
+  readonly media?: BindingSourcesArgs["media"];
 }
 
 /** How a read is cached: the route's scope, the page's language and window. */
@@ -2815,6 +2831,32 @@ async function readById(
   }
 }
 
+/**
+ * A media library item a binding follows into, read as the page's images
+ * are, through the library rather than as a collection's row: `media` is no
+ * collection the public reader finds, and asking it for one fails the read.
+ * Only the named fields are kept, as a row's read selects them; one claim.
+ */
+async function readMediaById(
+  reads: SourceReads,
+  media: NonNullable<BindingSourcesArgs["media"]>,
+  id: string,
+  fields: readonly string[]
+): Promise<PublicRecord> {
+  if (!reads.budget.take({ kind: "related" })) return undefined;
+  try {
+    const record = await media.findByID({ id, disableErrors: true });
+    if (record === null) return null;
+    return Object.fromEntries(
+      ["id", ...fields]
+        .filter(field => Object.hasOwn(record, field))
+        .map(field => [field, record[field]])
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 /** One Single as the public reads it, with only the named fields: one claim. */
 async function readSingle(
   reads: SourceReads,
@@ -2855,7 +2897,10 @@ async function withRelations(
     const id = record[name];
     if (target === undefined) continue;
     if (typeof id !== "string" && typeof id !== "number") continue;
-    const related = await readById(reads, target, id, inner, "related");
+    const related =
+      target === MEDIA_TAG_COLLECTION && reads.media !== undefined
+        ? await readMediaById(reads, reads.media, String(id), inner)
+        : await readById(reads, target, id, inner, "related");
     if (related !== undefined) followed = { ...followed, [name]: related };
   }
   return followed;
@@ -3077,6 +3122,19 @@ export interface BindingSourcesArgs {
   /** The documents drawn, as the read pipeline prepared them. */
   readonly documents: readonly BlockDocument[];
   /**
+   * The media library, as the page's images are read from it: a relation a
+   * binding follows into the built-in `media` collection (an image's alt text
+   * from the entry's featured image) is read here by id, since `media` is no
+   * collection the public reader finds. Absent, such a relation is not
+   * followed, and its bindings show their fallbacks.
+   */
+  readonly media?: {
+    findByID(args: {
+      id: string;
+      disableErrors?: boolean;
+    }): Promise<Record<string, unknown> | null>;
+  };
+  /**
    * What the bindings read, when the caller has worked it out already: the
    * editor's canvas works it out from the document it draws and sends only
    * that. Absent, it is read from `documents`.
@@ -3177,6 +3235,7 @@ export async function readBindingSources(
     reader: args.reader,
     budget: args.budget,
     shapes,
+    ...(args.media === undefined ? {} : { media: args.media }),
   };
   const entry =
     demand.entry === undefined
@@ -3433,6 +3492,9 @@ function routeReadSources(args: {
         page: context.slug,
         ...(context.locale === undefined ? {} : { locale: context.locale }),
         reader: publicReaderFor(config, context.locale, window),
+        // The library the route's images come from, so a binding into a
+        // media item (its alt text) is read as those images are.
+        ...mediaLibraryOf(config),
         budget,
         ...(config.cacheScope === undefined
           ? {}

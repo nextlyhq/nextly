@@ -451,12 +451,18 @@ function designHarness(options: {
     pages: "pages",
     pagesBackfilled: () => true,
     pagesWithSlugs: async () => [],
-    publishedEntries: async (asked, page, size) =>
-      ours(asked)
+    publishedEntries: async (asked, page, size, tx, lifecycle) => {
+      // Read on the write's transaction, so a write holding the pool's last
+      // connection never waits for a second one; and filtered by the
+      // lifecycle the hook read on it.
+      if (tx === undefined) throw new Error("entries read off the write");
+      if (!lifecycle) throw new Error("lifecycle not handed to the read");
+      return ours(asked)
         ? [...state.entries.values()]
             .filter(row => row.status === "published")
             .slice((page - 1) * size, page * size)
-        : [],
+        : [];
+    },
     describe: () => async holder => holder.id,
   };
   const handlers = new Map<string, Handler>();

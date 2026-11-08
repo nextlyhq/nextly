@@ -258,7 +258,14 @@ function instance(content: BlockDocument, extras: SiteExtras = {}) {
       if (runtime.site === null) throw new Error("no site settings");
       return runtime.site;
     }),
-    media: { findByID: vi.fn(async () => null) },
+    media: {
+      findByID: vi.fn(
+        async (_args: {
+          id: string;
+          disableErrors?: boolean;
+        }): Promise<Record<string, unknown> | null> => null
+      ),
+    },
   };
 }
 
@@ -844,6 +851,42 @@ describe("a routed page's bindings", () => {
       const { html } = await renderedPage(createBlocksPage, config, nextly);
       expect(html).toContain('href="/authors"');
       expect(html).not.toContain("/authors/a1");
+    });
+  });
+
+  it("follows a relation into the media library through the library, as the page's images are read", async () => {
+    runtime.shapes.set("collection:pages", [
+      { name: "title", type: "text" },
+      { name: "cover", type: "upload", relationTo: "media" },
+    ]);
+    const page = boundPage({ $bind: "cover.altText" });
+    const nextly = instance(page);
+    // The page's public row points at its cover, and `media` is no
+    // collection a list read finds: asking it for one fails, as it does on
+    // a real instance.
+    nextly.find.mockImplementation(async (args: Record<string, unknown>) => {
+      if (args.collection === "media") throw new Error("not a collection");
+      const rows = rowsFor(args, page, {});
+      const items = isPublicRead(args)
+        ? rows.map(row => ({ ...row, cover: "m1" }))
+        : rows;
+      return { items, meta: { total: 1 } };
+    });
+    nextly.media.findByID.mockImplementation(async ({ id }) =>
+      id === "m1"
+        ? { id: "m1", url: "/m1.jpg", altText: "A harbour at dawn" }
+        : null
+    );
+    const { html } = await renderedPage(
+      createBlocksPage,
+      { collections: ["pages"], field: "content", blocks },
+      nextly
+    );
+    expect(html).toContain("A harbour at dawn");
+    expect(html).not.toContain("Fallback");
+    expect(nextly.media.findByID).toHaveBeenCalledWith({
+      id: "m1",
+      disableErrors: true,
     });
   });
 
