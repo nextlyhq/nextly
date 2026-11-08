@@ -56,6 +56,7 @@ import {
   claimOrWait,
   claimSpace,
   committedClaims,
+  holdersIn,
   lockCollection,
   reconcileHolder,
   releaseClaims,
@@ -814,8 +815,12 @@ async function settleUnserved(
       templatePublished: false,
       ownDesignPublished: () => designs.has(id),
     });
-  const holders = await committedHolders(
+  // Read on the template's write's own transaction, under the lock taken
+  // above: a write holding the pool's last connection never waits for a
+  // second one.
+  const holders = await holdersIn(
     deps.claims,
+    tx,
     { holderCollection: { equals: collection } },
     holder => holder.collection === collection
   );
@@ -1101,7 +1106,9 @@ async function releaseUnaddressed(
 
 /**
  * Every document holding an address or waiting for one, as committed, among
- * the claims `where` narrows to, that `keep` accepts: each once.
+ * the claims `where` narrows to, that `keep` accepts: each once. Read through
+ * the pool, so only outside a transaction (the start-up sweep); a write reads
+ * them on its own with `holdersIn`.
  */
 async function committedHolders(
   claims: Claims,
@@ -1141,8 +1148,11 @@ async function releaseCollection(
   collection: string
 ): Promise<void> {
   await lockCollection(deps.claims, tx, collection);
-  const holders = await committedHolders(
+  // On `tx`, as every read inside a write is: a template's write holding the
+  // pool's last connection never waits for a second one.
+  const holders = await holdersIn(
     deps.claims,
+    tx,
     { holderCollection: { equals: collection } },
     holder => holder.collection === collection
   );

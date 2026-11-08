@@ -174,8 +174,11 @@ async function claimsIn(
   tx: Tx,
   where: Record<string, unknown>,
   matches: (row: ClaimRow) => boolean,
-  /** `update` for a read that goes on to write the rows it read. */
-  lock: "share" | "update" = "share"
+  /**
+   * `update` for a read that goes on to write the rows it read; `none` for
+   * one that only finds which locks to take, before taking them.
+   */
+  lock: "share" | "update" | "none" = "share"
 ): Promise<ClaimRow[]> {
   const { gone, written } = pendingOf(tx);
   const found: ClaimRow[] = [];
@@ -204,6 +207,40 @@ async function claimsIn(
     }
   }
   return found;
+}
+
+/**
+ * Every document holding an address or waiting for one, among the claims
+ * `where` narrows to, that `keep` accepts, each once, as `tx` sees the store:
+ * read on the transaction's own connection, as every read inside a save is,
+ * so a save holding the pool's last connection never waits for a second.
+ * Read holding nothing, as the last commit was read before: it only finds
+ * whom to release, and each is released under its own locks
+ * ({@link releaseClaims}), which a locking read here would precede.
+ */
+export async function holdersIn(
+  claims: Claims,
+  tx: Tx,
+  where: Record<string, unknown>,
+  keep: (holder: Holder) => boolean
+): Promise<Holder[]> {
+  const rows = await claimsIn(
+    claims,
+    tx,
+    { kind: { in: ["address", "waiting"] }, ...where },
+    row =>
+      (row.kind === "address" || row.kind === "waiting") &&
+      row.holder !== null &&
+      keep(row.holder),
+    "none"
+  );
+  const holders = new Map<string, Holder>();
+  for (const { holder } of rows) {
+    if (holder !== null) {
+      holders.set(`${holder.collection}\u0000${holder.id}`, holder);
+    }
+  }
+  return [...holders.values()];
 }
 
 /** The claims keyed by any of `keys` (canonical keys), as `tx` sees them. */
@@ -358,8 +395,10 @@ async function remove(claims: Claims, tx: Tx, row: ClaimRow): Promise<void> {
  * key's index for this one to end. An address's lock row is created by the
  * save that first claims it, so the waits and releases that contend for it
  * later only update it. (On MySQL two saves creating one lock row at once can
- * deadlock; the database then refuses one of them as a conflict to retry, and
- * nothing is claimed by it.)
+ * deadlock. The database then rolls one of them back, and that save fails
+ * with the deadlock, nothing claimed by it: a plugin's transaction is not run
+ * again on a deadlock, so the store avoids them by taking its locks before
+ * the rows they guard, rather than relying on a retry.)
  *
  * SQLite runs one writer at a time, so a transaction there already has every
  * claim to itself, and takes no lock.
@@ -768,17 +807,31 @@ export async function releaseClaims(
   scope: ReleaseScope = {}
 ): Promise<void> {
   const locale = scope.address?.locale ?? scope.locale;
-  const held = await claimsIn(
+  const where = {
+    holderCollection: { equals: holder.collection },
+    holderId: { equals: holder.id },
+    ...(locale === undefined ? {} : { locale: { equals: locale } }),
+  };
+  const mine = (row: ClaimRow) =>
+    sameHolder(row.holder, holder) && inScope(row, scope);
+  // Read twice: once holding nothing, to find the locks to take, and again
+  // under them. A locking read first would hold the holder's rows, and on
+  // MySQL the gaps beside them in its index, while this save waits for an
+  // address's lock; a save holding that lock and writing a wait into one of
+  // those gaps would then wait for this one, and the database would refuse
+  // one of the two as a deadlock.
+  const locks = (await claimsIn(claims, tx, where, mine, "none")).flatMap(
+    locksOf
+  );
+  await lockInOrder(claims, tx, locks);
+  const held = await claimsIn(claims, tx, where, mine);
+  // A claim the holder took between the two reads: its locks as well.
+  const taken = new Set(locks.map(at => claimKey("lock", at)));
+  await lockInOrder(
     claims,
     tx,
-    {
-      holderCollection: { equals: holder.collection },
-      holderId: { equals: holder.id },
-      ...(locale === undefined ? {} : { locale: { equals: locale } }),
-    },
-    row => sameHolder(row.holder, holder) && inScope(row, scope)
+    held.flatMap(locksOf).filter(at => !taken.has(claimKey("lock", at)))
   );
-  await lockInOrder(claims, tx, held.flatMap(locksOf));
   for (const row of held) {
     if (row.kind !== "lock") await remove(claims, tx, row);
   }
