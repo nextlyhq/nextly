@@ -144,23 +144,43 @@ export interface BindingRun {
 export const DEFAULT_BINDING_LOCALE = "en";
 
 /**
+ * The language and time zone a render formats bound values in, from the
+ * page's language and the site's time zone as given: English for a language
+ * absent or unknown to the runtime, UTC for a zone absent or refused.
+ * `timeZoneValid` is false only for a zone given and refused.
+ *
+ * The one answer a render's pass and the editor's previews share, so a
+ * value previewed in the inspector reads as the published page shows it.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function bindingFormatEnv(
+  input: Pick<BindingRunInput, "locale" | "timeZone">
+): { readonly env: FormatEnv; readonly timeZoneValid: boolean } {
+  const zone = safeTimeZone(input.timeZone);
+  return {
+    env: {
+      locale: supportedLocale(input.locale) ?? DEFAULT_BINDING_LOCALE,
+      timeZone: zone.zone,
+    },
+    timeZoneValid: zone.valid,
+  };
+}
+
+/**
  * Start a render's binding pass.
  *
  * @experimental Settles with the editor's binding controls.
  */
 export function createBindingRun(input: BindingRunInput): BindingRun {
-  const zone = safeTimeZone(input.timeZone);
-  const env: FormatEnv = {
-    locale: supportedLocale(input.locale) ?? DEFAULT_BINDING_LOCALE,
-    timeZone: zone.zone,
-  };
+  const { env, timeZoneValid } = bindingFormatEnv(input);
   return {
     sources: input.sources,
     ...(input.entryRef === undefined ? {} : { entryRef: input.entryRef }),
     ...(input.schema === undefined ? {} : { schema: input.schema }),
     props: input.props,
     env,
-    timeZoneValid: zone.valid,
+    timeZoneValid,
     formatter: createBindingFormatter(env),
     ...(input.mediaCollection === undefined
       ? {}

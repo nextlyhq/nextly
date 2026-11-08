@@ -412,8 +412,8 @@ async function insert(
  * A row another save committed after this transaction's snapshot was taken
  * (MySQL's default isolation reads every statement from that snapshot) can
  * be found by the store's reads and still be missing to the delete. The save
- * is then refused as a conflict to retry: nothing it did stands, the row it
- * met is left as it was, and the retry sees it.
+ * is then refused as a conflict and rolls back: nothing it did stands, the
+ * row it met is left as it was, and its caller may save again, which sees it.
  */
 async function remove(claims: Claims, tx: Tx, row: ClaimRow): Promise<void> {
   try {
