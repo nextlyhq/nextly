@@ -41,7 +41,7 @@ import { version as PLUGIN_VERSION } from "../package.json";
 
 import {
   backfillPageClaims,
-  publishedPages,
+  publishedPagesInTransaction,
   type PagesReader,
 } from "./address-claims/backfill";
 import { committedClaims, type Tx } from "./address-claims/claim-store";
@@ -2969,11 +2969,20 @@ export const pageBuilder = (
           ? {}
           : { pathTemplate: opts.pagePreviewPath }),
         backfillDone: () => pageClaimsBackfilled,
-        publishedPages: async function* () {
-          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-          const nextly = (await getCachedNextly()) as unknown as PagesReader;
-          yield* publishedPages(nextly, pagesSlug);
-        },
+        // Hook-free and as the system, as the pages' start-up pass reads
+        // them, on the save's own transaction: a save holding the pool's
+        // last connection never waits for a second one.
+        publishedPages: tx =>
+          publishedPagesInTransaction(
+            (on, options, opts) =>
+              ctx.services.ownCollections.listEntriesInTransaction(
+                on,
+                pagesSlug,
+                options,
+                opts
+              ),
+            tx
+          ),
       });
       pageClaimsBackfill = async () => {
         const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");

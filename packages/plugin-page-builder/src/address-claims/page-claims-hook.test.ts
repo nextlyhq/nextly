@@ -77,7 +77,10 @@ describe("registerPageAddressClaims while the start-up pass runs", () => {
   it("claims a page in a list's way by the address it is served at, in a later batch", async () => {
     const save = hookWith({
       pathTemplate: "/{slug}/{title}",
-      async *publishedPages() {
+      async *publishedPages(tx) {
+        // Walked on the save's own transaction: one holding the pool's last
+        // connection never gets a second.
+        if (tx !== TX) throw new Error("pages walked off the save");
         // Its slug starts with the list's, but it is served at
         // /news/page/2/old, outside the list's later pages.
         yield [

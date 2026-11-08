@@ -72,16 +72,17 @@ const PUBLISHED = { status: { equals: "published" } };
 
 /**
  * Every published page, oldest first (ids are random, so their order says
- * nothing), a batch at a time, as committed. The one walk over a site's
- * pages: the start-up pass claims from it, and a save made while that pass
- * runs finds the pages in its list's way from it. A read that fails throws.
+ * nothing), a batch at a time, as committed, through the pool: the walk the
+ * start-up pass claims from. A save made while that pass runs walks the
+ * pages on its own transaction instead ({@link publishedPagesInTransaction}).
+ * A read that fails throws.
  *
  * Each batch starts after the last page the one before it read, by when it
  * was made and then its id (the order the read sorts by), rather than at a
  * page number: a page unpublished or deleted meanwhile would shift every
  * later one back a place, and a numbered walk would skip one of them.
  */
-export async function* publishedPages(
+async function* publishedPages(
   nextly: PagesReader,
   pages: string
 ): AsyncGenerator<readonly Readonly<Record<string, unknown>>[]> {
@@ -139,6 +140,85 @@ function cursorAfter(row: Readonly<Record<string, unknown>> | undefined): {
     });
   }
   return { createdAt: row.createdAt, id: row.id };
+}
+
+/**
+ * The read {@link publishedPagesInTransaction} makes: the plugin's own
+ * `ownCollections.listEntriesInTransaction` over the Pages collection, on
+ * the transaction `tx` stands for.
+ */
+export type PagesInTransactionRead = (
+  tx: Tx,
+  options: {
+    readonly where: Record<string, unknown>;
+    readonly sort: { readonly field: "id"; readonly direction: "asc" };
+    readonly pagination: { readonly limit: number };
+    readonly depth: 0;
+  },
+  opts: { readonly lock: "none" }
+) => Promise<{ readonly data: readonly unknown[] }>;
+
+/**
+ * Every published page, a batch at a time, read on the transaction `tx`
+ * stands for: the pages a save made while the start-up pass runs finds in
+ * its list's way. On the save's own transaction, so a save holding the
+ * pool's last connection never waits for a second one.
+ *
+ * By id, the one field the read sorts on: the save claims every page it
+ * finds in the way, and any refusal rolls it back whole, so the order says
+ * only which page a refusal names. Each batch starts after the last id the
+ * one before it read, rather than at a page number, so a page unpublished
+ * meanwhile shifts none back a place; and the walk stops on a short batch,
+ * not on the read's total, which is a count made beside it.
+ *
+ * Read with no row lock, as the start-up pass reads a page again: the save
+ * holds its own page row and its claims locks (the page's own, and each
+ * address's it has claimed so far), while another page's save holding its
+ * row can be waiting for one of those locks, so a share lock here would wait
+ * for a save that waits for this one until the database refuses one of
+ * them. Under READ COMMITTED (PostgreSQL's default) the plain read answers
+ * the pages as committed, as the walk through the pool did; under MySQL's
+ * REPEATABLE READ it answers them as the save's snapshot holds them. Either
+ * way a page published after that holds its own claim, taken by its own
+ * save, which the list's claim is judged against under its lock.
+ */
+export async function* publishedPagesInTransaction(
+  read: PagesInTransactionRead,
+  tx: Tx
+): AsyncGenerator<readonly Readonly<Record<string, unknown>>[]> {
+  let after: string | number | null = null;
+  for (;;) {
+    const { data } = await read(
+      tx,
+      {
+        where:
+          after === null
+            ? PUBLISHED
+            : { and: [PUBLISHED, { id: { greater_than: after } }] },
+        sort: { field: "id", direction: "asc" },
+        pagination: { limit: BATCH },
+        depth: 0,
+      },
+      { lock: "none" }
+    );
+    const batch = data as readonly Readonly<Record<string, unknown>>[];
+    yield batch;
+    if (batch.length < BATCH) return;
+    after = idAfter(batch.at(-1));
+  }
+}
+
+/** Where the id walk resumes after `row`; a row with no id throws. */
+function idAfter(
+  row: Readonly<Record<string, unknown>> | undefined
+): string | number {
+  const id = row?.id;
+  if (typeof id !== "string" && typeof id !== "number") {
+    throw NextlyError.internal({
+      logContext: { reason: "page-walk-cursor-missing" },
+    });
+  }
+  return id;
 }
 
 /**
