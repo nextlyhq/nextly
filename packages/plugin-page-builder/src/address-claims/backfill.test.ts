@@ -32,21 +32,27 @@ const TX = {} as Tx;
 function depsOver(
   walk: Record<string, unknown>[],
   now: Record<string, Record<string, unknown> | undefined>
-): BackfillDeps & { find: ReturnType<typeof vi.fn> } {
+): BackfillDeps & {
+  find: ReturnType<typeof vi.fn>;
+  readPage: ReturnType<typeof vi.fn>;
+} {
   const find = vi.fn(async (args: Record<string, unknown>) => {
-    const where = args.where as { id?: { equals: string }; and?: unknown };
-    if (where.id !== undefined) {
-      const row = now[where.id.equals];
-      return { items: row === undefined ? [] : [row] };
-    }
+    const where = args.where as { and?: unknown };
     // The first batch is the walk; one resuming after it finds nothing.
     return { items: where.and === undefined ? walk : [] };
+  });
+  const readPage = vi.fn(async (tx: Tx, id: string) => {
+    // A page is read again on the pass's own transaction, never through a
+    // second connection, which on a pool of one waits for this one.
+    if (tx !== TX) throw new Error("page read off the pass's transaction");
+    return now[id] ?? null;
   });
   return {
     pages: "pages",
     claims: {} as Claims,
     locales: ["en"],
     nextly: { find },
+    readPage,
     withTransaction: async work => work(TX),
     warn: () => undefined,
     find,
@@ -75,7 +81,7 @@ describe("backfillPageClaims", () => {
     expect(reconciledPaths()).toEqual([["/about-us"]]);
     // The page's lock is taken before its row is read again, so a save of
     // it either committed first or waits for the pass.
-    const reread = deps.find.mock.invocationCallOrder[1];
+    const reread = deps.readPage.mock.invocationCallOrder[0];
     expect(vi.mocked(lockHolder).mock.invocationCallOrder[0]).toBeLessThan(
       reread ?? 0
     );
@@ -165,9 +171,9 @@ describe("backfillPageClaims", () => {
       Object.fromEntries(walk.map(row => [row.id, row]))
     );
     expect(await backfillPageClaims(deps)).toBe(true);
-    const reads = deps.find.mock.calls
-      .map(call => call[0] as Record<string, unknown>)
-      .filter(args => !("id" in (args.where as object)));
+    const reads = deps.find.mock.calls.map(
+      call => call[0] as Record<string, unknown>
+    );
     expect(reads).toHaveLength(2);
     expect(reads[1]?.page).toBeUndefined();
     expect(JSON.stringify(reads[1]?.where)).toContain(
