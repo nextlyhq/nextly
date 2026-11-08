@@ -164,11 +164,13 @@ function sourceName(source: BindingFieldSource): string {
 /**
  * The fields of `sources` that fit `prop`, one step into a relation or a
  * group, in the order the picker lists them. A relation or group whose own
- * value does not fit is not offered itself, only what is inside it.
+ * value does not fit is not offered itself, only what is inside it. A value
+ * shown formatted is formatted in `formatIn`, as the page's render formats it.
  */
 function fittingOptions(
   sources: readonly BindingFieldSource[],
-  prop: EditableProp
+  prop: EditableProp,
+  formatIn: ContentServices["bindingFormatIn"]
 ): readonly FieldOption[] {
   const options: FieldOption[] = [];
   sources.forEach((source, index) => {
@@ -179,7 +181,8 @@ function fittingOptions(
         options.push(
           withFormatOnBind(
             option(source, group, field, field.name, label),
-            prop
+            prop,
+            formatIn
           )
         );
       }
@@ -195,7 +198,8 @@ function fittingOptions(
               choiceLabel(inner),
               label
             ),
-            prop
+            prop,
+            formatIn
           )
         );
       }
@@ -231,10 +235,15 @@ function formatOnBind(
   return defaultFormatFor(bindablePropKind(prop.schema), field);
 }
 
-/** An option with the format its pick writes, where it writes one. */
+/**
+ * An option with the format its pick writes, where it writes one, its value
+ * previewed in that format in `formatIn`: the page's language and the site's
+ * time zone.
+ */
 function withFormatOnBind(
   choice: FieldOption,
-  prop: EditableProp
+  prop: EditableProp,
+  formatIn: ContentServices["bindingFormatIn"]
 ): FieldOption {
   const format = formatOnBind(choice.field, prop);
   if (format === undefined) return choice;
@@ -245,7 +254,8 @@ function withFormatOnBind(
     preview,
     format.format,
     bindablePropKind(prop.schema),
-    choice.field
+    choice.field,
+    formatIn
   );
   return {
     ...choice,
@@ -363,7 +373,8 @@ function BindingPicker({
       </p>
     );
   }
-  const options = fittingOptions(sources, prop);
+  // Previewed in the language and zone the canvas formats bound values in.
+  const options = fittingOptions(sources, prop, services?.bindingFormatIn);
   // A source with nothing to offer this prop is not listed: an empty group
   // only lengthens the list.
   const offering = new Set(options.map(option => option.group));

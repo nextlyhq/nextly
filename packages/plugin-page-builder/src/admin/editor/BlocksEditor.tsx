@@ -186,6 +186,11 @@ type EditorView = EditorMount &
     visitorUnreadable: ReturnType<
       typeof useBoundCanvasRender
     >["visitorUnreadable"];
+    /**
+     * What the canvas draws with, the sources its bindings read among them:
+     * the site's time zone, which the inspector previews bound values in.
+     */
+    canvasRender: ReturnType<typeof useBoundCanvasRender>["canvasRender"];
     documentDirty: boolean;
     pageTitle: string | undefined;
     /** "Edit component", and the banner over a component's own view. */
@@ -547,7 +552,12 @@ function servicesFor(
   binding: {
     readonly entry: DocumentIdentity | null;
     readonly page: DocumentIdentity | null;
-  }
+  },
+  /**
+   * The language and time zone the canvas's render formats bound values in,
+   * which the picker previews them in.
+   */
+  formatIn: NonNullable<ContentServices["bindingFormatIn"]>
 ): ContentServices {
   let byLocale = servicesByPassages.get(passages);
   if (byLocale === undefined) {
@@ -556,13 +566,16 @@ function servicesFor(
   }
   // All three in the key, as JSON so no language, collection and person can
   // collide: the list count below reads as the person signed in, and the
-  // recent icons are theirs.
+  // recent icons are theirs. The language and zone previews are formatted in
+  // too, so a zone read after the first draw reaches the picker.
   const key = JSON.stringify([
     locale ?? "",
     entryCollection ?? null,
     userId,
     binding.entry,
     binding.page,
+    formatIn.locale ?? null,
+    formatIn.timeZone ?? null,
   ]);
   const recentIcons = recentIconsStore(userId);
   let services = byLocale.get(key);
@@ -592,6 +605,9 @@ function servicesFor(
       // The fields a binding can read, as this author reads them, kept a
       // short while: the picker opens on every bindable prop.
       listBindingFields: bindingFieldsReader(binding.entry, locale, userId),
+      // The picker's previews in the canvas's language and zone, so a date
+      // or a number reads as the page shows it.
+      bindingFormatIn: formatIn,
       // An unbind's plan against the document the editor holds, by the same
       // decision as the page actions API's.
       ...withPlanUnbind(unbindPlanner(binding.page, locale)),
@@ -686,7 +702,18 @@ function editorInspector(
         view.readMedia,
         view.entryCollection,
         view.userId,
-        { entry: view.bindingEntry, page: view.editedDocument }
+        { entry: view.bindingEntry, page: view.editedDocument },
+        // What the canvas's binding pass is given: the language its context
+        // renders in and the site's zone its bindings carry, as on the
+        // published page.
+        {
+          ...(canvasRender.context?.locale === undefined
+            ? {}
+            : { locale: canvasRender.context.locale }),
+          ...(canvasRender.bindings.timeZone === undefined
+            ? {}
+            : { timeZone: canvasRender.bindings.timeZone }),
+        }
       )}
       // A placement's exposed passage the canvas is editing in place: its
       // field in the placement panel is held meanwhile, as one editor serves

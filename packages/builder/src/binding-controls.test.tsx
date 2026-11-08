@@ -285,22 +285,88 @@ describe("a date or a number picked for a text prop", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Bind Text to a field" })
     );
-    // As the browser's language and zone write them, which the picker uses.
-    const zone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const longDate = new Intl.DateTimeFormat(undefined, {
-      dateStyle: "long",
-      timeZone: zone,
-    }).format(new Date(UPDATED));
+    // A host that names no language or zone: English and UTC, as a page
+    // rendered with neither.
     const date = await screen.findByRole("option", { name: /^Updated at/ });
     expect(date.textContent).toContain("Long date");
-    expect(date.textContent).toContain(longDate);
+    expect(date.textContent).toContain("November 8, 2026");
     expect(date.textContent).not.toContain("2026-11-08T");
     const price = screen.getByRole("option", { name: /^Price/ });
     expect(price.textContent).toContain("Number");
-    expect(price.textContent).toContain(new Intl.NumberFormat().format(1234.5));
+    expect(price.textContent).toContain("1,234.5");
     expect(screen.getByRole("option", { name: /^Code/ }).textContent).toBe(
       "Code2026-11-08"
     );
+  });
+
+  it("previews in the page's language and the site's zone the host names, not the browser's", async () => {
+    // 21:30 UTC on 8 November: the 9th in Karachi, the 8th in Los Angeles.
+    const UPDATED = "2026-11-08T21:30:00.000Z";
+    // The browser's own defaults, in Los Angeles and in English, unlike the
+    // page's, so a preview read from them shows it.
+    const RealDateTimeFormat = Intl.DateTimeFormat;
+    class BrowserDateTimeFormat extends RealDateTimeFormat {
+      constructor(
+        locales?: Intl.LocalesArgument,
+        options?: Intl.DateTimeFormatOptions
+      ) {
+        super(locales ?? "en-US", {
+          timeZone: "America/Los_Angeles",
+          ...options,
+        });
+      }
+    }
+    Object.defineProperty(Intl, "DateTimeFormat", {
+      value: BrowserDateTimeFormat,
+      configurable: true,
+      writable: true,
+    });
+    try {
+      // The control: the stub is what a read of the browser's defaults gets.
+      expect(new Intl.DateTimeFormat().resolvedOptions()).toMatchObject({
+        locale: "en-US",
+        timeZone: "America/Los_Angeles",
+      });
+      mount(undefined, {
+        bindingFormatIn: { locale: "ar-EG", timeZone: "Asia/Karachi" },
+        listBindingFields: async () => [
+          {
+            binding: { source: "entry" },
+            label: "Post",
+            fields: [
+              {
+                name: "updatedAt",
+                type: "date",
+                public: true,
+                preview: UPDATED,
+              },
+              {
+                name: "price",
+                type: "number",
+                public: true,
+                preview: "1234.5",
+              },
+            ],
+          },
+        ],
+      });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Bind Text to a field" })
+      );
+      const date = await screen.findByRole("option", { name: /^Updated at/ });
+      // The 9th in Arabic digits: the browser's zone or UTC would show the
+      // 8th, and its language Latin digits.
+      expect(date.textContent).toContain("٩ نوفمبر ٢٠٢٦");
+      expect(date.textContent).not.toContain("November");
+      const price = screen.getByRole("option", { name: /^Price/ });
+      expect(price.textContent).toContain("١٬٢٣٤٫٥");
+    } finally {
+      Object.defineProperty(Intl, "DateTimeFormat", {
+        value: RealDateTimeFormat,
+        configurable: true,
+        writable: true,
+      });
+    }
   });
 
   it("writes the binding with Long date, in one edit", async () => {

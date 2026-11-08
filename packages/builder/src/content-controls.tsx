@@ -28,6 +28,7 @@ import {
   optionLabel,
   richTextToPlainText,
   type Binding,
+  type BindingRunInput,
   type BlockDocument,
   type FieldStoragePrimitive,
 } from "@nextlyhq/blocks-engine";
@@ -254,6 +255,13 @@ export interface ContentServices {
    * reads it. Absent, a prop offers no binding.
    */
   readonly listBindingFields?: () => Promise<readonly BindingFieldSource[]>;
+  /**
+   * The page's language and the site's time zone, as the canvas's render
+   * formats bound values in them, so the picker previews a date or a number
+   * as the page shows it. Each is resolved as a render resolves it
+   * (`bindingFormatEnv`): absent, English and UTC, as a page with neither.
+   */
+  readonly bindingFormatIn?: Pick<BindingRunInput, "locale" | "timeZone">;
   /**
    * An unbind's plan, made against the document the editor holds by the same
    * decision the page actions API takes: what to write in the binding's place
