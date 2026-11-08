@@ -80,15 +80,6 @@ export async function publishPostsTemplate(t: TestNextly): Promise<string> {
   );
 }
 
-/** The words a refused write gives, as its caller reads them. */
-export function refusalOf(error: unknown): string {
-  const found = error as
-    | { publicMessage?: unknown; message?: unknown }
-    | undefined;
-  if (found === undefined || found === null) return "no refusal";
-  return String(found.publicMessage ?? found.message);
-}
-
 /** The content route's provider, over the test's own instance. */
 export const pageContent = (t: TestNextly): PageBuilderContentProvider =>
   pageBuilderContent({ nextly: t.nextly as never });
@@ -128,20 +119,4 @@ export async function held(t: TestNextly): Promise<string[]> {
         `${String(row.kind)} ${String(row.path)} ${String(row.holderCollection)}:${String(row.holderId)}`
     )
     .sort();
-}
-
-/** Whether a stored document of `collection` has `slug`, in any state. */
-export async function stored(
-  t: TestNextly,
-  collection: string,
-  slug: string
-): Promise<boolean> {
-  const found = await t.nextly.find({
-    collection,
-    overrideAccess: true,
-    status: "all",
-    depth: 0,
-    where: { slug: { equals: slug } },
-  });
-  return found.items.length > 0;
 }
