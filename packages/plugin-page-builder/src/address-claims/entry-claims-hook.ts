@@ -59,6 +59,7 @@ import {
   holdersIn,
   lockCollection,
   reconcileHolder,
+  refuseUnseenHolders,
   releaseClaims,
   sharePending,
   type Claims,
@@ -185,11 +186,16 @@ export interface EntryClaimsDeps {
   /** Whether the start-up pass has claimed every existing page. */
   readonly pagesBackfilled: () => boolean;
   /**
-   * The published pages whose slug is one of `slugs`, as committed, with
-   * the addresses and list spaces each holds: the pages an entry's address
-   * could fall on before the start-up pass has claimed them.
+   * The published pages whose slug is one of `slugs`, with the addresses
+   * and list spaces each holds: the pages an entry's address could fall on
+   * before the start-up pass has claimed them. Read on the write's own
+   * transaction `tx`, so a write holding the pool's last connection never
+   * waits for a second one.
    */
-  readonly pagesWithSlugs: (slugs: readonly string[]) => Promise<
+  readonly pagesWithSlugs: (
+    slugs: readonly string[],
+    tx: Tx
+  ) => Promise<
     readonly {
       id: string;
       addresses: readonly ServedAddress[];
@@ -197,13 +203,17 @@ export interface EntryClaimsDeps {
     }[]
   >;
   /**
-   * One page (from 1) of `collection`'s published entries, as last
-   * committed, oldest first, `size` to a page.
+   * One page (from 1) of `collection`'s published entries, by id, `size` to
+   * a page: every entry where the collection has no Draft/Published
+   * `lifecycle`. Read on the write's own transaction `tx`, so a write
+   * holding the pool's last connection never waits for a second one.
    */
   readonly publishedEntries: (
     collection: string,
     page: number,
-    size: number
+    size: number,
+    tx: Tx,
+    lifecycle: boolean
   ) => Promise<readonly Row[]>;
   /**
    * Names the document an address is held by, in a refusal, reading it on
@@ -544,7 +554,7 @@ async function claimPagesAt(
 ): Promise<void> {
   if (deps.pagesBackfilled() || addresses.length === 0) return;
   const candidates = pageCandidates(addresses);
-  for (const page of await deps.pagesWithSlugs(candidates.slugs)) {
+  for (const page of await deps.pagesWithSlugs(candidates.slugs, tx)) {
     await claimForPage(deps, tx, page, candidates, mode);
   }
 }
@@ -822,12 +832,8 @@ async function settleUnserved(
   // Read on the template's write's own transaction, under the lock taken
   // above: a write holding the pool's last connection never waits for a
   // second one.
-  const holders = await holdersIn(
-    deps.claims,
-    tx,
-    { holderCollection: { equals: collection } },
-    holder => holder.collection === collection
-  );
+  const { where, keep } = entriesClaims(collection);
+  const holders = await holdersIn(deps.claims, tx, where, keep);
   for (const holder of holders) {
     if ((await servedHere(holder.id)) === null) {
       await releaseClaims(deps.claims, tx, holder);
@@ -838,6 +844,29 @@ async function settleUnserved(
     if ((await servedHere(id)) !== null) served.push(id);
   }
   await settleDesigned(deps, tx, collection, address, served);
+  // Last, once every lock taken above is held: an entry whose claim the read
+  // of holders missed is refused rather than left holding an address its
+  // collection no longer serves. Those with a published own design were
+  // settled above, so they are dealt with too.
+  await refuseUnseenHolders(deps.claims, tx, where, keep, [
+    ...holders,
+    ...[...designs].map(id => ({ collection, id })),
+  ]);
+}
+
+/**
+ * The claims held or waited for by `collection`'s entries: `where` narrows a
+ * read to them, and `keep` decides, so the read of holders and the check
+ * made after it select the same claims.
+ */
+function entriesClaims(collection: string): {
+  where: Record<string, unknown>;
+  keep: (holder: Holder) => boolean;
+} {
+  return {
+    where: { holderCollection: { equals: collection } },
+    keep: holder => holder.collection === collection,
+  };
 }
 
 /**
@@ -916,7 +945,11 @@ function servingChanges(
  * Bring every published entry of `collection` to what it should hold at
  * `address`, in `tx`, a page of entries at a time. An entry whose address
  * is held waits for it; one with no address holds nothing. Takes the
- * collection's lock first.
+ * collection's lock first. The entries are read on `tx`, held for share: an
+ * entry's save in flight holds its row and waits for the template's row or
+ * this write's lock, and the database refuses one of the two as a deadlock,
+ * which the adapter runs again, so the second reads what the first
+ * committed.
  */
 async function settleEntries(
   deps: EntryClaimsDeps,
@@ -928,7 +961,13 @@ async function settleEntries(
   await lockCollection(deps.claims, tx, collection);
   const lifecycle = await deps.lifecycle(collection, tx);
   for (let page = 1; ; page += 1) {
-    const rows = await deps.publishedEntries(collection, page, BATCH);
+    const rows = await deps.publishedEntries(
+      collection,
+      page,
+      BATCH,
+      tx,
+      lifecycle
+    );
     for (const row of rows) {
       await settleEntry(deps, tx, collection, address, locales, row, lifecycle);
     }
@@ -1154,13 +1193,13 @@ async function releaseCollection(
   await lockCollection(deps.claims, tx, collection);
   // On `tx`, as every read inside a write is: a template's write holding the
   // pool's last connection never waits for a second one.
-  const holders = await holdersIn(
-    deps.claims,
-    tx,
-    { holderCollection: { equals: collection } },
-    holder => holder.collection === collection
-  );
+  const { where, keep } = entriesClaims(collection);
+  const holders = await holdersIn(deps.claims, tx, where, keep);
   for (const holder of holders) {
     await releaseClaims(deps.claims, tx, holder);
   }
+  // Last, once every lock the releases took is held: an entry whose claim
+  // the read of holders missed is refused rather than left holding an
+  // address in a collection with none.
+  await refuseUnseenHolders(deps.claims, tx, where, keep, holders);
 }

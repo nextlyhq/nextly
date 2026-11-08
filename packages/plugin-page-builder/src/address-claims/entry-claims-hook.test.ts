@@ -20,9 +20,10 @@
  * dialect by `__tests__/template-addresses-runtime.integration.test.ts` and
  * `__tests__/entry-designs.integration.test.ts`.
  */
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
-import { collectionLockKey } from "./claim-key";
+import { claimKey, collectionLockKey, servedAddress } from "./claim-key";
 import { storedKey, type Claims } from "./claim-store";
 import {
   registerEntryAddressClaims,
@@ -59,6 +60,8 @@ function harness(options: {
     published: boolean;
     address: readonly string[] | null;
   } | null)[];
+  /** The claims collection, in place of the one stubbed here. */
+  claims?: Claims;
 }) {
   const steps: string[] = [];
   // The transaction each lifecycle read was asked on.
@@ -72,7 +75,7 @@ function harness(options: {
       ? { data: [GONE_CLAIM], pagination: { total: 1 } }
       : { data: [], pagination: { total: 0 } };
   const lockKey = storedKey(collectionLockKey("events"));
-  const claims = {
+  const stubbed = {
     slug: "address-claims",
     // A dialect that holds locks, so taking one is a write the stub sees.
     dialect: "postgresql",
@@ -114,7 +117,7 @@ function harness(options: {
     },
   } as unknown as Claims;
   const deps: EntryClaimsDeps = {
-    claims,
+    claims: options.claims ?? stubbed,
     addresses: new Map(),
     templates: "templates",
     locales: () => ["en"],
@@ -266,6 +269,184 @@ describe("a template pointed at another collection", () => {
       data: { id: "t1", collection: "events", status: "draft", address: null },
     });
     expect(steps).toContain("delete c1");
+  });
+});
+
+/**
+ * A MySQL claims collection holding an address for each of `collection`'s
+ * entries `ids`, at `/<collection>/<id>`. A read holding nothing leaves out
+ * the claims of the entries `unseen` names, as a snapshot taken before they
+ * were committed would; a locking read returns them.
+ */
+function snapshotClaims(
+  collection: string,
+  ids: readonly string[],
+  unseen: readonly string[]
+) {
+  const rows: Record<string, unknown>[] = ids.map(id => {
+    const path = `/${collection}/${id}`;
+    const address = servedAddress("en", path);
+    if (address === null) throw new Error(`no address at ${path}`);
+    return {
+      id: `claim-${id}`,
+      claimKey: storedKey(claimKey("address", address)),
+      kind: "address",
+      locale: "en",
+      path,
+      holderCollection: collection,
+      holderId: id,
+      space: null,
+      blockedBy: null,
+    };
+  });
+  let made = 0;
+  type Read = {
+    where?: Record<string, { equals?: unknown; in?: readonly unknown[] }>;
+    pagination: { limit: number; page?: number };
+  };
+  const read = (options: Read, lock: string) => {
+    const found = rows.filter(
+      row =>
+        !(lock === "none" && unseen.includes(String(row.holderId))) &&
+        Object.entries(options.where ?? {}).every(([field, test]) =>
+          test.in !== undefined
+            ? test.in.includes(row[field])
+            : test.equals === undefined || row[field] === test.equals
+        )
+    );
+    const { limit, page = 1 } = options.pagination;
+    return {
+      data: found.slice((page - 1) * limit, page * limit),
+      pagination: { total: found.length },
+    };
+  };
+  const claims = {
+    slug: "address-claims",
+    dialect: "mysql",
+    services: {
+      ownCollections: {
+        listEntries: async (_slug: string, options: Read) =>
+          read(options, "none"),
+        listEntriesInTransaction: async (
+          _tx: unknown,
+          _slug: string,
+          options: Read,
+          { lock }: { lock: string }
+        ) => read(options, lock),
+      },
+      collections: {
+        // Only lock rows are created here: nothing is served.
+        createEntryInTransaction: async (
+          _tx: unknown,
+          _slug: string,
+          data: Record<string, unknown>
+        ) => {
+          made += 1;
+          const row = { id: `lock-${made}`, ...data };
+          rows.push(row);
+          return row;
+        },
+        updateEntryInTransaction: async () => ({ item: {} }),
+        deleteEntryInTransaction: async (
+          _tx: unknown,
+          _slug: string,
+          id: string
+        ) => {
+          const index = rows.findIndex(row => row.id === id);
+          if (index >= 0) rows.splice(index, 1);
+          return {};
+        },
+      },
+    },
+  } as unknown as Claims;
+  /** The entries still holding an address, by id. */
+  const holding = () =>
+    rows
+      .filter(row => row.kind === "address")
+      .map(row => String(row.holderId))
+      .sort();
+  return { claims, holding };
+}
+
+/** A template moved from `gone` to `events`, leaving `gone` with no address. */
+const MOVED_AWAY = {
+  operation: "update",
+  id: "t1",
+  originalData: {
+    id: "t1",
+    collection: "gone",
+    status: "published",
+    address: "/gone",
+  },
+  data: { id: "t1", collection: "events", status: "draft", address: null },
+};
+
+/** `events`' template unpublished, its address kept. */
+const UNPUBLISHED = {
+  operation: "update",
+  id: "t1",
+  originalData: {
+    id: "t1",
+    collection: "events",
+    status: "published",
+    address: "/events",
+  },
+  data: {
+    id: "t1",
+    collection: "events",
+    status: "draft",
+    address: "/events",
+  },
+};
+
+describe("a template's write that leaves a collection's entries unserved", () => {
+  it("gives up every address its entries hold when both reads of them agree", async () => {
+    const { claims, holding } = snapshotClaims("gone", ["e8", "e9"], []);
+    const { writeTemplate } = harness({ mayHaveTemplate: true, claims });
+    await writeTemplate(MOVED_AWAY);
+    expect(holding()).toEqual([]);
+  });
+
+  it("is refused, when its read of the holders missed one, rather than leaving it served", async () => {
+    const { claims, holding } = snapshotClaims("gone", ["e8", "e9"], ["e8"]);
+    const { writeTemplate } = harness({ mayHaveTemplate: true, claims });
+    const written = writeTemplate(MOVED_AWAY);
+    await expect(written).rejects.toMatchObject({
+      logContext: { reason: "address-holders-read-raced", holder: "gone/e8" },
+    });
+    const error: unknown = await written?.catch((caught: unknown) => caught);
+    expect(NextlyError.isCode(error, "CONFLICT")).toBe(true);
+    // The entry the first read saw was released before the check; the write
+    // fails, so its transaction keeps neither.
+    expect(holding()).toEqual(["e8"]);
+  });
+
+  it("gives up the addresses of entries with no published own design when it unpublishes", async () => {
+    const { claims, holding } = snapshotClaims("events", ["e8", "e9"], []);
+    const { writeTemplate } = harness({
+      mayHaveTemplate: true,
+      template: { published: false, address: ["events"] },
+      claims,
+    });
+    await writeTemplate(UNPUBLISHED);
+    expect(holding()).toEqual([]);
+  });
+
+  it("is refused, when it unpublishes and its read of the holders missed one", async () => {
+    const { claims, holding } = snapshotClaims("events", ["e8", "e9"], ["e8"]);
+    const { writeTemplate } = harness({
+      mayHaveTemplate: true,
+      template: { published: false, address: ["events"] },
+      claims,
+    });
+    const written = writeTemplate(UNPUBLISHED);
+    await expect(written).rejects.toMatchObject({
+      logContext: {
+        reason: "address-holders-read-raced",
+        holder: "events/e8",
+      },
+    });
+    expect(holding()).toEqual(["e8"]);
   });
 });
 
@@ -451,12 +632,18 @@ function designHarness(options: {
     pages: "pages",
     pagesBackfilled: () => true,
     pagesWithSlugs: async () => [],
-    publishedEntries: async (asked, page, size) =>
-      ours(asked)
+    publishedEntries: async (asked, page, size, tx, lifecycle) => {
+      // Read on the write's transaction, so a write holding the pool's last
+      // connection never waits for a second one; and filtered by the
+      // lifecycle the hook read on it.
+      if (tx === undefined) throw new Error("entries read off the write");
+      if (!lifecycle) throw new Error("lifecycle not handed to the read");
+      return ours(asked)
         ? [...state.entries.values()]
             .filter(row => row.status === "published")
             .slice((page - 1) * size, page * size)
-        : [],
+        : [];
+    },
     describe: () => async holder => holder.id,
   };
   const handlers = new Map<string, Handler>();

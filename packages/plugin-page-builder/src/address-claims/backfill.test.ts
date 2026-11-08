@@ -7,7 +7,12 @@
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { backfillPageClaims, type BackfillDeps } from "./backfill";
+import {
+  backfillPageClaims,
+  publishedPagesInTransaction,
+  type BackfillDeps,
+  type PagesInTransactionRead,
+} from "./backfill";
 import {
   claimOrWait,
   claimSpaceOrWait,
@@ -34,36 +39,28 @@ function depsOver(
   now: Record<string, Record<string, unknown> | undefined>
 ): BackfillDeps & {
   find: ReturnType<typeof vi.fn>;
-  reread: ReturnType<typeof vi.fn>;
+  readPage: ReturnType<typeof vi.fn>;
 } {
-  // The walk, through the Direct API, outside any transaction.
   const find = vi.fn(async (args: Record<string, unknown>) => {
     const where = args.where as { and?: unknown };
     // The first batch is the walk; one resuming after it finds nothing.
     return { items: where.and === undefined ? walk : [] };
   });
-  // A page read again inside the pass's transaction, on that transaction.
-  const reread = vi.fn(
-    async (
-      _tx: Tx,
-      _slug: string,
-      read: { where: { id: { equals: string } } }
-    ) => {
-      const row = now[read.where.id.equals];
-      return { data: row === undefined ? [] : [row] };
-    }
-  );
+  const readPage = vi.fn(async (tx: Tx, id: string) => {
+    // A page is read again on the pass's own transaction, never through a
+    // second connection, which on a pool of one waits for this one.
+    if (tx !== TX) throw new Error("page read off the pass's transaction");
+    return now[id] ?? null;
+  });
   return {
     pages: "pages",
-    claims: {
-      services: { collections: { listEntriesInTransaction: reread } },
-    } as unknown as Claims,
+    claims: {} as Claims,
     locales: ["en"],
     nextly: { find },
+    readPage,
     withTransaction: async work => work(TX),
     warn: () => undefined,
     find,
-    reread,
   };
 }
 
@@ -88,13 +85,11 @@ describe("backfillPageClaims", () => {
     expect(await backfillPageClaims(deps)).toBe(true);
     expect(reconciledPaths()).toEqual([["/about-us"]]);
     // The page's lock is taken before its row is read again, so a save of
-    // it either committed first or waits for the pass, and the row is read
-    // on the pass's own transaction, never through the pool.
-    const reread = deps.reread.mock.invocationCallOrder[0];
+    // it either committed first or waits for the pass.
+    const reread = deps.readPage.mock.invocationCallOrder[0];
     expect(vi.mocked(lockHolder).mock.invocationCallOrder[0]).toBeLessThan(
       reread ?? 0
     );
-    expect(deps.reread.mock.calls[0]?.[0]).toBe(TX);
     expect(vi.mocked(lockHolder).mock.calls[0]?.[2]).toEqual({
       collection: "pages",
       id: "p",
@@ -243,5 +238,84 @@ describe("backfillPageClaims", () => {
     const deps = depsOver([], {});
     deps.find.mockRejectedValueOnce(new Error("down"));
     expect(await backfillPageClaims(deps)).toBe(false);
+  });
+});
+
+describe("publishedPagesInTransaction", () => {
+  /**
+   * A read over `stored`'s published pages as the facade answers one: on
+   * the save's transaction only, by id ascending, after the id the where
+   * names, `limit` to a batch.
+   */
+  function readOver(stored: readonly Record<string, unknown>[]) {
+    return vi.fn<PagesInTransactionRead>(async (tx, options) => {
+      if (tx !== TX) throw new Error("pages read off the save's transaction");
+      const after = JSON.stringify(options.where).match(
+        /"greater_than":"([^"]+)"/
+      )?.[1];
+      const data = stored
+        .filter(row => row.status === "published")
+        .filter(row => after === undefined || String(row.id) > after)
+        .sort((a, b) => (String(a.id) < String(b.id) ? -1 : 1))
+        .slice(0, options.pagination.limit);
+      return { data };
+    });
+  }
+
+  async function walked(read: PagesInTransactionRead): Promise<string[][]> {
+    const batches: string[][] = [];
+    for await (const batch of publishedPagesInTransaction(read, TX)) {
+      batches.push(batch.map(row => String(row.id)));
+    }
+    return batches;
+  }
+
+  it("reads every published page on the save's transaction, a batch after the last id", async () => {
+    // 100 to a batch: 230 published pages take three reads, and a draft
+    // among them is never answered.
+    const ids = Array.from(
+      { length: 230 },
+      (_, at) => `p${String(at).padStart(3, "0")}`
+    );
+    const read = readOver([
+      ...ids.map(id => ({ id, status: "published" })),
+      { id: "p050x", status: "draft" },
+    ]);
+    const batches = await walked(read);
+    expect(batches.map(batch => batch.length)).toEqual([100, 100, 30]);
+    expect(batches.flat()).toEqual(ids);
+    expect(read).toHaveBeenCalledTimes(3);
+    const [first, second] = read.mock.calls;
+    expect(first?.[1].where).toEqual({ status: { equals: "published" } });
+    expect(second?.[1].where).toEqual({
+      and: [
+        { status: { equals: "published" } },
+        { id: { greater_than: "p099" } },
+      ],
+    });
+    for (const call of read.mock.calls) {
+      expect(call[1].sort).toEqual({ field: "id", direction: "asc" });
+      // No row lock: the save holds claims locks another page's save,
+      // holding its own row, may be waiting for.
+      expect(call[2]).toEqual({ lock: "none" });
+    }
+  });
+
+  it("stops on a short batch, reading no further", async () => {
+    const read = readOver([
+      { id: "a", status: "published" },
+      { id: "b", status: "published" },
+    ]);
+    expect(await walked(read)).toEqual([["a", "b"]]);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to resume after a page with no id", async () => {
+    const read = vi.fn<PagesInTransactionRead>(async () => ({
+      data: Array.from({ length: 100 }, () => ({ status: "published" })),
+    }));
+    await expect(walked(read)).rejects.toSatisfy((error: unknown) =>
+      NextlyError.isCode(error, "INTERNAL_ERROR")
+    );
   });
 });

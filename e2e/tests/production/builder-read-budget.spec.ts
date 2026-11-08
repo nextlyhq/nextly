@@ -7,6 +7,10 @@
  * warns from; fifty make 501, past the 500 a page may make, so the last reads
  * are refused and their lists named.
  *
+ * A page made published a moment before it is opened, and opened at one of
+ * its blocks, is counted too: the meter says what it reads, never "Counting
+ * reads" for good.
+ *
  * @module tests/builder-read-budget.spec
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
@@ -81,6 +85,44 @@ async function seed(
   return ((await response.json()) as { item: { id: string } }).item.id;
 }
 
+/** The heading a published page is opened at. */
+const HEADING = "00000000-0000-4000-8000-000000000a01";
+
+/** A page of a heading and a text, made published through the API. */
+async function seedPublished(
+  api: APIRequestContext,
+  mark: string
+): Promise<string> {
+  const response = await api.post(PAGES, {
+    data: {
+      title: `${mark} published`,
+      slug: `read-budget-${mark.toLowerCase()}-published`,
+      status: "published",
+      content: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: HEADING,
+            type: "core/heading",
+            version: 1,
+            name: "Published heading",
+            props: { text: "A published page", level: "h2" },
+          },
+          {
+            id: "00000000-0000-4000-8000-000000000a02",
+            type: "core/text",
+            version: 1,
+            props: { text: "Read nothing." },
+          },
+        ],
+      },
+    },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  return ((await response.json()) as { item: { id: string } }).item.id;
+}
+
 /** Sign in through the real form; dev auto-login is blocked here. */
 async function signIn(page: Page): Promise<void> {
   await page.goto("/admin");
@@ -93,8 +135,12 @@ async function signIn(page: Page): Promise<void> {
   await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
 }
 
-async function openBuilder(page: Page, id: string): Promise<void> {
-  await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
+async function openBuilder(page: Page, id: string, at?: string): Promise<void> {
+  const block = at === undefined ? "" : `&block=${at}`;
+  await gotoAdmin(
+    page,
+    `/collections/pages/${id}/builder?field=content${block}`
+  );
   await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
     timeout: 60_000,
   });
@@ -171,5 +217,28 @@ test.describe("the page reads meter", () => {
         name: list,
       })
     ).toHaveAttribute("aria-current", "true");
+  });
+
+  test("counts a page made published a moment before, opened at one of its blocks", async ({
+    page,
+  }) => {
+    await signIn(page);
+    const mark = `R${Date.now().toString(36)}`;
+    await openBuilder(page, await seedPublished(page.request, mark), HEADING);
+    // Opened at the heading: the breadcrumb ends on it.
+    await expect(
+      page
+        .getByRole("list", { name: "Current location" })
+        .getByRole("button", { name: "Published heading" })
+    ).toHaveAttribute("aria-current", "true", { timeout: 30_000 });
+    // Counted a moment after the canvas drew it: a heading and a text read
+    // nothing.
+    await expect(meter(page)).toHaveAccessibleName("0 of 500 reads", {
+      timeout: 20_000,
+    });
+    // CONTROL: neither still counting nor a count that could not be made.
+    await expect(
+      page.getByRole("button", { name: /^(Counting|Couldn't count)/ })
+    ).toHaveCount(0);
   });
 });

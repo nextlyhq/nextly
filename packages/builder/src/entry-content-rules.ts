@@ -18,6 +18,7 @@ import {
   ENTRY_CONTENT_FIELD_PROP,
   ENTRY_CONTENT_TYPE,
   entryContentFieldOf,
+  entryContentIssues,
   entryContentPlacements,
   findNode,
   holdsEntryContent,
@@ -76,6 +77,30 @@ export function duplicationRefusal(
   const node = findNode(document.nodes, id);
   return node !== undefined && holdsEntryContent(node)
     ? ENTRY_CONTENT_ONE_REASON
+    : undefined;
+}
+
+/**
+ * Why the blocks `ids` of `document` cannot become a `kind`, a pattern or a
+ * component (Save as pattern, Update a pattern, Turn into component), or
+ * `undefined` where none of them holds Entry content. Asked of the save's own
+ * rule (`entryContentIssues`), with the blocks as that kind would hold them:
+ * it refuses Entry content anywhere but a template, and neither is one.
+ */
+export function compositionEntryContentRefusal(
+  document: BlockDocument,
+  ids: readonly string[],
+  kind: "pattern" | "component"
+): string | undefined {
+  const selected = ids.flatMap(id => {
+    const node = findNode(document.nodes, id);
+    return node === undefined ? [] : [node];
+  });
+  const refused = entryContentIssues(selected, { documentKind: kind }).some(
+    issue => issue.code === "entry-content-outside-template"
+  );
+  return refused
+    ? `Entry content belongs in its template, so it can’t be saved in a ${kind}.`
     : undefined;
 }
 

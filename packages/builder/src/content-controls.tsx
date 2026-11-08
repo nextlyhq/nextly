@@ -27,6 +27,7 @@ import {
   ITEM_SCHEMA_MAX_DEPTH,
   optionLabel,
   richTextToPlainText,
+  type Binding,
   type BlockDocument,
   type FieldStoragePrimitive,
 } from "@nextlyhq/blocks-engine";
@@ -259,6 +260,13 @@ export interface ContentServices {
    * and why, or why it can't be kept. Absent, a bound prop offers no unbind.
    */
   readonly planUnbind?: (ask: UnbindAsk) => Promise<UnbindPlanAnswer>;
+  /**
+   * Where a binding's source is edited in the admin: the entry's edit
+   * screen, the Single's, or the site settings. `undefined` for a source the
+   * host has no screen for, such as a list's item, which leaves a bound
+   * prop's menu without "Open source".
+   */
+  readonly sourceHref?: (binding: Binding) => string | undefined;
   /**
    * How many entries a list's stored query matches as the canvas reads them,
    * and how many of those its window shows, from one count read. Asked only
