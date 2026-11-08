@@ -46,7 +46,7 @@ import { CardGrowContext, grownRows } from "../frame/grow";
 import type { AnswerSize } from "../frame/tier";
 import { CardHiddenReportContext } from "../hidden-while-empty";
 import type { MoveDirection } from "../layout-editor";
-import type { PlacementReport } from "../reported-placements";
+import type { PlacementReport, SpanReport } from "../reported-placements";
 import { cardSpanClass, drawnSize } from "../sizes";
 import { settingsAsAsked, titleAsAsked } from "../widget-as-asked";
 import { WidgetRenderer } from "../WidgetRenderer";
@@ -139,10 +139,11 @@ export interface ArrangedCellProps {
    */
   fitsContent?: boolean;
   /**
-   * Where the cell reports whether it is drawn across other rows than it stores (grown to show
-   * more, or collapsed to one line), which keeps the cards sharing its rows at their stored height.
+   * Where the cell reports the rows it is drawn across when they are not its stored rows (grown
+   * to show more, or collapsed to one line), and `undefined` once they are again: the grid places
+   * the cards after it by them, and keeps the cards sharing its rows at their stored height.
    */
-  reportOffStored?: PlacementReport;
+  reportDrawnRows?: SpanReport;
   /** Registers the card's controls, so focus can be sent back to them. */
   refs: {
     menu: (element: HTMLElement | null) => void;
@@ -660,13 +661,14 @@ function useSettingsSheet(props: ArrangedCellProps, hasSettings: boolean) {
  * does not let it, and for a card that grows or collapses, which its rows already size.
  * `undefined` in customise mode, whose rows are fixed. `reportFit` is offered to the body only
  * where its band lets it, so neither the body nor its loading state asks for a height the cell
- * would not draw; and the grid is told when the card spans other rows than it stores
- * (`useReportOffStored`).
+ * would not draw; and the grid is told the rows the card spans when they are not its stored rows
+ * (`useReportDrawnRows`). Those rows follow the body's own reports (grown, collapsed) and never
+ * the fit verdict they feed, so the report cannot come back round to change them.
  */
 function useBodyRows(
   storedRows: number,
   isEditing: boolean,
-  band: Pick<ArrangedCellProps, "fitsContent" | "reportOffStored"> & {
+  band: Pick<ArrangedCellProps, "fitsContent" | "reportDrawnRows"> & {
     placementId: string;
   }
 ): {
@@ -688,10 +690,10 @@ function useBodyRows(
   const rows = isEditing
     ? storedRows
     : collapsedRows(grownRows(storedRows, contentHeight), collapsed);
-  useReportOffStored(
-    band.reportOffStored,
+  useReportDrawnRows(
+    band.reportDrawnRows,
     band.placementId,
-    !isEditing && rows !== storedRows
+    isEditing || rows === storedRows ? undefined : rows
   );
   const fits = band.fitsContent === true && !isEditing;
   const fitted = fits && contentHeight === undefined && !collapsed;
@@ -707,21 +709,21 @@ function useBodyRows(
 }
 
 /**
- * Tells the grid whether the card at `placementId` is drawn across other rows than it stores
- * (`offStored`: grown to show more, or collapsed to one line), which keeps the cards sharing its
- * rows at their stored height (`row-bands`). Told before the paint, as the rows it spans change,
- * and withdrawn as the cell leaves.
+ * Tells the grid the rows the card at `placementId` is drawn across when they are not its stored
+ * rows (`drawnRows`: grown to show more, or collapsed to one line), `undefined` when they are
+ * (`row-bands`). Told before the paint, as the rows it spans change, and withdrawn as the cell
+ * leaves.
  */
-function useReportOffStored(
-  report: PlacementReport | undefined,
+function useReportDrawnRows(
+  report: SpanReport | undefined,
   placementId: string,
-  offStored: boolean
+  drawnRows: number | undefined
 ): void {
   useLayoutEffect(() => {
-    report?.(placementId, offStored);
-  }, [report, placementId, offStored]);
+    report?.(placementId, drawnRows);
+  }, [report, placementId, drawnRows]);
   useLayoutEffect(
-    () => () => report?.(placementId, false),
+    () => () => report?.(placementId, undefined),
     [report, placementId]
   );
 }
@@ -756,7 +758,7 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   const { rows, requestPx, collapse, setContentHeight, reportFit } =
     useBodyRows(size.h, isEditing, {
       fitsContent: props.fitsContent,
-      reportOffStored: props.reportOffStored,
+      reportDrawnRows: props.reportDrawnRows,
       placementId: row.placementId,
     });
   // The card's report, bound to this placement. Only the card drawn in the cell is told it: the

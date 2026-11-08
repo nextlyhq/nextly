@@ -7,15 +7,17 @@ import { describe, expect, it } from "vitest";
 
 import { contentSizedPlacements, type BandCard } from "../row-bands";
 
-const card = (id: string, span: number, rows: number): BandCard => ({
-  id,
-  span,
-  rows,
-});
+/** A card drawn at `rows`, its stored rows unless `drawnRows` says it grew or collapsed. */
+const card = (
+  id: string,
+  span: number,
+  rows: number,
+  drawnRows = rows
+): BandCard => ({ id, span, rows: drawnRows, storedRows: rows });
 
-/** The placements that may fit, sorted, with nothing drawn off its stored rows. */
-const fitting = (cards: BandCard[], offStored: string[] = []) =>
-  [...contentSizedPlacements(cards, new Set(offStored))].sort();
+/** The placements that may fit, sorted. */
+const fitting = (cards: BandCard[]) =>
+  [...contentSizedPlacements(cards)].sort();
 
 describe("contentSizedPlacements", () => {
   it("lets two cards that share their rows exactly fit, and the full-width cards above and below", () => {
@@ -61,7 +63,20 @@ describe("contentSizedPlacements", () => {
     // A card grown to show more, or collapsed to one line, no longer spans the rows its band
     // shares.
     expect(
-      fitting([card("attention", 8, 4), card("releases", 4, 4)], ["attention"])
+      fitting([card("attention", 8, 4, 6), card("releases", 4, 4)])
     ).toEqual([]);
+  });
+
+  it("places the cards after a grown card by the rows it is drawn across, not the rows it stores", () => {
+    // 🔴 Fails where the walk reads stored rows: three half-width cards four rows high put the
+    // third on a row of its own, a band it fits alone. Grown to six rows, the first leaves room
+    // beside it under the second, so the third shares the first's rows and is drawn in its band.
+    const halves = (grown?: number) => [
+      card("first", 6, 4, grown),
+      card("second", 6, 4),
+      card("third", 6, 4),
+    ];
+    expect(fitting(halves())).toEqual(["first", "second", "third"]);
+    expect(fitting(halves(6))).toEqual([]);
   });
 });

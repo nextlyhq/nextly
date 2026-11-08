@@ -18,14 +18,15 @@
  * at its content's height has no body edge to fold rows behind: a list that fills its body, or
  * folds rows behind "Show N more", keeps its stored height. While one of the widgets whose bodies
  * report (`CONTENT_SIZED_WIDGETS`) is loading, its cell asks for the height a one-item answer
- * takes ({@link useLoadingFitsOneItem}), so the common answer lands at the height the loading
- * card already stood at and nothing below it moves. Nothing is written to the layout, and
+ * takes where that answer is one list row ({@link useLoadingFitsOneItem}), so the common answer
+ * lands at the height the loading card already stood at and nothing below it moves. Nothing is written to the layout, and
  * never in customise mode, where the rows are fixed and the card's stored size is what is being
  * edited.
  *
  * @module components/features/widgets/frame/fit
  */
 
+import type { SizeTier } from "@nextlyhq/ui/format";
 import type { ListDensity } from "nextly/config";
 import {
   createContext,
@@ -40,7 +41,7 @@ import { cardHeightPx, cardRowStyle } from "../sizes";
 
 import { LIST_ROW_HEIGHT_PX, rowsInBody, useListDensity } from "./list-rows";
 import { cardBodyHeightPx } from "./measures";
-import { CardHeightContext } from "./tier";
+import { CardHeightContext, useCardTier } from "./tier";
 
 /** Report the body height a card's content takes, in pixels, or `undefined` for its own rows. */
 export type ReportFitHeight = (bodyPx: number | undefined) => void;
@@ -99,9 +100,24 @@ export function oneItemBodyPx(density: ListDensity): number {
 }
 
 /**
+ * Whether the card of `widgetId`, drawn at `tier`, is a content-sized widget
+ * (`CONTENT_SIZED_WIDGETS`) whose one-item answer is one list row there ({@link oneItemBodyPx}):
+ * not at the large tier for a widget whose answer is a table there, whose heading row has no
+ * fixed height to reserve before it is drawn.
+ */
+export function oneItemIsOneListRow(
+  widgetId: string | undefined,
+  tier: SizeTier
+): boolean {
+  const widget =
+    widgetId === undefined ? undefined : CONTENT_SIZED_WIDGETS.get(widgetId);
+  return widget !== undefined && !(widget.tableAtLargeTier && tier === "large");
+}
+
+/**
  * While the card of `widgetId` is loading, asks its cell for the height a one-item answer takes
- * ({@link oneItemBodyPx}) where it is one of the content-sized widgets (`CONTENT_SIZED_WIDGETS`),
- * and only where that one item would leave a row of its stored body empty, as the answered body
+ * ({@link oneItemBodyPx}) where that answer is one list row at the card's tier
+ * ({@link oneItemIsOneListRow}), and only where that one item would leave a row of its stored body empty, as the answered body
  * reports by ({@link leavesRowsEmpty}); its stored height otherwise. Withdrawn in a layout effect's
  * cleanup as the loading state leaves, before the body that replaces it reports in its own, so
  * the cell is asked once per commit and a one-item answer asks for the height already drawn.
@@ -113,13 +129,15 @@ export function useLoadingFitsOneItem(widgetId: string | undefined): boolean {
   const report = useContext(CardFitContext);
   const storedRows = useContext(CardHeightContext);
   const density = useListDensity();
+  // Medium until the card has measured itself, as the bodies' own tier is; measured before the
+  // paint, so a card that turns out large withdraws the request before it is drawn.
+  const tier = useCardTier() ?? "medium";
   // Only where a cell takes the request: a card drawn with no cell to tell, as the settings
   // sheet's preview is at its stored height, keeps its full skeleton rather than one row in a
   // tall, mostly blank card.
   const fits =
     report !== undefined &&
-    widgetId !== undefined &&
-    CONTENT_SIZED_WIDGETS.has(widgetId) &&
+    oneItemIsOneListRow(widgetId, tier) &&
     leavesRowsEmpty(1, storedRows, density);
   useLayoutEffect(() => {
     if (report === undefined) return;

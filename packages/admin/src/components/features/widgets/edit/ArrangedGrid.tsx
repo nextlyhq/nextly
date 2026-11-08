@@ -44,7 +44,10 @@ import {
   type MoveDirection,
 } from "../layout-editor";
 import { widenLoneOfPair, WidenLonePairContext } from "../lone-pair";
-import { useReportedPlacements } from "../reported-placements";
+import {
+  useReportedPlacements,
+  useReportedSpans,
+} from "../reported-placements";
 import { contentSizedPlacements } from "../row-bands";
 import {
   cardRowStyle,
@@ -436,18 +439,18 @@ const NONE_FITTING: ReadonlySet<string> = new Set();
  * The placements whose cards may be drawn at their content's height at rest
  * (`contentSizedPlacements`): the cards on show, placed in their order at the columns they are
  * drawn across at the dashboard's width (their own `w`, or the width the grid draws them at in
- * its place) and their stored rows, banded by the rows they share. A cell reports here when it is
- * drawn across other rows than it stores (`reportOffStored`), which keeps its band at stored
- * heights. None while customising, whose rows are fixed, and none before the dashboard has a
- * width to place the cards at.
+ * its place) and the rows each is drawn across now, banded by the rows they share. A cell reports
+ * here the rows it spans when they are not its stored rows (`reportDrawnRows`), so a card grown or
+ * collapsed moves the cards after it in the walk as it does in the grid, and keeps its band at
+ * stored heights. None while customising, whose rows are fixed, and none before the dashboard has
+ * a width to place the cards at.
  */
 function useContentSized(
   rows: ArrangedWidget[],
   isEditing: boolean,
   shown: { hidden: ReadonlySet<string>; widths: ReadonlyMap<string, number> }
 ) {
-  const { placements: offStored, report: reportOffStored } =
-    useReportedPlacements();
+  const { spans, report: reportDrawnRows } = useReportedSpans();
   const dashboardWidth = useDashboardWidthAround();
   const { hidden, widths } = shown;
   const fitting = useMemo(() => {
@@ -460,12 +463,13 @@ function useContentSized(
         return {
           id: row.placementId,
           span: drawnSpan(w, dashboardWidth),
-          rows: size.h,
+          rows: spans.get(row.placementId) ?? size.h,
+          storedRows: size.h,
         };
       });
-    return contentSizedPlacements(cards, offStored);
-  }, [rows, isEditing, dashboardWidth, hidden, widths, offStored]);
-  return { fitting, reportOffStored };
+    return contentSizedPlacements(cards);
+  }, [rows, isEditing, dashboardWidth, hidden, widths, spans]);
+  return { fitting, reportDrawnRows };
 }
 
 export function ArrangedGrid({
@@ -491,7 +495,7 @@ export function ArrangedGrid({
     answers
   );
   // Which cards may stand at their content's height: those whose band of rows is even.
-  const { fitting, reportOffStored } = useContentSized(rows, isEditing, {
+  const { fitting, reportDrawnRows } = useContentSized(rows, isEditing, {
     hidden,
     widths,
   });
@@ -547,7 +551,7 @@ export function ArrangedGrid({
             )}
             reportHidden={reportHidden}
             fitsContent={fitting.has(row.placementId)}
-            reportOffStored={reportOffStored}
+            reportDrawnRows={reportDrawnRows}
             // The same rule the move applies, so an item is enabled exactly
             // when choosing it would move the card.
             can={moveAvailability(placements, row.placementId, isDrawn)}

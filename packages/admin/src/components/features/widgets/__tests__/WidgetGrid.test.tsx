@@ -10,7 +10,14 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { useEffect, useRef, useState, type JSX, type ReactNode } from "react";
+import {
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type JSX,
+  type ReactNode,
+} from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LIST_ROW_HEIGHT_PX } from "nextly/card-geometry";
@@ -24,6 +31,7 @@ import {
 import type { AdminBranding } from "@admin/types/branding";
 
 import { useCardCollapsed } from "../frame/collapse";
+import { CardGrowContext } from "../frame/grow";
 import {
   oneItemBodyPx,
   requestedCardHeightPx,
@@ -859,6 +867,42 @@ describe("WidgetGrid — sizing", () => {
     expect(requested(four)).toBe(`${cardHeightPx(4)}px`);
     expect(three.style.gridRow).toBe("span 3 / span 3");
     expect(four.style.gridRow).toBe("span 4 / span 4");
+  });
+
+  it("bands a card after a grown one by the rows the grown card is drawn across", async () => {
+    // 🔴 Fails where the cards are banded at their stored rows: there the third half-width card
+    // sits on a row of its own and fits, 166 px, though the grid draws it beside the grown first
+    // card, whose rows then size it as well.
+    function Growing() {
+      const grow = useContext(CardGrowContext);
+      return (
+        <button type="button" onClick={() => grow?.(cardBodyHeightPx(6))}>
+          Grow
+        </button>
+      );
+    }
+    registerComponents({
+      "@acme/admin#Grow": Growing,
+      "@acme/admin#Fit": fittingBody(LIST_ROW_HEIGHT_PX.default),
+    });
+    mockBranding = brandingWith([
+      fitted("first", 6, 4, "@acme/admin#Grow"),
+      fitted("second", 6, 4, "@acme/admin#Fit"),
+      fitted("third", 6, 4, "@acme/admin#Fit"),
+    ]);
+    renderGrid();
+    const first = screen.getByTestId("widget-cell-first");
+    const third = screen.getByTestId("widget-cell-third");
+    await within(third).findByRole("button", { name: "Fill" });
+    // Unchanged, the third card has a row of its own and asks for its content's height.
+    expect(requested(third)).toBe(
+      `${requestedCardHeightPx(4, LIST_ROW_HEIGHT_PX.default)}px`
+    );
+
+    fireEvent.click(within(first).getByRole("button", { name: "Grow" }));
+    expect(first.style.gridRow).toBe("span 6 / span 6");
+    // Six rows high, the first card leaves room beside it for the third, which shares its rows.
+    expect(requested(third)).toBe(`${cardHeightPx(4)}px`);
   });
 
   it("draws a loading content-sized card at its stored height, with its full skeleton, where its band of rows is uneven", async () => {

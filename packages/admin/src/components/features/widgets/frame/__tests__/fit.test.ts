@@ -11,6 +11,7 @@ import {
   cellRowStyle,
   leavesRowsEmpty,
   oneItemBodyPx,
+  oneItemIsOneListRow,
   requestedCardHeightPx,
 } from "../fit";
 import { cardBodyHeightPx } from "../measures";
@@ -60,6 +61,20 @@ describe("oneItemBodyPx", () => {
     expect(requestedCardHeightPx(4, oneItemBodyPx("default"))).toBe(
       FRAME + LIST_ROW_HEIGHT_PX.default
     );
+  });
+});
+
+describe("oneItemIsOneListRow", () => {
+  it("is yes for the content-sized widgets at every tier their one item is a list row, and no elsewhere", () => {
+    // 🔴 Fails where Upcoming releases reserves a list row at the large tier, where its answer is
+    // a table; and where Needs your attention, a list at every tier, stops reserving there.
+    for (const tier of ["small", "medium", "large"] as const) {
+      expect(oneItemIsOneListRow("core/needs-attention", tier)).toBe(true);
+    }
+    expect(oneItemIsOneListRow("core/upcoming-releases", "medium")).toBe(true);
+    expect(oneItemIsOneListRow("core/upcoming-releases", "large")).toBe(false);
+    expect(oneItemIsOneListRow("core/recent-entries", "medium")).toBe(false);
+    expect(oneItemIsOneListRow(undefined, "medium")).toBe(false);
   });
 });
 

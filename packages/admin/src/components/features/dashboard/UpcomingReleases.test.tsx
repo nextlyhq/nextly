@@ -313,4 +313,30 @@ describe("the upcoming rows", () => {
     expect(answered.mock.calls.at(-1)?.[0]).toBe(asked);
     measure.mockRestore();
   });
+
+  it("asks for nothing while loading at the large tier, where its answer is a table", () => {
+    // 🔴 Fails where the loading card reserves one list row at every tier: at the large tier its
+    // answer is a heading row over table rows, whose heading has no fixed height, so the row
+    // would grow as the answer lands and the table skeleton would be cut at the card's foot.
+    const report = vi.fn();
+    const loading = render(
+      <CardFitContext.Provider value={report}>
+        <WidgetCard
+          title="Upcoming releases"
+          widgetId="core/upcoming-releases"
+          tier="large"
+          h={4}
+          state={{ kind: "loading" }}
+          skeleton="rows"
+        >
+          {null}
+        </WidgetCard>
+      </CardFitContext.Provider>
+    );
+    expect(report.mock.calls.at(-1)?.[0]).toBeUndefined();
+    loading.unmount();
+    // The table it would have reserved for: drawn at the large tier.
+    draw(answer([release(1)]), "large");
+    expect(screen.getByTestId("list-card-table")).toBeInTheDocument();
+  });
 });

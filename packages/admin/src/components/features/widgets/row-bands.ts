@@ -17,26 +17,36 @@
 
 import { gridPlacements } from "./edit/drag/drop-geometry";
 
-/** A drawn card as the rule reads it: its placement, its drawn columns and its stored rows. */
+/** A drawn card as the rule reads it: its placement, its drawn columns and rows, and its stored rows. */
 export interface BandCard {
   id: string;
   /** The columns it is drawn across at the dashboard's width. */
   span: number;
-  /** The rows it spans: its stored height. */
+  /**
+   * The rows it is drawn across now: its stored rows, or the rows it grew to or collapsed to,
+   * which decide where the cards after it land.
+   */
   rows: number;
+  /** The rows its placement stores. */
+  storedRows: number;
 }
 
-/** A card placed on the grid: the first row it spans and the row after its last. */
+/**
+ * A card placed on the grid: the first row it spans, the row after its last, and whether those
+ * are other rows than it stores.
+ */
 interface PlacedRows {
   id: string;
   start: number;
   end: number;
+  offStored: boolean;
 }
 
 /**
  * The cards in `cards`, in their order, grouped into bands: the cards whose rows overlap, each
  * with the next, through any card between them. Placed as the grid places them
- * (`gridPlacements`), so a band is a stretch of rows the grid sizes together.
+ * (`gridPlacements`), at the rows each is drawn across now, so a band is a stretch of rows the
+ * grid sizes together.
  */
 function rowBands(cards: readonly BandCard[]): PlacedRows[][] {
   // One cell per card, in the cards' order.
@@ -44,7 +54,12 @@ function rowBands(cards: readonly BandCard[]): PlacedRows[][] {
   const placed = cards
     .map((card, index) => {
       const start = cells[index].row;
-      return { id: card.id, start, end: start + Math.max(card.rows, 1) };
+      return {
+        id: card.id,
+        start,
+        end: start + Math.max(card.rows, 1),
+        offStored: card.rows !== card.storedRows,
+      };
     })
     .sort((a, b) => a.start - b.start);
   const bands: PlacedRows[][] = [];
@@ -65,22 +80,19 @@ function rowBands(cards: readonly BandCard[]): PlacedRows[][] {
 /**
  * The placements that may be drawn at their content's height: those in a band
  * ({@link rowBands}) whose cards all start on one row and span as many rows. None in a band that
- * holds a card in `offStored`, one drawn across other rows than it stores (grown to show more,
- * or collapsed to one line), whose rows the band's other cards would no longer share. A lone card
- * is a band of its own.
+ * holds a card drawn across other rows than it stores (grown to show more, or collapsed to one
+ * line): its cell asks for the height of the rows it is drawn across, which its band's other
+ * cards are not certain to share. A lone card is a band of its own.
  */
 export function contentSizedPlacements(
-  cards: readonly BandCard[],
-  offStored: ReadonlySet<string>
+  cards: readonly BandCard[]
 ): ReadonlySet<string> {
   const fitting = new Set<string>();
   for (const band of rowBands(cards)) {
     const [first] = band;
     const even = band.every(
       card =>
-        card.start === first.start &&
-        card.end === first.end &&
-        !offStored.has(card.id)
+        card.start === first.start && card.end === first.end && !card.offStored
     );
     if (even) for (const card of band) fitting.add(card.id);
   }
