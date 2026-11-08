@@ -85,6 +85,55 @@ interface FieldOption extends ListedChoice {
 }
 
 /**
+ * A link's props, where the prop being bound is a link's destination: its
+ * address and the two halves of the entry reference it follows first.
+ */
+interface EntryLink {
+  readonly link: string;
+  readonly collection: string;
+  readonly id: string;
+}
+
+/**
+ * The edit a pick makes. A related entry's id fills the link's entry: its
+ * collection is set to the relation's in the same edit, since a pick writes
+ * both halves of the reference at once, and the address and a stored entry
+ * id are emptied, since the button follows the entry before the address.
+ * Any other pick binds `prop`, emptying `clearsOnBind`.
+ */
+function pickOp(
+  at: {
+    readonly document: BlockDocument;
+    readonly nodeId: string;
+    readonly prop: string;
+    readonly clearsOnBind: readonly string[] | undefined;
+    readonly entryLink: EntryLink | undefined;
+  },
+  picked: FieldOption,
+  kept: Binding | undefined
+): BuilderOp | null {
+  const entry = at.entryLink;
+  const collection = picked.field.linksTo;
+  if (entry === undefined || collection === undefined) {
+    return bindOp(
+      at.document,
+      at.nodeId,
+      at.prop,
+      bindingFor(picked, kept),
+      at.clearsOnBind
+    );
+  }
+  return bindOp(
+    at.document,
+    at.nodeId,
+    entry.id,
+    bindingFor(picked, kept),
+    [entry.link, entry.id],
+    { [entry.collection]: collection }
+  );
+}
+
+/**
  * The binding a pick writes: the path, the source when not the entry, and
  * the format the option names, where it names one.
  */
@@ -165,17 +214,25 @@ function sourceName(source: BindingFieldSource): string {
  * The fields of `sources` that fit `prop`, one step into a relation or a
  * group, in the order the picker lists them. A relation or group whose own
  * value does not fit is not offered itself, only what is inside it.
+ *
+ * A related entry's id (`linksTo`) is offered only for a link, whose entry it
+ * fills; the link's entry id, bound, is changed only to another such id.
  */
 function fittingOptions(
   sources: readonly BindingFieldSource[],
-  prop: EditableProp
+  prop: EditableProp,
+  entryLink: EntryLink | undefined
 ): readonly FieldOption[] {
+  const offered = (field: BindingFieldChoice): boolean =>
+    field.linksTo !== undefined
+      ? entryLink !== undefined
+      : prop.name !== entryLink?.id && fits(field, prop);
   const options: FieldOption[] = [];
   sources.forEach((source, index) => {
     const group = String(index);
     for (const field of source.fields) {
       const label = choiceLabel(field);
-      if (fits(field, prop)) {
+      if (offered(field)) {
         options.push(
           withFormatOnBind(
             option(source, group, field, field.name, label),
@@ -184,7 +241,7 @@ function fittingOptions(
         );
       }
       for (const inner of field.fields ?? []) {
-        if (!fits(inner, prop)) continue;
+        if (!offered(inner)) continue;
         options.push(
           withFormatOnBind(
             option(
@@ -342,11 +399,14 @@ function BindingPicker({
   blockLabel,
   services,
   current,
+  entryLink,
   onPick,
 }: {
   prop: EditableProp;
   blockLabel: string;
   services: ContentServices | undefined;
+  /** The link's entry, where the prop is a link's destination. */
+  entryLink: EntryLink | undefined;
   /** The prop's binding when it has one, marked in the list. */
   current: Binding | undefined;
   onPick: (option: FieldOption) => void;
@@ -363,7 +423,7 @@ function BindingPicker({
       </p>
     );
   }
-  const options = fittingOptions(sources, prop);
+  const options = fittingOptions(sources, prop, entryLink);
   // A source with nothing to offer this prop is not listed: an empty group
   // only lengthens the list.
   const offering = new Set(options.map(option => option.group));
@@ -435,6 +495,12 @@ export interface BindingControlProps {
    * bind or a change of field that would empty one is held.
    */
   readonly clearsLocked?: readonly string[] | undefined;
+  /**
+   * Where the prop is a link's destination, or its bound entry id: the
+   * link's props. The picker then offers the entries a relation names, and a
+   * pick of one binds the link's entry (see `pickOp`).
+   */
+  readonly entryLink?: EntryLink | undefined;
   /** The prop's own control, drawn while it is not bound. */
   readonly children: React.ReactNode;
 }
@@ -488,6 +554,7 @@ function BindButton({
   onApply,
   clearsOnBind,
   clearsLocked,
+  entryLink,
   onBound,
   onRefused,
 }: BindingControlProps & {
@@ -539,15 +606,14 @@ function BindButton({
           blockLabel={blockLabel}
           services={services}
           current={undefined}
+          entryLink={entryLink}
           onPick={picked => {
             pickedIn.current =
               trigger.current?.closest(".nx-inspector__fields") ?? null;
-            const op = bindOp(
-              document,
-              nodeId,
-              prop.name,
-              bindingFor(picked, undefined),
-              clearsOnBind
+            const op = pickOp(
+              { document, nodeId, prop: prop.name, clearsOnBind, entryLink },
+              picked,
+              undefined
             );
             setOpen(false);
             if (op === null || !onApply(op)) {
@@ -815,10 +881,13 @@ function BoundValueRows({
   services,
   disabled,
   labelId,
+  textFallback,
   onRebind,
 }: {
   prop: EditableProp;
   binding: Binding;
+  /** Whether a text fallback is offered where the prop's value is text. */
+  textFallback: boolean;
   /** The field the binding reads, once its source's fields are read. */
   field: NamedField | undefined;
   services: ContentServices | undefined;
@@ -844,7 +913,7 @@ function BoundValueRows({
           describedBy={labelId}
           onFallback={next => onRebind(withFallback(binding, next))}
         />
-      ) : takesTextFallback(prop) ? (
+      ) : textFallback && takesTextFallback(prop) ? (
         // A text input writes text: offered for a prop whose value is text
         // alone, so a number's, a choice's or a passage's fallback is never
         // rewritten.
@@ -1211,6 +1280,7 @@ function BoundField({
   onApply,
   clearsOnBind,
   clearsLocked,
+  entryLink,
   onUnbound,
 }: Omit<BindingControlProps, "binding" | "children"> & {
   binding: Binding;
@@ -1287,13 +1357,12 @@ function BoundField({
               blockLabel={blockLabel}
               services={services}
               current={binding}
+              entryLink={entryLink}
               onPick={picked => {
-                const op = bindOp(
-                  document,
-                  nodeId,
-                  prop.name,
-                  bindingFor(picked, binding),
-                  clearsOnBind
+                const op = pickOp(
+                  { document, nodeId, prop: prop.name, clearsOnBind, entryLink },
+                  picked,
+                  binding
                 );
                 close();
                 // A refusal said of the earlier field is no longer true; one
@@ -1310,6 +1379,9 @@ function BoundField({
           services={services}
           disabled={disabled}
           labelId={labelId}
+          // A link's entry id has no fallback a person could type: with no
+          // entry read, the link keeps its own address.
+          textFallback={prop.name !== entryLink?.id}
           // One write for the fallback and the format alike: the binding
           // replaced, as a pick replaces it.
           onRebind={next => {

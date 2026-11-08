@@ -44,7 +44,12 @@ export function bindOp(
   id: string,
   prop: string,
   binding: Binding,
-  clear: readonly string[] = []
+  clear: readonly string[] = [],
+  /**
+   * Props set in the same edit: what the bound value needs beside it, such
+   * as the collection of the entry a link's bound id names.
+   */
+  set: Readonly<Record<string, unknown>> = {}
 ): BuilderOp | null {
   const node = findNode(document.nodes, id);
   if (node === undefined) return null;
@@ -53,10 +58,21 @@ export function bindOp(
     ? { ...node.props }
     : {};
   const held = clear.filter(name => Object.hasOwn(props, name));
-  if (held.length === 0) {
+  const setting = Object.entries(set);
+  if (held.length === 0 && setting.length === 0) {
     return { kind: "update", id, patch: { bindings } };
   }
   for (const name of held) delete props[name];
+  for (const [name, value] of setting) {
+    // Defined rather than assigned, so a prop's name can't reach the
+    // prototype.
+    Object.defineProperty(props, name, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
   return { kind: "update", id, patch: { bindings, props } };
 }
 

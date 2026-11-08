@@ -108,7 +108,11 @@ import { InstanceInspectorPanel } from "./instance-inspector-panel";
 import { commitLinkChanges } from "./link-control";
 import { LookInspector, type LookEditing } from "./look-inspector";
 import { useCanvasTokenModeAt } from "./prefers-dark";
-import { propGroupsOf, type BindableWrapper } from "./prop-groups";
+import {
+  propGroupsOf,
+  type BindableOptions,
+  type BindableWrapper,
+} from "./prop-groups";
 import { selectionLock } from "./selection-ops";
 import { StyleStateField } from "./state-switcher";
 import {
@@ -576,6 +580,20 @@ function surfaceFor(
  * component: the scope holds the removal dialog and hands every control the
  * binding, so the panel below draws the same whichever document it edits.
  */
+/**
+ * The prop whose binding a group's lead is drawn with: a link whose entry is
+ * bound, and not its address, is drawn as its entry's chip in the address's
+ * place.
+ */
+function drawnBinding(
+  lead: string,
+  entry: BindableOptions["entryLink"],
+  bindings: Readonly<Record<string, unknown>> | undefined
+): string {
+  if (entry === undefined || bindings?.[lead] !== undefined) return lead;
+  return bindings?.[entry.id] === undefined ? lead : entry.id;
+}
+
 export function InspectorPanel({
   componentFields,
   componentVariants,
@@ -1501,9 +1519,12 @@ function ContentFields({
   // row gets, for the props the group offers: one chip, one menu and one
   // note for every bindable prop, wherever it is drawn.
   const bindableIn = (offered: ReadonlySet<string>): BindableWrapper =>
-    function wrapBindable(name, field, options) {
+    function wrapBindable(lead, field, options) {
+      const entry = options?.entryLink;
+      const name = drawnBinding(lead, entry, bindings);
       const prop = inspection.props.find(each => each.name === name);
-      if (prop === undefined || !prop.offered || !offered.has(name)) {
+      // Offered by the group's lead: a bound entry id is drawn in its place.
+      if (prop === undefined || !prop.offered || !offered.has(lead)) {
         return field;
       }
       const clears = options?.clearsOnBind ?? [];
@@ -1513,6 +1534,7 @@ function ContentFields({
           prop={prop}
           blockLabel={inspection.label}
           binding={bindings?.[name]}
+          entryLink={entry}
           document={document}
           services={services}
           disabled={!writable(name)}

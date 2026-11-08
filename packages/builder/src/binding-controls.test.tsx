@@ -28,7 +28,7 @@ import {
   within,
 } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { BindingFieldSource, UnbindPlanAnswer } from "./binding-services";
 import type { ContentServices } from "./content-controls";
@@ -36,6 +36,25 @@ import type { EditorState } from "./editor-state";
 import { inspectSelection } from "./inspector";
 import { InspectorPanel } from "./inspector-panel";
 import { propGroupsOf } from "./prop-groups";
+
+beforeAll(() => {
+  // What the picker asks of an element and of CSS, which jsdom does not
+  // draw: its active option scrolled into view, and a chip found by an
+  // escaped id once a pick closes it.
+  const element = window.Element.prototype as unknown as Record<
+    string,
+    unknown
+  >;
+  element.scrollIntoView = function scrollIntoView(): void {};
+  const css = (globalThis as { CSS?: { escape?: (text: string) => string } })
+    .CSS;
+  if (css?.escape === undefined) {
+    Object.defineProperty(globalThis, "CSS", {
+      value: { ...css, escape: (text: string) => text.replace(/["\\]/g, "\\$&") },
+      configurable: true,
+    });
+  }
+});
 
 afterEach(() => {
   cleanup();
@@ -53,13 +72,23 @@ const SOURCES: readonly BindingFieldSource[] = [
       // A date reaches text only through a format: offered with the one a
       // pick writes, named beside it.
       { name: "publishedOn", type: "date", public: true },
-      // A relation itself can't fill text, but its own fields can.
+      // A relation itself can't fill text, but its own fields can; the
+      // entry's own id fills only a link's entry, never a text prop.
       {
         name: "author",
         type: "relationship",
         relationTo: "users",
         public: true,
-        fields: [{ name: "name", type: "text", public: true, preview: "Ada" }],
+        fields: [
+          { name: "name", type: "text", public: true, preview: "Ada" },
+          {
+            name: "id",
+            type: "text",
+            label: "Link to this entry",
+            linksTo: "users",
+            public: true,
+          },
+        ],
       },
     ],
   },
@@ -553,6 +582,144 @@ describe("a link's address bound inside its group", () => {
       id: "b",
       patch: { bindings: { href: { $bind: "website" } } },
     });
+  });
+});
+
+describe("a link's entry bound to the entry a relation names", () => {
+  /** A button whose link may point at an entry, as `core/button` declares it. */
+  function mountButton(
+    props: Record<string, unknown>,
+    bindings?: BlockNode["bindings"]
+  ): EditorState {
+    registerBlocks(
+      [
+        {
+          name: "acme/cta",
+          version: 1,
+          description: "A call to action.",
+          example: { props: {} },
+          editor: { label: "Call to action" },
+          props: {
+            label: { label: "Label", role: "content", type: "text" },
+            href: { label: "Link", role: "content", type: "url" },
+            entryCollection: { label: "Entry collection", type: "text" },
+            entryId: { label: "Entry", type: "text" },
+          },
+          defaultProps: {},
+          render: () => null,
+        },
+      ] as never,
+      { source: "binding-controls-entry-link-test" }
+    );
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "b",
+          type: "acme/cta",
+          version: 1,
+          props,
+          ...(bindings === undefined ? {} : { bindings }),
+        },
+      ],
+    } as BlockDocument;
+    const editor = {
+      document,
+      selectedId: "b",
+      selection: { ids: ["b"], primary: "b" },
+      applyAll: vi.fn(() => document),
+      select: vi.fn(),
+      apply: vi.fn(() => document),
+      undo: vi.fn(),
+      redo: vi.fn(),
+      canUndo: false,
+      canRedo: false,
+      undoDepth: 0,
+      composed: () => undefined,
+    } as unknown as EditorState;
+    render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{ listBindingFields: async () => SOURCES }}
+      />
+    );
+    return editor;
+  }
+
+  it("offers the author's entry for the link, and not for the label", async () => {
+    mountButton({ label: "Read more" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Link to a field" })
+    );
+    const link = await screen.findByRole("listbox", {
+      name: "Fields for Link",
+    });
+    expect(
+      within(link)
+        .getAllByRole("option")
+        .map(option => option.textContent)
+    ).toContain("Author › Link to this entry");
+    fireEvent.keyDown(link, { key: "Escape" });
+    cleanup();
+    clearBlocks();
+    // The control: the label, a text prop the id would fit by type alone.
+    mountButton({ label: "Read more" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Label to a field" })
+    );
+    const label = await screen.findByRole("listbox", {
+      name: "Fields for Label",
+    });
+    const names = within(label)
+      .getAllByRole("option")
+      .map(option => option.textContent);
+    expect(names).toContain("Author › NameAda");
+    expect(names.some(name => name?.includes("Link to this entry"))).toBe(
+      false
+    );
+  });
+
+  it("binds the entry's id and sets its collection, emptying the address, in one edit", async () => {
+    const editor = mountButton({
+      label: "Read more",
+      href: "/about",
+      entryId: "p1",
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Link to a field" })
+    );
+    const list = await screen.findByRole("listbox", {
+      name: "Fields for Link",
+    });
+    const entry = within(list)
+      .getAllByRole("option")
+      .find(option => option.textContent === "Author › Link to this entry");
+    if (entry === undefined) throw new Error("The author's entry is not offered.");
+    fireEvent.click(entry);
+    expect(vi.mocked(editor.apply)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(editor.apply).mock.calls[0]?.[0]).toEqual({
+      kind: "update",
+      id: "b",
+      patch: {
+        bindings: { entryId: { $bind: "author.id" } },
+        props: { label: "Read more", entryCollection: "users" },
+      },
+    });
+  });
+
+  it("draws the bound entry's chip in the link's place, with no fallback to type", async () => {
+    mountButton(
+      { label: "Read more", entryCollection: "users" },
+      { entryId: { $bind: "author.id" } }
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Entry: bound to Author › Link to this entry of this post",
+      })
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Bind Link to a field" })).toBeNull();
+    expect(screen.queryByLabelText("Fallback")).toBeNull();
   });
 });
 
