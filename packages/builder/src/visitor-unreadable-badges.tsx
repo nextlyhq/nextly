@@ -60,7 +60,6 @@ import {
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
-import { useMediaSummary, type MediaSummary } from "./content-controls";
 import { watchCanvasFor, watchScreenBand } from "./canvas-geometry-watch";
 import {
   overlaps,
@@ -69,6 +68,7 @@ import {
   type TabAt,
   type TabDraft,
 } from "./canvas-tab-places";
+import { useMediaSummary, type MediaSummary } from "./content-controls";
 import type { Rect } from "./geometry";
 import {
   canvasContentRect,
@@ -458,6 +458,9 @@ export function VisitorUnreadableBadges({
             <div
               className="nx-visitor-unreadable__badge"
               data-badge-node={id}
+              // One attribute per place, so the stylesheet shapes each
+              // badge's corners from its own place alone.
+              data-above={place.at === "above" ? "" : undefined}
               data-inside={place.at === "inside" ? "" : undefined}
               data-below={place.at === "below" ? "" : undefined}
               data-tip-start={place.tipFromStart ? "" : undefined}
