@@ -10,6 +10,7 @@
  * the same button for each prop the group binds, and none for its qualifiers.
  */
 import {
+  applyOp,
   bindablePropKind,
   clearBlocks,
   registerBlocks,
@@ -104,13 +105,20 @@ function mount(
       } as BlockNode,
     ],
   } as BlockDocument;
+  let current = document;
   const editor = {
     document,
     selectedId: "a",
     selection: { ids: ["a"], primary: "a" },
     applyAll: vi.fn(() => document),
     select: vi.fn(),
-    apply: vi.fn(() => document),
+    // As the editor applies an edit: the op on the document it holds, the
+    // result drawn, so a binding removed is drawn removed.
+    apply: vi.fn((op: BuilderOp) => {
+      current = applyOp(current, op).document;
+      replaceDocument(current);
+      return current;
+    }),
     undo: vi.fn(),
     redo: vi.fn(),
     canUndo: false,
@@ -127,6 +135,7 @@ function mount(
   );
   // As the editor publishes an applied edit: a new document object, drawn.
   replaceDocument = next => {
+    current = next;
     view.rerender(
       <InspectorPanel
         editor={{ ...editor, document: next } as EditorState}

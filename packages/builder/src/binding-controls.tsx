@@ -38,6 +38,7 @@ import {
   PopoverAnchor,
   PopoverContent,
   PopoverTrigger,
+  Textarea,
 } from "@nextlyhq/ui";
 import {
   Check,
@@ -453,7 +454,16 @@ export function BindableField(props: BindingControlProps): React.JSX.Element {
   if (binding !== undefined) {
     return <BoundField {...props} binding={binding} onUnbound={setNote} />;
   }
-  if (!bindable) return <>{children}</>;
+  // No bind button where no field can fill it or none are listed; an
+  // unbind's note is still said.
+  if (!bindable) {
+    return (
+      <>
+        {children}
+        {note === null ? null : <UnboundNote note={note} />}
+      </>
+    );
+  }
   return (
     <div className="nx-binding-row">
       <div className="nx-binding-row__field">{children}</div>
@@ -842,6 +852,8 @@ function BoundValueRows({
           describedBy={labelId}
           fallback={fallback}
           disabled={disabled}
+          // A long-text prop keeps its fallback's line breaks.
+          multiline={prop.schema.type === "textarea"}
           onCommit={next => onRebind(withFallback(binding, next))}
         />
       ) : null}
@@ -880,14 +892,23 @@ function useUnbind(args: {
   // The document as the editor holds it now, read when a plan comes back.
   const latest = React.useRef(args.document);
   latest.current = args.document;
+  // Whether the field is still drawn, and an unbind still being planned: a
+  // plan answered after the field is gone (its prop already unbound) or a
+  // second one asked meanwhile is dropped, since neither can see the
+  // document as it is by then.
+  const mounted = React.useRef(true);
+  const pending = React.useRef(false);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const { nodeId, prop, binding, services } = args;
-  return async () => {
-    const plan = await planOf(services, {
-      document: latest.current,
-      nodeId,
-      prop: prop.name,
-    });
-    if (plan === undefined) return;
+  // A plan's answer, applied to the document as it is now: refused where it
+  // is one, where the binding changed meanwhile, or where the editor refuses
+  // the edit.
+  const settle = (plan: UnbindPlanAnswer): void => {
     if ("refusal" in plan) {
       args.onRefused(plan.refusal);
       return;
@@ -909,6 +930,18 @@ function useUnbind(args: {
       text: args.note(plan.answer),
       tone: plan.answer.unreadable === true ? "private" : "kept",
     });
+  };
+  return async () => {
+    if (pending.current) return;
+    pending.current = true;
+    const plan = await planOf(services, {
+      document: latest.current,
+      nodeId,
+      prop: prop.name,
+    }).finally(() => {
+      pending.current = false;
+    });
+    if (plan !== undefined && mounted.current) settle(plan);
   };
 }
 
@@ -932,31 +965,41 @@ function FallbackInput({
   describedBy,
   fallback,
   disabled,
+  multiline,
   onCommit,
 }: {
   describedBy: string;
   fallback: string;
   disabled: boolean;
+  /** A textarea prop's: a one-line input would drop its line breaks. */
+  multiline: boolean;
   onCommit: (next: string) => void;
 }): React.JSX.Element {
   const id = React.useId();
+  const field = {
+    id,
+    defaultValue: fallback,
+    disabled,
+    title: fallback === "" ? undefined : `Fallback: ${fallback}`,
+    "aria-describedby": describedBy,
+    onBlur: (
+      event: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>
+    ) => {
+      const next = event.currentTarget.value;
+      if (next !== fallback) onCommit(next);
+    },
+  };
   return (
     <div className="nx-binding__fallback">
       <label className="nx-binding__fallback-label" htmlFor={id}>
         Fallback
       </label>
-      <Input
-        id={id}
-        key={fallback}
-        defaultValue={fallback}
-        disabled={disabled}
-        title={fallback === "" ? undefined : `Fallback: ${fallback}`}
-        aria-describedby={describedBy}
-        onBlur={event => {
-          const next = event.currentTarget.value;
-          if (next !== fallback) onCommit(next);
-        }}
-      />
+      {/* Keyed by the stored value, so a value written elsewhere is shown. */}
+      {multiline ? (
+        <Textarea key={fallback} {...field} rows={3} />
+      ) : (
+        <Input key={fallback} {...field} />
+      )}
     </div>
   );
 }
