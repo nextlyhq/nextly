@@ -271,9 +271,12 @@ expectTypeOf<keyof NodeVisibility>().toEqualTypeOf<"conditions" | "devices">();
 // The token-reference convention. `$token` is the marker that keeps a reference
 // self-describing in raw JSON, parallel to `$bind`, and renaming it would make
 // every stored reference read as an ordinary object — accepted by the schema,
-// which publishes style values unconstrained, and silently unresolved.
-expectTypeOf<keyof TokenRef>().toEqualTypeOf<"$token">();
+// which publishes style values unconstrained, and silently unresolved. The
+// optional `times` scales a length or number token, so a reference written
+// before it existed still reads as one.
+expectTypeOf<keyof TokenRef>().toEqualTypeOf<"$token" | "times">();
 expectTypeOf<TokenRef["$token"]>().toEqualTypeOf<string>();
+expectTypeOf<TokenRef["times"]>().toEqualTypeOf<number | undefined>();
 
 // States on one axis, breakpoints on the other, both sparse. Flattening either
 // level is a storage migration rather than a refactor.

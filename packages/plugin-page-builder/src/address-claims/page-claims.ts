@@ -50,12 +50,11 @@ export function pageClaims(
   if (param === null) return NONE;
   // Where the host serves its pages, by the interpolation its preview and
   // the page search use, so a claim names the address a visitor requests.
+  // The interpolation only reads the entry, so the read-only data passes as is.
   const path =
     pathTemplate === undefined
       ? `/${param.slug.map(encodeURIComponent).join("/")}`
-      : previewUrlFromTemplate(pathTemplate, { pathFields: ["slug"] })(
-          data as Record<string, unknown>
-        );
+      : previewUrlFromTemplate(pathTemplate, { pathFields: ["slug"] })(data);
   if (path === null) return NONE;
   const addresses = locales.flatMap(locale => {
     const address = servedAddress(locale, path);
