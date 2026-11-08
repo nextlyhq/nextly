@@ -434,6 +434,7 @@ export async function countPageReads(
     listsShowingEmpty: _empty,
     listsStillShowing: _still,
     listsShowingVisitors: _visitors,
+    listShown: _shown,
     listPage: _listPage,
     ...base
   } = drawnContext ?? createStandaloneContext();

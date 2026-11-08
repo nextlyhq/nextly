@@ -294,7 +294,10 @@ export interface ItemMarkerSources {
 export function itemHiddenAsOf(sources: ItemMarkerSources): ItemHiddenAs {
   return (node, item) => {
     const preview = itemPreviewOf(sources, item);
-    const verdict = evaluateConditions(storedGate(node), inputOf(preview));
+    // The whole node, as the renderer judged it: its own conditions and the
+    // gates of a placement it was expanded from (`within`), which hide a
+    // component's otherwise unconditioned root.
+    const verdict = evaluateConditions(node, inputOf(preview));
     // The renderer asks only about a block the item hides; a verdict that
     // says otherwise draws the block's place empty rather than a false mark.
     if (verdict.shown) return undefined;

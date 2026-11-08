@@ -524,6 +524,29 @@ describe("what the canvas draws where a list's item hides a block", () => {
     ).toBeUndefined();
   });
 
+  it("is drawn for a component's root a placement's carried gate hides", () => {
+    // A conditioned placement inside a list's entries: composition carries
+    // its gate onto the component's root, which has no conditions of its own.
+    const root = block("root", {
+      visibility: {
+        within: [{ conditions: [[guides]] }],
+      } as unknown as BlockNode["visibility"],
+    });
+    const marker = hiddenAs(root, {
+      values: { category: "News" },
+      collection: "posts",
+      fields: FIELDS,
+    });
+    expect(marker).toMatchObject({ id: "root", type: CONDITION_HIDDEN_TYPE });
+    expect(
+      hiddenAs(root, {
+        values: { category: "Guides" },
+        collection: "posts",
+        fields: FIELDS,
+      })
+    ).toBeUndefined();
+  });
+
   it("judges a named query's row by the fields the renderer judged it by", () => {
     // A row of a query with its own schema: no collection, its fields
     // handed over by the renderer, which just judged it with them.

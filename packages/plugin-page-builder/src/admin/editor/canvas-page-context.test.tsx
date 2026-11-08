@@ -239,7 +239,7 @@ describe("a list the canvas reads as a visitor reads it", () => {
     expect(visitorListWords(undefined, 4)).toBeUndefined();
   });
 
-  it("wears the words on the canvas, counted from the person's reads and a visitor's", async () => {
+  it("wears the words on the canvas: what the list drew as a visitor reads it, beside the person's own rows", async () => {
     const { writePluginRoute } = await import("@nextlyhq/plugin-sdk/admin");
     vi.mocked(writePluginRoute).mockReset();
     vi.mocked(writePluginRoute).mockImplementation(async request => {
@@ -272,12 +272,8 @@ describe("a list the canvas reads as a visitor reads it", () => {
         asVisitor
       )
     );
-    await waitFor(() => {
-      expect(result.current.listsShowingVisitors?.get("posts-list")).toBe(
-        "Showing what visitors see: 4 of 6 entries"
-      );
-    });
-    // The canvas's own reads are a visitor's.
+    // The canvas's lists read as a visitor.
+    await result.current.data.find({ collection: "posts" });
     expect(
       vi
         .mocked(writePluginRoute)
@@ -287,6 +283,18 @@ describe("a list the canvas reads as a visitor reads it", () => {
             undefined
         )
     ).toBe(true);
+    // Nothing is said before the list has drawn.
+    expect(result.current.listsShowingVisitors).toBeUndefined();
+    // The list tells what it drew; a list drawing nothing (its allowance
+    // spent, say) is said to show none, however many a read would find.
+    act(() => {
+      result.current.listShown?.("posts-list", 0);
+    });
+    await waitFor(() => {
+      expect(result.current.listsShowingVisitors?.get("posts-list")).toBe(
+        "Showing what visitors see: 0 of 6 entries"
+      );
+    });
     userId.mockReturnValue("u1");
   });
 });

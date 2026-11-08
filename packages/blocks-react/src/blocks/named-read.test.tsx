@@ -1284,4 +1284,29 @@ describe("a list an editor draws as a visitor reads it", () => {
     );
     expect(visiting.querySelector("[data-nx-list-visitors]")).toBeNull();
   });
+
+  it("tells an editor how many entries it drew, only where an author is looking", async () => {
+    const definition = eventsQuery(async ({ reader }) => ({
+      rows: (await reader.find({ collection: "events" })).items,
+    }));
+    const shown = vi.fn();
+    await drawn(
+      page(list(named())),
+      context({
+        namedQueries: host(definition, base({ events: EVENTS })),
+        diagnostics: true,
+        listShown: shown,
+      })
+    );
+    expect(shown).toHaveBeenCalledWith("list", 2);
+    shown.mockClear();
+    await drawn(
+      page(list(named())),
+      context({
+        namedQueries: host(definition, base({ events: EVENTS })),
+        listShown: shown,
+      })
+    );
+    expect(shown).not.toHaveBeenCalled();
+  });
 });

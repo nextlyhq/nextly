@@ -901,6 +901,15 @@ export interface PageContext {
    */
   listsShowingVisitors?: ReadonlyMap<string, string>;
   /**
+   * Told how many entries each collection list drew, by its node id, as it
+   * draws them: an editor's tag compares what is drawn, never a read made
+   * again under other limits. Called only where {@link diagnostics} says an
+   * author is looking; a throw from it is contained.
+   *
+   * @experimental
+   */
+  listShown?: (nodeId: string, shown: number) => void;
+  /**
    * The editor's canvas, which can act on a list note's action: a list whose
    * sort fell back offers "Choose a field" there, which the canvas answers by
    * taking the author to the list's sort. Honoured only where

@@ -1094,9 +1094,15 @@ export function useBoundCanvasRender(
   // A page holding conditioned blocks asks for its lists' public field
   // shapes too, which a list item's conditions are judged by while they are
   // applied, though nothing on the page binds.
+  // The regions of its Layout too, whose lists read as a visitor while
+  // conditions are applied, judged in the same site zone.
   const conditions = useMemo(
-    () => listConditionsFor(document.nodes),
-    [document]
+    () =>
+      listConditionsFor([
+        ...document.nodes,
+        ...regions.flatMap(region => region.document.nodes),
+      ]),
+    [document, regions]
   );
   const bindings = useCanvasBindings(
     trees,

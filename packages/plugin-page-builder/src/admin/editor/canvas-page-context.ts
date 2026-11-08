@@ -175,10 +175,16 @@ export function useCanvasPageContext(
   // until they are read, a list whose source is one draws its template, as
   // with no host.
   const namedQueries = useCanvasNamedHost(locale, userId, visitor);
-  const visitorNotes = useVisitorListNotes(asVisitor, locale, userId, {
-    entryCollection,
-    entryId,
-  });
+  // How many entries each list drew as a visitor reads it, told by the
+  // lists as they draw, which the tags compare.
+  const drawn = useVisitorDrawnCounts(visitor);
+  const visitorNotes = useVisitorListNotes(
+    asVisitor,
+    locale,
+    userId,
+    { entryCollection, entryId },
+    drawn.seen
+  );
   const base = useMemo(
     () =>
       createStandaloneContext({
@@ -194,8 +200,17 @@ export function useCanvasPageContext(
           ? {}
           : { entry: { id: entryId }, entryCollection }),
         ...(namedQueries === undefined ? {} : { namedQueries }),
+        ...(drawn.report === undefined ? {} : { listShown: drawn.report }),
       }),
-    [readMedia, entryCollection, entryId, lists, budget, namedQueries]
+    [
+      readMedia,
+      entryCollection,
+      entryId,
+      lists,
+      budget,
+      namedQueries,
+      drawn.report,
+    ]
   );
   return useMemo(() => {
     const empty =
@@ -305,23 +320,22 @@ interface CanvasEntry {
 }
 
 /**
- * How many rows a list draws, as the person editing reads it or as a visitor
- * does: from the same reads the canvas draws it with, for every source kind,
- * a related list and a custom source saying no total among them.
+ * How many rows a list draws as the person editing reads it: from the same
+ * reads the canvas draws it with, kept a while, for every source kind, a
+ * related list and a custom source saying no total among them.
  */
-function shownAs(
+function ownShown(
   props: Readonly<Record<string, unknown>>,
   locale: string | undefined,
   userId: string | null,
-  visitor: ListEntriesVisitor | undefined,
   { entryCollection, entryId }: CanvasEntry
 ): Promise<number | undefined> {
   if (props.namedQuery !== undefined && props.namedQuery !== null) {
-    return canvasNamedQueriesIn(locale, userId, visitor)
+    return canvasNamedQueriesIn(locale, userId)
       .shown(props)
       .catch(() => undefined);
   }
-  const reads = canvasListReadsIn(locale, userId, visitor);
+  const reads = canvasListReadsIn(locale, userId);
   const ctx = createStandaloneContext({
     ...reads.terms,
     data: reads.data,
@@ -333,17 +347,69 @@ function shownAs(
   return listShownCount(props, ctx, reads.data).catch(() => undefined);
 }
 
+/** No list drawn yet. */
+const NONE_DRAWN: ReadonlyMap<string, number> = new Map();
+
+/**
+ * How many entries each list drew as a visitor of `visitor`'s document reads
+ * it, by its node id, told by the lists as they draw (`listShown`), so a tag
+ * says what is drawn, the page's allowance and a related list's reads
+ * included, never a read made again. Nothing is told while the lists read as
+ * the person editing.
+ */
+function useVisitorDrawnCounts(visitor: ListEntriesVisitor | undefined): {
+  readonly report: ((nodeId: string, shown: number) => void) | undefined;
+  readonly seen: ReadonlyMap<string, number>;
+} {
+  const visitorKey =
+    visitor === undefined
+      ? undefined
+      : JSON.stringify([visitor.collection, visitor.id]);
+  const [told, setTold] = useState<{
+    readonly key: string | undefined;
+    readonly counts: ReadonlyMap<string, number>;
+  }>({ key: undefined, counts: NONE_DRAWN });
+  const report = useMemo(
+    () =>
+      visitorKey === undefined
+        ? undefined
+        : (nodeId: string, shown: number) => {
+            // Told as a list draws, which may be inside a render: kept on
+            // the next turn, and only when it changed, so drawing again with
+            // the same count settles.
+            queueMicrotask(() => {
+              setTold(current => {
+                const counts =
+                  current.key === visitorKey ? current.counts : NONE_DRAWN;
+                if (counts.get(nodeId) === shown) return current;
+                const next = new Map(counts);
+                next.set(nodeId, shown);
+                return { key: visitorKey, counts: next };
+              });
+            });
+          },
+    [visitorKey]
+  );
+  return {
+    report,
+    seen: told.key === visitorKey ? told.counts : NONE_DRAWN,
+  };
+}
+
 /**
  * The words each list read as a visitor wears, by its id, where a visitor
- * sees fewer of its entries: counted from the same reads the canvas draws
- * with, the person's own and the visitor's, so counting reads little anew.
- * Asked again only when what the lists store changes.
+ * sees fewer of its entries: what the list drew as a visitor reads it,
+ * beside how many rows the person editing reads, from the same reads the
+ * canvas draws with. Asked again when what the lists store, or what they
+ * drew, changes.
  */
 function useVisitorListNotes(
   asVisitor: VisitorLists | undefined,
   locale: string | undefined,
   userId: string | null,
-  { entryCollection, entryId }: CanvasEntry
+  { entryCollection, entryId }: CanvasEntry,
+  /** How many entries each list drew as a visitor reads it, by its id. */
+  seen: ReadonlyMap<string, number>
 ): ReadonlyMap<string, string> | undefined {
   const lists = useMemo(
     () =>
@@ -362,6 +428,7 @@ function useVisitorListNotes(
     id,
     entryCollection ?? null,
     entryId ?? null,
+    [...seen],
   ]);
   const [found, setFound] = useState<{
     readonly key: string;
@@ -372,15 +439,15 @@ function useVisitorListNotes(
     const drawn = JSON.parse(lists) as DrawnList[];
     if (drawn.length === 0) return;
     let live = true;
-    const visitor = { collection, id };
     const entry = { entryCollection, entryId };
     void Promise.all(
       drawn.map(async list => {
-        const [own, seen] = await Promise.all([
-          shownAs(list.props, locale, userId, undefined, entry),
-          shownAs(list.props, locale, userId, visitor, entry),
-        ]);
-        return [list.id, visitorListWords(own, seen)] as const;
+        // What the list drew as a visitor reads it, as it told it; nothing
+        // is said of a list that has not drawn yet.
+        const shown = seen.get(list.id);
+        if (shown === undefined) return [list.id, undefined] as const;
+        const own = await ownShown(list.props, locale, userId, entry);
+        return [list.id, visitorListWords(own, shown)] as const;
       })
     ).then(counted => {
       if (!live) return;
@@ -393,7 +460,17 @@ function useVisitorListNotes(
     return () => {
       live = false;
     };
-  }, [key, lists, locale, userId, collection, id, entryCollection, entryId]);
+  }, [
+    key,
+    lists,
+    locale,
+    userId,
+    collection,
+    id,
+    entryCollection,
+    entryId,
+    seen,
+  ]);
   return found?.key === key && found.notes.size > 0 ? found.notes : undefined;
 }
 

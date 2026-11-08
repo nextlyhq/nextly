@@ -214,6 +214,20 @@ function tagMarks(ctx: PageContext, nodeId: string): Record<string, string> {
 }
 
 /**
+ * Tell an editor that asks how many entries a list drew, only while an
+ * author is looking. A throw from the editor's handler is contained, so it
+ * never fails the list.
+ */
+function reportShown(ctx: PageContext, nodeId: string, shown: number): void {
+  if (ctx.diagnostics !== true || ctx.listShown === undefined) return;
+  try {
+    ctx.listShown(nodeId, shown);
+  } catch {
+    // The editor's own concern; the list is drawn regardless.
+  }
+}
+
+/**
  * Why a list an author is looking at draws its empty state: they chose to
  * see it, no entry matched, or the read failed. Written on the list's root
  * for the editor's chrome, which tags the list with it, and only while an
@@ -528,6 +542,9 @@ function drawList(
 ): ReactElement {
   const { outcome, itemContext } = read;
   const { className, renderSlot, spacingMode, ctx } = args;
+  // How many entries this list drew, told to an editor that asks, so what
+  // it says of the list is of what is drawn, never of a read made again.
+  reportShown(ctx, args.nodeId, outcome.items.length);
   const note = diagnosticNote(outcome, ctx);
   const marks = {
     ...emptyMarks(
