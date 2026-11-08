@@ -482,6 +482,8 @@ describe("every bindable prop", () => {
       },
       body: { label: "Body", role: "content", type: "richText" },
       glyph: { label: "Glyph", role: "content", type: "icon" },
+      // No field can fill a colour: the control, drawn with no bind button.
+      tint: { label: "Tint", role: "content", type: "color" },
     } as const;
     registerBlocks(
       [
@@ -541,10 +543,11 @@ describe("every bindable prop", () => {
         schema => bindablePropKind(schema as never) !== undefined
       ).length
     ).toBeGreaterThan(3);
+    expect(bindablePropKind(props.tint as never)).toBeUndefined();
+    // Its row is drawn, so the missing button is the binding rule's doing.
+    expect(screen.getByText("Not editable here (color).")).toBeTruthy();
     expect(
-      Object.values(props).some(
-        schema => bindablePropKind(schema as never) === undefined
-      )
-    ).toBe(true);
+      screen.queryByRole("button", { name: "Bind Tint to a field" })
+    ).toBeNull();
   });
 });
