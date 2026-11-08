@@ -32,24 +32,38 @@ const TX = {} as Tx;
 function depsOver(
   walk: Record<string, unknown>[],
   now: Record<string, Record<string, unknown> | undefined>
-): BackfillDeps & { find: ReturnType<typeof vi.fn> } {
+): BackfillDeps & {
+  find: ReturnType<typeof vi.fn>;
+  reread: ReturnType<typeof vi.fn>;
+} {
+  // The walk, through the Direct API, outside any transaction.
   const find = vi.fn(async (args: Record<string, unknown>) => {
-    const where = args.where as { id?: { equals: string }; and?: unknown };
-    if (where.id !== undefined) {
-      const row = now[where.id.equals];
-      return { items: row === undefined ? [] : [row] };
-    }
+    const where = args.where as { and?: unknown };
     // The first batch is the walk; one resuming after it finds nothing.
     return { items: where.and === undefined ? walk : [] };
   });
+  // A page read again inside the pass's transaction, on that transaction.
+  const reread = vi.fn(
+    async (
+      _tx: Tx,
+      _slug: string,
+      read: { where: { id: { equals: string } } }
+    ) => {
+      const row = now[read.where.id.equals];
+      return { data: row === undefined ? [] : [row] };
+    }
+  );
   return {
     pages: "pages",
-    claims: {} as Claims,
+    claims: {
+      services: { collections: { listEntriesInTransaction: reread } },
+    } as unknown as Claims,
     locales: ["en"],
     nextly: { find },
     withTransaction: async work => work(TX),
     warn: () => undefined,
     find,
+    reread,
   };
 }
 
@@ -74,11 +88,13 @@ describe("backfillPageClaims", () => {
     expect(await backfillPageClaims(deps)).toBe(true);
     expect(reconciledPaths()).toEqual([["/about-us"]]);
     // The page's lock is taken before its row is read again, so a save of
-    // it either committed first or waits for the pass.
-    const reread = deps.find.mock.invocationCallOrder[1];
+    // it either committed first or waits for the pass, and the row is read
+    // on the pass's own transaction, never through the pool.
+    const reread = deps.reread.mock.invocationCallOrder[0];
     expect(vi.mocked(lockHolder).mock.invocationCallOrder[0]).toBeLessThan(
       reread ?? 0
     );
+    expect(deps.reread.mock.calls[0]?.[0]).toBe(TX);
     expect(vi.mocked(lockHolder).mock.calls[0]?.[2]).toEqual({
       collection: "pages",
       id: "p",
@@ -165,9 +181,9 @@ describe("backfillPageClaims", () => {
       Object.fromEntries(walk.map(row => [row.id, row]))
     );
     expect(await backfillPageClaims(deps)).toBe(true);
-    const reads = deps.find.mock.calls
-      .map(call => call[0] as Record<string, unknown>)
-      .filter(args => !("id" in (args.where as object)));
+    const reads = deps.find.mock.calls.map(
+      call => call[0] as Record<string, unknown>
+    );
     expect(reads).toHaveLength(2);
     expect(reads[1]?.page).toBeUndefined();
     expect(JSON.stringify(reads[1]?.where)).toContain(

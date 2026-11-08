@@ -160,20 +160,27 @@ export async function backfillPageClaims(deps: BackfillDeps): Promise<boolean> {
 /**
  * The page `id` as committed now, or null when it is gone. Read under the
  * page's own lock, so a save of it that has not committed yet waits for this
- * pass, and one that has is what this reads.
+ * pass, and one that has is what this reads. Read on `tx`, the pass's own
+ * transaction, as the system: a pass holding the pool's last connection
+ * never waits for a second one, which on a pool of one would hold every
+ * other request until the pool's wait ran out.
  */
 async function currentPage(
   deps: BackfillDeps,
+  tx: Tx,
   id: string
 ): Promise<Readonly<Record<string, unknown>> | null> {
-  const { items } = await deps.nextly.find({
-    collection: deps.pages,
-    where: { id: { equals: id } },
-    limit: 1,
-    overrideAccess: true,
-    depth: 0,
-  });
-  const [row] = items;
+  const { data } =
+    await deps.claims.services.collections.listEntriesInTransaction(
+      tx,
+      deps.pages,
+      {
+        where: { id: { equals: id } },
+        pagination: { limit: 1 },
+        depth: 0,
+      }
+    );
+  const [row] = data;
   return typeof row === "object" && row !== null
     ? (row as Readonly<Record<string, unknown>>)
     : null;
@@ -232,7 +239,7 @@ async function wantedNow(
   // Asked again under the lock: a pass superseded while it waited for the
   // lock leaves the page to the newer one, which reads it after this.
   if (deps.current?.() === false) return null;
-  const row = await currentPage(deps, holder.id);
+  const row = await currentPage(deps, tx, holder.id);
   return row === null ? null : pageClaims(row, deps.locales, deps.pathTemplate);
 }
 
