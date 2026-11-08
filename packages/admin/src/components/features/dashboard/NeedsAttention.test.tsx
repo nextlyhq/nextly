@@ -82,9 +82,10 @@ function draw(
 
 /**
  * Lays the card out as the frame draws it at `h` grid rows: a body of `cardBodyHeightPx(h)`, rows
- * of the list's own height from its top, and the fold's control wherever it is drawn.
+ * `rowPx` high from its top (the list's own height unless a case wraps them taller), and the
+ * fold's control wherever it is drawn.
  */
-function layOut(h: number): void {
+function layOut(h: number, rowPx = LIST_ROW_HEIGHT_PX.default): void {
   const rect = (top: number, bottom: number) =>
     ({
       top,
@@ -94,7 +95,7 @@ function layOut(h: number): void {
       width: 600,
       height: bottom - top,
     }) as DOMRect;
-  const row = LIST_ROW_HEIGHT_PX.default;
+  const row = rowPx;
   const body = cardBodyHeightPx(h);
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
     function (this: Element) {
@@ -120,6 +121,40 @@ const plugin = (n: number) => ({
 });
 
 afterEach(() => vi.restoreAllMocks());
+
+/**
+ * What the card drawn four rows high (its stored body holds four default rows) last asked of its
+ * cell, with `drawn` rows on show when the case says how many it expects.
+ */
+function askedOfCell(items: readonly object[], drawn?: number): unknown {
+  const report = vi.fn();
+  const { unmount } = render(
+    <CardFitContext.Provider value={report}>
+      <CardHeightContext.Provider value={4}>
+        {inFrame(
+          <NeedsAttention
+            widgetId="core/needs-attention"
+            placementId="attention"
+            settings={{}}
+            size={{ w: 8, h: 4, tier: "medium" }}
+            data={{ items }}
+            refreshing={false}
+            retry={() => undefined}
+          />,
+          "Needs your attention"
+        )}
+      </CardHeightContext.Provider>
+    </CardFitContext.Provider>
+  );
+  if (drawn !== undefined) {
+    expect(screen.getAllByTestId("needs-attention-item")).toHaveLength(drawn);
+  }
+  const last = report.mock.calls.at(-1)?.[0];
+  unmount();
+  // Withdrawn as the body leaves, so a card whose state replaces it takes its rows again.
+  expect(report.mock.calls.at(-1)?.[0]).toBeUndefined();
+  return last;
+}
 
 describe("NeedsAttention", () => {
   it("draws each item with its severity, label and count, reason and one Review, in the answer's order", () => {
@@ -287,37 +322,22 @@ describe("NeedsAttention", () => {
   });
 
   it("asks its cell to fit it to its items while they leave a row of its height empty, and not once they fill it", () => {
-    // What the card last asked of its cell, drawn four rows high: its stored body holds four rows.
-    const asked = (items: readonly object[]) => {
-      const report = vi.fn();
-      const { unmount } = render(
-        <CardFitContext.Provider value={report}>
-          <CardHeightContext.Provider value={4}>
-            {inFrame(
-              <NeedsAttention
-                widgetId="core/needs-attention"
-                placementId="attention"
-                settings={{}}
-                size={{ w: 8, h: 4, tier: "medium" }}
-                data={{ items }}
-                refreshing={false}
-                retry={() => undefined}
-              />,
-              "Needs your attention"
-            )}
-          </CardHeightContext.Provider>
-        </CardFitContext.Provider>
-      );
-      const last = report.mock.calls.at(-1)?.[0];
-      unmount();
-      // Withdrawn as the body leaves, so a card whose state replaces it takes its rows again.
-      expect(report.mock.calls.at(-1)?.[0]).toBeUndefined();
-      return last;
-    };
     // One item: a height to fit to (jsdom measures it as 0), not "its own rows".
-    expect(asked([OVERDUE])).toEqual(expect.any(Number));
-    expect(asked([1, 2, 3].map(plugin))).toEqual(expect.any(Number));
-    // Four fill the body: the card keeps the height of the card beside it.
-    expect(asked([1, 2, 3, 4].map(plugin))).toBeUndefined();
+    expect(askedOfCell([OVERDUE])).toEqual(expect.any(Number));
+    expect(askedOfCell([1, 2, 3].map(plugin))).toEqual(expect.any(Number));
+    // Four fill the body: the card keeps its stored height.
+    expect(askedOfCell([1, 2, 3, 4].map(plugin))).toBeUndefined();
+  });
+
+  it("asks its cell for nothing while it folds rows its count says would fit", () => {
+    // 🔴 Fails where the count alone decides: three items leave a row of four empty, but rows
+    // wrapped to 80 px fold the third, and a card drawn at the two rows' height would be measured
+    // again with all three drawn, grow back, and fold them again.
+    layOut(4, 80);
+    expect(askedOfCell([1, 2, 3].map(plugin), 2)).toBeUndefined();
+    vi.restoreAllMocks();
+    // The must-differ half: rows of their own height all fit, and the card asks for their height.
+    layOut(4);
+    expect(askedOfCell([1, 2, 3].map(plugin), 3)).toEqual(expect.any(Number));
   });
 });

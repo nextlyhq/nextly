@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-On the dashboard, the Needs your attention card holding fewer items than its rows hold is drawn at the height its items take, rather than stretched to the height of the card beside it with empty room under them. Beside another card it keeps its place and the other card keeps its height; drawn across the whole row, it takes the fewest rows that hold its items. In customise mode it is drawn at its saved size.
+On the dashboard, a card's saved height is now the most it is drawn at, and a row of cards is as tall as the tallest of the cards that share it needs. Needs your attention and Upcoming releases holding fewer items than their rows hold are drawn at the height their items take, so one item no longer sits above rows of empty room; the two cards side by side keep one height, with their bottoms aligned, at the taller of their contents. Every other card is drawn at its saved size as before, and holds its row at that height, and no card moves to another place. In customise mode every card is drawn at its saved size, so it can still be resized.

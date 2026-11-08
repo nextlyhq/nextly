@@ -1,54 +1,59 @@
 /**
- * How a cell draws a card whose content takes less than its stored rows: across the whole row in
- * the fewest rows that hold it, beside another card at its own rows aligned to their top, and at
- * its stored rows, stretched, otherwise. The cell's half, drawn in the grid, is in
- * `WidgetGrid.test.tsx`.
+ * The height a cell asks of the dashboard's content-sized rows for a card whose body reports the
+ * height its content takes, at most its stored height, and the style that carries it; and which
+ * lists may report it. The cell's half, drawn in the grid, is in `WidgetGrid.test.tsx`.
  */
 import { LIST_ROW_HEIGHT_PX } from "nextly/card-geometry";
 import { describe, expect, it } from "vitest";
 
-import { drawnAcrossWholeRow, fittedCell, leavesRowsEmpty } from "../fit";
+import { cardHeightPx } from "../../sizes";
+import { cellRowStyle, leavesRowsEmpty, requestedCardHeightPx } from "../fit";
 import { cardBodyHeightPx } from "../measures";
 
-const beside = { fullRow: false, minRows: 3 };
-const across = { fullRow: true, minRows: 3 };
+/** What the frame draws around a card's body: the same at every height. */
+const FRAME = cardHeightPx(4) - cardBodyHeightPx(4);
 
-describe("fittedCell", () => {
-  it("keeps the stored rows, stretched, when the body reports nothing or needs all of them", () => {
-    const stretched = { rows: 4, alignStart: false };
-    for (const placed of [beside, across]) {
-      expect(fittedCell(4, undefined, placed)).toEqual(stretched);
-      expect(fittedCell(4, Number.NaN, placed)).toEqual(stretched);
-      expect(fittedCell(4, cardBodyHeightPx(4), placed)).toEqual(stretched);
-      expect(fittedCell(4, cardBodyHeightPx(4) + 1, placed)).toEqual(stretched);
-    }
+describe("requestedCardHeightPx", () => {
+  it("asks for the card that holds the reported body, so the taller of two in a row is the row's height", () => {
+    // 🔴 Fails where a card fitted to its content is drawn in whole rows: one row of 52 px would
+    // ask for three rows' height, 248 px, leaving 82 px under the item.
+    const one = requestedCardHeightPx(4, LIST_ROW_HEIGHT_PX.default);
+    const two = requestedCardHeightPx(4, 2 * LIST_ROW_HEIGHT_PX.default);
+    expect(one).toBe(FRAME + LIST_ROW_HEIGHT_PX.default);
+    expect(two).toBe(FRAME + 2 * LIST_ROW_HEIGHT_PX.default);
+    expect(Math.max(one, two)).toBe(two);
+    // The frame is the same whatever the rows: the frame's own measures, one formula.
+    expect(cardHeightPx(2) - cardBodyHeightPx(2)).toBe(FRAME);
+    // A fraction of a pixel is rounded up, so the last row is never cut.
+    expect(requestedCardHeightPx(4, 52.2)).toBe(FRAME + 53);
   });
 
-  it("beside another card, keeps its stored rows and stands at its content's height", () => {
-    // The rows stay, so no card beside it or below it moves; only its own height follows.
-    expect(fittedCell(4, LIST_ROW_HEIGHT_PX.default, beside)).toEqual({
-      rows: 4,
-      alignStart: true,
-    });
+  it("never asks for more than the card's stored rows draw it at", () => {
+    expect(requestedCardHeightPx(4, cardBodyHeightPx(4))).toBe(cardHeightPx(4));
+    expect(requestedCardHeightPx(4, cardBodyHeightPx(4) + 1)).toBe(
+      cardHeightPx(4)
+    );
+    expect(requestedCardHeightPx(2, 10_000)).toBe(cardHeightPx(2));
   });
 
-  it("across the whole row, spans the fewest rows that hold its content, never under its minimum", () => {
-    // One row of 52 px: two rows' body (46 px) is too short, three's holds it.
-    expect(cardBodyHeightPx(2)).toBeLessThan(LIST_ROW_HEIGHT_PX.default);
-    expect(
-      fittedCell(6, LIST_ROW_HEIGHT_PX.default, { fullRow: true, minRows: 2 })
-    ).toEqual({ rows: 3, alignStart: false });
-    // Exactly four rows' body is four rows, one pixel more is five.
-    expect(fittedCell(6, cardBodyHeightPx(4), across)).toEqual({
-      rows: 4,
-      alignStart: false,
+  it("asks for the stored height for a body that reports nothing, or nothing it can draw by", () => {
+    // 🔴 Fails where an unreported card asks for nothing: content-sized rows would then shrink
+    // under it to whatever the cards beside it ask for.
+    expect(requestedCardHeightPx(4, undefined)).toBe(cardHeightPx(4));
+    expect(requestedCardHeightPx(4, Number.NaN)).toBe(cardHeightPx(4));
+    expect(requestedCardHeightPx(4, -1)).toBe(cardHeightPx(4));
+  });
+});
+
+describe("cellRowStyle", () => {
+  it("spans the card's rows in every mode, and asks for its height only where the rows take it", () => {
+    // 🔴 Fails where a fitted card's span changes: its rows are what places every card after it.
+    expect(cellRowStyle(4, 166)).toEqual({
+      gridRow: "span 4 / span 4",
+      minHeight: "166px",
     });
-    expect(fittedCell(6, cardBodyHeightPx(4) + 1, across)).toEqual({
-      rows: 5,
-      alignStart: false,
-    });
-    // Nothing at all to hold: the widget's minimum, not the grid's.
-    expect(fittedCell(6, 0, across)).toEqual({ rows: 3, alignStart: false });
+    // Customise mode's fixed rows: the span alone, as the cell was always drawn.
+    expect(cellRowStyle(4, undefined)).toEqual({ gridRow: "span 4 / span 4" });
   });
 });
 
@@ -64,19 +69,14 @@ describe("leavesRowsEmpty", () => {
     expect(leavesRowsEmpty(9, 4, "default")).toBe(false);
   });
 
+  it("counts the rows under what the body draws above them", () => {
+    // 🔴 Fails where the room above the rows is not taken off: under a 32 px line a four-row body
+    // holds three rows, and three fill it.
+    expect(leavesRowsEmpty(3, 4, "default", 32)).toBe(false);
+    expect(leavesRowsEmpty(2, 4, "default", 32)).toBe(true);
+  });
+
   it("is no for a card of unknown height", () => {
     expect(leavesRowsEmpty(1, undefined, "default")).toBe(false);
-  });
-});
-
-describe("drawnAcrossWholeRow", () => {
-  it("is yes where the dashboard draws the card twelve columns wide, and no beside another or unmeasured", () => {
-    // From 1,024 px a card is drawn at its own w; below it, a w past six takes the whole row.
-    expect(drawnAcrossWholeRow(12, 1200)).toBe(true);
-    expect(drawnAcrossWholeRow(8, 1200)).toBe(false);
-    expect(drawnAcrossWholeRow(8, 900)).toBe(true);
-    expect(drawnAcrossWholeRow(4, 900)).toBe(false);
-    expect(drawnAcrossWholeRow(4, 390)).toBe(true);
-    expect(drawnAcrossWholeRow(12, undefined)).toBe(false);
   });
 });

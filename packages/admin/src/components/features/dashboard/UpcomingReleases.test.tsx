@@ -9,9 +9,10 @@
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { CoreListWidgetData } from "nextly/core-widget-data";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
+import { CardFitContext } from "@admin/components/features/widgets/frame/fit";
 import { render, screen, within } from "@admin/__tests__/utils";
 import {
   CardHeightContext,
@@ -199,5 +200,48 @@ describe("the upcoming rows", () => {
     // not know is left out, so an answer of only those draws the same state.
     draw(answer([{ kind: "unknown" }]));
     expect(screen.getByTestId("card-empty")).toBeInTheDocument();
+  });
+
+  it("asks its cell for the height its line and rows take while they leave a row empty, and not once they fill it", () => {
+    // 🔴 Fails where the card reports nothing: its row of the dashboard then keeps their stored
+    // height however short both cards' lists are. Drawn four rows high, its body holds four rows,
+    // three under the attention line.
+    const asked = (items: CoreListWidgetData["items"]) => {
+      const report = vi.fn();
+      const { unmount } = render(
+        <CardFitContext.Provider value={report}>
+          <CardHeightContext.Provider value={4}>
+            <CardTierContext.Provider value="medium">
+              {inFrame(
+                <UpcomingReleasesCard
+                  widgetId="core/upcoming-releases"
+                  placementId="card-1"
+                  settings={{}}
+                  size={{ w: 4, h: 4, tier: "medium" }}
+                  data={answer(items)}
+                  refreshing={false}
+                  retry={() => undefined}
+                />
+              )}
+            </CardTierContext.Provider>
+          </CardHeightContext.Provider>
+        </CardFitContext.Provider>
+      );
+      const last = report.mock.calls.at(-1)?.[0];
+      unmount();
+      // Withdrawn as the body leaves, so the cell asks for the card's stored height again.
+      expect(report.mock.calls.at(-1)?.[0]).toBeUndefined();
+      return last;
+    };
+    const releases = (count: number) =>
+      Array.from({ length: count }, (_, index) => release(index + 1));
+    // A height to fit to (jsdom measures it as 0), not "its own rows".
+    expect(asked(releases(2))).toEqual(expect.any(Number));
+    expect(asked([...ATTENTION, ...releases(2)])).toEqual(expect.any(Number));
+    // Four rows fill the body, and three fill it under the line: the stored height.
+    expect(asked(releases(4))).toBeUndefined();
+    expect(asked([...ATTENTION, ...releases(3)])).toBeUndefined();
+    // More than it draws: the rows it draws fill the body, so the stored height too.
+    expect(asked(releases(6))).toBeUndefined();
   });
 });

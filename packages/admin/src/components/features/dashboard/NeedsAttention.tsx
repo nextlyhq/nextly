@@ -42,10 +42,11 @@ import {
  * whose room the frame keeps for every card, so the rows have the whole body.
  * The title carries how many items there are ("Needs your attention 2").
  *
- * With fewer items than its rows hold, the card is drawn at the height its items take rather
- * than its stored rows (`frame/fit`): one item would otherwise sit above the empty room of a card
- * as tall as Upcoming releases beside it. Its rows are drawn at the default density, the one
- * they are counted at.
+ * With fewer items than its rows hold, and none of them folded, the card asks for the height its
+ * items take rather than its stored rows (`frame/fit`): one item would otherwise sit above three
+ * rows of empty room. Its row of the dashboard is then as tall as the taller of it and the card
+ * beside it, Upcoming releases on the default dashboard. Its rows are drawn at the default
+ * density, the one they are counted at.
  *
  * A card that joins the dashboard while the reader is on it (hidden at first,
  * then found with something waiting) says how many items arrived, politely,
@@ -60,12 +61,7 @@ export const NeedsAttention: React.FC<DeclaredComponentProps> = ({
   const rows = useMemo(() => attentionRows(data), [data]);
   const fold = useRowFold(rows.length);
   useCardTitleCount(rows.length);
-  const storedRows = useContext(CardHeightContext);
-  useCardFitsContent(
-    fold.listRef,
-    leavesRowsEmpty(rows.length, storedRows, "default"),
-    rows.length
-  );
+  useFitsItsItems(fold, rows.length);
   const arrival = useArrivalAnnouncement(
     useRevealedWhileViewed(placementId),
     rows.length
@@ -126,6 +122,22 @@ export const NeedsAttention: React.FC<DeclaredComponentProps> = ({
 };
 
 NeedsAttention.displayName = "NeedsAttention";
+
+/**
+ * Asks the card's cell for the height of its `count` items while they leave a whole row of its
+ * stored body empty (`frame/fit`). Never while the fold holds rows back: those rows are folded
+ * because the body it measured is too short for them, as when their text wraps, and a card drawn
+ * at the folded rows' height would be measured again with them all drawn and grow, then fold them
+ * again.
+ */
+function useFitsItsItems(fold: RowFold, count: number): void {
+  const storedRows = useContext(CardHeightContext);
+  useCardFitsContent(
+    fold.listRef,
+    leavesRowsEmpty(count, storedRows, "default") && fold.shown >= count,
+    count
+  );
+}
 
 /**
  * The rows the reader's "Show N more" revealed, while they are shown: focus moves to the first of

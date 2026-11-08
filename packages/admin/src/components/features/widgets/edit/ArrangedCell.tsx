@@ -37,17 +37,16 @@ import {
 } from "../frame/collapse";
 import {
   CardFitContext,
-  drawnAcrossWholeRow,
-  fittedCell,
-  FITS_CONTENT_CLASS,
+  cellRowStyle,
+  CONTENT_SIZED_CELL_CLASS,
+  requestedCardHeightPx,
 } from "../frame/fit";
 import { CardGrowContext, grownRows } from "../frame/grow";
 import type { AnswerSize } from "../frame/tier";
 import { CardHiddenReportContext } from "../hidden-while-empty";
 import type { MoveDirection } from "../layout-editor";
 import type { PlacementReport } from "../reported-placements";
-import { cardRowStyle, cardSpanClass, drawnSize } from "../sizes";
-import { useDashboardWidthAround } from "../useDashboardWidth";
+import { cardSpanClass, drawnSize } from "../sizes";
 import { settingsAsAsked, titleAsAsked } from "../widget-as-asked";
 import { WidgetRenderer } from "../WidgetRenderer";
 
@@ -443,16 +442,12 @@ function doneFor(props: ArrangedCellProps): {
  * The cell's classes: its columns (`span`, the card's drawn width or the width the grid draws it
  * at in its place), its leaving the grid while hidden, and its spacing.
  */
-function cellClassName(
-  span: number,
-  isEditing: boolean,
-  alignStart: boolean
-): string {
+function cellClassName(span: number, isEditing: boolean): string {
   return cn(
     // `relative` so the drag handle, which is absolutely positioned, lands
     // on this cell rather than on the grid. `min-h-0` and `overflow-hidden`
     // so a body taller than the card's rows stays inside them: the card is as
-    // tall as its `h`, never as tall as its content.
+    // tall as its rows, never as tall as its content.
     "relative min-h-0 overflow-hidden",
     // 🔴 The PLACEMENT's size, drawn at the nearest size its widget's bounds
     // allow. The stored size IS the reader's arrangement, so it is never
@@ -466,9 +461,10 @@ function cellClassName(
     // it. On the controls rather than the cell, because the margin that
     // counts is the focused element's own.
     isEditing && "[&_button]:scroll-mt-40",
-    // A card fitted to its content beside another card: at its own height at the top of its rows
-    // (`frame/fit`), never in customise mode, where `useBodyRows` reports no fit.
-    alignStart && FITS_CONTENT_CLASS
+    // At rest the grid's rows take their cards' heights: the cell asks for its own through its
+    // minimum height alone, and is stretched to its rows' height (`frame/fit`). Customise mode's
+    // rows are fixed, so there the cell is as it always was.
+    !isEditing && CONTENT_SIZED_CELL_CLASS
   );
 }
 
@@ -640,23 +636,23 @@ function useSettingsSheet(props: ArrangedCellProps, hasSettings: boolean) {
 }
 
 /**
- * The rows a card is drawn at, from what its body asks of the frame: the body height its content
- * has asked for while its reader shows more of it (`frame/grow`), the smaller height its content
- * takes when that is less than its stored rows give it (`frame/fit`), and whether the body has
- * collapsed it to one line (`frame/collapse`), which is one row. Its stored rows in customise
- * mode, where the arrangement is what is being edited, and never collapsed or fitted there.
+ * The rows a card spans, from what its body asks of the frame: the body height its content has
+ * asked for while its reader shows more of it (`frame/grow`), and whether the body has collapsed
+ * it to one line (`frame/collapse`), which is one row. Its stored rows in customise mode, where
+ * the arrangement is what is being edited, and never collapsed there.
  *
- * `alignStart` is the fitted card beside another one: drawn at its content's height at the top of
- * its stored rows ({@link FITS_CONTENT_CLASS}), so neither the cards beside it nor those below
- * move. A card that grows or collapses takes those rows instead, and is never also fitted.
+ * `requestPx` is the height the cell asks of those rows at rest, where they take their cards'
+ * heights (`requestedCardHeightPx`): the card holding the body height its content takes, as its
+ * body reports it (`frame/fit`), at most the height its rows draw it at; that height for a body
+ * that reports nothing, and for a card that grows or collapses, which its rows already size.
+ * `undefined` in customise mode, whose rows are fixed.
  */
 function useBodyRows(
   storedRows: number,
-  isEditing: boolean,
-  placed: { fullRow: boolean; minRows: number }
+  isEditing: boolean
 ): {
   rows: number;
-  alignStart: boolean;
+  requestPx: number | undefined;
   collapse: CardCollapse;
   setContentHeight: (height: number | undefined) => void;
   setFitHeight: (height: number | undefined) => void;
@@ -672,19 +668,17 @@ function useBodyRows(
   if (isEditing) {
     return {
       rows: storedRows,
-      alignStart: false,
+      requestPx: undefined,
       collapse,
       setContentHeight,
       setFitHeight,
     };
   }
-  const fitted =
-    contentHeight === undefined && !collapsed
-      ? fittedCell(storedRows, fitHeight, placed)
-      : { rows: grownRows(storedRows, contentHeight), alignStart: false };
+  const rows = collapsedRows(grownRows(storedRows, contentHeight), collapsed);
+  const fitted = contentHeight === undefined && !collapsed;
   return {
-    rows: collapsedRows(fitted.rows, collapsed),
-    alignStart: fitted.alignStart,
+    rows,
+    requestPx: requestedCardHeightPx(rows, fitted ? fitHeight : undefined),
     collapse,
     setContentHeight,
     setFitHeight,
@@ -718,16 +712,8 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
     () => drawnSize(row.size, row.widget.size),
     [row.size, row.widget.size]
   );
-  const drawnW = props.drawnW ?? size.w;
-  // Whether the cell is drawn across the whole row at the dashboard's width, which decides how a
-  // card whose content takes less than its rows is fitted to it (`frame/fit`).
-  const dashboardWidth = useDashboardWidthAround();
-  const fullRow = drawnAcrossWholeRow(drawnW, dashboardWidth);
-  const { rows, alignStart, collapse, setContentHeight, setFitHeight } =
-    useBodyRows(size.h, isEditing, {
-      fullRow,
-      minRows: row.widget.size.min.h,
-    });
+  const { rows, requestPx, collapse, setContentHeight, setFitHeight } =
+    useBodyRows(size.h, isEditing);
   // The card's report, bound to this placement. Only the card drawn in the cell is told it: the
   // settings sheet's preview of the same placement is drawn outside it and reports nothing.
   const { reportHidden } = props;
@@ -771,8 +757,8 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
       highlighted={props.highlighted}
       {...(props.drag === undefined ? {} : { drag: props.drag })}
       data-testid={`widget-cell-${widget.id}`}
-      className={cellClassName(drawnW, isEditing, alignStart)}
-      style={cardRowStyle(rows)}
+      className={cellClassName(props.drawnW ?? size.w, isEditing)}
+      style={cellRowStyle(rows, requestPx)}
     >
       <CellEditActions actions={editActions} />
       {/* On every card, since every card has its own title to set, once its reader first opens

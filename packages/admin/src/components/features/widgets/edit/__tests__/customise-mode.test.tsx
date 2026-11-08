@@ -28,6 +28,7 @@ import type {
 
 import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
+import { cardHeightPx } from "../../sizes";
 import { WidgetGrid } from "../../WidgetGrid";
 import { preloadWidgetSettingsSheet } from "../settings-sheet-code";
 import {
@@ -530,6 +531,29 @@ describe("the bar", () => {
     renderDashboard();
     await beginEditing();
     expect(bar()).toHaveClass("sticky", "top-0");
+  });
+
+  it("draws fixed rows and every card at its stored rows while customising, and rows as tall as their cards at rest", async () => {
+    // 🔴 Fails with fixed rows at rest, where no cell asks its rows for a height and no card can
+    // be drawn shorter than its stored size; and with content rows while customising, where the
+    // stored sizes are what is being edited.
+    renderDashboard();
+    const resting = await screen.findByTestId("widget-cell-core/a");
+    expect(screen.getByLabelText("Dashboard widgets")).toHaveClass(
+      "auto-rows-auto"
+    );
+    // A body that reports nothing asks for its stored height, and holds its row at it.
+    expect(resting.style.minHeight).toBe(`${cardHeightPx(3)}px`);
+    expect(resting).toHaveClass("contain-size");
+
+    await beginEditing();
+    const grid = screen.getByLabelText("Dashboard widgets");
+    expect(grid).toHaveClass("auto-rows-[72px]");
+    expect(grid).not.toHaveClass("auto-rows-auto");
+    const editing = screen.getByTestId("widget-cell-core/a");
+    expect(editing.style.gridRow).toBe("span 3 / span 3");
+    expect(editing.style.minHeight).toBe("");
+    expect(editing).not.toHaveClass("contain-size");
   });
 
   it("keeps exactly one level-one heading, the page's own", async () => {

@@ -45,7 +45,7 @@ import {
 } from "../layout-editor";
 import { widenLoneOfPair, WidenLonePairContext } from "../lone-pair";
 import { useReportedPlacements } from "../reported-placements";
-import { cardRowStyle, GRID_CLASS } from "../sizes";
+import { cardRowStyle, dashboardGridClass } from "../sizes";
 import { settingsAsAsked, titleAsAsked } from "../widget-as-asked";
 
 import { ArrangedCell, type ArrangedCellProps } from "./ArrangedCell";
@@ -176,7 +176,8 @@ function EmptyArrangement({
   return (
     <p
       data-testid="widget-grid-empty"
-      // Two rows, so its sentence fits inside the grid's fixed row height.
+      // Two rows, so its sentence fits inside the fixed rows of customise mode; at rest the rows
+      // take its own height.
       style={cardRowStyle(2)}
       className="col-span-full flex items-center justify-center rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground"
     >
@@ -454,10 +455,11 @@ export function ArrangedGrid({
         // sequence), so focus has somewhere to land when the element holding
         // it is taken off the page.
         tabIndex={-1}
-        // The grid's columns, rows and gaps (`GRID_CLASS`), the ones a card's predicted width
-        // counts. `relative` so the drop line is placed from the grid's own corner, where the
-        // drag measures from.
-        className={cn("relative", GRID_CLASS)}
+        // The grid's columns, rows and gaps (`dashboardGridClass`), the ones a card's predicted
+        // width counts: fixed rows while customising, rows as tall as their cards at rest.
+        // `relative` so the drop line is placed from the grid's own corner, where the drag
+        // measures from.
+        className={cn("relative", dashboardGridClass(isEditing))}
         // When the oldest answer on show arrived, for the page's one freshness line: no card
         // says when its own data arrived.
         data-answered-at={answeredAt?.toISOString()}
