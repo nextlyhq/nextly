@@ -217,7 +217,7 @@ describe("applyCache under Cache Components", () => {
     expect(result).toEqual({ id: "x" });
     // The read's own key parts, then the part naming the shape it holds.
     expect(seen).toEqual([
-      ['["posts","x","nextly:kept-v1"]', ["nextly:posts"], 60],
+      ['["posts","x","nextly:kept-v2"]', ["nextly:posts"], 60],
     ]);
   });
 
@@ -231,7 +231,7 @@ describe("applyCache under Cache Components", () => {
       tags: ["nextly:posts"],
       keyParts: ["posts", "y"],
     });
-    expect(used).toEqual([["posts", "y", "nextly:kept-v1"]]);
+    expect(used).toEqual([["posts", "y", "nextly:kept-v2"]]);
   });
 
   // Next.js's two refusals of a `"use cache"` call with no App Router scope:
