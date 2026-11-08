@@ -25,7 +25,11 @@
  *
  * @module canvas-page-context
  */
-import { isPlainRecord } from "@nextlyhq/blocks-engine";
+import {
+  COLLECTION_LIST_TYPE,
+  isPlainRecord,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 import {
   createQueryBudget,
   createStandaloneContext,
@@ -35,6 +39,7 @@ import {
   type ResolvedIcon,
   type ResolvedMedia,
 } from "@nextlyhq/blocks-react";
+import type { ListEntryCount } from "@nextlyhq/blocks-react/blocks";
 import { useCurrentUserId, useMediaResolver } from "@nextlyhq/plugin-sdk/admin";
 import { useEffect, useMemo, useState } from "react";
 
@@ -136,13 +141,15 @@ export function useCanvasPageContext(
   /** The lists whose new source waits for an input, with each one's tag. */
   listsStillShowing?: ReadonlyMap<string, string>,
   /**
-   * The document being edited while its visibility conditions are applied:
-   * its lists are then read as a visitor reads them, published entries and
-   * public fields only, so each item's conditions are judged as the
-   * published page judges them.
+   * The document being edited while its visibility conditions are applied,
+   * with the blocks it draws: its lists are then read as a visitor reads
+   * them, published entries and public fields only, so each item's
+   * conditions are judged as the published page judges them; and a list a
+   * visitor sees fewer entries of says so.
    */
-  visitor?: ListEntriesVisitor
+  asVisitor?: VisitorLists
 ): PageContext {
+  const visitor = asVisitor?.visitor;
   const readMedia = useMediaResolver();
   const budget = useMemo(canvasQueryBudget, []);
   // Renewed once each draw has been committed, so the next draw has the
@@ -167,6 +174,7 @@ export function useCanvasPageContext(
   // until they are read, a list whose source is one draws its template, as
   // with no host.
   const namedQueries = useCanvasNamedHost(locale, userId, visitor);
+  const visitorNotes = useVisitorListNotes(asVisitor, locale, userId);
   const base = useMemo(
     () =>
       createStandaloneContext({
@@ -194,15 +202,23 @@ export function useCanvasPageContext(
       listsStillShowing === undefined || listsStillShowing.size === 0
         ? undefined
         : listsStillShowing;
-    // The editor's one object again whenever nothing is chosen, waiting or
-    // paged.
-    if (empty === undefined && still === undefined && pagedList === undefined) {
+    // The editor's one object again whenever nothing is chosen, waiting,
+    // paged or drawn as a visitor sees fewer of.
+    if (
+      empty === undefined &&
+      still === undefined &&
+      pagedList === undefined &&
+      visitorNotes === undefined
+    ) {
       return base;
     }
     return {
       ...base,
       ...(empty === undefined ? {} : { listsShowingEmpty: empty }),
       ...(still === undefined ? {} : { listsStillShowing: still }),
+      ...(visitorNotes === undefined
+        ? {}
+        : { listsShowingVisitors: visitorNotes }),
       // The links lead nowhere on the canvas: a click there selects the
       // list, and the pages after the first are the published route's to
       // draw.
@@ -212,7 +228,138 @@ export function useCanvasPageContext(
             listPage: { nodeId: pagedList, page: 1, href: canvasPageHref },
           }),
     };
-  }, [base, listsShowingEmpty, listsStillShowing, pagedList]);
+  }, [base, listsShowingEmpty, listsStillShowing, pagedList, visitorNotes]);
+}
+
+/** The document a canvas reads its lists as a visitor of, and its blocks. */
+export interface VisitorLists {
+  readonly visitor: ListEntriesVisitor;
+  /** The blocks the canvas draws, whose lists are counted both ways. */
+  readonly nodes: readonly BlockNode[];
+}
+
+/** A list the page draws once: its id and what it stores. */
+interface DrawnList {
+  readonly id: string;
+  readonly props: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * The lists a page draws once each: every collection list but one inside
+ * another list's entries, which is drawn once per entry and counts nothing
+ * as one list.
+ */
+export function drawnListsOf(nodes: readonly BlockNode[]): DrawnList[] {
+  const found: DrawnList[] = [];
+  const stack: unknown[] = [...nodes].reverse();
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!isPlainRecord(node) || typeof node.id !== "string") continue;
+    if (node.type === COLLECTION_LIST_TYPE) {
+      found.push({ id: node.id, props: propsOf(node.props) });
+    } else {
+      stack.push(...childrenOf(node.slots).reverse());
+    }
+  }
+  return found;
+}
+
+/** A stored block's props, or none where it stores something else. */
+function propsOf(props: unknown): Readonly<Record<string, unknown>> {
+  return isPlainRecord(props) ? props : {};
+}
+
+/** A stored block's children, slot by slot, in order. */
+function childrenOf(slots: unknown): unknown[] {
+  if (!isPlainRecord(slots)) return [];
+  return Object.values(slots).flatMap(children =>
+    Array.isArray(children) ? (children as unknown[]) : []
+  );
+}
+
+/**
+ * What a list read as a visitor reads it says, where a visitor sees fewer
+ * of its entries than the person editing: "Showing what visitors see: 4 of
+ * 6 entries". Nothing where either count is not known, or nothing shrank.
+ */
+export function visitorListWords(
+  own: ListEntryCount | undefined,
+  seen: ListEntryCount | undefined
+): string | undefined {
+  if (own === undefined || seen === undefined || seen.shown >= own.shown) {
+    return undefined;
+  }
+  const noun = own.shown === 1 ? "entry" : "entries";
+  return `Showing what visitors see: ${String(seen.shown)} of ${String(own.shown)} ${noun}`;
+}
+
+/** A list's count, as the person editing reads it or as a visitor does. */
+function countAs(
+  props: Readonly<Record<string, unknown>>,
+  locale: string | undefined,
+  userId: string | null,
+  visitor: ListEntriesVisitor | undefined
+): Promise<ListEntryCount | undefined> {
+  const count =
+    props.namedQuery === undefined || props.namedQuery === null
+      ? canvasListReadsIn(locale, userId, visitor).count(props)
+      : canvasNamedQueriesIn(locale, userId, visitor).count(props);
+  // A count that can't be taken says nothing, as the inspector's does.
+  return count.catch(() => undefined);
+}
+
+/**
+ * The words each list read as a visitor wears, by its id, where a visitor
+ * sees fewer of its entries: counted from the same reads the canvas draws
+ * with, the person's own and the visitor's, so counting reads little anew.
+ * Asked again only when what the lists store changes.
+ */
+function useVisitorListNotes(
+  asVisitor: VisitorLists | undefined,
+  locale: string | undefined,
+  userId: string | null
+): ReadonlyMap<string, string> | undefined {
+  const lists = useMemo(
+    () =>
+      JSON.stringify(
+        asVisitor === undefined ? [] : drawnListsOf(asVisitor.nodes)
+      ),
+    [asVisitor]
+  );
+  const collection = asVisitor?.visitor.collection;
+  const id = asVisitor?.visitor.id;
+  const key = JSON.stringify([lists, locale ?? "", userId, collection, id]);
+  const [found, setFound] = useState<{
+    readonly key: string;
+    readonly notes: ReadonlyMap<string, string>;
+  }>();
+  useEffect(() => {
+    if (collection === undefined || id === undefined) return;
+    const drawn = JSON.parse(lists) as DrawnList[];
+    if (drawn.length === 0) return;
+    let live = true;
+    const visitor = { collection, id };
+    void Promise.all(
+      drawn.map(async list => {
+        const [own, seen] = await Promise.all([
+          countAs(list.props, locale, userId, undefined),
+          countAs(list.props, locale, userId, visitor),
+        ]);
+        return [list.id, visitorListWords(own, seen)] as const;
+      })
+    ).then(counted => {
+      if (!live) return;
+      const notes = new Map<string, string>();
+      for (const [list, words] of counted) {
+        if (words !== undefined) notes.set(list, words);
+      }
+      setFound({ key, notes });
+    });
+    return () => {
+      live = false;
+    };
+  }, [key, lists, locale, userId, collection, id]);
+  return found?.key === key && found.notes.size > 0 ? found.notes : undefined;
 }
 
 /** Where a page link points on the canvas: an anchor naming the page. */

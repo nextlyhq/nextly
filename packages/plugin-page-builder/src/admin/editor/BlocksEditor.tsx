@@ -173,6 +173,11 @@ import {
   type CanvasInputs,
   type SiteStyleInputs,
 } from "./use-render-inputs";
+import {
+  useFollowApplied,
+  useItemsJudgedRender,
+  useListsAsVisitor,
+} from "./visitor-lists";
 
 /** Everything the shell's slots are filled from. */
 type EditorView = EditorMount &
@@ -1388,7 +1393,10 @@ function EditorBody<TFieldValues extends FieldValues>({
   );
 
   const style = useSiteStyleInputs(mount.clientConfig);
-  const canvas = useCanvasInputs(mount, style);
+  // Whether the canvas's lists read as a visitor: held above the canvas's
+  // inputs, which read them, and set by the conditions switch below.
+  const listsAsVisitor = useListsAsVisitor();
+  const canvas = useCanvasInputs(mount, style, listsAsVisitor.visitor);
   const panels = useEditorPanels(mount, name, {
     control,
     canvasRoot: canvas.canvasElement,
@@ -1518,6 +1526,19 @@ function EditorBody<TFieldValues extends FieldValues>({
       // The site's zone, as the canvas's bindings read it, for a date a
       // condition compares by day.
       timeZone: canvasRender.bindings.timeZone,
+      // Once the lists read as a visitor, a list item's block is judged for
+      // each item the canvas draws.
+      itemsJudged: listsAsVisitor.visitor !== undefined,
+    }
+  );
+  useFollowApplied(listsAsVisitor, conditions.applied !== undefined);
+  const shownRender = useItemsJudgedRender(
+    canvasRender,
+    listsAsVisitor.visitor !== undefined && conditions.applied !== undefined,
+    {
+      services: conditionServices,
+      componentTitle: mount.componentLibrary.titleOf,
+      timeZone: canvasRender.bindings.timeZone,
     }
   );
   const view: EditorView = {
@@ -1525,7 +1546,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     ...style,
     ...canvas,
     ...panels,
-    canvasRender,
+    canvasRender: shownRender,
     visitorUnreadable,
     documentDirty,
     pageTitle,

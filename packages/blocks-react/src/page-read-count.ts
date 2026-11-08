@@ -433,6 +433,7 @@ export async function countPageReads(
     // page is the stages' to claim.
     listsShowingEmpty: _empty,
     listsStillShowing: _still,
+    listsShowingVisitors: _visitors,
     listPage: _listPage,
     ...base
   } = drawnContext ?? createStandaloneContext();

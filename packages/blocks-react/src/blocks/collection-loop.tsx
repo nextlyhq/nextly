@@ -199,13 +199,18 @@ function NoteWords({
 }
 
 /**
- * The mark on a list's root saying its author chose a new source that waits
- * for an input, with the tag's words, while an author is looking.
+ * The marks on a list's root an editor tags it with, while an author is
+ * looking: that its author chose a new source that waits for an input, and
+ * that it draws what a visitor reads, each with the tag's words.
  */
-function stillMarks(ctx: PageContext, nodeId: string): Record<string, string> {
-  const words =
-    ctx.diagnostics === true ? ctx.listsStillShowing?.get(nodeId) : undefined;
-  return words === undefined ? {} : { "data-nx-list-still": words };
+function tagMarks(ctx: PageContext, nodeId: string): Record<string, string> {
+  if (ctx.diagnostics !== true) return {};
+  const still = ctx.listsStillShowing?.get(nodeId);
+  const visitors = ctx.listsShowingVisitors?.get(nodeId);
+  return {
+    ...(still === undefined ? {} : { "data-nx-list-still": still }),
+    ...(visitors === undefined ? {} : { "data-nx-list-visitors": visitors }),
+  };
 }
 
 /**
@@ -386,7 +391,7 @@ export async function renderCollectionLoop({
       <div
         className={className}
         {...emptyMarks(ctx, "chosen")}
-        {...stillMarks(ctx, node.id)}
+        {...tagMarks(ctx, node.id)}
       >
         {renderSlot("empty")}
       </div>
@@ -402,7 +407,7 @@ export async function renderCollectionLoop({
     // collection: the template, once, so an author still sees it, with no
     // item, as an unconfigured list draws it.
     return (
-      <div className={className} {...stillMarks(ctx, node.id)}>
+      <div className={className} {...tagMarks(ctx, node.id)}>
         {renderSlot("children", withoutItem(ctx))}
       </div>
     );
@@ -430,7 +435,7 @@ export async function renderCollectionLoop({
     // than vanishing: an author placing a loop before choosing a collection
     // still sees what they are building.
     return (
-      <div className={className} {...stillMarks(ctx, node.id)}>
+      <div className={className} {...tagMarks(ctx, node.id)}>
         {renderSlot("children", withoutItem(ctx))}
       </div>
     );
@@ -450,7 +455,7 @@ export async function renderCollectionLoop({
       <div
         className={className}
         {...emptyMarks(ctx, "none")}
-        {...stillMarks(ctx, node.id)}
+        {...tagMarks(ctx, node.id)}
       >
         {renderSlot("empty", withoutItem(ctx))}
       </div>
@@ -529,7 +534,7 @@ function drawList(
       ctx,
       outcome.items.length > 0 ? undefined : outcome.failed ? "failed" : "none"
     ),
-    ...stillMarks(ctx, args.nodeId),
+    ...tagMarks(ctx, args.nodeId),
   };
   // Nothing matched, or the read failed: the designable empty state, as a
   // visitor sees it. Otherwise each entry, drawn with the template.

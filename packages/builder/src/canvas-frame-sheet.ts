@@ -490,6 +490,35 @@ ${ROOT} [data-nx-list-still]::before {
   zoom: calc(1 / var(--nx-canvas-zoom, 1));
 }
 
+/* A list drawn as a visitor reads it, while conditions are applied, wears
+   how many of the editor's entries a visitor sees ("Showing what visitors
+   see: 4 of 6 entries"): the same place as the wait's tag, quieter, since
+   it reports rather than asks. A list waiting for an input says that
+   instead, as the one thing it asks. */
+${ROOT} [data-nx-list-visitors]:not([data-nx-list-still])::before {
+  content: attr(data-nx-list-visitors);
+  display: block;
+  grid-column: 1 / -1;
+  justify-self: start;
+  align-self: start;
+  flex: none;
+  inline-size: max-content;
+  max-inline-size: 100%;
+  margin-block-end: 0.375rem;
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--nx-builder-border, GrayText);
+  border-radius: 0.1875rem;
+  background: var(--nx-builder-surface-raised, Canvas);
+  color: var(--nx-builder-text-muted, GrayText);
+  font-family: system-ui, sans-serif;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  zoom: calc(1 / var(--nx-canvas-zoom, 1));
+}
+
 /* A region of the page's Layout, drawn locked around the page. Its content
    keeps the site's own colours, quietened, so it reads as what surrounds the
    page; its links and forms are inert. Its mark never covers that content: a

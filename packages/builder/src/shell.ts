@@ -436,7 +436,9 @@ export {
 export {
   conditionsPreviewOf,
   useAppliedConditions,
+  useItemHiddenAs,
   type AppliedConditionsOptions,
+  type ItemHiddenOptions,
 } from "./use-applied-conditions";
 export { PageInserters } from "./page-inserters";
 export type { PageInsertersProps } from "./page-inserters";

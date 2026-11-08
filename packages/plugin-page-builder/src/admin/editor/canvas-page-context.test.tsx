@@ -29,8 +29,13 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   writePluginRoute: vi.fn(),
 }));
 
-const { listEntryCollectionOf, namedHostRetryDelay, useCanvasPageContext } =
-  await import("./canvas-page-context");
+const {
+  drawnListsOf,
+  listEntryCollectionOf,
+  namedHostRetryDelay,
+  useCanvasPageContext,
+  visitorListWords,
+} = await import("./canvas-page-context");
 const { canvasListReadsIn } = await import("../list-entries-client");
 
 describe("the collection a document's lists read the entry of", () => {
@@ -191,5 +196,97 @@ describe("the canvas's host for named queries", () => {
     expect(namedHostRetryDelay(1)).toBe(2000);
     expect(namedHostRetryDelay(2)).toBe(4000);
     expect(namedHostRetryDelay(10)).toBe(60_000);
+  });
+});
+
+describe("a list the canvas reads as a visitor reads it", () => {
+  const list = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    type: "core/collection-loop",
+    version: 1,
+    props: { collection: "posts", limit: 10 },
+    ...extra,
+  });
+
+  it("is counted once for each list the page draws, none inside another's entries", () => {
+    const nested = list("inner");
+    const outer = list("outer", { slots: { children: [nested] } });
+    const box = {
+      id: "box",
+      type: "core/container",
+      version: 1,
+      props: {},
+      slots: { children: [list("boxed")] },
+    };
+    expect(drawnListsOf([outer, box]).map(found => found.id)).toEqual([
+      "outer",
+      "boxed",
+    ]);
+  });
+
+  it("says so only where a visitor sees fewer entries", () => {
+    expect(
+      visitorListWords({ matching: 6, shown: 6 }, { matching: 4, shown: 4 })
+    ).toBe("Showing what visitors see: 4 of 6 entries");
+    expect(
+      visitorListWords({ matching: 1, shown: 1 }, { matching: 0, shown: 0 })
+    ).toBe("Showing what visitors see: 0 of 1 entry");
+    expect(
+      visitorListWords({ matching: 4, shown: 4 }, { matching: 4, shown: 4 })
+    ).toBeUndefined();
+    expect(
+      visitorListWords(undefined, { matching: 4, shown: 4 })
+    ).toBeUndefined();
+  });
+
+  it("wears the words on the canvas, counted from the person's reads and a visitor's", async () => {
+    const { writePluginRoute } = await import("@nextlyhq/plugin-sdk/admin");
+    vi.mocked(writePluginRoute).mockReset();
+    vi.mocked(writePluginRoute).mockImplementation(async request => {
+      const body = (request as { body: Record<string, unknown> }).body;
+      const total = body.visitor === undefined ? 6 : 4;
+      return {
+        items: Array.from({ length: total }, (_, at) => ({ id: `p${at}` })),
+        meta: {
+          total,
+          page: 1,
+          limit: 10,
+          totalPages: 1,
+          hasNext: false,
+          hasPrev: false,
+        },
+      };
+    });
+    userId.mockReturnValue("visitor-notes");
+    const asVisitor = {
+      visitor: { collection: "pages", id: "p1" },
+      nodes: [list("posts-list")],
+    };
+    const { result } = renderHook(() =>
+      useCanvasPageContext(
+        undefined,
+        "en",
+        undefined,
+        undefined,
+        undefined,
+        asVisitor
+      )
+    );
+    await waitFor(() => {
+      expect(result.current.listsShowingVisitors?.get("posts-list")).toBe(
+        "Showing what visitors see: 4 of 6 entries"
+      );
+    });
+    // The canvas's own reads are a visitor's.
+    expect(
+      vi
+        .mocked(writePluginRoute)
+        .mock.calls.some(
+          ([request]) =>
+            (request as { body: Record<string, unknown> }).body.visitor !==
+            undefined
+        )
+    ).toBe(true);
+    userId.mockReturnValue("u1");
   });
 });

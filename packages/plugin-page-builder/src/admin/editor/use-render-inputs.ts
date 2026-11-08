@@ -73,6 +73,7 @@ import {
   readRemotePatterns,
   type HostFetchPolicy,
 } from "../../host-policy";
+import type { ListEntriesVisitor } from "../../list-entries-contract";
 import { siteSheet, type SiteStyleData } from "../../site-style";
 import { readSiteStyleRecord } from "../../site-style-record";
 import { useCanvasBindings } from "../canvas-bindings-client";
@@ -295,6 +296,7 @@ function useCanvasRender({
   editor,
   locale,
   initialDocument,
+  visitor,
 }: Pick<
   EditorMount,
   | "clientConfig"
@@ -304,7 +306,10 @@ function useCanvasRender({
   | "locale"
   | "initialDocument"
 > &
-  Pick<SiteStyleInputs, "canvasSiteStyle" | "stylePolicy">): CanvasRender {
+  Pick<SiteStyleInputs, "canvasSiteStyle" | "stylePolicy"> & {
+    /** The document the lists are read as a visitor of, while they are. */
+    readonly visitor?: ListEntriesVisitor;
+  }): CanvasRender {
   /*
    * What the canvas hands `PageRenderer` beyond the document and the sheet.
    *
@@ -372,12 +377,20 @@ function useCanvasRender({
   // The list the page splits into pages draws its links on the canvas, as
   // on its first published page, so an author sees and styles them.
   const pagedList = paginatedList(editor.document.nodes)?.id;
+  // While the conditions are applied, the lists read as a visitor of the
+  // document, and those a visitor sees fewer entries of say so.
+  const nodes = editor.document.nodes;
+  const asVisitor = useMemo(
+    () => (visitor === undefined ? undefined : { visitor, nodes }),
+    [visitor, nodes]
+  );
   const canvasContext = useCanvasPageContext(
     editor.listsShowingEmpty,
     locale,
     initialDocument,
     pagedList,
-    editor.listsStillShowing
+    editor.listsStillShowing,
+    asVisitor
   );
   const pageInputs = useMemo(
     () =>
@@ -879,9 +892,15 @@ function useStyleReadings({
  */
 export function useCanvasInputs(
   mount: EditorMount,
-  style: SiteStyleInputs
+  style: SiteStyleInputs,
+  /** The document the lists are read as a visitor of, while they are. */
+  visitor?: ListEntriesVisitor
 ): CanvasInputs {
-  const render = useCanvasRender({ ...mount, ...style });
+  const render = useCanvasRender({
+    ...mount,
+    ...style,
+    ...(visitor === undefined ? {} : { visitor }),
+  });
   const viewport = useCanvasViewport({ ...render, ...style });
   const styleState = useStyleState(mount.editor);
   const wiring = useCanvasWiring(mount);

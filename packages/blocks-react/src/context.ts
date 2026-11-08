@@ -892,6 +892,15 @@ export interface PageContext {
    */
   listsStillShowing?: ReadonlyMap<string, string>;
   /**
+   * The collection lists, by node id, an editor draws as a visitor reads
+   * them where that draws fewer entries than the person editing reads: the
+   * editor's tag for each ("Showing what visitors see: 4 of 6 entries").
+   * Honoured only where {@link diagnostics} says an author is looking.
+   *
+   * @experimental
+   */
+  listsShowingVisitors?: ReadonlyMap<string, string>;
+  /**
    * The editor's canvas, which can act on a list note's action: a list whose
    * sort fell back offers "Choose a field" there, which the canvas answers by
    * taking the author to the list's sort. Honoured only where
