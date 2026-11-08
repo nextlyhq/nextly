@@ -29,17 +29,12 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Keep page builder writes and start-up work from waiting on a second database
-connection while they hold one.
+Keep the page builder's checks after every write from waiting on a second
+database connection while the write holds one.
 
 On a pool of one connection, the usual serverless setting, a save inside a
 transaction waited five seconds for each extra connection it asked for, and
-other requests waited behind it:
-
-- The breakpoint-removal and bindings-report checks that follow every write
-  now run once the write's transaction has committed, as they were meant to,
-  rather than inside it.
-- The start-up pass that claims every page's address now reads each page on
-  its own transaction. A request arriving during that pass no longer finds its
-  first reads refused, which could make a template save report that its
-  collection did not exist.
+other requests waited behind it. The breakpoint-removal and bindings-report
+checks that follow every write now run once the write's transaction has
+committed, as they were meant to, rather than inside it. A rolled-back write
+no longer runs them at all.
