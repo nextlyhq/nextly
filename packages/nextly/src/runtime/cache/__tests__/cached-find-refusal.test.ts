@@ -242,10 +242,13 @@ describe("a cached read refused by access", () => {
     expect(reader).toHaveBeenCalledTimes(2);
   });
 
-  it("throws a kept refusal again without reading the clock, and takes its time when a log reads it", async () => {
+  it("throws a kept refusal again without reading the clock, even when it is logged", async () => {
     const { cache } = nextLikeCache();
+    let made = new Date(0);
     const reader = vi.fn(async () => {
-      throw refused();
+      const refusal = refused();
+      made = refusal.timestamp;
+      throw refusal;
     });
     await applyCache(cache, reader, options).catch(() => undefined);
 
@@ -282,13 +285,20 @@ describe("a cached read refused by access", () => {
       requestId: "r1",
     });
 
-    // The control: the clock is watched, and the time is taken once, when a
-    // log line first asks for it, and kept.
+    // Inspecting it reads no clock either: a log line, a JSON copy, a spread.
     clock.on = true;
     const logged = kept.toLogJSON("r1");
-    expect(kept.toLogJSON("r1").timestamp).toBe(logged.timestamp);
+    JSON.stringify(kept);
+    void { ...kept };
     clock.on = false;
-    expect(clock.reads).toBe(1);
+    expect(clock.reads).toBe(0);
+    // Its time is the refusal's own, kept when it was made.
     expect(kept.timestamp).toBeInstanceOf(Date);
+    expect(kept.timestamp.getTime()).toBe(made.getTime());
+    expect(logged.timestamp).toBe(made.toISOString());
+    // And its stack names the class and carries the frames that threw it.
+    const lines = (kept.stack ?? "").split("\n");
+    expect(lines[0]).toBe("NextlyError: Authentication required.");
+    expect(lines.length).toBeGreaterThan(1);
   });
 });
