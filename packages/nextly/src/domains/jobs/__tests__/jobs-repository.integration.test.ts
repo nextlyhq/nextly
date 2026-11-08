@@ -405,7 +405,7 @@ describe.each(getConfiguredTestDialects())("JobsRepository (%s)", dialect => {
     expect(again.deduped).toBe(true);
   });
 
-  it("withdraws a pending job no runner holds, and leaves a held or finished one", async () => {
+  it("says which job no runner holds, and withdraws only that one", async () => {
     // Work done another way first withdraws its job; a runner already holding
     // one finishes it, so its outcome is still recorded.
     const app = await boot(dialect);
@@ -437,7 +437,13 @@ describe.each(getConfiguredTestDialects())("JobsRepository (%s)", dialect => {
       })
     ).toBe(true);
 
+    // Asked first: only the free one is still waiting.
+    expect(await repo.isUnclaimed(free.id)).toBe(true);
+    expect(await repo.isUnclaimed(held.id)).toBe(false);
+    expect(await repo.isUnclaimed(finished.id)).toBe(false);
+
     expect(await repo.withdrawUnclaimed(free.id)).toBe(true);
+    expect(await repo.isUnclaimed(free.id)).toBe(false);
     expect(await repo.withdrawUnclaimed(held.id)).toBe(false);
     expect(await repo.withdrawUnclaimed(finished.id)).toBe(false);
 

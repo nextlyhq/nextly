@@ -17,7 +17,10 @@ import {
 
 import { refuseLinkingPublicRole } from "./public-role";
 import { listDescendantRoleIds } from "./role-descendants";
-import { afterRoleGrantsChanged } from "./role-grants-changed";
+import {
+  afterRoleGrantsChanged,
+  changingRoleGrants,
+} from "./role-grants-changed";
 import { MAX_ROLE_HIERARCHY_DEPTH, walkRoleGraph } from "./role-graph";
 import { refuseGrantingSuperAdmin } from "./super-admin-grant";
 
@@ -62,76 +65,80 @@ export class RoleInheritanceService extends BaseService {
     requestedChildRoleId: string,
     requestedParentRoleId: string
   ): Promise<void> {
-    // Judged and written as the roles' rows spell their ids. MySQL matches
-    // ids case-insensitively, so a request can name a role in another case:
-    // compared as given, a role named twice in two spellings would pass as
-    // two roles, and the row written would carry an id other than the role's.
-    const childRoleId = await this.storedRoleId(requestedChildRoleId);
-    const parentRoleId = await this.storedRoleId(requestedParentRoleId);
-    if (childRoleId === parentRoleId) throw new Error("INHERIT_SELF_FORBIDDEN");
-    // The Public role is never joined to inheritance, on either side: it
-    // would pass visitors' grants to another role, or another role's to
-    // visitors.
-    await refuseLinkingPublicRole(
-      this.db as LastSuperAdminTx,
-      this.dialect,
-      [childRoleId, parentRoleId],
-      "inherit",
-      { childRoleId, parentRoleId }
-    );
-    await this.refuseEditingSystemRole(parentRoleId);
-    if (await this.willCreateCycle(childRoleId, parentRoleId))
-      throw new Error("INHERIT_CYCLE_FORBIDDEN");
-
-    // One transaction for the decision and the write. The parent comes to
-    // confer whatever the child does, so inheriting a role that confers
-    // super-admin is giving it: asked first, under the lock every change to
-    // who is a super-admin takes, so no concurrent change lands in between.
-    await this.withTransaction(async tx => {
-      await refuseGrantingSuperAdmin(
-        tx as LastSuperAdminTx,
+    // The content expiry this change owes is queued before it is written.
+    return changingRoleGrants(async () => {
+      // Judged and written as the roles' rows spell their ids. MySQL matches
+      // ids case-insensitively, so a request can name a role in another case:
+      // compared as given, a role named twice in two spellings would pass as
+      // two roles, and the row written would carry an id other than the role's.
+      const childRoleId = await this.storedRoleId(requestedChildRoleId);
+      const parentRoleId = await this.storedRoleId(requestedParentRoleId);
+      if (childRoleId === parentRoleId)
+        throw new Error("INHERIT_SELF_FORBIDDEN");
+      // The Public role is never joined to inheritance, on either side: it
+      // would pass visitors' grants to another role, or another role's to
+      // visitors.
+      await refuseLinkingPublicRole(
+        this.db as LastSuperAdminTx,
         this.dialect,
-        [childRoleId],
-        { parentRoleId, childRoleId }
+        [childRoleId, parentRoleId],
+        "inherit",
+        { childRoleId, parentRoleId }
       );
-      const txDb = tx as RBACDatabaseInstance;
-      const { roleInherits } = this.tables;
+      await this.refuseEditingSystemRole(parentRoleId);
+      if (await this.willCreateCycle(childRoleId, parentRoleId))
+        throw new Error("INHERIT_CYCLE_FORBIDDEN");
 
-      // Avoid duplicate errors across dialects by pre-checking
-      const duplicate = await (tx as LastSuperAdminTx)
-        .select({ id: roleInherits.id })
-        .from(roleInherits)
-        .where(
-          and(
-            eq(roleInherits.parentRoleId, parentRoleId),
-            eq(roleInherits.childRoleId, childRoleId)
+      // One transaction for the decision and the write. The parent comes to
+      // confer whatever the child does, so inheriting a role that confers
+      // super-admin is giving it: asked first, under the lock every change to
+      // who is a super-admin takes, so no concurrent change lands in between.
+      await this.withTransaction(async tx => {
+        await refuseGrantingSuperAdmin(
+          tx as LastSuperAdminTx,
+          this.dialect,
+          [childRoleId],
+          { parentRoleId, childRoleId }
+        );
+        const txDb = tx as RBACDatabaseInstance;
+        const { roleInherits } = this.tables;
+
+        // Avoid duplicate errors across dialects by pre-checking
+        const duplicate = await (tx as LastSuperAdminTx)
+          .select({ id: roleInherits.id })
+          .from(roleInherits)
+          .where(
+            and(
+              eq(roleInherits.parentRoleId, parentRoleId),
+              eq(roleInherits.childRoleId, childRoleId)
+            )
           )
-        )
-        .limit(1);
-      if (duplicate.length > 0) return;
+          .limit(1);
+        if (duplicate.length > 0) return;
 
-      const id = `${parentRoleId}::${childRoleId}`;
-      try {
-        const inheritanceData: RoleInheritanceInsertData = {
-          id,
-          childRoleId,
-          parentRoleId,
-        };
-        const insert = txDb.insert(roleInherits).values(inheritanceData);
-        if (typeof insert.onConflictDoNothing === "function") {
-          await insert.onConflictDoNothing();
-        } else {
-          await insert;
+        const id = `${parentRoleId}::${childRoleId}`;
+        try {
+          const inheritanceData: RoleInheritanceInsertData = {
+            id,
+            childRoleId,
+            parentRoleId,
+          };
+          const insert = txDb.insert(roleInherits).values(inheritanceData);
+          if (typeof insert.onConflictDoNothing === "function") {
+            await insert.onConflictDoNothing();
+          } else {
+            await insert;
+          }
+        } catch (e: unknown) {
+          const error = e as DatabaseError;
+          const code = String(error?.code || "");
+          const msg = String(error?.message || "").toLowerCase();
+          if (!(code === "ER_DUP_ENTRY" || msg.includes("duplicate"))) throw e;
         }
-      } catch (e: unknown) {
-        const error = e as DatabaseError;
-        const code = String(error?.code || "");
-        const msg = String(error?.message || "").toLowerCase();
-        if (!(code === "ER_DUP_ENTRY" || msg.includes("duplicate"))) throw e;
-      }
-    });
+      });
 
-    await afterRoleGrantsChanged(childRoleId);
+      await afterRoleGrantsChanged(childRoleId);
+    });
   }
 
   /**
@@ -144,28 +151,31 @@ export class RoleInheritanceService extends BaseService {
     childRoleId: string,
     parentRoleId: string
   ): Promise<void> {
-    await this.refuseEditingSystemRole(parentRoleId);
-    // In a transaction of its own, under the lock every change to who is a
-    // super-admin takes: the role's holders may be super-admins only through
-    // this inheritance, and the last of them is kept.
-    await this.withTransaction(async tx => {
-      await refuseRemovingLastSuperAdmin(
-        tx as LastSuperAdminTx,
-        this.tables,
-        this.dialect,
-        { kind: "removeInheritance", parentRoleId, childRoleId }
-      );
-      await (tx as RBACDatabaseInstance)
-        .delete(this.tables.roleInherits)
-        .where(
-          and(
-            eq(this.tables.roleInherits.childRoleId, childRoleId),
-            eq(this.tables.roleInherits.parentRoleId, parentRoleId)
-          )
+    // The content expiry this change owes is queued before it is written.
+    return changingRoleGrants(async () => {
+      await this.refuseEditingSystemRole(parentRoleId);
+      // In a transaction of its own, under the lock every change to who is a
+      // super-admin takes: the role's holders may be super-admins only through
+      // this inheritance, and the last of them is kept.
+      await this.withTransaction(async tx => {
+        await refuseRemovingLastSuperAdmin(
+          tx as LastSuperAdminTx,
+          this.tables,
+          this.dialect,
+          { kind: "removeInheritance", parentRoleId, childRoleId }
         );
-    });
+        await (tx as RBACDatabaseInstance)
+          .delete(this.tables.roleInherits)
+          .where(
+            and(
+              eq(this.tables.roleInherits.childRoleId, childRoleId),
+              eq(this.tables.roleInherits.parentRoleId, parentRoleId)
+            )
+          );
+      });
 
-    await afterRoleGrantsChanged(childRoleId);
+      await afterRoleGrantsChanged(childRoleId);
+    });
   }
 
   /**

@@ -600,6 +600,26 @@ export class JobsRepository {
   }
 
   /**
+   * Whether a job is still pending with no runner holding it: the state
+   * {@link withdrawUnclaimed} removes. One a runner holds or has finished, or
+   * that is gone, is not.
+   */
+  async isUnclaimed(id: string): Promise<boolean> {
+    const rows = await this.db.select<{ id: string }>(JOBS, {
+      columns: ["id"],
+      where: {
+        and: [
+          { column: "id", op: "=", value: id },
+          { column: "state", op: "=", value: "pending" },
+          { column: "lockedBy", op: "IS NULL", value: null },
+        ],
+      },
+      limit: 1,
+    });
+    return rows.length > 0;
+  }
+
+  /**
    * Remove terminal rows older than `before`, at most `limit` of them.
    *
    * A queue without this grows forever: every completed and every permanently

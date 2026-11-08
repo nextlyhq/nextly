@@ -16,6 +16,10 @@
  * expired or was recorded for every instance, not kept by this process alone,
  * and a row whose attempts run out leaves a successor queued.
  *
+ * The job is queued before the grants write starts, due only after a margin
+ * of minutes, so it is owed before the change commits and no jobs run takes it
+ * before then: a process stopped right after the commit still leaves it.
+ *
  * SQLite needs no URL, and the flush is post-commit bookkeeping that no
  * dialect changes.
  */
@@ -54,6 +58,18 @@ type RetryHolder = Record<
   typeof retryKey,
   { timer?: ReturnType<typeof setTimeout> } | undefined
 >;
+
+/** Past the margin a row queued ahead of a write waits before a jobs run may take it. */
+function pastTheMargin(): Date {
+  return new Date(Date.now() + 6 * 60_000);
+}
+
+/**
+ * The table the step right after a grants write commits asks after first (the
+ * retirement of stored permission answers), so a test can stop that step
+ * there, as a process stopped right after the commit would.
+ */
+const FIRST_ASKED_AFTER_COMMIT = "user_permission_cache";
 
 /** Forgets what this process owes, as a restart does: only what the database holds is left. */
 function forgetThisProcess(): void {
@@ -228,6 +244,8 @@ describe("a change to a role's grants and the cached content reads (sqlite)", ()
     expect(spy.tags).toEqual(
       expect.arrayContaining(["nextly:posts", "nextly:single:header"])
     );
+    // One row queued ahead of the sweep's writes, withdrawn once it landed.
+    expect(await grantsExpiryJobs(nextly)).toEqual([]);
   });
 
   it("expires nothing when the role is set to what it already holds", async () => {
@@ -241,6 +259,8 @@ describe("a change to a role's grants and the cached content reads (sqlite)", ()
     });
 
     expect(spy.flushed).toEqual([]);
+    // The row queued ahead of the write is withdrawn: nothing changed.
+    expect(await grantsExpiryJobs(nextly)).toEqual([]);
   });
 
   it("leaves no job queued once the expiry lands", async () => {
@@ -269,7 +289,8 @@ describe("a change to a role's grants and the cached content reads (sqlite)", ()
     reads.mockRestore();
     await runJobsPass(
       nextly.adapter,
-      container.get<JobRegistry>("jobRegistry")
+      container.get<JobRegistry>("jobRegistry"),
+      { now: pastTheMargin }
     );
 
     expect(spy.tags).toEqual(
@@ -347,11 +368,90 @@ describe("a change to a role's grants and the cached content reads (sqlite)", ()
       { and: [{ column: "id", op: "=", value: owed.id }] }
     );
 
-    await runJobsPass(nextly.adapter, registry);
+    await runJobsPass(nextly.adapter, registry, { now: pastTheMargin });
 
     const rows = await grantsExpiryJobs(nextly);
     expect(rows.find(job => job.id === owed.id)?.state).toBe("failed");
     const successors = rows.filter(job => job.id !== owed.id);
     expect(successors.map(job => job.state)).toEqual(["pending"]);
+  });
+
+  it("leaves a pending job when the process stops right after the grants write commits", async () => {
+    const nextly = await boot();
+    const registry = container.get<JobRegistry>("jobRegistry");
+    spy.flushed.length = 0;
+    let resume = (): void => undefined;
+    const stopped = new Promise<void>(resolve => {
+      resume = resolve;
+    });
+    const tableExists = nextly.adapter.tableExists.bind(nextly.adapter);
+    vi.spyOn(nextly.adapter, "tableExists").mockImplementation(
+      async (name: string) => {
+        if (name === FIRST_ASKED_AFTER_COMMIT) await stopped;
+        return tableExists(name);
+      }
+    );
+
+    const writing = removePublicRead(nextly);
+    // The change commits; the step after it never gets on.
+    await vi.waitFor(
+      async () => {
+        const { held } = await publicRole(nextly);
+        expect(held.map(permission => permission.slug)).not.toContain(
+          "read-posts"
+        );
+      },
+      { timeout: 5_000, interval: 20 }
+    );
+    expect(spy.flushed).toEqual([]);
+    expect((await grantsExpiryJobs(nextly)).map(job => job.state)).toEqual([
+      "pending",
+    ]);
+
+    // A jobs run now leaves it: it cannot run before the write it follows commits.
+    await runJobsPass(nextly.adapter, registry);
+    expect(spy.flushed).toEqual([]);
+
+    // The process is gone; a jobs run past the margin expires the pages.
+    forgetThisProcess();
+    await runJobsPass(nextly.adapter, registry, { now: pastTheMargin });
+    expect(spy.tags).toEqual(
+      expect.arrayContaining(["nextly:posts", "nextly:single:header"])
+    );
+    expect((await grantsExpiryJobs(nextly)).map(job => job.state)).toEqual([
+      "done",
+    ]);
+
+    resume();
+    await writing;
+  });
+
+  it("leaves one job for a grants write that rolls back, which a jobs run completes", async () => {
+    const nextly = await boot();
+    const { id } = await publicRole(nextly);
+    spy.flushed.length = 0;
+
+    await expect(
+      nextly.nextly.roles.setPermissions({
+        roleId: id,
+        permissionIds: ["no-such-permission"],
+      })
+    ).rejects.toThrow();
+
+    expect(spy.flushed).toEqual([]);
+    expect((await grantsExpiryJobs(nextly)).map(job => job.state)).toEqual([
+      "pending",
+    ]);
+    await runJobsPass(
+      nextly.adapter,
+      container.get<JobRegistry>("jobRegistry"),
+      {
+        now: pastTheMargin,
+      }
+    );
+    expect(spy.tags).toContain("nextly:posts");
+    expect((await grantsExpiryJobs(nextly)).map(job => job.state)).toEqual([
+      "done",
+    ]);
   });
 });

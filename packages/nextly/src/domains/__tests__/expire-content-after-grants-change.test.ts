@@ -8,6 +8,10 @@
  * job is withdrawn. Landing means every tag expired or was recorded where
  * every instance reads it: a tag the revalidator kept in this process alone
  * is lost with it, so the job stays and the expiry is tried again.
+ *
+ * Inside a gate (`aheadOfGrantsChange`) the job is queued before the write,
+ * due only after a margin, and the expiry after the write takes that row; one
+ * no longer waiting when the expiry fails is replaced by a fresh one.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -29,7 +33,7 @@ vi.mock("../../observability/logger", () => ({
   getNextlyLogger: () => ({ error: logged, info: informed }),
 }));
 
-const { expireContentAfterGrantsChange } = await import(
+const { aheadOfGrantsChange, expireContentAfterGrantsChange } = await import(
   "../flush-content-change"
 );
 
@@ -40,6 +44,7 @@ const JOB_SLUG = "nextly:grants-content-expiry";
 
 const enqueue = vi.fn();
 const withdrawUnclaimed = vi.fn();
+const isUnclaimed = vi.fn();
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -57,7 +62,13 @@ beforeEach(() => {
   enqueue.mockResolvedValue({ id: "job-1", deduped: false });
   withdrawUnclaimed.mockReset();
   withdrawUnclaimed.mockResolvedValue(true);
-  container.register("jobsRepository", () => ({ enqueue, withdrawUnclaimed }));
+  isUnclaimed.mockReset();
+  isUnclaimed.mockResolvedValue(true);
+  container.register("jobsRepository", () => ({
+    enqueue,
+    withdrawUnclaimed,
+    isUnclaimed,
+  }));
 });
 
 afterEach(() => {
@@ -196,5 +207,81 @@ describe("the content expiry after a change to grants", () => {
     expect(flush).toHaveBeenCalledTimes(1);
     expect(withdrawUnclaimed).toHaveBeenCalledWith("job-1");
     expect(logged).not.toHaveBeenCalled();
+  });
+
+  it("queues the job before a gated write, due after a margin, and the expiry takes that row", async () => {
+    content.mockResolvedValue(SCOPES);
+    const before = Date.now();
+    await aheadOfGrantsChange(async () => {
+      // Queued before the write starts.
+      expect(enqueue).toHaveBeenCalledTimes(1);
+      await expireContentAfterGrantsChange();
+    });
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    const [queued] = enqueue.mock.calls[0] as [{ runAt: Date }];
+    expect(queued.runAt.getTime()).toBeGreaterThanOrEqual(before + 4 * 60_000);
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(withdrawUnclaimed.mock.calls).toEqual([["job-1"]]);
+  });
+
+  it("withdraws the row queued ahead when the gate announces no change", async () => {
+    await aheadOfGrantsChange(async () => undefined);
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(withdrawUnclaimed.mock.calls).toEqual([["job-1"]]);
+    expect(content).not.toHaveBeenCalled();
+  });
+
+  it("leaves the row queued ahead when the write throws", async () => {
+    await expect(
+      aheadOfGrantsChange(async () => {
+        throw new Error("rolled back");
+      })
+    ).rejects.toThrow("rolled back");
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(withdrawUnclaimed).not.toHaveBeenCalled();
+  });
+
+  it("queues nothing for a sweep until a write inside it asks", async () => {
+    await aheadOfGrantsChange(async () => undefined, { queue: false });
+    expect(enqueue).not.toHaveBeenCalled();
+    await aheadOfGrantsChange(
+      () => aheadOfGrantsChange(async () => undefined),
+      { queue: false }
+    );
+    expect(enqueue).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the row queued ahead when the expiry fails and it still waits", async () => {
+    content
+      .mockRejectedValueOnce(new Error("database down"))
+      .mockRejectedValueOnce(new Error("database down"))
+      .mockResolvedValue(SCOPES);
+    await aheadOfGrantsChange(() => expireContentAfterGrantsChange());
+    expect(isUnclaimed).toHaveBeenCalledWith("job-1");
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(withdrawUnclaimed).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(withdrawUnclaimed.mock.calls).toEqual([["job-1"]]);
+  });
+
+  it("queues a fresh row when the expiry fails and the row queued ahead was taken", async () => {
+    enqueue
+      .mockResolvedValueOnce({ id: "job-1", deduped: false })
+      .mockResolvedValue({ id: "job-2", deduped: false });
+    isUnclaimed.mockResolvedValue(false);
+    content
+      .mockRejectedValueOnce(new Error("database down"))
+      .mockRejectedValueOnce(new Error("database down"))
+      .mockResolvedValue(SCOPES);
+    await aheadOfGrantsChange(() => expireContentAfterGrantsChange());
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    // Due at once: it holds what the taken row no longer does.
+    expect(enqueue).toHaveBeenLastCalledWith(
+      expect.objectContaining({ runAt: null })
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(withdrawUnclaimed.mock.calls).toEqual([["job-2"]]);
   });
 });

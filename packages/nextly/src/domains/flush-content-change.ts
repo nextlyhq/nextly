@@ -12,6 +12,8 @@
  *
  * @module domains/flush-content-change
  */
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { NextlyError } from "../errors/nextly-error";
 import {
   buildCollectionRevalidationIntent,
@@ -169,10 +171,93 @@ interface GrantsExpiryRetry {
   running?: Promise<void>;
 }
 
-// One per process, across module copies, like the expiry hand-off.
+/**
+ * How far ahead a row queued before a grants write may first run. The row commits before the
+ * write does, so a jobs run that took it at once could expire the pages before the change and
+ * finish, leaving nothing owed if the expiry after the change then failed. Minutes, so far longer
+ * than any grants write (a transaction or a seeding sweep) and than clock drift between
+ * instances: by then the write has committed, or failed and the row is one spare expiry.
+ */
+const WRITE_AHEAD_MARGIN_MS = 5 * 60 * 1000;
+
+/** A grants write under way, and the row queued ahead of it. */
+interface GrantsWriteAhead {
+  /** The row queued ahead of the writes so far and not yet taken by an expiry. */
+  row?: Promise<string | undefined>;
+}
+
+// One per process, across module copies, like the expiry hand-off: a gate entered through one
+// copy must be found by an expiry reached through another.
 const globalForGrantsExpiry = globalThis as unknown as {
   __nextly_grants_expiry_retry?: GrantsExpiryRetry;
+  __nextly_grants_write_ahead?: AsyncLocalStorage<GrantsWriteAhead>;
 };
+
+function writeAheadScope(): AsyncLocalStorage<GrantsWriteAhead> {
+  globalForGrantsExpiry.__nextly_grants_write_ahead ??= new AsyncLocalStorage();
+  return globalForGrantsExpiry.__nextly_grants_write_ahead;
+}
+
+/**
+ * Runs `write`, a change to what some role grants, with the content expiry it owes queued as a
+ * job before it starts, so the expiry is owed in the database before the change can commit: a
+ * process stopped between the commit and the expiry still leaves it to the jobs queue. The
+ * expiry after the change takes that row rather than queueing its own, and withdraws it once it
+ * lands. Called by the gates every grants writer goes through (`writingPermissions`,
+ * `inPermissionSweep`, `changingRoleGrants`); a gate inside another joins it.
+ *
+ * With `queue: false` (a sweep) nothing is queued until a write inside asks, so a sweep that
+ * writes nothing queues nothing. A row no expiry took when the outermost gate returns is
+ * withdrawn: the gate announced no change, so nothing changed. One whose write threw is left: the
+ * write may have changed rows before it failed, or rolled back, and either way the row performs
+ * one expiry more, which only refreshes the pages again.
+ */
+export async function aheadOfGrantsChange<T>(
+  write: () => Promise<T>,
+  options: { queue?: boolean } = {}
+): Promise<T> {
+  const enclosing = writeAheadScope().getStore();
+  if (enclosing !== undefined) {
+    if (options.queue !== false) await queueAhead(enclosing);
+    return write();
+  }
+  const ahead: GrantsWriteAhead = {};
+  if (options.queue !== false) await queueAhead(ahead);
+  let threw = false;
+  try {
+    return await writeAheadScope().run(ahead, write);
+  } catch (error) {
+    threw = true;
+    throw error;
+  } finally {
+    const left = ahead.row;
+    if (left !== undefined && !threw) {
+      const job = await left;
+      if (job !== undefined) await withdrawGrantsExpiries([job]);
+    }
+  }
+}
+
+/** Queues the row ahead of a write, unless one not yet taken is queued already. */
+async function queueAhead(ahead: GrantsWriteAhead): Promise<void> {
+  ahead.row ??= (async () => {
+    const { languageChangeContentCache } = await import(
+      "../di/registrations/language-change-content-cache"
+    );
+    // A process that caches nothing owes no expiry, as `expireContentAfterGrantsChange` says.
+    if (!languageChangeContentCache().revalidator()) return undefined;
+    return queueGrantsExpiry(new Date(Date.now() + WRITE_AHEAD_MARGIN_MS));
+  })();
+  await ahead.row;
+}
+
+/** The row queued ahead of the write this flow is in, taken so no later expiry reuses it. */
+function takeWriteAhead(): Promise<string | undefined> | undefined {
+  const ahead = writeAheadScope().getStore();
+  const row = ahead?.row;
+  if (ahead !== undefined) ahead.row = undefined;
+  return row;
+}
 
 function grantsExpiryRetry(): GrantsExpiryRetry {
   globalForGrantsExpiry.__nextly_grants_expiry_retry ??= {
@@ -200,6 +285,11 @@ function grantsExpiryRetry(): GrantsExpiryRetry {
  * away from its reader, so the expiry is owed until it lands: queued as a job first, tried here
  * (twice), and when both tries fail, tried again by this process with a growing wait until one
  * succeeds, while the queued job covers a process that is gone first.
+ *
+ * The job is the one a gate queued ahead of the write (`aheadOfGrantsChange`), or, for a change
+ * made outside every gate, one queued here, after the commit. A row queued ahead that is no
+ * longer waiting when the expiry fails (a jobs run took it, or it was withdrawn) is replaced by a
+ * fresh one, so a pending row always holds what is still owed.
  */
 export async function expireContentAfterGrantsChange(): Promise<void> {
   // Loaded here rather than at the top, for the reason `flushContentChange` gives: the permission
@@ -209,9 +299,14 @@ export async function expireContentAfterGrantsChange(): Promise<void> {
       import("../di/registrations/language-change-content-cache"),
       import("../observability/logger"),
     ]);
+  const queuedAhead = takeWriteAhead();
+  const wroteAhead = queuedAhead === undefined ? undefined : await queuedAhead;
   // A process that caches nothing has nothing to expire, here or later, as before.
-  if (!languageChangeContentCache().revalidator()) return;
-  const job = await queueGrantsExpiry();
+  if (!languageChangeContentCache().revalidator()) {
+    if (wroteAhead !== undefined) await withdrawGrantsExpiries([wroteAhead]);
+    return;
+  }
+  let job = wroteAhead ?? (await queueGrantsExpiry());
   let failure: unknown;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -221,6 +316,11 @@ export async function expireContentAfterGrantsChange(): Promise<void> {
     } catch (error) {
       failure = error;
     }
+  }
+  // Still owed, so a row that waits must hold it: the one queued ahead may have been taken by a
+  // jobs run that expired the pages before the change committed.
+  if (wroteAhead !== undefined && !(await stillWaiting(wroteAhead))) {
+    job = await queueGrantsExpiry();
   }
   const retry = grantsExpiryRetry();
   retry.failures += 1;
@@ -240,10 +340,13 @@ export async function expireContentAfterGrantsChange(): Promise<void> {
 }
 
 /**
- * Queues the expiry as a job and resolves its id, or `undefined` where there is no jobs queue (a
- * CLI path) or it refused the row: the expiry is then owed by this process alone.
+ * Queues the expiry as a job, due from `runAt` (at once by default), and resolves its id, or
+ * `undefined` where there is no jobs queue (a CLI path) or it refused the row: the expiry is then
+ * owed by this process alone.
  */
-async function queueGrantsExpiry(): Promise<string | undefined> {
+async function queueGrantsExpiry(
+  runAt: Date | null = null
+): Promise<string | undefined> {
   const { container } = await import("../di/container");
   if (!container.has("jobsRepository")) return undefined;
   try {
@@ -252,7 +355,7 @@ async function queueGrantsExpiry(): Promise<string | undefined> {
       .enqueue({
         slug: GRANTS_CONTENT_EXPIRY_JOB,
         input: null,
-        runAt: null,
+        runAt,
         runAsUserId: null,
         // One row per change: a key would fold a change into a job already running, whose
         // expiry may have landed before this change committed.
@@ -262,6 +365,23 @@ async function queueGrantsExpiry(): Promise<string | undefined> {
     return id;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Whether `job` is still pending with no runner holding it. One a jobs run took (running or
+ * finished) may have expired the pages before the change committed; one that cannot be asked
+ * about counts as taken, so a fresh row is queued rather than none.
+ */
+async function stillWaiting(job: string): Promise<boolean> {
+  const { container } = await import("../di/container");
+  if (!container.has("jobsRepository")) return false;
+  try {
+    return await container
+      .get<JobsRepository>("jobsRepository")
+      .isUnclaimed(job);
+  } catch {
+    return false;
   }
 }
 

@@ -22,7 +22,10 @@ import { BaseService } from "../../../services/base-service";
 import { writingPermissions } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 
-import { afterRoleGrantsChanged } from "./role-grants-changed";
+import {
+  afterRoleGrantsChanged,
+  changingRoleGrants,
+} from "./role-grants-changed";
 
 /**
  * The transaction methods this service calls.
@@ -79,141 +82,146 @@ export class RolePermissionService extends BaseService {
     roleId: string,
     perm: { action: string; resource: string; name?: string; slug?: string }
   ): Promise<void> {
-    // A retired `manage-` permission is added as the plain four it stands
-    // for, all four in one transaction under the lock on the role's row, so
-    // the add lands whole and no other writer lands between its parts. Where
-    // one of the four is missing, it is added as itself, as `storedAsPlain`
-    // keeps it.
-    if (isRetiredManage(perm.action, perm.resource)) {
-      let added = false;
-      await this.adapter.transaction(async tx => {
-        await tx.lockRow("roles", roleId);
-        const four = await plainFourOnLocked(tx, perm.resource);
-        if (four.length === 0) return;
-        const held = await this.heldIn(tx, roleId);
-        await this.insertAssignments(
-          tx,
-          roleId,
-          four.filter(id => !held.has(id))
-        );
-        // The role is left holding the plain four alone: a retired row it
-        // still held, from before, goes with this add, as any writer stores it.
-        const retired = (
-          await tx.select<{ id: unknown }>("permissions", {
-            columns: ["id"],
-            forUpdate: true,
-            where: {
-              and: [
-                { column: "action", op: "=", value: "manage" },
-                { column: "resource", op: "=", value: perm.resource },
-              ],
-            },
-          })
-        )
-          .map(row => String(row.id))
-          .filter(id => held.has(id));
-        if (retired.length > 0) {
-          await tx.delete("role_permissions", {
-            and: [
-              { column: "roleId", op: "=", value: roleId },
-              { column: "permissionId", op: "IN", value: retired },
-            ],
-          });
-        }
-        added = true;
-      });
-      if (added) {
-        await afterRoleGrantsChanged(roleId);
-        return;
-      }
-    }
-    // Composed by the shared helpers rather than written out. This method
-    // creates the permission row when the pair has none, and it is reached from
-    // the REST surface with neither field supplied — so what these fallbacks
-    // produce IS the identity every later authorization check looks up.
-    const permName = perm.name || permissionName(perm.action, perm.resource);
-    const permSlug = perm.slug || permissionSlug(perm.action, perm.resource);
-
-    let permissionId: string;
-
-    const existing = await (
-      this.db as RBACDatabaseInstance
-    ).query.permissions.findFirst({
-      where: { action: perm.action, resource: perm.resource },
-      columns: {
-        id: true,
-        slug: true,
-      },
-    });
-
-    if (existing) {
-      permissionId = String(existing.id);
-      await this.healReversedSlug(permissionId, String(existing.slug), perm);
-
-      // Under the lock on the role's row that every other writer of its
-      // permissions takes, and only where the role does not hold it yet: a
-      // plain insert of an assignment the role holds fails on MySQL, which
-      // has no conflict clause to fall back on.
-      const assigned = permissionId;
-      await this.adapter.transaction(async tx => {
-        await tx.lockRow("roles", roleId);
-        if (!(await this.heldIn(tx, roleId)).has(assigned)) {
-          await this.insertAssignments(tx, roleId, [assigned]);
-        }
-      });
-    } else {
-      const newPermId = randomUUID();
-      const rolePermId = randomUUID();
-
-      // `withTransaction`, not Drizzle's `db.transaction`. better-sqlite3 is
-      // synchronous and rejects any callback returning a promise, so calling
-      // the driver directly threw `Transaction function cannot return a
-      // promise` on SQLite — this whole branch, the one that CREATES the
-      // permission, was unreachable there. The base-service helper runs it
-      // through the adapter's transaction on that dialect and uses the
-      // native transaction on Postgres and MySQL.
-      // The gate wraps the TRANSACTION, not the statement inside it. Retiring
-      // the caches before the commit would leave a window in which a check
-      // refills them from the state this is replacing, and the refilled answer
-      // then outlives the change that was supposed to retire it.
-      await writingPermissions(this.tables.permissions, permissionsTable =>
-        this.withTransaction(async txRaw => {
-          const tx = txRaw as TransactionLike;
-          const permissionData = {
-            id: newPermId,
-            name: permName,
-            slug: permSlug,
-            action: perm.action,
-            resource: perm.resource,
-            description: null,
-          };
-          const permInsert = tx.insert(permissionsTable).values(permissionData);
-          if (typeof permInsert.onConflictDoNothing === "function") {
-            await permInsert.onConflictDoNothing();
-          } else {
-            await permInsert;
-          }
-
-          const rolePermissionData: RolePermissionInsertData = {
-            id: rolePermId,
+    // The content expiry this change owes is queued before it is written.
+    return changingRoleGrants(async () => {
+      // A retired `manage-` permission is added as the plain four it stands
+      // for, all four in one transaction under the lock on the role's row, so
+      // the add lands whole and no other writer lands between its parts. Where
+      // one of the four is missing, it is added as itself, as `storedAsPlain`
+      // keeps it.
+      if (isRetiredManage(perm.action, perm.resource)) {
+        let added = false;
+        await this.adapter.transaction(async tx => {
+          await tx.lockRow("roles", roleId);
+          const four = await plainFourOnLocked(tx, perm.resource);
+          if (four.length === 0) return;
+          const held = await this.heldIn(tx, roleId);
+          await this.insertAssignments(
+            tx,
             roleId,
-            permissionId: newPermId,
-          };
-          const rpInsert = tx
-            .insert(this.tables.rolePermissions)
-            .values(rolePermissionData);
-          if (typeof rpInsert.onConflictDoNothing === "function") {
-            await rpInsert.onConflictDoNothing();
-          } else {
-            await rpInsert;
+            four.filter(id => !held.has(id))
+          );
+          // The role is left holding the plain four alone: a retired row it
+          // still held, from before, goes with this add, as any writer stores it.
+          const retired = (
+            await tx.select<{ id: unknown }>("permissions", {
+              columns: ["id"],
+              forUpdate: true,
+              where: {
+                and: [
+                  { column: "action", op: "=", value: "manage" },
+                  { column: "resource", op: "=", value: perm.resource },
+                ],
+              },
+            })
+          )
+            .map(row => String(row.id))
+            .filter(id => held.has(id));
+          if (retired.length > 0) {
+            await tx.delete("role_permissions", {
+              and: [
+                { column: "roleId", op: "=", value: roleId },
+                { column: "permissionId", op: "IN", value: retired },
+              ],
+            });
           }
-        })
-      );
+          added = true;
+        });
+        if (added) {
+          await afterRoleGrantsChanged(roleId);
+          return;
+        }
+      }
+      // Composed by the shared helpers rather than written out. This method
+      // creates the permission row when the pair has none, and it is reached from
+      // the REST surface with neither field supplied — so what these fallbacks
+      // produce IS the identity every later authorization check looks up.
+      const permName = perm.name || permissionName(perm.action, perm.resource);
+      const permSlug = perm.slug || permissionSlug(perm.action, perm.resource);
 
-      permissionId = newPermId;
-    }
+      let permissionId: string;
 
-    await afterRoleGrantsChanged(roleId);
+      const existing = await (
+        this.db as RBACDatabaseInstance
+      ).query.permissions.findFirst({
+        where: { action: perm.action, resource: perm.resource },
+        columns: {
+          id: true,
+          slug: true,
+        },
+      });
+
+      if (existing) {
+        permissionId = String(existing.id);
+        await this.healReversedSlug(permissionId, String(existing.slug), perm);
+
+        // Under the lock on the role's row that every other writer of its
+        // permissions takes, and only where the role does not hold it yet: a
+        // plain insert of an assignment the role holds fails on MySQL, which
+        // has no conflict clause to fall back on.
+        const assigned = permissionId;
+        await this.adapter.transaction(async tx => {
+          await tx.lockRow("roles", roleId);
+          if (!(await this.heldIn(tx, roleId)).has(assigned)) {
+            await this.insertAssignments(tx, roleId, [assigned]);
+          }
+        });
+      } else {
+        const newPermId = randomUUID();
+        const rolePermId = randomUUID();
+
+        // `withTransaction`, not Drizzle's `db.transaction`. better-sqlite3 is
+        // synchronous and rejects any callback returning a promise, so calling
+        // the driver directly threw `Transaction function cannot return a
+        // promise` on SQLite — this whole branch, the one that CREATES the
+        // permission, was unreachable there. The base-service helper runs it
+        // through the adapter's transaction on that dialect and uses the
+        // native transaction on Postgres and MySQL.
+        // The gate wraps the TRANSACTION, not the statement inside it. Retiring
+        // the caches before the commit would leave a window in which a check
+        // refills them from the state this is replacing, and the refilled answer
+        // then outlives the change that was supposed to retire it.
+        await writingPermissions(this.tables.permissions, permissionsTable =>
+          this.withTransaction(async txRaw => {
+            const tx = txRaw as TransactionLike;
+            const permissionData = {
+              id: newPermId,
+              name: permName,
+              slug: permSlug,
+              action: perm.action,
+              resource: perm.resource,
+              description: null,
+            };
+            const permInsert = tx
+              .insert(permissionsTable)
+              .values(permissionData);
+            if (typeof permInsert.onConflictDoNothing === "function") {
+              await permInsert.onConflictDoNothing();
+            } else {
+              await permInsert;
+            }
+
+            const rolePermissionData: RolePermissionInsertData = {
+              id: rolePermId,
+              roleId,
+              permissionId: newPermId,
+            };
+            const rpInsert = tx
+              .insert(this.tables.rolePermissions)
+              .values(rolePermissionData);
+            if (typeof rpInsert.onConflictDoNothing === "function") {
+              await rpInsert.onConflictDoNothing();
+            } else {
+              await rpInsert;
+            }
+          })
+        );
+
+        permissionId = newPermId;
+      }
+
+      await afterRoleGrantsChanged(roleId);
+    });
   }
 
   /**
@@ -278,44 +286,47 @@ export class RolePermissionService extends BaseService {
     roleId: string,
     perm: { action: string; resource: string }
   ): Promise<void> {
-    const retired = isRetiredManage(perm.action, perm.resource);
+    // The content expiry this change owes is queued before it is written.
+    return changingRoleGrants(async () => {
+      const retired = isRetiredManage(perm.action, perm.resource);
 
-    // Under the lock on the role's row that every other writer of its
-    // permissions takes, so a removal never lands between another writer's
-    // read of what the role holds and its write. The permission named is
-    // found here too, by a locking read: one edited into another permission
-    // since is no longer it, and is left on the role.
-    let removed = false;
-    await this.adapter.transaction(async tx => {
-      await tx.lockRow("roles", roleId);
-      const named = await tx.select<{ id: unknown }>("permissions", {
-        columns: ["id"],
-        forUpdate: true,
-        where: {
+      // Under the lock on the role's row that every other writer of its
+      // permissions takes, so a removal never lands between another writer's
+      // read of what the role holds and its write. The permission named is
+      // found here too, by a locking read: one edited into another permission
+      // since is no longer it, and is left on the role.
+      let removed = false;
+      await this.adapter.transaction(async tx => {
+        await tx.lockRow("roles", roleId);
+        const named = await tx.select<{ id: unknown }>("permissions", {
+          columns: ["id"],
+          forUpdate: true,
+          where: {
+            and: [
+              { column: "action", op: "=", value: perm.action },
+              { column: "resource", op: "=", value: perm.resource },
+            ],
+          },
+        });
+        const ids = [
+          ...named.map(row => String(row.id)),
+          // A retired `manage-` permission is stored as the plain four it
+          // stands for, so taking it off takes them off too.
+          ...(retired ? await plainFourOnLocked(tx, perm.resource) : []),
+        ];
+        if (ids.length === 0) return;
+        await tx.delete("role_permissions", {
           and: [
-            { column: "action", op: "=", value: perm.action },
-            { column: "resource", op: "=", value: perm.resource },
+            { column: "roleId", op: "=", value: roleId },
+            { column: "permissionId", op: "IN", value: ids },
           ],
-        },
+        });
+        removed = true;
       });
-      const ids = [
-        ...named.map(row => String(row.id)),
-        // A retired `manage-` permission is stored as the plain four it
-        // stands for, so taking it off takes them off too.
-        ...(retired ? await plainFourOnLocked(tx, perm.resource) : []),
-      ];
-      if (ids.length === 0) return;
-      await tx.delete("role_permissions", {
-        and: [
-          { column: "roleId", op: "=", value: roleId },
-          { column: "permissionId", op: "IN", value: ids },
-        ],
-      });
-      removed = true;
-    });
-    if (!removed) return;
+      if (!removed) return;
 
-    await afterRoleGrantsChanged(roleId);
+      await afterRoleGrantsChanged(roleId);
+    });
   }
 
   /**
@@ -341,83 +352,86 @@ export class RolePermissionService extends BaseService {
     roleId: string,
     permissionIds: string[]
   ): Promise<Array<{ id: string; action: string; resource: string }>> {
-    // A retired `manage-` permission is stored as the plain four it stands
-    // for, so a role set with one, a preset's at each boot included, never
-    // holds it again once converted. Read here only to see whether anything
-    // changes; a change is stored as normalized again under the locks below.
-    const unchangedIf = new Set(
-      await storedAsPlain(
-        this.adapter,
-        permissionIds,
-        this.adapter.getCapabilities().maxParamsPerQuery
-      )
-    );
+    // The content expiry this change owes is queued before it is written.
+    return changingRoleGrants(async () => {
+      // A retired `manage-` permission is stored as the plain four it stands
+      // for, so a role set with one, a preset's at each boot included, never
+      // holds it again once converted. Read here only to see whether anything
+      // changes; a change is stored as normalized again under the locks below.
+      const unchangedIf = new Set(
+        await storedAsPlain(
+          this.adapter,
+          permissionIds,
+          this.adapter.getCapabilities().maxParamsPerQuery
+        )
+      );
 
-    // Read first, outside any transaction: once a preset has settled, every
-    // boot of every instance asks this with nothing to change, and the answer
-    // costs one read rather than a lock and a rewrite. Compared by the rows'
-    // own permission ids, so an assignment whose permission no longer exists
-    // counts as held and is removed below. MySQL's table declares no foreign
-    // key, so such a row can be there.
-    const before = await this.readAssignments(roleId);
-    if (
-      sameMembers(new Set(before.map(row => row.permissionId)), unchangedIf)
-    ) {
-      return named(before);
-    }
-
-    // Each statement binds no more parameters than the adapter says one query
-    // may: one per id plus the role's for a removal, and up to one per column
-    // for each inserted row, defaults included (`insertAssignments`).
-    const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
-
-    await this.adapter.transaction(async tx => {
-      // Serialises writers to this role: a second writer waits, then reads what
-      // the first committed and applies only what is still different. Columns
-      // are named as the schema declares them, which is how the adapter reads a
-      // where clause and returns a row.
-      await tx.lockRow("roles", roleId);
-      const desired = await storedAsPlainLocked(tx, permissionIds, maxParams);
-      const held = await this.heldIn(tx, roleId);
-
-      const extra = [...held].filter(id => !desired.has(id));
-      for (const ids of batches(extra, maxParams - 1)) {
-        await tx.delete("role_permissions", {
-          and: [
-            { column: "roleId", op: "=", value: roleId },
-            { column: "permissionId", op: "IN", value: ids },
-          ],
-        });
+      // Read first, outside any transaction: once a preset has settled, every
+      // boot of every instance asks this with nothing to change, and the answer
+      // costs one read rather than a lock and a rewrite. Compared by the rows'
+      // own permission ids, so an assignment whose permission no longer exists
+      // counts as held and is removed below. MySQL's table declares no foreign
+      // key, so such a row can be there.
+      const before = await this.readAssignments(roleId);
+      if (
+        sameMembers(new Set(before.map(row => row.permissionId)), unchangedIf)
+      ) {
+        return named(before);
       }
 
-      const missing = [...desired].filter(id => !held.has(id));
+      // Each statement binds no more parameters than the adapter says one query
+      // may: one per id plus the role's for a removal, and up to one per column
+      // for each inserted row, defaults included (`insertAssignments`).
+      const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
 
-      // Every id added has to name a permission. PostgreSQL and SQLite refuse
-      // one that does not through the foreign key; MySQL's table declares
-      // none, so it would keep an assignment that grants nothing, which the
-      // list leaves out, and the replacement would report success. Thrown here,
-      // inside the transaction, so the removal above is undone with it.
-      const known = new Set<string>();
-      for (const ids of batches(missing, maxParams)) {
-        const rows = await tx.select<{ id: string }>("permissions", {
-          columns: ["id"],
-          where: { and: [{ column: "id", op: "IN", value: ids }] },
-        });
-        for (const row of rows) known.add(String(row.id));
-      }
-      const unknown = missing.filter(id => !known.has(id));
-      if (unknown.length > 0) {
-        throw NextlyError.notFound({
-          logContext: { roleId, permissionIds: unknown },
-        });
-      }
+      await this.adapter.transaction(async tx => {
+        // Serialises writers to this role: a second writer waits, then reads what
+        // the first committed and applies only what is still different. Columns
+        // are named as the schema declares them, which is how the adapter reads a
+        // where clause and returns a row.
+        await tx.lockRow("roles", roleId);
+        const desired = await storedAsPlainLocked(tx, permissionIds, maxParams);
+        const held = await this.heldIn(tx, roleId);
 
-      await this.insertAssignments(tx, roleId, missing);
+        const extra = [...held].filter(id => !desired.has(id));
+        for (const ids of batches(extra, maxParams - 1)) {
+          await tx.delete("role_permissions", {
+            and: [
+              { column: "roleId", op: "=", value: roleId },
+              { column: "permissionId", op: "IN", value: ids },
+            ],
+          });
+        }
+
+        const missing = [...desired].filter(id => !held.has(id));
+
+        // Every id added has to name a permission. PostgreSQL and SQLite refuse
+        // one that does not through the foreign key; MySQL's table declares
+        // none, so it would keep an assignment that grants nothing, which the
+        // list leaves out, and the replacement would report success. Thrown here,
+        // inside the transaction, so the removal above is undone with it.
+        const known = new Set<string>();
+        for (const ids of batches(missing, maxParams)) {
+          const rows = await tx.select<{ id: string }>("permissions", {
+            columns: ["id"],
+            where: { and: [{ column: "id", op: "IN", value: ids }] },
+          });
+          for (const row of rows) known.add(String(row.id));
+        }
+        const unknown = missing.filter(id => !known.has(id));
+        if (unknown.length > 0) {
+          throw NextlyError.notFound({
+            logContext: { roleId, permissionIds: unknown },
+          });
+        }
+
+        await this.insertAssignments(tx, roleId, missing);
+      });
+
+      await afterRoleGrantsChanged(roleId);
+
+      return this.listRolePermissions(roleId);
     });
-
-    await afterRoleGrantsChanged(roleId);
-
-    return this.listRolePermissions(roleId);
   }
 
   /** The permission ids `roleId` holds, read on transaction `tx`. */
@@ -487,17 +501,20 @@ export class RolePermissionService extends BaseService {
       executor: unknown
     ) => Promise<readonly string[]>
   ): Promise<string[]> {
-    let added: string[] = [];
-    await this.adapter.transaction(async tx => {
-      await tx.lockRow("roles", roleId);
-      const held = await this.heldIn(tx, roleId);
-      const asWanted = await this.stillAsWanted(tx, wanted);
-      const picked = new Set(await pick(asWanted, tx.getDrizzle()));
-      added = asWanted.filter(id => picked.has(id) && !held.has(id));
-      await this.insertAssignments(tx, roleId, added);
+    // The content expiry this change owes is queued before it is written.
+    return changingRoleGrants(async () => {
+      let added: string[] = [];
+      await this.adapter.transaction(async tx => {
+        await tx.lockRow("roles", roleId);
+        const held = await this.heldIn(tx, roleId);
+        const asWanted = await this.stillAsWanted(tx, wanted);
+        const picked = new Set(await pick(asWanted, tx.getDrizzle()));
+        added = asWanted.filter(id => picked.has(id) && !held.has(id));
+        await this.insertAssignments(tx, roleId, added);
+      });
+      if (added.length > 0) await afterRoleGrantsChanged(roleId);
+      return added;
     });
-    if (added.length > 0) await afterRoleGrantsChanged(roleId);
-    return added;
   }
 
   /**
@@ -511,28 +528,31 @@ export class RolePermissionService extends BaseService {
     roleId: string,
     options: { recheckReleases?: boolean } = {}
   ): Promise<boolean> {
-    const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
-    let changed = false;
-    await this.adapter.transaction(async tx => {
-      await tx.lockRow("roles", roleId);
-      const held = await this.heldIn(tx, roleId);
-      const desired = await storedAsPlainLocked(tx, [...held], maxParams);
-      const removed = [...held].filter(id => !desired.has(id));
-      const added = [...desired].filter(id => !held.has(id));
-      if (removed.length === 0 && added.length === 0) return;
-      for (const ids of batches(removed, maxParams - 1)) {
-        await tx.delete("role_permissions", {
-          and: [
-            { column: "roleId", op: "=", value: roleId },
-            { column: "permissionId", op: "IN", value: ids },
-          ],
-        });
-      }
-      await this.insertAssignments(tx, roleId, added);
-      changed = true;
+    // The content expiry this change owes is queued before it is written.
+    return changingRoleGrants(async () => {
+      const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
+      let changed = false;
+      await this.adapter.transaction(async tx => {
+        await tx.lockRow("roles", roleId);
+        const held = await this.heldIn(tx, roleId);
+        const desired = await storedAsPlainLocked(tx, [...held], maxParams);
+        const removed = [...held].filter(id => !desired.has(id));
+        const added = [...desired].filter(id => !held.has(id));
+        if (removed.length === 0 && added.length === 0) return;
+        for (const ids of batches(removed, maxParams - 1)) {
+          await tx.delete("role_permissions", {
+            and: [
+              { column: "roleId", op: "=", value: roleId },
+              { column: "permissionId", op: "IN", value: ids },
+            ],
+          });
+        }
+        await this.insertAssignments(tx, roleId, added);
+        changed = true;
+      });
+      if (changed) await afterRoleGrantsChanged(roleId, options);
+      return changed;
     });
-    if (changed) await afterRoleGrantsChanged(roleId, options);
-    return changed;
   }
 
   /**
@@ -559,28 +579,31 @@ export class RolePermissionService extends BaseService {
       executor: unknown
     ) => Promise<readonly string[]>
   ): Promise<string[]> {
-    let removed: string[] = [];
-    await this.adapter.transaction(async tx => {
-      await tx.lockRow("roles", roleId);
-      const held = await this.heldIn(tx, roleId);
-      const holding = (await this.stillAsWanted(tx, unwanted)).filter(id =>
-        held.has(id)
-      );
-      if (holding.length === 0) return;
-      const picked = new Set(await pick(holding, tx.getDrizzle()));
-      removed = holding.filter(id => picked.has(id));
-      const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
-      for (const batch of batches(removed, maxParams - 1)) {
-        await tx.delete("role_permissions", {
-          and: [
-            { column: "roleId", op: "=", value: roleId },
-            { column: "permissionId", op: "IN", value: batch },
-          ],
-        });
-      }
+    // The content expiry this change owes is queued before it is written.
+    return changingRoleGrants(async () => {
+      let removed: string[] = [];
+      await this.adapter.transaction(async tx => {
+        await tx.lockRow("roles", roleId);
+        const held = await this.heldIn(tx, roleId);
+        const holding = (await this.stillAsWanted(tx, unwanted)).filter(id =>
+          held.has(id)
+        );
+        if (holding.length === 0) return;
+        const picked = new Set(await pick(holding, tx.getDrizzle()));
+        removed = holding.filter(id => picked.has(id));
+        const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
+        for (const batch of batches(removed, maxParams - 1)) {
+          await tx.delete("role_permissions", {
+            and: [
+              { column: "roleId", op: "=", value: roleId },
+              { column: "permissionId", op: "IN", value: batch },
+            ],
+          });
+        }
+      });
+      if (removed.length > 0) await afterRoleGrantsChanged(roleId);
+      return removed;
     });
-    if (removed.length > 0) await afterRoleGrantsChanged(roleId);
-    return removed;
   }
 
   /**
