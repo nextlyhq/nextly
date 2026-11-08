@@ -55,7 +55,13 @@ import {
   useCurrentUserId,
   type DocumentIdentity,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useEffect, useMemo, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 
 import {
   bindingReadsOf,
@@ -177,44 +183,167 @@ function routeBindings(
 }
 
 /**
+ * The longest a count waits for the page to stop changing, from the first
+ * change it waits on: a page whose inputs change more often than
+ * {@link COUNT_AFTER_MS} is still counted, rather than put off for good.
+ */
+const COUNT_WITHIN_MS = 3000;
+
+/**
+ * How long a count may take before the meter says it could not be made: a
+ * read that never answers (a stalled request, a block that never settles)
+ * would otherwise leave it counting for good. A count of a page at its
+ * allowance's 500 reads takes a few seconds.
+ */
+const COUNT_GIVES_UP_MS = 20_000;
+
+/** What the meter shows: the latest count, none yet, or a failed one. */
+type ShownCount =
+  | { readonly report: PageReadReport | undefined; readonly failed: false }
+  | { readonly report: undefined; readonly failed: true };
+
+const NOT_COUNTED: ShownCount = { report: undefined, failed: false };
+
+/** What `usePageReads` answers. */
+interface PageReads {
+  readonly report: PageReadReport | undefined;
+  /** Given when the latest count could not be made: counts again now. */
+  readonly retry: (() => void) | undefined;
+}
+
+/**
+ * How long a count waits now, a change having been made: the moment the
+ * page is given to settle, but never past {@link COUNT_WITHIN_MS} from the
+ * first change it has waited on (`since`).
+ */
+function countWait(since: number, now: number): number {
+  return Math.min(COUNT_AFTER_MS, Math.max(0, since + COUNT_WITHIN_MS - now));
+}
+
+/**
+ * Who reads the page, by value: the person, and the entry it is drawn as.
+ * The form's identity is a new object on every render, so it is compared by
+ * what it names.
+ */
+function readerKey(
+  identity: DocumentIdentity | null,
+  userId: string | null
+): string {
+  return [
+    userId ?? "",
+    identity?.kind ?? "",
+    identity?.slug ?? "",
+    identity?.documentId ?? "",
+  ].join("\u0000");
+}
+
+/**
+ * Counts made one after another, of which the latest started is the one
+ * shown: one started before a later change still lands, until the count
+ * after it does. A count that fails is said, not kept quiet: one never made
+ * would leave the meter counting for good, and the last one may no longer
+ * be the page's.
+ */
+function useCountRuns(): {
+  readonly shown: ShownCount;
+  readonly run: (count: () => Promise<PageReadReport>) => void;
+  readonly clear: () => void;
+} {
+  const [shown, setShown] = useState<ShownCount>(NOT_COUNTED);
+  const started = useRef(0);
+  const live = useRef(true);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
+  const run = useCallback((count: () => Promise<PageReadReport>) => {
+    started.current += 1;
+    const mine = started.current;
+    const latest = () => live.current && mine === started.current;
+    const failed = () => {
+      if (latest()) setShown({ report: undefined, failed: true });
+    };
+    // A count that never answers is one that could not be made, said once
+    // it has had its while; should it answer after all, its answer is shown.
+    const givenUp = setTimeout(failed, COUNT_GIVES_UP_MS);
+    count().then(
+      report => {
+        clearTimeout(givenUp);
+        if (latest()) setShown({ report, failed: false });
+      },
+      () => {
+        clearTimeout(givenUp);
+        failed();
+      }
+    );
+  }, []);
+  const clear = useCallback(() => setShown(NOT_COUNTED), []);
+  return { shown, run, clear };
+}
+
+/**
  * The page's count, made again a moment after it last changed. The last
  * count stays shown while the next is made, so the meter does not blink;
- * there is none until the first is made.
+ * there is none until the first is made. A count that could not be made is
+ * said, with the way to make it again, rather than left counting.
+ *
+ * What starts a count is the page changing: what the canvas draws it with,
+ * its document and its Layout's regions, and who reads it (by value). A
+ * render of the editor is not a change of the page: were it one, an editor
+ * rendering more often than {@link COUNT_AFTER_MS} would put the count off
+ * for good.
  */
 function usePageReads(
   drawnWith: CountedDrawing,
   document: BlockDocument,
   regions: readonly CountedRegion[]
-): PageReadReport | undefined {
-  const [report, setReport] = useState<PageReadReport | undefined>(undefined);
+): PageReads {
+  const { shown, run, clear } = useCountRuns();
   // The entry the canvas is drawn as, and the person reading it, so the
   // bindings are read as the canvas reads them.
   const identity = useCanvasEntryIdentity();
   const userId = useCurrentUserId();
-  const reads = useMemo(
-    (): PageCountReads => ({
+  const reader = readerKey(identity, userId);
+  // The reads as of the latest render, which a count takes when it starts.
+  const readsNow = useRef<PageCountReads>({});
+  useEffect(() => {
+    readsNow.current = {
       entrySource: identity?.kind ?? "collection",
       readBindings: routeBindings(identity, userId, drawnWith),
-    }),
-    [identity, userId, drawnWith]
-  );
-  useEffect(() => {
-    let current = true;
-    const timer = setTimeout(() => {
-      countPageReads(drawnWith, document, regions, undefined, reads).then(
-        counted => {
-          if (current) setReport(counted);
-        },
-        // A count that could not be made leaves the last one shown.
-        () => undefined
-      );
-    }, COUNT_AFTER_MS);
-    return () => {
-      current = false;
-      clearTimeout(timer);
     };
-  }, [drawnWith, document, regions, reads]);
-  return report;
+  });
+  // Bumped by a retry, which counts at once.
+  const [asked, setAsked] = useState(0);
+  const countNow = useRef(false);
+  // When the first change a count waits on was made, so the wait is capped.
+  const waitingSince = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const now = Date.now();
+    waitingSince.current ??= now;
+    const wait = countNow.current ? 0 : countWait(waitingSince.current, now);
+    const timer = setTimeout(() => {
+      countNow.current = false;
+      waitingSince.current = undefined;
+      run(() =>
+        countPageReads(
+          drawnWith,
+          document,
+          regions,
+          undefined,
+          readsNow.current
+        )
+      );
+    }, wait);
+    return () => clearTimeout(timer);
+  }, [drawnWith, document, regions, reader, asked, run]);
+  const retry = useCallback(() => {
+    countNow.current = true;
+    clear();
+    setAsked(value => value + 1);
+  }, [clear]);
+  return { report: shown.report, retry: shown.failed ? retry : undefined };
 }
 
 export function PageReadMeter({
@@ -232,10 +361,11 @@ export function PageReadMeter({
    */
   readonly regions: NonNullable<ReadBudgetMeterProps["regions"]>;
 }): React.JSX.Element {
-  const report = usePageReads(drawnWith, editor.document, regions);
+  const { report, retry } = usePageReads(drawnWith, editor.document, regions);
   return (
     <ReadBudgetMeter
       report={report}
+      failed={retry === undefined ? undefined : { retry }}
       editor={editor}
       regions={regions}
       {...(componentTitle === undefined ? {} : { componentTitle })}

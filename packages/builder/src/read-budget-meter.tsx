@@ -28,6 +28,7 @@ import {
   Link,
   List,
   Repeat,
+  RotateCw,
   Component as ComponentMark,
   TriangleAlert,
 } from "lucide-react";
@@ -64,6 +65,11 @@ export interface ReadBudgetMeterProps {
    * from, and offers the way to edit that Layout.
    */
   regions?: readonly CanvasRegion[];
+  /**
+   * Given when the latest count could not be made: the meter says so, in
+   * place of a count, and pressing it counts again.
+   */
+  failed?: { readonly retry: () => void } | undefined;
 }
 
 /** The mark each standing wears beside its count. */
@@ -101,13 +107,20 @@ const STANDING_WORDS: Record<ReadBudgetStanding, string> = {
   over: "Over the limit",
 };
 
+/** What the meter says, and its tooltip, when the page could not be counted. */
+const FAILED_NAME = "Couldn't count page reads. Retry";
+
 export function ReadBudgetMeter({
   report,
   editor,
   componentTitle,
   regions,
+  failed,
 }: ReadBudgetMeterProps): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
+  if (failed !== undefined) {
+    return <ReadCountFailed retry={failed.retry} />;
+  }
   const standing = readBudgetStanding(report);
   const share = report === undefined ? 0 : readShare(report);
 
@@ -158,6 +171,40 @@ export function ReadBudgetMeter({
         />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * The meter when the count could not be made: in the place and at the size
+ * of the reading, in its quiet colours, saying so, and pressing it counts
+ * again. Not a panel's trigger, since there is nothing to say past this.
+ */
+function ReadCountFailed({
+  retry,
+}: {
+  readonly retry: () => void;
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      className="nx-read-meter"
+      data-standing="failed"
+      aria-label={FAILED_NAME}
+      // The same words as a tooltip, for the short form a crowded bar draws.
+      title={FAILED_NAME}
+      onClick={retry}
+    >
+      <RotateCw className="nx-read-meter__mark" aria-hidden={true} />
+      <span className="nx-read-meter__count" aria-hidden="true">
+        <span className="nx-read-meter__full">
+          <span className="nx-read-meter__words">
+            Couldn&apos;t count reads
+          </span>
+          <span className="nx-read-meter__retry"> · Retry</span>
+        </span>
+        <span className="nx-read-meter__short nx-read-meter__retry">Retry</span>
+      </span>
+    </button>
   );
 }
 

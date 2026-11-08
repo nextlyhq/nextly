@@ -89,3 +89,29 @@ describe("a Layout region's unread block", () => {
     expect(screen.queryByRole("link")).toBeNull();
   });
 });
+
+describe("a count that could not be made", () => {
+  it("says so in the meter's place, its tooltip the same words, and retries when pressed", () => {
+    const retry = vi.fn();
+    render(
+      <ReadBudgetMeter
+        report={undefined}
+        editor={{ document: pageDocument, select: vi.fn() }}
+        failed={{ retry }}
+      />
+    );
+    const meter = screen.getByRole("button", {
+      name: "Couldn't count page reads. Retry",
+    });
+    expect(meter.getAttribute("title")).toBe(
+      "Couldn't count page reads. Retry"
+    );
+    // Never "Counting": the count is not on its way.
+    expect(meter.getAttribute("aria-busy")).toBeNull();
+    expect(meter.textContent).toContain("Couldn't count reads");
+    fireEvent.click(meter);
+    expect(retry).toHaveBeenCalledTimes(1);
+    // A press retries; it opens no panel, which would have nothing to say.
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});

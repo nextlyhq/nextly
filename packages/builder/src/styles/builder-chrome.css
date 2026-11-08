@@ -10983,6 +10983,17 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   color: var(--nx-builder-text-muted);
 }
 
+/* A count that could not be made: quiet, as counting is, with the way to
+   count again in the text's own colour. */
+.nx-read-meter[data-standing="failed"] .nx-read-meter__count {
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-read-meter[data-standing="failed"] .nx-read-meter__retry {
+  color: var(--nx-builder-text);
+  font-weight: 500;
+}
+
 .nx-read-meter[data-standing="near"] {
   border-color: color-mix(in oklch, var(--nx-warning) 55%, transparent);
   background: var(--nx-builder-warning-ground);
