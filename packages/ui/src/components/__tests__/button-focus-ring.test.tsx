@@ -71,7 +71,7 @@ describe("the shared Button's focus ring", () => {
       expect(classes).toEqual(
         expect.arrayContaining([
           "[.overflow-hidden>&]:focus-visible:outline-offset-[-2px]",
-          "[.overflow-hidden>&]:focus-visible:shadow-[inset_0_0_0_4px_var(--color-background)]",
+          "[.overflow-hidden>&]:focus-visible:shadow-[inset_0_0_0_4px_var(--nx-background)]",
         ])
       );
     }

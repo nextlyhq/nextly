@@ -85,9 +85,11 @@ export const BUTTON_VARIANT_MAP = {
 // paint over its inner edge. There the outline moves inside the button's edge,
 // with an inset stripe of the page's background just within it: on a light
 // fill the ring shows; on a fill matching the ring (a selected primary option)
-// the stripe does.
+// the stripe does. The stripe reads `--nx-background`, the token both the
+// Tailwind v4 theme and the v3 preset define; `--color-background` is the v4
+// theme's alias only, and unset under the preset would drop the stripe.
 const BUTTON_FOCUS_RING =
-  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [.overflow-hidden>&]:focus-visible:outline-offset-[-2px] [.overflow-hidden>&]:focus-visible:shadow-[inset_0_0_0_4px_var(--color-background)]";
+  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [.overflow-hidden>&]:focus-visible:outline-offset-[-2px] [.overflow-hidden>&]:focus-visible:shadow-[inset_0_0_0_4px_var(--nx-background)]";
 
 const buttonVariants: VariantsFn<typeof BUTTON_VARIANT_MAP> = cva(
   `inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium cursor-pointer transition-all duration-150 ${BUTTON_FOCUS_RING} disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] [&_svg]:text-current`,
