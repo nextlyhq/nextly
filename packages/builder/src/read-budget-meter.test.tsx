@@ -114,4 +114,32 @@ describe("a count that could not be made", () => {
     // A press retries; it opens no panel, which would have nothing to say.
     expect(screen.queryByRole("dialog")).toBeNull();
   });
+
+  it("closes an open panel on failing, so a count after it does not open it again", () => {
+    const editor = { document: pageDocument, select: vi.fn() };
+    const { rerender } = render(
+      <ReadBudgetMeter report={over} editor={editor} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /reads/i }));
+    expect(screen.getByRole("dialog", { name: "Page reads" })).toBeTruthy();
+    rerender(
+      <ReadBudgetMeter
+        report={undefined}
+        editor={editor}
+        failed={{ retry: vi.fn() }}
+      />
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // Counting again after a Retry, then the count, or a late answer: the
+    // panel stays closed until it is pressed open.
+    rerender(<ReadBudgetMeter report={undefined} editor={editor} />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    rerender(<ReadBudgetMeter report={over} editor={editor} />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: /^Over the limit/ })
+        .getAttribute("aria-expanded")
+    ).toBe("false");
+  });
 });

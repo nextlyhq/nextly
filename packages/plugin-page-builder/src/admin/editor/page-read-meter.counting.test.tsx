@@ -212,3 +212,67 @@ describe("an editor that renders more often than the count waits", () => {
     expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
   });
 });
+
+describe("a page changing all the while its counts are slow", () => {
+  /**
+   * Render the meter, and a way to give it a new `drawnWith` every 100 ms
+   * for `ms`.
+   */
+  function changingMeter(): (ms: number) => Promise<void> {
+    const fresh = () => ({ ...drawnWith }) as CountedDrawing;
+    const view = render(
+      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+    );
+    return async ms => {
+      for (let elapsed = 0; elapsed < ms; elapsed += 100) {
+        await wait(100);
+        view.rerender(
+          <PageReadMeter
+            editor={editor}
+            drawnWith={fresh()}
+            regions={NO_REGIONS}
+          />
+        );
+      }
+    };
+  }
+
+  it("makes one count at a time, and shows the first that answers", async () => {
+    let making = 0;
+    let most = 0;
+    countWithStages.mockImplementation(
+      () =>
+        new Promise<PageReadReport>(resolve => {
+          making += 1;
+          most = Math.max(most, making);
+          // Each count takes five seconds.
+          setTimeout(() => {
+            making -= 1;
+            resolve(counted);
+          }, 5000);
+        })
+    );
+    const changeFor = changingMeter();
+    await changeFor(8000);
+    // Started at three seconds, the cap on the wait, it answers at eight.
+    expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
+    await changeFor(12_000);
+    expect(most).toBe(1);
+    // One count, then one after each answer for the changes made meanwhile.
+    expect(countWithStages.mock.calls.length).toBeLessThanOrEqual(6);
+  });
+
+  it("says the count could not be made within twenty seconds of the first change, when none answers", async () => {
+    countWithStages.mockImplementation(
+      () => new Promise<PageReadReport>(() => undefined)
+    );
+    await changingMeter()(19_900);
+    // One count, waited on rather than started over.
+    expect(countWithStages).toHaveBeenCalledTimes(1);
+    expect(meter().getAttribute("aria-label")).toBe("Counting page reads");
+    await wait(100);
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Couldn't count page reads. Retry"
+    );
+  });
+});

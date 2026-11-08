@@ -204,6 +204,8 @@ type ShownCount =
 
 const NOT_COUNTED: ShownCount = { report: undefined, failed: false };
 
+const FAILED: ShownCount = { report: undefined, failed: true };
+
 /** What `usePageReads` answers. */
 interface PageReads {
   readonly report: PageReadReport | undefined;
@@ -237,57 +239,143 @@ function readerKey(
   ].join("\u0000");
 }
 
+/** What a count is made with: the page's inputs as they are when it starts. */
+type MakeCount = () => Promise<PageReadReport>;
+
 /**
- * Counts made one after another, of which the latest started is the one
- * shown: one started before a later change still lands, until the count
- * after it does. A count that fails is said, not kept quiet: one never made
- * would leave the meter counting for good, and the last one may no longer
- * be the page's.
+ * When the page's counts are made, and what the meter is told of them.
+ *
+ * - **A change waits.** A count is made {@link COUNT_AFTER_MS} after the
+ *   page last changed, and never more than {@link COUNT_WITHIN_MS} after the
+ *   first change it waited on.
+ * - **One count at a time.** A change made while a count is being made is
+ *   remembered, and exactly one count is made with the latest inputs once
+ *   that one answers or gives up. Counts started over one another would each
+ *   be overtaken before it answered, and the meter would wait on them all.
+ * - **One deadline per wait.** From the first change the meter waits on, it
+ *   is told a count or a failure within {@link COUNT_GIVES_UP_MS}, however
+ *   the page goes on changing: a read that never answers would otherwise
+ *   leave it counting for good.
+ * - **A failure is said.** A count that fails, or does not answer in time,
+ *   is told as one that could not be made. One that answers after its time
+ *   is told only if nothing has been asked since.
  */
-function useCountRuns(): {
-  readonly shown: ShownCount;
-  readonly run: (count: () => Promise<PageReadReport>) => void;
-  readonly clear: () => void;
-} {
-  const [shown, setShown] = useState<ShownCount>(NOT_COUNTED);
-  const started = useRef(0);
-  const live = useRef(true);
-  useEffect(() => {
-    live.current = true;
-    return () => {
-      live.current = false;
-    };
-  }, []);
-  const run = useCallback((count: () => Promise<PageReadReport>) => {
-    started.current += 1;
-    const mine = started.current;
-    const latest = () => live.current && mine === started.current;
-    const failed = () => {
-      if (latest()) setShown({ report: undefined, failed: true });
-    };
-    // A count that never answers is one that could not be made, said once
-    // it has had its while; should it answer after all, its answer is shown.
-    const givenUp = setTimeout(failed, COUNT_GIVES_UP_MS);
-    count().then(
-      report => {
-        clearTimeout(givenUp);
-        if (latest()) setShown({ report, failed: false });
-      },
-      () => {
-        clearTimeout(givenUp);
-        failed();
-      }
+class CountScheduler {
+  private make: MakeCount | undefined;
+  private waitTimer: ReturnType<typeof setTimeout> | undefined;
+  private waitingSince: number | undefined;
+  /** The count being made, by its number; 0 when none is. */
+  private inFlight = 0;
+  /** The page changed while a count was being made. */
+  private changedSince = false;
+  /** The deadline of the wait in hand; `undefined` when none is. */
+  private deadline: ReturnType<typeof setTimeout> | undefined;
+  private counts = 0;
+  private disposed = false;
+
+  constructor(private readonly tell: (shown: ShownCount) => void) {}
+
+  /** The page changed: `make` counts it as it is now. */
+  changed(make: MakeCount): void {
+    this.make = make;
+    this.awaitAnswer();
+    if (this.inFlight !== 0) {
+      this.changedSince = true;
+      return;
+    }
+    this.wait(countWait(this.since(), Date.now()));
+  }
+
+  /** Count again now, showing the meter as counting meanwhile. */
+  retry(): void {
+    this.tell(NOT_COUNTED);
+    this.awaitAnswer();
+    if (this.inFlight !== 0) {
+      this.changedSince = true;
+      return;
+    }
+    this.wait(0);
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    clearTimeout(this.waitTimer);
+    clearTimeout(this.deadline);
+  }
+
+  private since(): number {
+    this.waitingSince ??= Date.now();
+    return this.waitingSince;
+  }
+
+  private wait(ms: number): void {
+    clearTimeout(this.waitTimer);
+    this.waitTimer = setTimeout(() => this.start(), ms);
+  }
+
+  private awaitAnswer(): void {
+    this.deadline ??= setTimeout(() => this.giveUp(), COUNT_GIVES_UP_MS);
+  }
+
+  private answered(): void {
+    clearTimeout(this.deadline);
+    this.deadline = undefined;
+  }
+
+  private start(): void {
+    const make = this.make;
+    this.waitTimer = undefined;
+    this.waitingSince = undefined;
+    this.changedSince = false;
+    if (make === undefined) return;
+    this.counts += 1;
+    const count = this.counts;
+    this.inFlight = count;
+    make().then(
+      report => this.settle(count, { report, failed: false }),
+      () => this.settle(count, FAILED)
     );
-  }, []);
-  const clear = useCallback(() => setShown(NOT_COUNTED), []);
-  return { shown, run, clear };
+  }
+
+  private settle(count: number, shown: ShownCount): void {
+    if (this.disposed) return;
+    if (this.inFlight !== count) {
+      // Given up on already: told only if nothing has been asked since.
+      if (count === this.counts && this.deadline === undefined) {
+        this.tell(shown);
+      }
+      return;
+    }
+    this.inFlight = 0;
+    this.answered();
+    this.tell(shown);
+    this.next();
+  }
+
+  private giveUp(): void {
+    this.deadline = undefined;
+    if (this.disposed) return;
+    this.inFlight = 0;
+    this.tell(FAILED);
+    // A count still waiting to start has a deadline of its own.
+    if (this.waitTimer !== undefined) this.awaitAnswer();
+    this.next();
+  }
+
+  /** The one count the changes made meanwhile ask for, made now. */
+  private next(): void {
+    if (!this.changedSince) return;
+    this.awaitAnswer();
+    this.start();
+  }
 }
 
 /**
  * The page's count, made again a moment after it last changed. The last
  * count stays shown while the next is made, so the meter does not blink;
  * there is none until the first is made. A count that could not be made is
- * said, with the way to make it again, rather than left counting.
+ * said, with the way to make it again, rather than left counting. When
+ * counts are made: {@link CountScheduler}.
  *
  * What starts a count is the page changing: what the canvas draws it with,
  * its document and its Layout's regions, and who reads it (by value). A
@@ -300,7 +388,7 @@ function usePageReads(
   document: BlockDocument,
   regions: readonly CountedRegion[]
 ): PageReads {
-  const { shown, run, clear } = useCountRuns();
+  const [shown, setShown] = useState<ShownCount>(NOT_COUNTED);
   // The entry the canvas is drawn as, and the person reading it, so the
   // bindings are read as the canvas reads them.
   const identity = useCanvasEntryIdentity();
@@ -314,35 +402,23 @@ function usePageReads(
       readBindings: routeBindings(identity, userId, drawnWith),
     };
   });
-  // Bumped by a retry, which counts at once.
-  const [asked, setAsked] = useState(0);
-  const countNow = useRef(false);
-  // When the first change a count waits on was made, so the wait is capped.
-  const waitingSince = useRef<number | undefined>(undefined);
+  // One scheduler for the meter's life, made before the first change is
+  // told to it.
+  const scheduler = useRef<CountScheduler | null>(null);
   useEffect(() => {
-    const now = Date.now();
-    waitingSince.current ??= now;
-    const wait = countNow.current ? 0 : countWait(waitingSince.current, now);
-    const timer = setTimeout(() => {
-      countNow.current = false;
-      waitingSince.current = undefined;
-      run(() =>
-        countPageReads(
-          drawnWith,
-          document,
-          regions,
-          undefined,
-          readsNow.current
-        )
-      );
-    }, wait);
-    return () => clearTimeout(timer);
-  }, [drawnWith, document, regions, reader, asked, run]);
-  const retry = useCallback(() => {
-    countNow.current = true;
-    clear();
-    setAsked(value => value + 1);
-  }, [clear]);
+    const made = new CountScheduler(setShown);
+    scheduler.current = made;
+    return () => {
+      made.dispose();
+      scheduler.current = null;
+    };
+  }, []);
+  useEffect(() => {
+    scheduler.current?.changed(() =>
+      countPageReads(drawnWith, document, regions, undefined, readsNow.current)
+    );
+  }, [drawnWith, document, regions, reader]);
+  const retry = useCallback(() => scheduler.current?.retry(), []);
   return { report: shown.report, retry: shown.failed ? retry : undefined };
 }
 

@@ -118,6 +118,10 @@ export function ReadBudgetMeter({
   failed,
 }: ReadBudgetMeterProps): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
+  // Closed on failing, so neither a retry nor a late answer opens the panel
+  // again: it was opened on a count the failure replaced. Set while
+  // rendering, so no frame draws the panel open over the failure.
+  if (failed !== undefined && open) setOpen(false);
   if (failed !== undefined) {
     return <ReadCountFailed retry={failed.retry} />;
   }
