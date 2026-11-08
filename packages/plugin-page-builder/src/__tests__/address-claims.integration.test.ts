@@ -341,6 +341,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("gives a waiting list its later pages once every page among them is released", async () => {
       const claims = claimsOf(await boot());
+      await claim(claims, "/news", page("list"));
       await claim(claims, "/news/page/2", page("p2"));
       await claim(claims, "/news/page/3", page("p3"));
       expect(await waitForSpace(claims, "/news", page("list"))).toBe("waiting");
@@ -361,27 +362,44 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
-    it("settles a list's wait for its later pages apart from its wait for its address", async () => {
+    it("leaves a list waiting for its later pages while it waits for its address, and gives it both once the address is released", async () => {
       const claims = claimsOf(await boot());
       await claim(claims, "/news", post("e1"));
       await claim(claims, "/news/page/2", page("p2"));
       await saving(claims, tx =>
         claimOrWait(claims, tx, { address: at("/news"), holder: page("list") })
       );
-      await waitForSpace(claims, "/news", page("list"));
+      expect(await waitForSpace(claims, "/news", page("list"))).toBe("waiting");
 
-      // Its address is still held by another, but nothing is left among its
-      // later pages: it takes them, and keeps waiting for its address.
+      // Nothing is left among its later pages, but its address is still held
+      // by another: they stay no one's, its wait for them behind that claim.
       await release(claims, page("p2"));
+      expect(await stored(claims, "space")).toEqual([]);
+      expect(await stored(claims, "waiting")).toEqual([
+        ["/news", "list"],
+        ["/news", "list"],
+      ]);
+
+      // The address released hands it the address, then the later pages.
+      await release(claims, post("e1"));
+      expect(await stored(claims, "address")).toEqual([["/news", "list"]]);
       expect(await stored(claims, "space")).toEqual([["/news", "list"]]);
-      expect(await stored(claims, "waiting")).toEqual([["/news", "list"]]);
-      expect(await stored(claims, "address")).toEqual([["/news", "e1"]]);
+      expect(await stored(claims, "waiting")).toEqual([]);
+    });
+
+    it("gives a list no later pages while it is served nowhere at its own address", async () => {
+      const claims = claimsOf(await boot());
+      expect(await waitForSpace(claims, "/news", page("list"))).toBe("waiting");
+      expect(await stored(claims, "space")).toEqual([]);
+      expect(await stored(claims, "waiting")).toEqual([]);
     });
 
     it("drops a list's wait for its later pages once it stops paginating", async () => {
       const claims = claimsOf(await boot());
+      await claim(claims, "/news", page("list"));
       await claim(claims, "/news/page/2", page("p2"));
-      await waitForSpace(claims, "/news", page("list"));
+      expect(await waitForSpace(claims, "/news", page("list"))).toBe("waiting");
+      expect(await stored(claims, "waiting")).toEqual([["/news", "list"]]);
       await saving(claims, tx =>
         reconcileHolder(
           claims,
