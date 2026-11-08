@@ -59,6 +59,7 @@ import {
   holdersIn,
   lockCollection,
   reconcileHolder,
+  refuseUnseenHolders,
   releaseClaims,
   sharePending,
   type Claims,
@@ -822,12 +823,8 @@ async function settleUnserved(
   // Read on the template's write's own transaction, under the lock taken
   // above: a write holding the pool's last connection never waits for a
   // second one.
-  const holders = await holdersIn(
-    deps.claims,
-    tx,
-    { holderCollection: { equals: collection } },
-    holder => holder.collection === collection
-  );
+  const { where, keep } = entriesClaims(collection);
+  const holders = await holdersIn(deps.claims, tx, where, keep);
   for (const holder of holders) {
     if ((await servedHere(holder.id)) === null) {
       await releaseClaims(deps.claims, tx, holder);
@@ -838,6 +835,29 @@ async function settleUnserved(
     if ((await servedHere(id)) !== null) served.push(id);
   }
   await settleDesigned(deps, tx, collection, address, served);
+  // Last, once every lock taken above is held: an entry whose claim the read
+  // of holders missed is refused rather than left holding an address its
+  // collection no longer serves. Those with a published own design were
+  // settled above, so they are dealt with too.
+  await refuseUnseenHolders(deps.claims, tx, where, keep, [
+    ...holders,
+    ...[...designs].map(id => ({ collection, id })),
+  ]);
+}
+
+/**
+ * The claims held or waited for by `collection`'s entries: `where` narrows a
+ * read to them, and `keep` decides, so the read of holders and the check
+ * made after it select the same claims.
+ */
+function entriesClaims(collection: string): {
+  where: Record<string, unknown>;
+  keep: (holder: Holder) => boolean;
+} {
+  return {
+    where: { holderCollection: { equals: collection } },
+    keep: holder => holder.collection === collection,
+  };
 }
 
 /**
@@ -1154,13 +1174,13 @@ async function releaseCollection(
   await lockCollection(deps.claims, tx, collection);
   // On `tx`, as every read inside a write is: a template's write holding the
   // pool's last connection never waits for a second one.
-  const holders = await holdersIn(
-    deps.claims,
-    tx,
-    { holderCollection: { equals: collection } },
-    holder => holder.collection === collection
-  );
+  const { where, keep } = entriesClaims(collection);
+  const holders = await holdersIn(deps.claims, tx, where, keep);
   for (const holder of holders) {
     await releaseClaims(deps.claims, tx, holder);
   }
+  // Last, once every lock the releases took is held: an entry whose claim
+  // the read of holders missed is refused rather than left holding an
+  // address in a collection with none.
+  await refuseUnseenHolders(deps.claims, tx, where, keep, holders);
 }

@@ -214,15 +214,18 @@ async function claimsIn(
  * `where` narrows to, that `keep` accepts, each once, as `tx` sees the store:
  * read on the transaction's own connection, as every read inside a save is,
  * so a save holding the pool's last connection never waits for a second.
- * Read holding nothing, as the last commit was read before: it only finds
- * whom to release, and each is released under its own locks
- * ({@link releaseClaims}), which a locking read here would precede.
+ * Read holding nothing by default: it only finds whom to release, and each
+ * is released under its own locks ({@link releaseClaims}), which a locking
+ * read here would precede. On MySQL such a read can answer from a snapshot
+ * older than the locks taken since, so whoever reads holders this way checks
+ * them afterwards with {@link refuseUnseenHolders}.
  */
 export async function holdersIn(
   claims: Claims,
   tx: Tx,
   where: Record<string, unknown>,
-  keep: (holder: Holder) => boolean
+  keep: (holder: Holder) => boolean,
+  lock: "none" | "share" = "none"
 ): Promise<Holder[]> {
   const rows = await claimsIn(
     claims,
@@ -232,15 +235,61 @@ export async function holdersIn(
       (row.kind === "address" || row.kind === "waiting") &&
       row.holder !== null &&
       keep(row.holder),
-    "none"
+    lock
   );
   const holders = new Map<string, Holder>();
   for (const { holder } of rows) {
-    if (holder !== null) {
-      holders.set(`${holder.collection}\u0000${holder.id}`, holder);
-    }
+    if (holder !== null) holders.set(holderName(holder), holder);
   }
   return [...holders.values()];
+}
+
+/** One text per holder, for telling holders apart. */
+function holderName(holder: Holder): string {
+  return `${holder.collection}\u0000${holder.id}`;
+}
+
+/**
+ * Refuse, as a conflict, a write that dealt with the holders
+ * {@link holdersIn} found holding nothing, when a read of the latest commit
+ * finds a holder among the same claims that it did not see, and so left as
+ * it was. `seen` is every holder the write dealt with: those the first read
+ * found, and any it went on to serve itself.
+ *
+ * On MySQL the first read can answer from a snapshot older than the lock the
+ * write took over these claims (a collection's, say), when the transaction
+ * had read something before taking it: a save that committed a claim in
+ * between is then missing from it. Reading under a share lock reads the
+ * latest commit instead. The read is made last, once the write holds every
+ * lock it took: made first, its locks on these rows and the gaps beside them
+ * would be held while the write waits for an address's lock, and a save
+ * holding that lock and writing a claim into one of those gaps would wait for
+ * this one, which the database would refuse as a deadlock. Releasing the
+ * holder found late would take its address's lock after this read, in that
+ * same order, so the write is refused instead, and the save may run again.
+ */
+export async function refuseUnseenHolders(
+  claims: Claims,
+  tx: Tx,
+  where: Record<string, unknown>,
+  keep: (holder: Holder) => boolean,
+  seen: Iterable<Holder>
+): Promise<void> {
+  const dealtWith = new Set([...seen].map(holderName));
+  const missed = (await holdersIn(claims, tx, where, keep, "share")).filter(
+    holder => !dealtWith.has(holderName(holder))
+  );
+  const [first] = missed;
+  if (first === undefined) return;
+  throw NextlyError.conflict({
+    message:
+      "Another save changed who holds or waits for this address just now. Try again.",
+    logContext: {
+      reason: "address-holders-read-raced",
+      holder: `${first.collection}/${first.id}`,
+      missed: missed.length,
+    },
+  });
 }
 
 /** The claims keyed by any of `keys` (canonical keys), as `tx` sees them. */
