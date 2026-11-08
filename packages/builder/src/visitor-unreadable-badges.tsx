@@ -110,6 +110,33 @@ export function tipRunsFromStart(right: number, screenLeft: number): boolean {
   return right - screenLeft < TIP_MAX_WIDTH_PX;
 }
 
+/**
+ * About the tallest a tooltip is drawn, its sentence wrapped at its widest
+ * over a few lines, erring tall: drawn hidden until asked for, it has no
+ * height to measure before it shows.
+ */
+const TIP_HEIGHT_ESTIMATE_PX = 120;
+
+/** The gap the stylesheet leaves between a badge and its tooltip (0.375rem). */
+const TIP_GAP_PX = 6;
+
+/** No canvas on screen: nothing measured yet, or the layer is gone. */
+const NO_SCREEN: Rect = { x: 0, y: 0, width: 0, height: 0 };
+
+/**
+ * Whether a badge whose top is at `top` has its tooltip open upwards: the
+ * screen, `screen` in the chrome's coordinates, has too little room under the
+ * badge for the tooltip and more above it. A badge on its block's bottom
+ * edge near the foot of the screen would otherwise show its tooltip where the
+ * canvas clips it.
+ */
+export function tipRunsUp(top: number, screen: Rect): boolean {
+  const roomBelow =
+    screen.y + screen.height - (top + BADGE_HEIGHT_PX + TIP_GAP_PX);
+  const roomAbove = top - TIP_GAP_PX - screen.y;
+  return roomBelow < TIP_HEIGHT_ESTIMATE_PX && roomAbove > roomBelow;
+}
+
 /** The badge's drawn width for `id`, or the estimate before it is drawn. */
 function badgeWidthOf(
   layer: HTMLElement | null,
@@ -142,6 +169,8 @@ interface BadgePlace {
    * screen to the badge's left for it to run left from the badge's right.
    */
   readonly tipFromStart: boolean;
+  /** The tooltip opens upwards: too little room on screen under the badge. */
+  readonly tipUp: boolean;
 }
 
 /** One marked block as measured: its outline, and its badge to place. */
@@ -221,6 +250,7 @@ function measuredBadgeOf(
       // Sitting on the outline's edge, its border shared with the outline's,
       // so the two read as one mark of this block.
       foot: 1,
+      leftmost: onScreen.x,
     },
   };
 }
@@ -351,14 +381,14 @@ export function VisitorUnreadableBadges({
   const measured = useRef<{
     readonly root: HTMLElement | null;
     readonly badges: readonly MeasuredBadge[];
-    /** The left edge of what of the canvas is on screen, as last measured. */
-    readonly screenLeft: number;
-  }>({ root: null, badges: [], screenLeft: 0 });
+    /** What of the canvas is on screen, as last measured. */
+    readonly screen: Rect;
+  }>({ root: null, badges: [], screen: NO_SCREEN });
 
   // The badges as last measured, placed where the board puts them now, with
   // the canvas's other tabs and the block toolbar.
   const placeBadges = useCallback(() => {
-    const { root, badges, screenLeft } = measured.current;
+    const { root, badges, screen } = measured.current;
     const placements =
       root === null ? [] : tabBoardOf(root).placesOf("visitor");
     const next = new Map<string, BadgePlace>();
@@ -368,14 +398,17 @@ export function VisitorUnreadableBadges({
         side: tab.side,
       };
       const right = outline.x + outline.width - side;
+      const top = badgeTopOf(outline, at);
       next.set(id, {
         outline,
         right,
-        top: badgeTopOf(outline, at),
+        top,
         at,
-        // Read from where the badge is placed, which a step left to keep
-        // clear of another tab moves, so its tooltip still fits on screen.
-        tipFromStart: tipRunsFromStart(right, screenLeft),
+        // Read from where the badge is placed, which a step left or a move to
+        // the bottom edge to keep clear of another tab changes, so its
+        // tooltip still fits on screen.
+        tipFromStart: tipRunsFromStart(right, screen.x),
+        tipUp: tipRunsUp(top, screen),
       });
     });
     setPlaces(next);
@@ -387,7 +420,7 @@ export function VisitorUnreadableBadges({
     const space =
       element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
     if (space === null) {
-      measured.current = { root: null, badges: [], screenLeft: 0 };
+      measured.current = { root: null, badges: [], screen: NO_SCREEN };
       postTabs(null);
       setPlaces(current => (current.size === 0 ? current : new Map()));
       return;
@@ -397,7 +430,7 @@ export function VisitorUnreadableBadges({
       const badge = measuredBadgeOf(element, space, onScreen, id);
       return badge === undefined ? [] : [badge];
     });
-    measured.current = { root: space.root, badges, screenLeft: onScreen.x };
+    measured.current = { root: space.root, badges, screen: onScreen };
     postTabs(space.root, { tabs: badges.map(({ tab }) => tab), taken: [] });
     placeBadges();
   }, [marked, postTabs, placeBadges]);
@@ -464,6 +497,7 @@ export function VisitorUnreadableBadges({
               data-inside={place.at === "inside" ? "" : undefined}
               data-below={place.at === "below" ? "" : undefined}
               data-tip-start={place.tipFromStart ? "" : undefined}
+              data-tip-up={place.tipUp ? "" : undefined}
               data-dismissed={dismissed === id ? "" : undefined}
               style={{ left: place.right, top: place.top }}
               onMouseLeave={() => {

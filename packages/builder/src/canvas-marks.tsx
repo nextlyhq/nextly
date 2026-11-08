@@ -951,6 +951,7 @@ function atRestMark(
       height: AT_REST_TAB_HEIGHT,
       // Measured from the edge they stand on: their foot shares the dash.
       foot: 0,
+      leftmost: onScreen.x,
     },
   };
 }

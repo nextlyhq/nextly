@@ -14,6 +14,7 @@ import type { MediaSummary } from "./content-controls";
 import {
   VisitorUnreadableLine,
   tipRunsFromStart,
+  tipRunsUp,
   visitorUnreadableSentence,
 } from "./visitor-unreadable-badges";
 import { VisitorUnreadableNote } from "./visitor-unreadable-context";
@@ -130,5 +131,30 @@ describe("the badge's tooltip, beside the screen's left edge", () => {
   it("runs left from the badge's right edge where there is room", () => {
     // The control: the same screen, a badge far enough in.
     expect(tipRunsFromStart(48 + 400, 48)).toBe(false);
+  });
+});
+
+describe("the badge's tooltip, near the screen's foot", () => {
+  // A screen 600px tall, from y=40 in the chrome's coordinates.
+  const screenBand = { x: 48, y: 40, width: 900, height: 600 };
+
+  it("opens upwards from a badge on its block's bottom edge near the foot", () => {
+    // The badge's top at 560: 22px of badge and 6px of gap leave 52px under
+    // it, too little for a tooltip of a few lines, with 514px above.
+    expect(tipRunsUp(560, screenBand)).toBe(true);
+  });
+
+  it("opens downwards where there is room under the badge", () => {
+    // The control: the same screen, a badge higher up. Fails were the
+    // tooltip turned upwards by its edge alone, or by any badge on the bottom.
+    expect(tipRunsUp(200, screenBand)).toBe(false);
+  });
+
+  it("opens downwards where there is even less room above", () => {
+    // A screen too short for the tooltip either way: below keeps the room
+    // that is larger, rather than turning up into less.
+    expect(tipRunsUp(60, { x: 48, y: 40, width: 900, height: 140 })).toBe(
+      false
+    );
   });
 });

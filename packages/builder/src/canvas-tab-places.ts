@@ -58,6 +58,11 @@ export interface TabDraft {
    * sits on it: drawn that far over the edge rather than wholly past it.
    */
   readonly foot: number;
+  /**
+   * The furthest left its box may start: the left edge of what of the canvas
+   * is on screen, past which a tab stepped left would be drawn out of view.
+   */
+  readonly leftmost: number;
 }
 
 /** Where a tab is placed: on which edge, and how far in from the right. */
@@ -119,7 +124,7 @@ function tabBoxOf(draft: TabDraft, at: TabAt, side: number): Rect {
  * blocks, it keeps its first place and steps left along that edge, past what
  * it would cover. A tab that is clear is placed exactly as it is alone.
  */
-function tabsApart(
+export function tabsApart(
   drafts: readonly TabDraft[],
   taken: readonly Rect[] = []
 ): TabPlacement[] {
@@ -143,11 +148,22 @@ function tabsApart(
     const at = clear ?? draft.places[0] ?? "inside";
     let side = draft.side;
     let box = tabBoxOf(draft, at, side);
+    // The furthest in from the outline's right edge it may step: its box then
+    // starts at the screen's left edge. A tab stopped there may still cover
+    // another, but it stays in view and reachable, where one stepped further
+    // would be drawn, and its button placed, off the canvas.
+    const furthest = Math.max(
+      draft.side,
+      draft.edge.x + draft.edge.width - draft.width - draft.leftmost
+    );
     // Ends: each step leaves the tab wholly left of the box it hits, and it
-    // only moves left, so no placed box is hit twice.
+    // only moves left, so no placed box is hit twice; or it reaches the
+    // screen's left edge and stops.
     for (let over = hit(box); over !== undefined; over = hit(box)) {
-      side = draft.edge.x + draft.edge.width - (over.x - TAB_GAP);
+      const next = draft.edge.x + draft.edge.width - (over.x - TAB_GAP);
+      side = Math.min(next, furthest);
       box = tabBoxOf(draft, at, side);
+      if (next >= furthest) break;
     }
     placed.push(box);
     placements[index] = { at, side };
