@@ -1024,13 +1024,20 @@ export interface LinkGroupFieldProps {
  */
 function isLinkBound(
   group: LinkGroup,
-  document: BlockDocument | undefined,
-  nodeId: string | undefined
+  bound: Readonly<Record<string, unknown>> | undefined
 ): boolean {
-  if (document === undefined || nodeId === undefined) return false;
-  const bound = findNode(document.nodes, nodeId)?.bindings;
   if (bound?.[group.link] !== undefined) return true;
   return group.entry !== undefined && bound?.[group.entry.id] !== undefined;
+}
+
+/** The block's bindings, where the group knows its document and block. */
+function bindingsOfBlock(
+  document: BlockDocument | undefined,
+  nodeId: string | undefined
+): Readonly<Record<string, unknown>> | undefined {
+  return document === undefined || nodeId === undefined
+    ? undefined
+    : findNode(document.nodes, nodeId)?.bindings;
 }
 
 /**
@@ -1043,9 +1050,13 @@ function isLinkBound(
 function bindOptions(
   group: LinkGroup,
   destination: readonly string[],
-  writable: (name: string) => boolean
+  writable: (name: string) => boolean,
+  bound: Readonly<Record<string, unknown>> | undefined
 ): BindableOptions {
   const entry = group.entry;
+  // A related entry's pick removes the address's binding, so where that
+  // binding is held it is not offered either.
+  const addressHeld = bound?.[group.link] !== undefined && !writable(group.link);
   return {
     clearsOnBind: destination.filter(name => name !== group.link),
     ...(entry === undefined
@@ -1056,7 +1067,8 @@ function bindOptions(
             ...entry,
             // A related entry's pick writes both halves, so where either is
             // held (an area that keeps the block's design) none is offered.
-            writable: writable(entry.collection) && writable(entry.id),
+            writable:
+              writable(entry.collection) && writable(entry.id) && !addressHeld,
           },
         }),
   };
@@ -1091,7 +1103,8 @@ export function LinkGroupField({
   const label =
     linkProp === undefined ? "Link" : propLabel(linkProp.name, linkProp.schema);
   const value = linkValueOf(group, values);
-  const linkBound = isLinkBound(group, document, nodeId);
+  const bound = bindingsOfBlock(document, nodeId);
+  const linkBound = isLinkBound(group, bound);
   const linked = value.kind !== "none" || linkBound;
   const held = (name: string | undefined): string | undefined =>
     name === undefined || writable(name) ? undefined : reasonId;
@@ -1150,7 +1163,7 @@ export function LinkGroupField({
             />
           </div>
         </HeldByLock>,
-        bindOptions(group, destination, writable)
+        bindOptions(group, destination, writable, bound)
       )}
       {!linked || group.target === undefined ? null : (
         <HeldByLock reasonId={held(group.target)}>

@@ -94,8 +94,9 @@ interface EntryLink {
   readonly collection: string;
   readonly id: string;
   /**
-   * Whether both halves of the reference may be written where the block
-   * sits: a related entry's pick writes both, so it is offered only then.
+   * Whether a related entry's pick may be written where the block sits: it
+   * writes both halves of the reference and removes the address's binding,
+   * so it is offered only where all three may change.
    */
   readonly writable: boolean;
 }
@@ -111,6 +112,7 @@ interface PickEdit {
  * collection is set to the relation's in the same edit, since a pick writes
  * both halves of the reference at once, and a stored entry id is emptied.
  * The address the link was bound to is unbound, since the entry replaces it,
+ * as is a bound collection, which would otherwise overlay the one set,
  * and its fallback is not carried over, being an address rather than an id;
  * the address stored on the block is kept, so the link still goes there
  * where the entry is not read. Any other pick binds `prop`, emptying
@@ -145,7 +147,12 @@ function pickOp(
     entry.id,
     bindingFor(picked, at.prop === entry.id ? kept : undefined),
     [entry.id],
-    { set: { [entry.collection]: collection }, unbind: [entry.link] }
+    {
+      set: { [entry.collection]: collection },
+      // The collection is set, so a binding of it, which the page would fill
+      // over the value set, goes too.
+      unbind: [entry.link, entry.collection],
+    }
   );
   return { op, bound: entry.id };
 }

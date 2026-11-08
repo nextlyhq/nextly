@@ -963,6 +963,52 @@ describe("a link's entry bound to the entry a relation names", () => {
     ).toBeNull();
   });
 
+  it("unbinds a bound collection when a pick sets one, so the page reads the one set", async () => {
+    const editor = mountButton(
+      { label: "Read more" },
+      { entryCollection: { $bind: "title" } }
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Link to a field" })
+    );
+    fireEvent.click(await authorEntry("Fields for Link"));
+    expect(onlyEdit(editor)).toEqual({
+      kind: "update",
+      id: "b",
+      patch: {
+        bindings: { entryId: { $bind: "author.id" } },
+        props: { label: "Read more", entryCollection: "users" },
+      },
+    });
+  });
+
+  it("offers no entry where an area holds the address's binding, which a pick would remove", async () => {
+    const both = {
+      href: { $bind: "siteUrl", source: "site" as const },
+      entryId: { $bind: "author.id" },
+    };
+    const props = { label: "Read more", entryCollection: "users" };
+    /** The options the entry chip's Change field lists, once it says so. */
+    const changeOptions = async (): Promise<(string | null)[]> => {
+      const chip = await screen.findByRole("button", {
+        name: "Entry: bound to Author › Link to this entry of this post",
+      });
+      fireEvent.keyDown(chip, { key: "Enter" });
+      fireEvent.click(
+        await screen.findByRole("menuitem", { name: "Change field…" })
+      );
+      await screen.findByText(/^(No field can fill|Only fields)/);
+      return screen.queryAllByRole("option").map(option => option.textContent);
+    };
+    mountButton(props, both, ["href"]);
+    expect(await changeOptions()).toEqual([]);
+    cleanup();
+    clearBlocks();
+    // The control: the same block where the address may change.
+    mountButton(props, both);
+    expect(await changeOptions()).toEqual(["Author › Link to this entry"]);
+  });
+
   it("draws the bound entry's chip in the link's place, with no fallback to type", async () => {
     mountButton(
       { label: "Read more", entryCollection: "users" },
