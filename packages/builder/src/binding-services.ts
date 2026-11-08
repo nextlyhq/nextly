@@ -44,6 +44,12 @@ export interface BindingFieldChoice extends Omit<BindingFieldShape, "fields"> {
    * is shown.
    */
   readonly linksTo?: string;
+  /**
+   * Set on a related entry (`linksTo`) whose collection has no page yet, as
+   * the host serves pages: the collection's name, which the picker says the
+   * row is waiting for. Listed, so the author sees why, but not picked.
+   */
+  readonly noPageFor?: string;
 }
 
 /**

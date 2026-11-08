@@ -72,8 +72,27 @@ export const BUTTON_VARIANT_MAP = {
  * Note: 'primary' is a semantic alias for 'default' variant for better code readability
  * @experimental
  */
+// The keyboard focus ring: a 2px outline of the ring token, set 2px out from
+// the button. An outline's offset is a real gap, not a painted one, so the
+// surface the button sits on (a card, the page, a dialog) shows through it in
+// either mode, and the ring is judged against that surface, where the ring
+// token holds its contrast, whatever the variant's fill. A 1px ring flush on
+// the fill could not be seen at all on the fill that matches the ring token
+// (the black primary in light mode, the white one in dark).
+//
+// Inside a parent that clips (a segmented control's `overflow-hidden` row),
+// an outline outside the button would be cut away, and the next option would
+// paint over its inner edge. There the outline moves inside the button's edge,
+// with an inset stripe of the page's background just within it: on a light
+// fill the ring shows; on a fill matching the ring (a selected primary option)
+// the stripe does. The stripe reads `--nx-background`, the token both the
+// Tailwind v4 theme and the v3 preset define; `--color-background` is the v4
+// theme's alias only, and unset under the preset would drop the stripe.
+const BUTTON_FOCUS_RING =
+  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [.overflow-hidden>&]:focus-visible:outline-offset-[-2px] [.overflow-hidden>&]:focus-visible:shadow-[inset_0_0_0_4px_var(--nx-background)]";
+
 const buttonVariants: VariantsFn<typeof BUTTON_VARIANT_MAP> = cva(
-  "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium cursor-pointer transition-all duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-0 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] [&_svg]:text-current",
+  `inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium cursor-pointer transition-all duration-150 ${BUTTON_FOCUS_RING} disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] [&_svg]:text-current`,
   {
     variants: BUTTON_VARIANT_MAP,
     defaultVariants: {

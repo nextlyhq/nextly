@@ -87,8 +87,10 @@ import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
 import {
   entryConditionedIn,
   gateByConditions,
+  markByConditions,
   pruneHiddenNodes,
   type ConditionGate,
+  type EntryJudgement,
 } from "./visibility";
 
 export interface PrepareDocumentArgs {
@@ -124,6 +126,14 @@ export interface PrepareDocumentArgs {
    * conditioned block is held back until a route decides them.
    */
   itemsDecided?: boolean;
+  /**
+   * Judge the page's conditions for an entry as an editor shows it to a
+   * visitor reading that entry: each block judged as the route's gate judges
+   * it, one whose conditions hold drawn with them lifted, one they hide
+   * replaced by the judgement's own node, and one a list's item decides kept
+   * for the list. Wins over {@link itemsDecided}, which it includes.
+   */
+  entryJudged?: EntryJudgement;
 }
 
 /**
@@ -395,12 +405,19 @@ export function prepareDocumentReadStages(
   document: BlockDocument,
   args: PrepareDocumentArgs
 ): DocumentReadStages | null {
-  const before = stagesBeforeBindings(
-    document,
-    args,
-    args.itemsDecided === true ? itemsKept : undefined
-  );
+  const before = stagesBeforeBindings(document, args, decideFor(args));
   return before === null ? null : withBindings(before, args);
+}
+
+/** The gating a reading asks for, where it asks for one of its own. */
+function decideFor(
+  args: PrepareDocumentArgs
+): ((migrated: BlockDocument) => BlockDocument) | undefined {
+  const judgement = args.entryJudged;
+  if (judgement !== undefined) {
+    return migrated => markByConditions(migrated, judgement).document;
+  }
+  return args.itemsDecided === true ? itemsKept : undefined;
 }
 
 /**
@@ -685,8 +702,12 @@ export function readStagesFor(
   prepared: PreparedDocument | undefined
 ): DocumentReadStages | null {
   const record = prepared === undefined ? undefined : PREPARED.get(prepared);
+  // A route's preparation gates as the route does; a reading that judges
+  // the page itself, an editor's, never reuses one.
   const reusable =
     record !== undefined &&
+    args.entryJudged === undefined &&
+    args.itemsDecided !== true &&
     record.document === document &&
     record.resolver === args.resolver &&
     record.definitions === definitionsKey(args.definitions) &&

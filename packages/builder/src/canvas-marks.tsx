@@ -46,6 +46,13 @@ import {
   watchCanvasFor,
   watchScreenBand,
 } from "./canvas-geometry-watch";
+import {
+  tabBoardOf,
+  useTabPost,
+  type TabAt,
+  type TabDraft,
+  type TabPlacement,
+} from "./canvas-tab-places";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import type { Rect } from "./geometry";
 import {
@@ -162,7 +169,7 @@ interface Mark {
    */
   readonly entryContent?: string;
   /** Where an at-rest mark's tabs go: above the block, below it, or inside its top. */
-  readonly tabsAt?: "above" | "below" | "inside";
+  readonly tabsAt?: TabAt;
   /** Whether the block is selected, so its ring stands for the outline. */
   readonly atRestSelected?: boolean;
   readonly rect: Rect;
@@ -596,10 +603,23 @@ interface MarkInputs {
   readonly shownLabel: string;
 }
 
+/**
+ * What a measure of the canvas finds: the marks drawn as measured, and the
+ * at-rest marks, whose tabs the board places with every other layer's
+ * (`placedAtRest`), over the canvas drawn at `root`.
+ */
+interface Measured {
+  readonly root: HTMLElement | null;
+  readonly marks: readonly Mark[];
+  readonly atRest: readonly AtRestDraft[];
+}
+
+const NOTHING_MEASURED: Measured = { root: null, marks: NO_MARKS, atRest: [] };
+
 /** The marked elements of a canvas root, as the boxes to draw over them. */
-function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
+function marksOf(element: HTMLElement, inputs: MarkInputs): Measured {
   const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
-  if (space === null) return NO_MARKS;
+  if (space === null) return NOTHING_MEASURED;
   const { root } = space;
   const onScreen = onScreenOf(space);
   const screenBottom = onScreen.y + onScreen.height;
@@ -763,10 +783,11 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
       });
     });
   }
-  found.push(
-    ...atRestMarks(root, space, onScreen, toolbarAbove, inputs.shownLabel)
-  );
-  return dimmedBesideEditing(found);
+  return {
+    root,
+    marks: dimmedBesideEditing(found),
+    atRest: atRestMarks(root, space, onScreen, toolbarAbove, inputs.shownLabel),
+  };
 }
 
 /** What an element asks an at-rest mark to say, read off its attributes. */
@@ -799,7 +820,8 @@ function atRestTabsOf(element: Element): AtRestTabs | undefined {
  * block with its tabs on the outline's edge, a block that is both carrying
  * both tabs on the one outline. Placed outside the block, above it where
  * there's room and below it where there isn't, so the tabs never cover what
- * the block draws.
+ * the block draws; where they go apart from every other tab drawn over the
+ * canvas is the board's to say (`placedAtRest`).
  */
 function atRestMarks(
   root: HTMLElement,
@@ -807,7 +829,7 @@ function atRestMarks(
   onScreen: Rect,
   toolbarAbove: (rect: Rect) => boolean,
   shownLabel: string
-): Mark[] {
+): AtRestDraft[] {
   const badges = new Map<string, ConditionBadge>();
   const copies = new Map<Element | null, number>();
   root
@@ -880,36 +902,83 @@ function badgeKey(
     : `${String(copyOf(copies, element))}\u0000${placement}`;
 }
 
-/** One marked block's at-rest mark: its outline and where its tabs go. */
+/**
+ * One marked block's at-rest mark before its tabs are placed: the mark, and
+ * its tabs as the board places them (`canvas-tab-places.ts`).
+ */
+interface AtRestDraft {
+  readonly mark: Mark;
+  readonly tab: TabDraft;
+}
+
+/** One marked block's at-rest mark: its outline and where its tabs may go. */
 function atRestMark(
   badge: ConditionBadge,
   onScreen: Rect,
   toolbarAbove: (rect: Rect) => boolean,
   shownLabel: string
-): Mark {
+): AtRestDraft {
   const outline = placementOutline(badge.parts);
   // The top is taken by a selected placement's name, or by the block
   // toolbar above the primary block: the tab then takes the bottom edge.
   const topTaken =
     (badge.selected && badge.placement) ||
     (badge.primary && toolbarAbove(outline.rect));
+  const places = tabPlacesOf(outline.rect, onScreen, topTaken);
+  const side = tabInset(outline.rect, onScreen, badge.tabs, shownLabel);
   return {
-    ...outline,
-    kind: "at-rest",
-    secondary: false,
-    component: false,
-    locked: false,
-    hidden: false,
-    tag: "below",
-    tagEdge: "right",
-    tagInset: {
-      bottom: 0,
-      side: tabInset(outline.rect, onScreen, badge.tabs, shownLabel),
+    mark: {
+      ...outline,
+      kind: "at-rest",
+      secondary: false,
+      component: false,
+      locked: false,
+      hidden: false,
+      tag: "below",
+      tagEdge: "right",
+      tagInset: { bottom: 0, side },
+      ...badge.tabs,
+      tabsAt: places[0] ?? "inside",
+      ...(badge.selected ? { atRestSelected: true } : {}),
     },
-    ...badge.tabs,
-    tabsAt: tabsAtOf(outline.rect, onScreen, topTaken),
-    ...(badge.selected ? { atRestSelected: true } : {}),
+    tab: {
+      block: outline.rect,
+      edge: outline.rect,
+      places,
+      side,
+      // No wider than the outline, as the stylesheet keeps them.
+      width: Math.min(tabsWidthOf(badge.tabs, shownLabel), outline.rect.width),
+      height: AT_REST_TAB_HEIGHT,
+      // Measured from the edge they stand on: their foot shares the dash.
+      foot: 0,
+      leftmost: onScreen.x,
+    },
   };
+}
+
+/**
+ * The height an at-rest mark's tabs take, as the stylesheet draws them: a
+ * 16px line, with 1px of padding and a 1px border above and below it.
+ */
+const AT_REST_TAB_HEIGHT = 20;
+
+/**
+ * The at-rest marks with their tabs where the board places them: apart from
+ * each other, from the "Visitors won't see this" badges and from the block
+ * toolbar, all placed by the one pass (`tabsApart` in `canvas-tab-places.ts`).
+ * With no board (no canvas), each keeps its tabs where they go alone.
+ */
+function placedAtRest(
+  drafts: readonly AtRestDraft[],
+  placements: readonly TabPlacement[]
+): Mark[] {
+  return drafts.map(({ mark, tab }, index) => {
+    const { at, side } = placements[index] ?? {
+      at: tab.places[0] ?? "inside",
+      side: tab.side,
+    };
+    return { ...mark, tabsAt: at, tagInset: { ...mark.tagInset, side } };
+  });
 }
 
 /**
@@ -959,21 +1028,26 @@ function copyOf(copies: Map<Element | null, number>, element: Element): number {
 }
 
 /**
- * Where an at-rest mark's tabs go: above the block where there's room on
- * screen and nothing else takes that corner, else below it, else, for a
- * block taller than what's on screen, inside its top edge, so the tabs are
- * always seen.
+ * Where an at-rest mark's tabs may go, in order of preference: above the
+ * block where there's room on screen and nothing else takes that corner,
+ * below it where there's room, and inside its top edge, which is always on
+ * screen. The first is where they go alone, so a block taller than what's on
+ * screen carries them inside; `tabsApart` takes a later one where another
+ * block's tabs, a visitor badge or the block toolbar are in the way.
  */
-function tabsAtOf(
+function tabPlacesOf(
   rect: Rect,
   onScreen: Rect,
   topTaken: boolean
-): "above" | "below" | "inside" {
-  if (!topTaken && rect.y - onScreen.y >= MARK_TAG_HEIGHT) return "above";
-  if (rect.y + rect.height + MARK_TAG_HEIGHT <= onScreen.y + onScreen.height) {
-    return "below";
-  }
-  return "inside";
+): readonly TabAt[] {
+  const above = !topTaken && rect.y - onScreen.y >= MARK_TAG_HEIGHT;
+  const below =
+    rect.y + rect.height + MARK_TAG_HEIGHT <= onScreen.y + onScreen.height;
+  return [
+    ...(above ? (["above"] as const) : []),
+    ...(below ? (["below"] as const) : []),
+    "inside",
+  ];
 }
 
 /**
@@ -1075,19 +1149,40 @@ export function CanvasMarks({
   // unambiguously.
   const revealedKey = JSON.stringify(revealed);
 
+  // The last measure, which placing the at-rest tabs again reads: another
+  // layer's post moves where they go, not what the canvas marks.
+  const measured = React.useRef<Measured>(NOTHING_MEASURED);
+
+  // The marks as last measured, the at-rest tabs where the board puts them
+  // now: placed again whenever another layer's post changes the board.
+  const placeTabs = React.useCallback(() => {
+    const { root, marks: drawn, atRest } = measured.current;
+    const next = [
+      ...drawn,
+      ...placedAtRest(
+        atRest,
+        root === null ? [] : tabBoardOf(root).placesOf("at-rest")
+      ),
+    ];
+    setMarks(current => (sameMarks(current, next) ? current : next));
+  }, []);
+  const postTabs = useTabPost("at-rest", placeTabs);
+
   const measure = React.useCallback(() => {
     const element = layer.current;
-    const next =
+    measured.current =
       element === null
-        ? NO_MARKS
+        ? NOTHING_MEASURED
         : marksOf(element, {
             hovered,
             revealed: new Set(JSON.parse(revealedKey) as string[]),
             tagWidth: tagWidthOf(hiddenLabel),
             shownLabel,
           });
-    setMarks(current => (sameMarks(current, next) ? current : next));
-  }, [hovered, revealedKey, hiddenLabel, shownLabel]);
+    const { root, atRest } = measured.current;
+    postTabs(root, { tabs: atRest.map(({ tab }) => tab), taken: [] });
+    placeTabs();
+  }, [hovered, revealedKey, hiddenLabel, shownLabel, postTabs, placeTabs]);
 
   React.useLayoutEffect(() => {
     measure();

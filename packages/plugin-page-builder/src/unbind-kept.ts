@@ -20,6 +20,7 @@ import {
   COLLECTION_LIST_TYPE,
   DEFAULT_BINDING_SOURCE,
   DOCUMENT_FORMAT_VERSION,
+  ENTRY_LINK_PROPS,
   findNode,
   getBlock,
   imageValueOf,
@@ -725,7 +726,8 @@ export async function planUnbind(
   document: BlockDocument,
   nodeId: string,
   prop: string,
-  keep: UnbindKeep
+  keep: UnbindKeep,
+  reads: UnbindReads = {}
 ): Promise<UnbindPlan> {
   const node = findNode(document.nodes, nodeId);
   if (node === undefined) {
@@ -750,15 +752,69 @@ export async function planUnbind(
     prop,
     unbindPlan(prop, binding.$bind ?? prop, view, declared)
   );
-  return "refusal" in plan
-    ? plan
-    : {
-        ...plan,
-        answer: {
-          ...plan.answer,
-          reason: `${plan.answer.reason} ${DEFAULT_RENDERER_NOTE}`,
-        },
-      };
+  if ("refusal" in plan) return plan;
+  const answer = await entryLinkAnswer(node, prop, plan.answer, source, reads);
+  return {
+    ...plan,
+    answer: { ...answer, reason: `${answer.reason} ${DEFAULT_RENDERER_NOTE}` },
+  };
+}
+
+/** What an unbind reads beyond the visitor's view, where its caller can. */
+export interface UnbindReads {
+  /**
+   * An entry's title as a visitor reads it, or `undefined` for none: named
+   * where a link keeps going to that entry. Absent, no title is named.
+   */
+  readonly entryTitle?: (
+    entry: { readonly collection: string; readonly id: string },
+    locale: string | undefined
+  ) => Promise<string | undefined>;
+}
+
+/**
+ * The entry a link keeps going to after its entry id is unbound: the id
+ * visitors saw, kept beside the link's stored collection. `undefined` for an
+ * unbind of any other prop, or one that keeps no such id.
+ */
+function keptEntryOf(
+  node: BlockNode,
+  prop: string,
+  answer: UnbindAnswer
+): { readonly collection: string; readonly id: string } | undefined {
+  if (prop !== ENTRY_LINK_PROPS.id || answer.kept !== "visitor") {
+    return undefined;
+  }
+  const collection = node.props[ENTRY_LINK_PROPS.collection];
+  const id = answer.value;
+  if (typeof collection !== "string" || collection === "") return undefined;
+  return typeof id === "string" || typeof id === "number"
+    ? { collection, id: String(id) }
+    : undefined;
+}
+
+/**
+ * The answer for a link's entry id bound to a related entry, where visitors
+ * saw that entry: the id kept beside the link's stored collection, so the
+ * link keeps going to the entry's page, by reference, which a change of its
+ * address does not break. Said so, with the entry's title where a visitor
+ * may read it. Any other answer is returned as it is.
+ */
+async function entryLinkAnswer(
+  node: BlockNode,
+  prop: string,
+  answer: UnbindAnswer,
+  source: UnbindSource,
+  reads: UnbindReads
+): Promise<UnbindAnswer> {
+  const entry = keptEntryOf(node, prop, answer);
+  if (entry === undefined) return answer;
+  const title = await reads.entryTitle?.(entry, source.locale);
+  return {
+    ...answer,
+    entry: title === undefined ? {} : { title },
+    reason: `The link keeps going to ${title === undefined ? "the page visitors saw" : `${title}'s page`}, by the entry's reference.`,
+  };
 }
 
 /**

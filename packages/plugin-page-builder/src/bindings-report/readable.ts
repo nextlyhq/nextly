@@ -63,11 +63,19 @@ function present(
 }
 
 /**
+ * Where a collection's registry record is read: all {@link collectionNaming}
+ * asks of a route's collections service, so any route holding it can ask.
+ */
+export interface CollectionConfigs {
+  getCollection(name: string, context: Record<string, never>): Promise<unknown>;
+}
+
+/**
  * A collection's title field and its names, plural and one entry's, from its
  * registry record.
  */
 export async function collectionNaming(
-  ctx: Pick<ReadableContext, "services">,
+  ctx: { readonly services: { readonly collections: CollectionConfigs } },
   slug: string
 ): Promise<
   | {
@@ -82,7 +90,7 @@ export async function collectionNaming(
     record = (await ctx.services.collections.getCollection(
       slug,
       undefined as never
-    )) as unknown as Record<string, unknown>;
+    )) as Record<string, unknown>;
   } catch {
     return undefined;
   }
