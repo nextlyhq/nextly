@@ -21,7 +21,9 @@
  * @module visitor-unreadable-bindings
  */
 import {
+  bindablePropKind,
   checkBinding,
+  type BindablePropKind,
   type BindingCheck,
   type BindingSchemaRef,
   type BindingSchemaSource,
@@ -48,6 +50,12 @@ export interface VisitorUnreadableBinding {
    * valid value of the prop. Absent, a visitor sees the prop's own value.
    */
   readonly fallback?: { readonly value: unknown };
+  /**
+   * What the prop takes, when the block's props were known: so an image's
+   * fallback can be read as an image value (a media id or an address), where
+   * the same text on a heading is only text.
+   */
+  readonly kind?: BindablePropKind;
 }
 
 /**
@@ -153,6 +161,22 @@ function unreadableBinding(
   };
 }
 
+/**
+ * A mark with what its prop takes, by the one reading of a prop schema the
+ * check itself uses; as it was where the block's props are not known.
+ */
+function withKind(
+  mark: VisitorUnreadableBinding,
+  definition: ReturnType<BlockPropsLookup["get"]>
+): VisitorUnreadableBinding {
+  const props = definition?.props;
+  const kind =
+    props === undefined
+      ? undefined
+      : bindablePropKind(ownEntry(props, mark.prop));
+  return kind === undefined ? mark : { ...mark, kind };
+}
+
 /** One node's bindings a visitor will not see filled; none when it holds none. */
 function unreadableOn(
   node: Readonly<Record<string, unknown>>,
@@ -178,7 +202,7 @@ function unreadableOn(
       refs,
     });
     const mark = unreadableBinding(check, prop, input);
-    if (mark !== undefined) marked.push(mark);
+    if (mark !== undefined) marked.push(withKind(mark, definition));
   }
   return marked.length === 0 ? null : { id, marked };
 }

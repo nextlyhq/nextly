@@ -205,6 +205,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "useFieldAddress (value)",
   "useMediaItem (value)",
   "useMediaResolver (value)",
+  "useMediaSearcher (value)",
   "usePluginClientConfig (value)",
   "usePluginFieldTypeEntries (value)",
   "usePluginRoute (value)",

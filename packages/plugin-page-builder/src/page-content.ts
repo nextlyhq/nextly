@@ -25,6 +25,7 @@ import {
 } from "./collections/templates";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import { fieldOf } from "./spacing-mode-reader";
+import { drawingDesign } from "./templates/entry-designs";
 
 export type { ContentAddressHolder } from "./address-claims/content-addresses";
 
@@ -234,10 +235,12 @@ export function pageBuilderContent(
         });
         const rows = items as readonly Record<string, unknown>[];
         // Compared again exactly, as `read` compares, the own design first.
-        const row =
-          rows.find(found => found[TEMPLATE_ENTRY_FIELD] === key) ??
-          rows.find(found => found[TEMPLATE_COLLECTION_FIELD] === collection);
-        return row === undefined ? null : drawnWith(row);
+        const row = await drawingDesign(
+          rows.find(found => found[TEMPLATE_ENTRY_FIELD] === key),
+          () =>
+            rows.find(found => found[TEMPLATE_COLLECTION_FIELD] === collection)
+        );
+        return row === null ? null : drawnWith(row);
       },
     },
   };

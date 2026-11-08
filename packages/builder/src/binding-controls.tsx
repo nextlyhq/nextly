@@ -951,11 +951,37 @@ function OpenSourceItem({
   );
 }
 
+/**
+ * When a bound image's fallback is shown, in the words of its source and
+ * field: "Shown when a post has no cover image." Said so only for one entry
+ * of a collection (the page's own, or a list's item) and a field named in one
+ * step; anywhere else, in the plain words that fit every binding.
+ */
+function fallbackShownWhen(
+  binding: Binding,
+  sources: readonly BindingFieldSource[] | "loading" | "failed",
+  item: ItemSource | undefined,
+  field: string
+): string {
+  const found =
+    binding.source === undefined || binding.source === "entry"
+      ? boundSource(binding, sources)?.label.toLowerCase()
+      : undefined;
+  const one = item?.one ?? found;
+  // A path's names joined with "›" read badly inside a sentence.
+  if (one === undefined || field.includes("›")) {
+    return "Shown when the bound field has no image.";
+  }
+  const article = /^[aeiou]/i.test(one) ? "an" : "a";
+  return `Shown when ${article} ${one} has no ${field.toLowerCase()}.`;
+}
+
 /** A bound prop's own rows under its chip: its Fallback, and its Format. */
 function BoundValueRows({
   prop,
   binding,
   field,
+  shownWhen,
   services,
   disabled,
   labelId,
@@ -966,6 +992,8 @@ function BoundValueRows({
   binding: Binding;
   /** Whether a text fallback is offered where the prop's value is text. */
   textFallback: boolean;
+  /** When an image's fallback is shown, said under its library picker. */
+  shownWhen: string;
   /** The field the binding reads, once its source's fields are read. */
   field: NamedField | undefined;
   services: ContentServices | undefined;
@@ -983,9 +1011,11 @@ function BoundValueRows({
   return (
     <>
       {kind === "image" ? (
-        // An image's fallback is an address, with its picture shown.
+        // An image's fallback: an address with its picture shown, or a file
+        // chosen from the media library, shown by its name.
         <ImageBindingFallback
           binding={binding}
+          shownWhen={shownWhen}
           services={services}
           disabled={disabled}
           describedBy={labelId}
@@ -1454,6 +1484,7 @@ function BoundField({
           prop={prop}
           binding={binding}
           field={boundField(binding, from)}
+          shownWhen={fallbackShownWhen(binding, sources, item, names.field)}
           services={services}
           disabled={disabled}
           labelId={labelId}
