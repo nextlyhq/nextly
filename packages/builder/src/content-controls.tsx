@@ -264,6 +264,19 @@ export interface ContentServices {
    */
   readonly listBindingFields?: () => Promise<readonly BindingFieldSource[]>;
   /**
+   * The page's language, as the canvas's render formats bound values in it,
+   * so the picker previews a date or a number as the page shows it. Resolved
+   * as a render resolves it (`bindingFormatEnv`): absent, English.
+   */
+  readonly bindingLocale?: string;
+  /**
+   * The site's time zone, as a published page shows its date-times in it,
+   * read when a binding picker opens: `undefined` for a site with none set.
+   * Until it is in, or where it is absent or fails, previews are in UTC, as
+   * a page rendered with no zone.
+   */
+  readonly readSiteTimeZone?: () => Promise<string | undefined>;
+  /**
    * An unbind's plan, made against the document the editor holds by the same
    * decision the page actions API takes: what to write in the binding's place
    * and why, or why it can't be kept. Absent, a bound prop offers no unbind.

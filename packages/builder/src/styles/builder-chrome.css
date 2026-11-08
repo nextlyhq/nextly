@@ -6160,8 +6160,9 @@ fieldset.nx-inspector__fields {
  * words are not selected by the drag. Touch is left to scroll and tap.
  *
  * Important because the admin gives every `[data-slot="label"]` a pointer
- * cursor with `!important`, which reads as "click me" here and outranks any
- * plain rule; this selector is the more specific of the two.
+ * cursor marked important, which reads as "click me" here and outranks any
+ * plain rule; this selector is the more specific of the two. Said in words,
+ * not as the flag, so the design lint counts the one real override here.
  */
 .nx-style-inspector .nx-inspector__field > label[data-scrub] {
   cursor: ew-resize !important;
@@ -11005,6 +11006,22 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-read-meter[data-standing="counting"] .nx-read-meter__count {
   color: var(--nx-builder-text-muted);
+}
+
+/* A count that could not be made: quiet, as counting is, its alert mark in
+   the editor's warning ink, and the way to count again in the text's own
+   colour. */
+.nx-read-meter[data-standing="failed"] .nx-read-meter__count {
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-read-meter[data-standing="failed"] .nx-read-meter__mark {
+  color: var(--nx-builder-warning-text);
+}
+
+.nx-read-meter[data-standing="failed"] .nx-read-meter__retry {
+  color: var(--nx-builder-text);
+  font-weight: 500;
 }
 
 .nx-read-meter[data-standing="near"] {

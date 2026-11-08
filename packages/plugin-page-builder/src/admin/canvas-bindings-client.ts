@@ -187,11 +187,7 @@ export function canvasBindingsRequest(
     conditions !== undefined;
   if (!(found.any || conditions !== undefined) || !asks) return undefined;
   return {
-    source: {
-      kind: identity.kind,
-      slug: identity.slug,
-      ...(identity.documentId === undefined ? {} : { id: identity.documentId }),
-    },
+    source: requestSourceOf(identity),
     demand: wire,
     lists,
     ...(locale === undefined ? {} : { locale }),
@@ -205,15 +201,74 @@ export function canvasBindingsRequest(
   };
 }
 
+/** The entry an ask is made for, as the route takes it. */
+function requestSourceOf(
+  identity: DocumentIdentity
+): CanvasBindingsRequest["source"] {
+  return {
+    kind: identity.kind,
+    slug: identity.slug,
+    ...(identity.documentId === undefined ? {} : { id: identity.documentId }),
+  };
+}
+
+/** The site's zone read so far, by editor session, for the person it was read as. */
+const ZONES = new WeakMap<
+  object,
+  { readonly userId: string; readonly read: Promise<string | undefined> }
+>();
+
+/**
+ * The site's time zone, as a published page shows its date-times in it, for
+ * the inspector's previews: read once per editor session (`session`, any
+ * object that lives as long as one editor) and person, and only when asked.
+ *
+ * Asked of the route as a page that formats a date and binds nothing else,
+ * so the route reads the zone by the published page's own rule
+ * (`readBindingSources`, which reads the site settings for it) and nothing
+ * more. A page that formats no date asks the canvas's read for no zone, so
+ * the inspector cannot take it from there. A failed read is not kept, so
+ * the next ask reads again; `undefined` is a site with no zone set.
+ */
+export function siteTimeZoneFor(
+  session: object,
+  identity: DocumentIdentity,
+  userId: string,
+  ask: (
+    request: CanvasBindingsRequest
+  ) => Promise<CanvasBindingsResponse> = askRoute
+): Promise<string | undefined> {
+  const kept = ZONES.get(session);
+  if (kept !== undefined && kept.userId === userId) return kept.read;
+  const request: CanvasBindingsRequest = {
+    source: requestSourceOf(identity),
+    demand: demandToWire({
+      any: true,
+      singles: new Map(),
+      site: false,
+      formatsDates: true,
+    }),
+    lists: [],
+  };
+  const read = ask(request).then(answer => bindingsFromWire(answer).timeZone);
+  ZONES.set(session, { userId, read });
+  read.catch(() => {
+    if (ZONES.get(session)?.read === read) ZONES.delete(session);
+  });
+  return read;
+}
+
 /** One ask of the route. */
 async function askRoute(
-  request: CanvasBindingsRequest
+  request: CanvasBindingsRequest,
+  signal?: AbortSignal
 ): Promise<CanvasBindingsResponse> {
   const body = await writePluginRoute<CanvasBindingsResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: CANVAS_BINDINGS_ROUTE_PATH,
     method: "POST",
     body: request,
+    ...(signal === undefined ? {} : { signal }),
   });
   if (body === undefined || !Array.isArray(body.singles)) {
     throw new Error("The canvas's binding sources could not be read.");
@@ -231,10 +286,20 @@ export function canvasBindingsFor(
   request: CanvasBindingsRequest,
   userId: string,
   ask: (
-    request: CanvasBindingsRequest
+    request: CanvasBindingsRequest,
+    signal?: AbortSignal
   ) => Promise<CanvasBindingsResponse> = askRoute,
-  fresh = false
+  fresh = false,
+  /**
+   * Aborts the ask this call makes. An aborted ask fails, and like any
+   * failed ask is not kept, so the next ask for the same sources is made
+   * afresh.
+   */
+  signal?: AbortSignal
 ): Promise<PageBindings> {
+  if (signal?.aborted === true) {
+    return Promise.reject(signal.reason as Error);
+  }
   if (keptFor !== userId) {
     KEPT.clear();
     keptFor = userId;
@@ -244,7 +309,7 @@ export function canvasBindingsFor(
   if (!fresh && kept !== undefined && Date.now() - kept.at < KEPT_FOR_MS) {
     return kept.read;
   }
-  const reading = ask(request).then(answer => {
+  const reading = ask(request, signal).then(answer => {
     const bindings = bindingsFromWire(answer);
     const reads = readsIn(answer);
     if (reads !== undefined) READS.set(bindings, reads);

@@ -16,12 +16,14 @@
  * @module binding-format-field
  */
 import {
+  bindingFormatEnv,
   bindingKindOf,
   checkFormat,
   createBindingFormatter,
   type BindablePropKind,
   type BindingFieldShape,
   type BindingFormat,
+  type BindingRunInput,
 } from "@nextlyhq/blocks-engine";
 import {
   Input,
@@ -230,33 +232,28 @@ function previewValue(preview: string, field: BindingFieldShape): unknown {
 }
 
 /**
- * Where the picker formats a preview: the browser's language and time zone,
- * the closest the inspector has to the language edited and the site's zone.
- */
-function previewEnv(): { readonly locale: string; readonly timeZone: string } {
-  const resolved = new Intl.DateTimeFormat().resolvedOptions();
-  return { locale: resolved.locale, timeZone: resolved.timeZone };
-}
-
-/**
  * A field's preview as a pick would show it: formatted with the format the
  * pick writes, by the engine's formatter, so a date reads "November 8, 2026"
  * rather than its stored text. The preview as it is where there is no such
  * format, or where it cannot be formatted, so nothing is lost.
+ *
+ * Formatted in `formatIn`, the page's language and the site's time zone,
+ * resolved by the render's own rule (`bindingFormatEnv`), so the preview
+ * reads as the published page shows the value, never in the browser's
+ * language or zone. Absent, it is a page with neither: English and UTC.
  */
 export function previewWithFormat(
   preview: string,
   format: BindingFormat,
   kind: BindablePropKind | undefined,
-  field: BindingFieldShape
+  field: BindingFieldShape,
+  formatIn: Pick<BindingRunInput, "locale" | "timeZone"> | undefined
 ): string {
   const check = checkFormat(format, kind, field);
   if (!check.ok || check.format === null) return preview;
-  const formatted = createBindingFormatter(previewEnv()).format(
-    previewValue(preview, field),
-    check.format,
-    field
-  );
+  const formatted = createBindingFormatter(
+    bindingFormatEnv(formatIn ?? {}).env
+  ).format(previewValue(preview, field), check.format, field);
   return formatted.ok ? formatted.value.text : preview;
 }
 
