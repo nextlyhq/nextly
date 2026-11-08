@@ -28,7 +28,6 @@
  * @module entry-content
  */
 import {
-  COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
   renderedDomId,
   type BlockDocument,
@@ -296,10 +295,10 @@ export interface EntryContentSource {
   readonly maxDepth?: number;
   /**
    * The definitions of the components the page places, as the renderer will
-   * expand them: the template is then charged what it draws once its
-   * instances are expanded, so the entry never takes the room an expansion
-   * needs, and every instance still resolves under the page's one node
-   * limit. Absent, each instance is charged as the one node it is stored as.
+   * expand them: the entry is then cut to what the page draws whole once
+   * composed, the template's placements and the entry's own expanded, as the
+   * resolver itself measures it, so every placement still resolves under the
+   * page's limits. Absent, the entry is cut to its stored nodes alone.
    */
   readonly definitions?: ComponentLookup;
 }
@@ -406,159 +405,95 @@ function drawnAttributes(
 /**
  * The entry's forest as the template draws it: every Entry content block left
  * out, at any depth, so the content can never draw itself, and cut after
- * `budget` entries in document order, so an entry larger than the page may
- * draw is never walked or copied past that. Read by index, so not one entry
- * past the budget is read; nested no deeper than the page may draw.
+ * `budget` stored entries in document order, so an entry larger than the page
+ * may draw is never walked or copied past that. Read by index, so not one
+ * entry past the budget is read; nested no deeper than the page may draw.
+ * A cheap first cut only: what the page can draw of it, its component
+ * placements expanded, is the resolver's to say (`fittedPrefix`).
  */
 function drawableForest(
   nodes: readonly unknown[],
   limits: {
-    /** How many entries may still be drawn. */
+    /** How many stored entries may still be read. */
     readonly budget: number;
     /** The depth the entry's top-level blocks are drawn at. */
     readonly depth: number;
     /** The deepest the drawn page may nest, as the renderer counts it. */
     readonly maxDepth: number;
-    /**
-     * What one of the entry's nodes costs once drawn, at `depth`, with at
-     * most `left` to spend: one for a block, what it expands to for a
-     * component placement. More than `left` where it does not fit.
-     */
-    readonly costOf: (node: BlockNode, depth: number, left: number) => number;
   }
 ): BlockNode[] {
   let left = limits.budget;
-  /**
-   * One entry of a forest, charged where `charged`: its block as drawn, or
-   * nothing for an entry that draws nothing; `undefined` once the page has
-   * no room left for it, which ends the cut, as the renderer would refuse
-   * what follows it.
-   */
-  const take = (
-    node: unknown,
-    depth: number,
-    charged: boolean
-  ): BlockNode | null | undefined => {
-    if (!isPlainRecord(node) || node.type === ENTRY_CONTENT_TYPE) {
-      if (charged) left -= 1;
-      return null;
-    }
-    const block = node as unknown as BlockNode;
-    const cost = charged ? limits.costOf(block, depth, left) : 0;
-    if (cost > left) {
-      left = 0;
-      return undefined;
-    }
-    left -= cost;
-    // A placement's own blocks were charged with its expansion.
-    return withCutSlots(block, depth, charged && cost === 1);
-  };
-  const cut = (
-    forest: readonly unknown[],
-    depth: number,
-    charged: boolean
-  ): BlockNode[] => {
+  const cut = (forest: readonly unknown[], depth: number): BlockNode[] => {
     const kept: BlockNode[] = [];
     if (depth > limits.maxDepth) return kept;
-    for (let at = 0; at < forest.length && (left > 0 || !charged); at += 1) {
-      const taken = take(forest[at], depth, charged);
-      if (taken === undefined) break;
-      if (taken !== null) kept.push(taken);
+    for (let at = 0; at < forest.length && left > 0; at += 1) {
+      left -= 1;
+      const node = forest[at];
+      if (!isPlainRecord(node) || node.type === ENTRY_CONTENT_TYPE) continue;
+      kept.push(withCutSlots(node as unknown as BlockNode, depth));
     }
     return kept;
   };
-  const withCutSlots = (
-    node: BlockNode,
-    depth: number,
-    charged: boolean
-  ): BlockNode => {
+  const withCutSlots = (node: BlockNode, depth: number): BlockNode => {
     if (!isPlainRecord(node.slots)) return node;
     const slots: Record<string, BlockNode[]> = {};
     for (const [name, children] of Object.entries(node.slots)) {
-      if (Array.isArray(children)) {
-        slots[name] = cut(children, depth + 1, charged);
-      }
+      if (Array.isArray(children)) slots[name] = cut(children, depth + 1);
     }
     return { ...node, slots };
   };
-  return cut(nodes, limits.depth, true);
+  return cut(nodes, limits.depth);
 }
 
 /**
- * What the template costs of the page's node limit once drawn: its stored
- * nodes (`stored`), or, given the components' definitions, the nodes it
- * holds once the resolver has expanded its instances under the page's own
- * limits, its node cap and its depth, as the renderer will. Conditioned
- * instances are expanded too, so the room kept is the most any entry of the
- * collection can need.
+ * Whether `document` draws whole under `limits`, as the resolver itself
+ * answers it: its survey reads every node within the cap (past it, the
+ * resolver composes nothing), and it refuses no component placement for
+ * want of room. The resolver's own measure, so its depth rules, its refunds
+ * and its survey are never modelled a second time here.
  */
-function templateCost(
-  document: BlockDocument,
-  stored: number,
-  source: EntryContentSource,
-  limits: DocumentLimits
-): number {
-  if (source.definitions === undefined) return stored;
-  return Math.max(stored, expandedCount(document, source.definitions, limits));
-}
-
-/**
- * How many nodes `document` holds once the resolver has expanded its
- * component placements under `limits`; more than `limits.maxNodes` where a
- * placement is refused for want of room, so a caller never takes a refused
- * expansion for a cheap one. One refused for any other reason (a component
- * missing, a loop) is drawn as the one placeholder it stands as.
- */
-function expandedCount(
+function drawsWhole(
   document: BlockDocument,
   definitions: ComponentLookup,
   limits: DocumentLimits
-): number {
-  const resolved = resolveComponentInstances(document, definitions, {
+): boolean {
+  if (hostIdsIn(document.nodes, limits.maxNodes).truncated) return false;
+  const { unresolved } = resolveComponentInstances(document, definitions, {
     limits,
+    // As a page whose conditions are decided draws them: every conditioned
+    // placement expanded, the most any visitor can be shown.
     conditioned: "carry",
   });
-  if (resolved.unresolved.some(instance => instance.reason === "budget")) {
-    return limits.maxNodes + 1;
-  }
-  let count = 0;
-  walkNodes(resolved.document.nodes, () => {
-    count += 1;
-  });
-  return count;
+  return !unresolved.some(instance => instance.reason === "budget");
 }
 
 /**
- * What one of the entry's nodes costs of the page's node limit, drawn at
- * `depth` with `left` still to spend: one for a block, and, given the
- * components' definitions, what a placement expands to under what is left
- * and the depth below it, as the template's own placements are charged. The
- * blocks inside any other node are charged one by one as the cut reaches
- * them.
+ * How many of the entry's top-level blocks (`drawn`) the page draws whole
+ * once composed (`withBlocks`), given the components' definitions: the
+ * longest prefix for which the resolver, under the page's own limits,
+ * refuses nothing for want of room. Found by halving, so the resolver runs
+ * a logarithmic number of times, each bounded by the cap. Every block where
+ * nothing is placed, as the cut already kept the stored page within it.
  */
-function entryNodeCost(
-  node: BlockNode,
-  depth: number,
-  left: number,
-  source: EntryContentSource,
+function fittedPrefix(
+  drawn: readonly BlockNode[],
+  withBlocks: (blocks: readonly BlockNode[]) => BlockDocument,
+  definitions: ComponentLookup | undefined,
   limits: DocumentLimits
 ): number {
-  if (
-    node.type !== COMPONENT_INSTANCE_TYPE ||
-    source.definitions === undefined
-  ) {
-    return 1;
+  if (definitions === undefined) return drawn.length;
+  const fits = (count: number) =>
+    drawsWhole(withBlocks(drawn.slice(0, count)), definitions, limits);
+  if (fits(drawn.length)) return drawn.length;
+  // The longest prefix that fits lies in [low, high): `low` fits, or is 0.
+  let low = 0;
+  let high = drawn.length;
+  while (high - low > 1) {
+    const middle = Math.floor((low + high) / 2);
+    if (fits(middle)) low = middle;
+    else high = middle;
   }
-  return expandedCount(
-    { formatVersion: DOCUMENT_FORMAT_VERSION, kind: "page", nodes: [node] },
-    source.definitions,
-    {
-      ...limits,
-      maxNodes: left,
-      // Resolved on its own, at the top: the depth left below where it sits.
-      maxDepth: limits.maxDepth - depth + 1,
-    }
-  );
+  return low;
 }
 
 /**
@@ -597,7 +532,7 @@ export function composeEntryContent(
   }
   if (!Array.isArray(document.nodes)) return document;
   // The page's own limits, its node cap and its depth: every pass below,
-  // and every expansion charged, is held to the same two.
+  // the resolver's measure of the page included, is held to the same two.
   const limits: DocumentLimits = {
     ...DEFAULT_LIMITS,
     ...(source.maxNodes === undefined ? {} : { maxNodes: source.maxNodes }),
@@ -614,18 +549,14 @@ export function composeEntryContent(
   if (field === undefined) return document;
   const entry = entryBlocksDocumentOf(source.valueOf(field));
   if (entry === null || entry.nodes.length === 0) return document;
-  // The entry's blocks within what the page may still draw beside the
+  // The entry's blocks within what the page may still store beside the
   // template's own, cut before any of them is minted, walked or copied.
-  // Charged as the page is drawn in full: the template's placements and the
-  // entry's own at what they expand to, so every placement still resolves.
   const kept = drawableForest(entry.nodes, {
-    budget: maxNodes - templateCost(document, host.count, source, limits),
+    budget: maxNodes - host.count,
     // A slot's blocks one below the block holding it, which sits as deep as
     // its path has slots below the top (a top-level block at depth 1).
     depth: depthOf(first.path) + 1,
     maxDepth: limits.maxDepth,
-    costOf: (node, depth, left) =>
-      entryNodeCost(node, depth, left, source, limits),
   });
   if (kept.length === 0) return document;
   const ids = drawnIds(kept, first.node.id, host.ids);
@@ -634,7 +565,7 @@ export function composeEntryContent(
   // The block as stored, by identity: the walk hands back the very node the
   // rebuild below meets, so only that one is composed.
   const target: unknown = first.node;
-  return {
+  const withBlocks = (blocks: readonly BlockNode[]): BlockDocument => ({
     ...document,
     nodes: mapForest(document.nodes, node =>
       node === target
@@ -642,10 +573,14 @@ export function composeEntryContent(
             ...node,
             slots: {
               ...(isPlainRecord(node.slots) ? node.slots : {}),
-              [ENTRY_CONTENT_SLOT]: drawn,
+              [ENTRY_CONTENT_SLOT]: [...blocks],
             },
           }
         : node
     ),
-  };
+  });
+  // As much of the entry as the page draws whole, the template's component
+  // placements and the entry's own expanded, as the resolver measures it.
+  const count = fittedPrefix(drawn, withBlocks, source.definitions, limits);
+  return count === 0 ? document : withBlocks(drawn.slice(0, count));
 }

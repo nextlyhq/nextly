@@ -31,11 +31,12 @@
 
 Entry content keeps every component placement whole under the page's limits.
 
-- The room an entry's content may take is charged as the page is drawn in full: a
-  component placement inside the entry's own blocks is charged at what it expands to, as
-  the template's are, so it resolves and the page fits its node limit.
-- The template's placements are charged under the page's own depth limit as well as its
-  node limit, so one below the format's default depth is counted as it is drawn.
+- The room an entry's content may take is measured by the component resolver itself, on
+  the page composed in full: the entry keeps the longest run of its blocks for which
+  every component placement, the template's and the entry's own, resolves within the
+  page's node and depth limits. A page that already fits is resolved once; only one
+  past its limit is searched, by halving.
 - In the editor, while the window's refresh reads the previewed entry again, its blocks
   and their conditions stay as they were until the Previewing strip names the refreshed
-  entry, so they change together with the canvas's bound values.
+  entry, so they change together with the canvas's bound values. A change of collection,
+  language or person is never taken for a refresh of the entry with the same id.
