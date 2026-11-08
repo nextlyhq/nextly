@@ -13,7 +13,11 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { NextlyError } from "nextly/errors";
-import type { BindingSourceRef } from "nextly/runtime";
+import {
+  listPageNumber,
+  listPageOf,
+  type BindingSourceRef,
+} from "nextly/runtime";
 import { createElement, type ReactElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -735,18 +739,38 @@ describe("an entry's list split into pages", () => {
     })
   ) as BlockDocument;
 
+  /** post-1's list's later pages, held as one space, as the store gives them. */
+  const SPACE: ContentAddressHolder = {
+    collection: "posts",
+    id: "post-1",
+    kind: "space",
+  };
+
   /**
-   * The route over a store that gives post-1 its address and its list's
-   * later pages (`/blog/hello/page/*`) as one space, and a Direct API whose
-   * list of posts matches three, so the list has three pages.
+   * The route over a store that gives post-1 its address, and its list's
+   * later pages to `laterPages` (post-1 itself by default), and a Direct API
+   * whose list of posts matches three, so the list has three pages.
+   *
+   * The store answers as the real one does: a later page is one the route
+   * reads as a page number from 2, so `page/1`, `page/02` and `page/two` are
+   * held by no one; and a document published at `page/2` (the default
+   * blocks none) holds that address alone, the space's other pages then
+   * held by no one, since the entry waits for its space.
    */
-  function pagedConfig(design: BlockDocument = PAGED_TEMPLATE) {
+  function pagedConfig(
+    design: BlockDocument = PAGED_TEMPLATE,
+    blocking?: ContentAddressHolder
+  ) {
     const options = config({
       resolveAddress: async (_locale, path) => {
         if (path === "/blog/hello") return HELD["/blog/hello"];
-        return path.startsWith("/blog/hello/page/")
-          ? { collection: "posts", id: "post-1", kind: "space" }
-          : null;
+        const later = listPageOf(path.slice(1));
+        const page = later === null ? null : listPageNumber(later.segment);
+        if (later?.base !== "blog/hello" || page === null || page < 2) {
+          return null;
+        }
+        if (blocking === undefined) return SPACE;
+        return page === 2 ? blocking : null;
       },
       templates: {
         collection: "templates",
@@ -816,6 +840,36 @@ describe("an entry's list split into pages", () => {
     await expect(route.ContentPage({ params: { slug } })).rejects.toMatchObject(
       NOT_FOUND
     );
+  });
+
+  describe("while a page is published among its later pages", () => {
+    const BLOCKING: ContentAddressHolder = {
+      collection: "pages",
+      id: "p2",
+      kind: "address",
+    };
+
+    it("draws the entry's list unpaged, linking to none of its later pages", async () => {
+      const html = await served(
+        createContentPage(pagedConfig(PAGED_TEMPLATE, BLOCKING)),
+        ["blog", "hello"]
+      );
+      expect(html).toContain("Hello world");
+      expect(html).not.toContain("/blog/hello/page/");
+    });
+
+    it.each([
+      ["a later page the space would hold", ["blog", "hello", "page", "3"]],
+      [
+        "the first page under a second spelling",
+        ["blog", "hello", "page", "1"],
+      ],
+    ])("answers not found for %s", async (_why, slug) => {
+      const route = createContentPage(pagedConfig(PAGED_TEMPLATE, BLOCKING));
+      await expect(
+        route.ContentPage({ params: { slug } })
+      ).rejects.toMatchObject(NOT_FOUND);
+    });
   });
 
   it("answers not found for a later page where the design serving the entry splits no list", async () => {

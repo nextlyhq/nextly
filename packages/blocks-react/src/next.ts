@@ -4409,6 +4409,25 @@ type ContentAnswer =
   /** The first page of an entry's list under a second spelling. */
   | { readonly kind: "redirect"; readonly path: string };
 
+/** Where on a document's page a path falls: its address, and a list page. */
+interface ListPlace {
+  /** The segments of the address the list is on. */
+  readonly segments: readonly string[];
+  /** The page of its list, absent for the address itself. */
+  readonly page?: number;
+}
+
+/**
+ * The page of a list `segments` names (`…/page/<n>`), as the route reads a
+ * page number, or null where it names none: no `page/<n>` ending, or a
+ * number written another way (`page/02`, `page/0`).
+ */
+function listPlaceOf(segments: readonly string[]): Required<ListPlace> | null {
+  const later = listPageOf(segments.join("/"));
+  const page = later === null ? null : listPageNumber(later.segment);
+  return page === null ? null : { segments: segments.slice(0, -2), page };
+}
+
 /**
  * Where on an entry's page a path the store answers for it falls: its own
  * address (`segments`), or a later page of its list (`…/page/<n>`), which
@@ -4418,13 +4437,8 @@ type ContentAnswer =
 function entryPlaceOf(
   segments: readonly string[],
   holder: ContentAddressHolder
-): { readonly segments: readonly string[]; readonly page?: number } | null {
-  if (holder.kind !== "space") return { segments };
-  const later = listPageOf(segments.join("/"));
-  const page = later === null ? null : listPageNumber(later.segment);
-  return later === null || page === null
-    ? null
-    : { segments: segments.slice(0, -2), page };
+): ListPlace | null {
+  return holder.kind === "space" ? listPlaceOf(segments) : { segments };
 }
 
 /** The segments of page `page` of the list on the page at `segments`. */
@@ -4682,21 +4696,59 @@ function buildContentRoute(
     // pages route's gate before any other holder is served: the preview
     // shows the page, and its publish is what a clash refuses.
     if (await draftGranted(slug)) return { kind: "page" };
-    if (holder === null) return null;
-    return await entryAnswer(holder, segments);
+    if (holder === null) return await firstListPage(segments);
+    const place = entryPlaceOf(segments, holder);
+    return place === null ? null : await entryAnswer(holder, place);
   }
 
   /**
-   * What `segments`, held by a collection's entry, is served as: the entry
-   * drawn with the design serving it, at its own address or on a later page
-   * of its list; or null for not found.
+   * What `segments` is served as where the store holds it for no one, when
+   * it is the first page of a list under a second spelling (`…/page/1`):
+   * no claim holds it, since a list's first page is its document's own
+   * address and the list's space starts at page 2. So it is answered as the
+   * document at that address answers it: a page by the pages route, which
+   * redirects there, an entry by its list's own pages; anything else, or
+   * any other path, is not found.
+   */
+  async function firstListPage(
+    segments: readonly string[]
+  ): Promise<ContentAnswer | null> {
+    const place = listPlaceOf(segments);
+    if (place === null || place.page !== 1) return null;
+    const holder = await holderOf(pathOf(place.segments));
+    if (holder === null || holder.kind === "space") return null;
+    if (pageCollections.has(holder.collection)) return { kind: "page" };
+    return await entryAnswer(holder, place);
+  }
+
+  /**
+   * Whether the store gives the entry `holder` the later pages of its list
+   * on the page at `segments`: one lookup of the list's second page, which
+   * the store answers with the space's holder, as it answers every later
+   * page. Until it does (a document is published among them, and the entry
+   * waits for it), the entry's list is drawn unpaged.
+   */
+  async function holdsLaterPages(
+    holder: ContentAddressHolder,
+    segments: readonly string[]
+  ): Promise<boolean> {
+    const second = await holderOf(pathOf(listPageSegments(segments, 2)));
+    return (
+      second?.kind === "space" &&
+      second.collection === holder.collection &&
+      second.id === holder.id
+    );
+  }
+
+  /**
+   * What `place`, held by a collection's entry, is served as: the entry
+   * drawn with the design serving it, at its own address or on a page of its
+   * list; or null for not found.
    */
   async function entryAnswer(
     holder: ContentAddressHolder,
-    segments: readonly string[]
+    place: ListPlace
   ): Promise<ContentAnswer | null> {
-    const place = entryPlaceOf(segments, holder);
-    if (place === null) return null;
     const template = await designOf(holder.collection, holder.id);
     if (template === null) return null;
     // An entry the public may not read answers not found, as an unpublished
@@ -4712,17 +4764,29 @@ function buildContentRoute(
     if (entry === null) return null;
     const route = entryRouteOf(holder.collection);
     const drawn = { ...entry, [TEMPLATE_DOCUMENT_KEY]: template.document };
+    // A later page's lookup was answered with the entry's space; its own
+    // address, and the first page's second spelling, ask the store.
+    const paged =
+      holder.kind === "space" ||
+      (await holdsLaterPages(holder, place.segments));
     // The addresses of the entry's list pages, as this route serves them, so
-    // the list's links name exactly the pages the store gives the entry.
+    // the list's links name exactly the pages the store gives the entry, and
+    // none while it gives the entry none: the list is then drawn unpaged.
     const context: RenderContext = {
       collection: holder.collection,
       slug: place.segments.join("/"),
       ...(pages.locale === undefined ? {} : { locale: pages.locale }),
-      listPagePath: page => pathOf(listPageSegments(place.segments, page)),
+      ...(paged
+        ? {
+            listPagePath: (page: number) =>
+              pathOf(listPageSegments(place.segments, page)),
+          }
+        : {}),
     };
     if (place.page === undefined) {
       return { kind: "entry", route, entry: drawn, context };
     }
+    if (!paged) return null;
     return await entryListPage(route, drawn, context, {
       segments: place.segments,
       page: place.page,
