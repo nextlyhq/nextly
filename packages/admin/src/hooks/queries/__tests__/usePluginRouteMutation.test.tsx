@@ -510,6 +510,22 @@ describe("writePluginRoute", () => {
     );
   });
 
+  it("hands the request the caller's signal, so the caller can abort it", async () => {
+    postSpy.mockResolvedValue(null);
+    const controller = new AbortController();
+    await writePluginRoute({
+      plugin: "@acme/plugin",
+      path: "/site/thing",
+      body: { value: 1 },
+      signal: controller.signal,
+    });
+    expect(postSpy).toHaveBeenCalledWith(
+      "/plugins/@acme/plugin/site/thing",
+      { value: 1 },
+      { headers: { "x-csrf-token": "token" }, signal: controller.signal }
+    );
+  });
+
   it("sends an ordinary request when the body is larger than keepalive allows", async () => {
     postSpy.mockResolvedValue(null);
     await writePluginRoute({
