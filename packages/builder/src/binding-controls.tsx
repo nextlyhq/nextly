@@ -444,6 +444,36 @@ function usePreviewFormatIn(
   );
 }
 
+/** The host's read of the fields a binding can read. */
+type ListBindingFields = () => Promise<readonly BindingFieldSource[]>;
+
+/**
+ * The read in flight, per host function, shared only while it runs, as the
+ * list controls share theirs (`collection-loop-controls`): the controls drawn
+ * together for one block (a bound image's chip and its alt note) make one
+ * read and see one answer, so they can't disagree. Dropped once it settles:
+ * an answer is one signed-in author's, read with their access.
+ */
+const sourcesInFlight = new WeakMap<
+  ListBindingFields,
+  Promise<readonly BindingFieldSource[]>
+>();
+
+/** The host's binding sources, one read shared by every control asking at once. */
+function readBindingSources(
+  list: ListBindingFields
+): Promise<readonly BindingFieldSource[]> {
+  const held = sourcesInFlight.get(list);
+  if (held !== undefined) return held;
+  const answer = list();
+  sourcesInFlight.set(list, answer);
+  const settle = (): void => {
+    if (sourcesInFlight.get(list) === answer) sourcesInFlight.delete(list);
+  };
+  answer.then(settle, settle);
+  return answer;
+}
+
 /** The fields a binding can read, as the host reads them; read once per open. */
 function useBindingSources(
   services: ContentServices | undefined,
@@ -457,7 +487,7 @@ function useBindingSources(
     if (!wanted || list === undefined) return;
     let current = true;
     setSources("loading");
-    list().then(
+    readBindingSources(list).then(
       read => {
         if (current) setSources(read);
       },

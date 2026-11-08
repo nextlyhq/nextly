@@ -53,6 +53,7 @@ import {
 } from "./content-controls";
 import { useBoundFieldOf } from "./binding-controls";
 import { HeldByLock } from "./held-by-lock";
+import { useVisitorUnreadable } from "./visitor-unreadable-context";
 import {
   addressChanges,
   ALT_MODE_LABELS,
@@ -476,6 +477,8 @@ function GrowingText({
 
 /** A picture bound to a field, as the alt note reads which field it is. */
 interface BoundPicture {
+  /** The media prop the binding fills. */
+  readonly prop: string;
   readonly binding: Binding;
   readonly document: BlockDocument;
   readonly nodeId: string;
@@ -502,7 +505,7 @@ function boundPictureOf(
   const binding = findNode(document.nodes, nodeId)?.bindings?.[media];
   return binding === undefined
     ? undefined
-    : { binding, document, nodeId, services };
+    : { prop: media, binding, document, nodeId, services };
 }
 
 /** What From library says under the menu: the library's words, or why none. */
@@ -550,12 +553,27 @@ function LibraryAltNote({
  * field they don't list), the note says both, promising neither.
  */
 function BoundPictureAltNote({
+  prop,
   binding,
   document,
   nodeId,
   services,
 }: BoundPicture): React.JSX.Element {
   const field = useBoundFieldOf(binding, document, nodeId, services);
+  // A field visitors can't read never fills the published picture: they see
+  // the binding's fallback, or the block's own image, which the note under
+  // the group names. Whatever the field's kind, its alt text is not theirs.
+  const unreadable = useVisitorUnreadable(nodeId).some(
+    each => each.prop === prop
+  );
+  if (unreadable) {
+    return (
+      <p className="nx-inspector__note" data-bound-picture="unreadable">
+        Visitors can&apos;t read the bound field, so they see its fallback.
+        Choose Custom to describe the image they see.
+      </p>
+    );
+  }
   const kind = field === undefined ? undefined : bindingKindOf(field);
   if (kind === "media") {
     return (
