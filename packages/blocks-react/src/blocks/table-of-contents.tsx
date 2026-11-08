@@ -203,7 +203,8 @@ const NO_MARGIN = {
  * The parts' defaults: lists without markers or a browser's gutter, since the
  * nesting is what shows the structure; a nested list set in by one `em`; one
  * line's breathing room between entries; and a title in the weight of a
- * label; the note an author sees on an empty block, slanted and quieter.
+ * label; links underlined in the text's colour, with hover and keyboard
+ * focus states; the note an author sees on an empty block, slanted and quieter.
  * Everything else inherits from the block, so a template styles the contents
  * by styling the block.
  */
@@ -240,7 +241,22 @@ const TABLE_OF_CONTENTS_PARTS = {
       base: { base: { margin: { ...NO_MARGIN, blockStart: "0.5em" } } },
     },
   },
-  link: {},
+  // Links that read as links on a site that styles none: a thin underline in
+  // the text's own colour, thicker under the pointer, and a ring in that
+  // colour for keyboard focus, which a reset stylesheet may have taken away.
+  link: {
+    baseStyles: {
+      base: { base: { textDecoration: "underline 1px" } },
+      hover: { base: { textDecoration: "underline 2px" } },
+      focus: {
+        base: {
+          textDecoration: "underline 2px",
+          borderRadius: "2px",
+          boxShadow: "0 0 0 2px currentColor",
+        },
+      },
+    },
+  },
   // Set apart from the page's own words, so an author never reads it as
   // content: slanted, and a step quieter than the text around it.
   note: {

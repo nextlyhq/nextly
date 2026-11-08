@@ -15,6 +15,14 @@ const BLOG_LIB = fileURLToPath(
 const BASE_SITE_URL = fileURLToPath(
   new URL("../../templates/base/src/lib/site-url.ts", import.meta.url)
 );
+// A template's approach config is copied to the project's root as
+// `nextly.config.ts`, so it imports the template's source as `./src/...`.
+const BLOG_CONFIGS = fileURLToPath(
+  new URL("../../templates/blog/configs/", import.meta.url)
+).replaceAll("\\", "/");
+const BLOG_ROOT = fileURLToPath(
+  new URL("../../templates/blog/", import.meta.url)
+).replaceAll("\\", "/");
 
 export default defineConfig({
   plugins: [
@@ -22,6 +30,20 @@ export default defineConfig({
     // A scaffolded blog gets `lib/site-url` from the base template, laid over
     // the blog's own `lib`, so blog code imports it from beside itself; the
     // blog's source does not carry it. Resolved here as the scaffold lays it.
+    // A test that loads one of the blog's approach configs where it sits, in
+    // `configs/`, resolves its `./src/...` imports from the blog's root, as
+    // they resolve in the project the config is copied into.
+    {
+      name: "blog-config-at-project-root",
+      resolveId(source, importer) {
+        return source.startsWith("./src/") &&
+          importer?.replaceAll("\\", "/").startsWith(BLOG_CONFIGS)
+          ? this.resolve(`${BLOG_ROOT}${source.slice(2)}`, importer, {
+              skipSelf: true,
+            })
+          : null;
+      },
+    },
     {
       name: "blog-lib-from-base",
       resolveId(source, importer) {
