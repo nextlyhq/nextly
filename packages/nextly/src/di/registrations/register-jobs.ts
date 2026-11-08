@@ -295,8 +295,13 @@ export function registerJobServices(ctx: RegistrationContext): void {
 
     // The content expiry a change to grants owes: queued before the expiry is
     // tried and withdrawn once it lands, so a row left is one whose process
-    // failed or is gone, and the next jobs run expires the pages it left.
-    registry.register(createGrantsContentExpiryJob());
+    // failed or is gone, and the next jobs run expires the pages it left. A
+    // row near the end of its attempts queues a successor through the queue.
+    registry.register(
+      createGrantsContentExpiryJob({
+        jobs: () => container.get<JobsRepository>("jobsRepository"),
+      })
+    );
 
     // Job types the application and its plugins declared. Registered AFTER the
     // built-ins so a plugin cannot shadow one: `collectJobs` already refuses a

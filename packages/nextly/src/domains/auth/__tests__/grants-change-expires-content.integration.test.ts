@@ -12,7 +12,9 @@
  * The expiry is owed until it lands: queued as a job before it is tried and
  * withdrawn once it lands, so when the registries cannot be read, the job is
  * left for a jobs run to perform after the process that owed it is gone, and
- * a process still running tries again until it lands.
+ * a process still running tries again until it lands. Landing means every tag
+ * expired or was recorded for every instance, not kept by this process alone,
+ * and a row whose attempts run out leaves a successor queued.
  *
  * SQLite needs no URL, and the flush is post-commit bookkeeping that no
  * dialect changes.
@@ -33,6 +35,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type {
   CacheRevalidator,
+  FlushOutcome,
   RevalidationIntent,
 } from "../../../revalidation/types";
 import {
@@ -63,8 +66,13 @@ function forgetThisProcess(): void {
 /** Every intent flushed to it, so a test sees exactly which tags expired. */
 class RecordingRevalidator implements CacheRevalidator {
   readonly flushed: RevalidationIntent[] = [];
-  flush(intents: RevalidationIntent[]): void {
+  /** Whether it answers as a revalidator whose hand-off kept the tags in this process only. */
+  keepInProcess = false;
+  flush(intents: RevalidationIntent[]): FlushOutcome | void {
     this.flushed.push(...intents);
+    if (!this.keepInProcess) return;
+    const tags = intents.flatMap(intent => intent.tags);
+    return { deferredTags: tags, keptInProcess: tags };
   }
   get tags(): string[] {
     return this.flushed.flatMap(intent => intent.tags);
@@ -297,5 +305,53 @@ describe("a change to a role's grants and the cached content reads (sqlite)", ()
       },
       { timeout: 5_000, interval: 50 }
     );
+  });
+
+  it("keeps the job while the expiry's tags are kept in this process only, until they are recorded", async () => {
+    const nextly = await boot();
+    spy.keepInProcess = true;
+    spy.flushed.length = 0;
+
+    await removePublicRead(nextly);
+
+    // Flushed, but not for good: the job stays queued for a jobs run.
+    expect(spy.tags).toContain("nextly:posts");
+    expect((await grantsExpiryJobs(nextly)).map(job => job.state)).toEqual([
+      "pending",
+    ]);
+
+    spy.keepInProcess = false;
+    await vi.waitFor(
+      async () => {
+        expect(await grantsExpiryJobs(nextly)).toEqual([]);
+      },
+      { timeout: 5_000, interval: 50 }
+    );
+  });
+
+  it("leaves a successor queued when a row's last attempt fails", async () => {
+    const nextly = await boot();
+    failRegistryReads();
+    await removePublicRead(nextly);
+    forgetThisProcess();
+    const [owed] = await grantsExpiryJobs(nextly);
+    if (!owed) throw new Error("the failed expiry left no job");
+    const registry = container.get<JobRegistry>("jobRegistry");
+    const last = registry.get(GRANTS_EXPIRY_JOB)?.retry.maxAttempts;
+    if (last === undefined)
+      throw new Error("the grants expiry job is not registered");
+    // Every attempt but the last already spent.
+    await nextly.adapter.update(
+      "nextly_jobs",
+      { attempt_count: last - 1 },
+      { and: [{ column: "id", op: "=", value: owed.id }] }
+    );
+
+    await runJobsPass(nextly.adapter, registry);
+
+    const rows = await grantsExpiryJobs(nextly);
+    expect(rows.find(job => job.id === owed.id)?.state).toBe("failed");
+    const successors = rows.filter(job => job.id !== owed.id);
+    expect(successors.map(job => job.state)).toEqual(["pending"]);
   });
 });

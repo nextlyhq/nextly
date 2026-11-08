@@ -5,14 +5,19 @@
  * leaves it to the jobs queue; tried twice; and when both fail, logged as an
  * error, never thrown, since the change it follows has committed, and tried
  * again by this process with a growing wait until it lands, when the queued
- * job is withdrawn.
+ * job is withdrawn. Landing means every tag expired or was recorded where
+ * every instance reads it: a tag the revalidator kept in this process alone
+ * is lost with it, so the job stays and the expiry is tried again.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { container } from "../../di/container";
+import type { FlushOutcome } from "../../revalidation/types";
 
 const content = vi.hoisted(() => vi.fn());
-const flush = vi.hoisted(() => vi.fn(async () => undefined));
+const flush = vi.hoisted(() =>
+  vi.fn(async (_intents: unknown): Promise<FlushOutcome | void> => undefined)
+);
 const revalidator = vi.hoisted(() => vi.fn());
 const logged = vi.hoisted(() => vi.fn());
 const informed = vi.hoisted(() => vi.fn());
@@ -42,7 +47,8 @@ beforeEach(() => {
   delete (globalThis as { __nextly_grants_expiry_retry?: unknown })
     .__nextly_grants_expiry_retry;
   content.mockReset();
-  flush.mockClear();
+  flush.mockReset();
+  flush.mockResolvedValue(undefined);
   revalidator.mockReset();
   revalidator.mockReturnValue({ flush });
   logged.mockClear();
@@ -161,5 +167,34 @@ describe("the content expiry after a change to grants", () => {
     await expireContentAfterGrantsChange();
     expect(enqueue).not.toHaveBeenCalled();
     expect(content).not.toHaveBeenCalled();
+  });
+
+  it("keeps the job and tries again while the flush keeps tags in this process only", async () => {
+    content.mockResolvedValue(SCOPES);
+    const kept = {
+      deferredTags: ["nextly:posts"],
+      keptInProcess: ["nextly:posts"],
+    };
+    flush.mockResolvedValueOnce(kept).mockResolvedValueOnce(kept);
+    await expireContentAfterGrantsChange();
+    expect(flush).toHaveBeenCalledTimes(2);
+    expect(withdrawUnclaimed).not.toHaveBeenCalled();
+    expect(logged).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "grants-change-content-expiry-failed" })
+    );
+
+    // Recorded on the next try: now it has landed.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(flush).toHaveBeenCalledTimes(3);
+    expect(withdrawUnclaimed).toHaveBeenCalledWith("job-1");
+  });
+
+  it("withdraws the job when the tags it deferred were recorded for every instance", async () => {
+    content.mockResolvedValue(SCOPES);
+    flush.mockResolvedValue({ deferredTags: ["nextly:posts"] });
+    await expireContentAfterGrantsChange();
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(withdrawUnclaimed).toHaveBeenCalledWith("job-1");
+    expect(logged).not.toHaveBeenCalled();
   });
 });

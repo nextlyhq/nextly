@@ -12,6 +12,7 @@
  *
  * @module domains/flush-content-change
  */
+import { NextlyError } from "../errors/nextly-error";
 import {
   buildCollectionRevalidationIntent,
   buildSingleRevalidationIntent,
@@ -19,6 +20,7 @@ import {
 } from "../revalidation/intent-builders";
 import type {
   CacheRevalidator,
+  FlushOutcome,
   RevalidationIntent,
 } from "../revalidation/types";
 
@@ -87,11 +89,12 @@ function parsed(stored: unknown): unknown {
  * the same intent builders, and none for one whose `revalidate.disable` opts it
  * out. Nothing where `cache` names no revalidator, so a process that caches
  * nothing reads no registry. Rejects when the registries or the flush fail;
- * each caller says what it could not refresh.
+ * each caller says what it could not refresh. Resolves what the revalidator
+ * says it could not finish, for a caller that must know.
  */
 export async function flushEveryContentScope(
   cache: LanguageChangeContentCache
-): Promise<void> {
+): Promise<FlushOutcome | void> {
   const revalidator = cache.revalidator();
   if (!revalidator) return;
   const { collections, singles } = await cache.content();
@@ -106,7 +109,35 @@ export async function flushEveryContentScope(
   const tags = new Set(intents.flatMap(intent => intent?.tags ?? []));
   // A site with nothing to flush issues no revalidation, which some backends log as an error.
   if (tags.size === 0) return;
-  await revalidator.flush([{ tags: [...tags] }]);
+  return revalidator.flush([{ tags: [...tags] }]);
+}
+
+/**
+ * {@link flushEveryContentScope}, rejecting unless every tag expired or was recorded where every
+ * instance reads it. A tag the revalidator only kept in this process (the hand-off refused it, or
+ * did not answer in time) is lost if the process stops, so the expiry is not done yet: the grants
+ * expiry keeps its queued job, and the job is tried again, until one lands for good.
+ */
+export async function expireEveryContentScopeForGood(
+  cache: LanguageChangeContentCache
+): Promise<void> {
+  const kept = (await flushEveryContentScope(cache))?.keptInProcess ?? [];
+  if (kept.length > 0) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: `${kept.length} cache tags were kept in this process only, unrecorded`,
+      },
+    });
+  }
+}
+
+/** What a failed expiry says in a log: a NextlyError's reason, else its message. */
+function failureText(failure: unknown): string {
+  if (failure instanceof NextlyError) {
+    const reason = failure.logContext?.reason;
+    if (typeof reason === "string") return reason;
+  }
+  return failure instanceof Error ? failure.message : String(failure);
 }
 
 /**
@@ -184,7 +215,7 @@ export async function expireContentAfterGrantsChange(): Promise<void> {
   let failure: unknown;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      await flushEveryContentScope(languageChangeContentCache());
+      await expireEveryContentScopeForGood(languageChangeContentCache());
       if (job !== undefined) await withdrawGrantsExpiries([job]);
       return;
     } catch (error) {
@@ -197,9 +228,9 @@ export async function expireContentAfterGrantsChange(): Promise<void> {
   else retry.queued.add(job);
   getNextlyLogger().error({
     kind: "grants-change-content-expiry-failed",
-    message: `What a role grants changed, but cached pages could not be expired yet: ${
-      failure instanceof Error ? failure.message : String(failure)
-    }. Until they are, a cached page may keep what the change took away; this process tries again${
+    message: `What a role grants changed, but cached pages could not be expired yet: ${failureText(
+      failure
+    )}. Until they are, a cached page may keep what the change took away; this process tries again${
       job === undefined
         ? ""
         : ", and the jobs queue holds it for the next jobs run"
@@ -279,7 +310,7 @@ async function tryGrantsExpiryAgain(retry: GrantsExpiryRetry): Promise<void> {
   const failuresBefore = retry.failures;
   const jobs = [...retry.queued];
   try {
-    await flushEveryContentScope(languageChangeContentCache());
+    await expireEveryContentScopeForGood(languageChangeContentCache());
   } catch {
     // Still owed. Queued now if it could not be before, so a restart does not lose it.
     if (retry.unqueued) {
