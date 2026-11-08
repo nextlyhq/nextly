@@ -166,49 +166,75 @@ async function held(
     .sort();
 }
 
-/** When the entry `id` of `collection` was last saved, as stored. */
-async function savedAt(
-  t: TestNextly,
-  collection: string,
-  id: string
-): Promise<unknown> {
-  const row = (await t.nextly.findByID({
-    collection,
-    id,
-    overrideAccess: true,
-    depth: 0,
-  })) as unknown as Record<string, unknown>;
-  return row.updatedAt;
+/**
+ * Every write to an entry of the posts collection, as `operation id`, in
+ * the order the writes ran: seen inside the write's own transaction, so a
+ * save that stores the very values it read is counted all the same.
+ */
+function entryWrites() {
+  const writes: string[] = [];
+  return {
+    /** The writes to the entry `id`. */
+    of: (id: string) => writes.filter(write => write.endsWith(` ${id}`)),
+    plugin: definePlugin({
+      name: "@t/claims-entry-writes",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      init(ctx) {
+        ctx.hooks.onInTransaction("posts", write => {
+          writes.push(`${write.operation} ${String(write.id)}`);
+        });
+      },
+    }),
+  };
 }
+
+/** What the race gate reports when the two saves met. */
+const MET = "both saves in their transactions at once";
 
 /**
  * Two saves held at the start of their in-transaction phase until both
- * have reached it, or two seconds pass: each has written its own row, and
- * neither has read or claimed an address yet, so both then claim at once.
+ * have reached it: each has written its own row, and neither has read or
+ * claimed an address yet, so both then claim at once. Saves run one after
+ * the other never meet, so one left waiting `patience` ms alone is let go
+ * and the meeting recorded as missed, which the test reads as a failure.
  * Registered before the page builder's own handlers, so it runs first.
  */
-function raceGate() {
+function raceGate(patience = 10_000) {
   let armed = false;
   let arrived = 0;
-  let bothArrived: () => void = () => undefined;
+  let met = false;
+  let missed = false;
+  let release: () => void = () => undefined;
   const together = new Promise<void>(resolve => {
-    bothArrived = resolve;
+    release = resolve;
   });
   const meet = async (): Promise<void> => {
     if (!armed) return;
     arrived += 1;
-    if (arrived === 2) bothArrived();
-    await Promise.race([
-      together,
-      new Promise(resolve => setTimeout(resolve, 2000)),
-    ]);
+    if (arrived > 1) {
+      met = !missed;
+      release();
+      return;
+    }
+    const alone = setTimeout(() => {
+      missed = true;
+      release();
+    }, patience);
+    await together;
+    clearTimeout(alone);
   };
   return {
     arm: () => {
       armed = true;
     },
-    /** How many saves reached the gate. */
-    arrivals: () => arrived,
+    /** Whether the saves met, or how they missed. */
+    outcome: () =>
+      met
+        ? MET
+        : missed
+          ? `one save waited ${patience} ms alone (${arrived} arrived)`
+          : `${arrived} of 2 saves arrived`,
     plugin: definePlugin({
       name: "@t/claims-race-gate",
       version: "1.0.0",
@@ -290,7 +316,7 @@ describe.each(getConfiguredTestDialects())(
         ]);
         // Both saves were in their transactions together: a race, not two
         // saves one after the other.
-        expect(gate.arrivals()).toBe(2);
+        expect(gate.outcome()).toBe(MET);
         expect([entrySave.status, pageSave.status].sort()).toEqual([
           "fulfilled",
           "rejected",
@@ -343,12 +369,27 @@ describe.each(getConfiguredTestDialects())(
       expect(await held(t, ["waiting"])).toEqual([
         `waiting /blog/held posts:${entry}`,
       ]);
-      return { entry, page, saved: await savedAt(t, "posts", entry) };
+      return { entry, page };
+    }
+
+    /**
+     * The entry was never saved after its creation, though its address
+     * moved to it; and the log does see a save of it when there is one.
+     */
+    async function savedOnlyAtCreation(
+      t: TestNextly,
+      writes: ReturnType<typeof entryWrites>,
+      entry: string
+    ): Promise<void> {
+      expect(writes.of(entry)).toEqual([`create ${entry}`]);
+      await updateLive(t, "posts", entry, { title: "Post held, saved" });
+      expect(writes.of(entry)).toEqual([`create ${entry}`, `update ${entry}`]);
     }
 
     it("hands a waiting entry its address when the page holding it is renamed, without saving the entry", async () => {
-      const t = await boot();
-      const { entry, page, saved } = await waitingBehindPages(t);
+      const writes = entryWrites();
+      const t = await boot({ plugins: [writes.plugin] });
+      const { entry, page } = await waitingBehindPages(t);
 
       await updateLive(t, "pages", page, { slug: "elsewhere" });
       expect(await held(t)).toEqual([
@@ -362,12 +403,13 @@ describe.each(getConfiguredTestDialects())(
         id: entry,
         kind: "address",
       });
-      expect(await savedAt(t, "posts", entry)).toEqual(saved);
+      await savedOnlyAtCreation(t, writes, entry);
     });
 
     it("hands a waiting entry its address when the page holding it is deleted, without saving the entry", async () => {
-      const t = await boot();
-      const { entry, page, saved } = await waitingBehindPages(t);
+      const writes = entryWrites();
+      const t = await boot({ plugins: [writes.plugin] });
+      const { entry, page } = await waitingBehindPages(t);
 
       await t.nextly.delete({
         collection: "pages",
@@ -379,7 +421,7 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await pageContent(t).resolveAddress(undefined, "/blog/held")
       ).toEqual({ collection: "posts", id: entry, kind: "address" });
-      expect(await savedAt(t, "posts", entry)).toEqual(saved);
+      await savedOnlyAtCreation(t, writes, entry);
     });
 
     it("serves a page at /blog beside the collection served from /blog, refusing neither", async () => {
