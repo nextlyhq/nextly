@@ -190,8 +190,8 @@ names the entry of a Collection list's collection, which a block inside the list
 `{ "value": … }` gives the value; in a list inside another list's items, the item is
 the nearest list's. An image a visitor saw by its address, not a library image, is kept
 in the block's address prop (`src` on the Image block), the media prop emptied, and so is
-an image fallback kept in place of a private field; a block declaring none refuses the
-unbind; and an image's typed address, which a bound image never draws, is emptied
+an image fallback address kept in place of a private field (a media library fallback stays
+in the media prop); a block declaring none refuses the unbind; and an image's typed address, which a bound image never draws, is emptied
 wherever the address isn't what's kept. Three bindings need `{ "value": … }`, since what
 visitors see rests on what the server can't read: an image bound to an upload field of a
 collection other than the media library (the site's pages may draw images from it,

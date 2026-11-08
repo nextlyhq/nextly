@@ -6,7 +6,8 @@
  * Every reference the export reads (`transfer-references`) is one this
  * rewrites, in the same places: a placement's `componentId` and its image
  * values, a node's classes, styles and hide settings, a document's own styles
- * and asset list, a media prop, and a component's variants. A breakpoint the
+ * and asset list, a media prop and the media id its binding falls back to,
+ * and a component's variants. A breakpoint the
  * import drops takes its styles and hide settings with it, and so does one the
  * file does not define, since the source drew nothing under it either; what is
  * kept is only ever written under a breakpoint the destination defines.
@@ -29,7 +30,11 @@ import {
   type NodeStyles,
 } from "@nextlyhq/blocks-engine";
 
-import { imageExposureIds, mediaIdOf } from "./transfer-references";
+import {
+  fallbackMediaIdOf,
+  imageExposureIds,
+  mediaIdOf,
+} from "./transfer-references";
 
 /** The destination's id for each source reference, one map per kind. */
 export interface ReferenceMaps {
@@ -127,7 +132,30 @@ function rewriteNode(
     if (media !== undefined) props[prop] = mapped(maps.media, media);
   }
   next.props = props;
+  const bindings = rewriteFallbacks(node, mediaProps, maps);
+  if (bindings !== undefined) next.bindings = bindings;
   return next;
+}
+
+/**
+ * A node's bindings with each media prop's media-id fallback mapped, as the
+ * prop's own id is; `undefined` when none holds one, so the node keeps its
+ * bindings as stored. An address fallback is no reference and stays.
+ */
+function rewriteFallbacks(
+  node: BlockNode,
+  mediaProps: readonly string[],
+  maps: ReferenceMaps
+): BlockNode["bindings"] {
+  let bindings: BlockNode["bindings"];
+  for (const prop of mediaProps) {
+    const media = fallbackMediaIdOf(node, prop);
+    const binding = node.bindings?.[prop];
+    if (media === undefined || binding === undefined) continue;
+    bindings ??= { ...node.bindings };
+    bindings[prop] = { ...binding, fallback: mapped(maps.media, media) };
+  }
+  return bindings;
 }
 
 /** A node with its styles, classes and hide settings mapped. */

@@ -164,6 +164,28 @@ describe("unbindPlan", () => {
       answer: { kept: "fallback", value: address, into: "src" },
     });
   });
+
+  it("keeps a private image's media-library fallback in the media prop, the typed address emptied", () => {
+    const plan = unbindPlan(
+      "mediaId",
+      "memberPhoto",
+      view({
+        filled: { mediaId: "fallback-media" },
+        unreadable: { fallback: { value: "fallback-media" } },
+      }),
+      IMAGE
+    );
+    // Written into the address prop, the id would read as a broken address;
+    // the typed address the bound image never drew would appear if kept.
+    expect(plan).toEqual({
+      kept: { set: { mediaId: "fallback-media" }, empty: ["src"] },
+      answer: expect.objectContaining({
+        kept: "fallback",
+        value: "fallback-media",
+      }),
+    });
+    expect(plan).not.toHaveProperty("answer.into");
+  });
 });
 
 describe("an image bound to nothing", () => {

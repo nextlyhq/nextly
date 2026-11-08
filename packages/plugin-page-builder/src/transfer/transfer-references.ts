@@ -7,15 +7,18 @@
  *
  * One walk over the document, through every slot, a placement's own slot
  * content included. Media is found by the block registry's own word: a prop
- * declared `type: "media"`, and a placement value for an exposure of type
- * `image`, which is the one exposure that holds a media id. A string prop that
- * merely looks like an id is never taken for one.
+ * declared `type: "media"`, the fallback of a binding on such a prop where it
+ * holds a media id rather than an image address, and a placement value for an
+ * exposure of type `image`, which is the one exposure that holds a media id.
+ * A string prop that merely looks like an id is never taken for one.
  *
  * @module transfer/transfer-references
  */
 import {
   getBlock,
+  imageValueOf,
   isComponentInstance,
+  isPlainRecord,
   walkNodes,
   type BlockDocument,
   type BlockNode,
@@ -88,6 +91,26 @@ export function mediaIdOf(value: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * The media id a binding on a media prop falls back to, when it holds one.
+ * Read as the binding's own check and the renderer read an image fallback
+ * (`imageValueOf`), so an image address is never taken for an id and an id
+ * the page draws is never left behind.
+ */
+export function fallbackMediaIdOf(
+  node: BlockNode,
+  prop: string
+): string | undefined {
+  const bindings: unknown = node.bindings;
+  if (!isPlainRecord(bindings) || !Object.hasOwn(bindings, prop)) {
+    return undefined;
+  }
+  const binding = bindings[prop];
+  if (!isPlainRecord(binding)) return undefined;
+  const image = imageValueOf(binding.fallback);
+  return image?.holds === "media" ? image.value : undefined;
+}
+
 /** Add everything one document refers to into `into`. */
 export function collectDocumentReferences(
   document: BlockDocument,
@@ -149,6 +172,10 @@ function collectNodeReferences(
   for (const prop of mediaProps(node.type)) {
     const media = mediaIdOf(props[prop]);
     if (media !== undefined) into.media.add(media);
+    // A bound media prop draws its binding's fallback when the bound value is
+    // missing, so a media id there is carried as the prop's own is.
+    const fallback = fallbackMediaIdOf(node, prop);
+    if (fallback !== undefined) into.media.add(fallback);
   }
 }
 

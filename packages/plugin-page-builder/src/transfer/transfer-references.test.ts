@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectDocumentReferences,
   emptyReferences,
+  fallbackMediaIdOf,
   imageExposureIds,
   mediaIdOf,
 } from "./transfer-references";
@@ -149,6 +150,118 @@ describe("collectDocumentReferences", () => {
       { mediaProps }
     );
     expect(sorted(into.media)).toEqual(["m-9"]);
+  });
+
+  it("reads the media id a media prop's binding falls back to, never an address fallback or another prop's", () => {
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "bound-image",
+          type: "core/image",
+          version: 1,
+          props: { mediaId: "m-own" },
+          bindings: { mediaId: { $bind: "cover", fallback: "m-fallback" } },
+          slots: {
+            children: [
+              {
+                id: "nested-image",
+                type: "core/image",
+                version: 1,
+                props: {},
+                bindings: {
+                  mediaId: { $bind: "cover", fallback: "m-nested" },
+                },
+              },
+            ],
+          },
+        },
+        {
+          id: "address-fallback",
+          type: "core/image",
+          version: 1,
+          props: {},
+          bindings: {
+            mediaId: { $bind: "cover", fallback: "/media/fallback.jpg" },
+          },
+        },
+        {
+          // A text prop's fallback that looks like an id is no media.
+          id: "heading",
+          type: "core/heading",
+          version: 1,
+          props: {},
+          bindings: { text: { $bind: "title", fallback: "m-not-media" } },
+        },
+      ],
+    };
+    const into = emptyReferences();
+    collectDocumentReferences(document, into, { mediaProps });
+    expect(sorted(into.media)).toEqual(["m-fallback", "m-nested", "m-own"]);
+  });
+
+  it("reads a fallback's media id a document lists among its assets", () => {
+    const into = emptyReferences();
+    collectDocumentReferences(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "bound-image",
+            type: "core/image",
+            version: 1,
+            props: {},
+            bindings: { mediaId: { $bind: "cover", fallback: "m-fallback" } },
+          },
+        ],
+        assets: { mediaIds: ["m-fallback"] },
+      },
+      into,
+      { mediaProps }
+    );
+    expect(sorted(into.media)).toEqual(["m-fallback"]);
+  });
+});
+
+describe("fallbackMediaIdOf", () => {
+  const imageWith = (binding: unknown) =>
+    ({
+      id: "img",
+      type: "core/image",
+      version: 1,
+      props: {},
+      bindings: { mediaId: binding },
+    }) as BlockDocument["nodes"][number];
+
+  it("takes a fallback that is a media id, trimmed as the renderer reads it", () => {
+    expect(
+      fallbackMediaIdOf(
+        imageWith({ $bind: "cover", fallback: " m-1 " }),
+        "mediaId"
+      )
+    ).toBe("m-1");
+  });
+
+  it("takes no address, no unsafe value, no non-string and no missing fallback", () => {
+    for (const fallback of [
+      "https://cdn.example/a.jpg",
+      "/media/a.jpg",
+      "javascript:alert(1)",
+      "//elsewhere.example/a.png",
+      "",
+      7,
+      undefined,
+    ]) {
+      expect(
+        fallbackMediaIdOf(imageWith({ $bind: "cover", fallback }), "mediaId")
+      ).toBeUndefined();
+    }
+    expect(fallbackMediaIdOf(imageWith("m-1"), "mediaId")).toBeUndefined();
+    expect(
+      fallbackMediaIdOf(imageWith({ $bind: "cover", fallback: "m-1" }), "src")
+    ).toBeUndefined();
   });
 });
 

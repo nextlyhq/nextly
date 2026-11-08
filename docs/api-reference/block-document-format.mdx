@@ -241,10 +241,14 @@ An image prop (`media` or `upload`) binds to a media field or a URL field:
   a relative path and `//host` are not image addresses, so they render the
   fallback. The address keeps the block's own alternative text, and has no
   size.
-- **The fallback** is an image address. Any other value, a media id
-  included, is refused when the document is saved and ignored when it
-  renders. With no value to draw and no fallback, the prop keeps its own
-  value, as any bound prop does.
+- **The fallback** is an image address or a media library image's id, read
+  as the prop's own value is: a media id draws as a picked image does, with
+  the record's address, alternative text and size. Any other value
+  (`javascript:`, `data:`, `//host`, a number) is refused when the document
+  is saved and ignored when it renders. A page's export carries a fallback's
+  media file, and its import maps the id to the file on the new site, as
+  they do for the prop's own. With no value to draw and no fallback, the prop
+  keeps its own value, as any bound prop does.
 - **What draws.** An address goes through the same scheme and host checks as
   a typed one, so a host outside the site's `remotePatterns` is not loaded. A
   value that can't be drawn, a record the host can't find included, shows the

@@ -98,6 +98,77 @@ describe("rewriteDocument", () => {
     expect(document.nodes[0]?.classes).toEqual(["k-src", "k-unknown"]);
   });
 
+  it("maps a media prop's media-id fallback as the prop's own id, and leaves an address fallback", () => {
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      assets: { mediaIds: ["m-src", "m-fallback-src"] },
+      nodes: [
+        {
+          id: "img",
+          type: "core/image",
+          version: 1,
+          props: { mediaId: "m-src" },
+          bindings: {
+            mediaId: {
+              $bind: "cover",
+              source: "single",
+              sourceKey: "home",
+              fallback: "m-fallback-src",
+            },
+          },
+        },
+        {
+          id: "address",
+          type: "core/image",
+          version: 1,
+          props: {},
+          bindings: {
+            mediaId: { $bind: "cover", fallback: "/media/fallback.jpg" },
+          },
+        },
+        {
+          id: "heading",
+          type: "core/heading",
+          version: 1,
+          props: {},
+          bindings: { text: { $bind: "title", fallback: "m-src" } },
+        },
+      ],
+    };
+    const withFallback: ReferenceMaps = {
+      ...maps,
+      media: new Map([
+        ["m-src", "m-dst"],
+        ["m-fallback-src", "m-fallback-dst"],
+      ]),
+    };
+
+    const rewritten = rewriteDocument(document, withFallback, lookups);
+
+    const [image, address, heading] = rewritten.nodes;
+    expect(image?.props).toEqual({ mediaId: "m-dst" });
+    // The binding is otherwise kept as stored.
+    expect(image?.bindings).toEqual({
+      mediaId: {
+        $bind: "cover",
+        source: "single",
+        sourceKey: "home",
+        fallback: "m-fallback-dst",
+      },
+    });
+    expect(address?.bindings).toEqual(document.nodes[1]?.bindings);
+    // Only a media prop's fallback is a reference.
+    expect(heading?.bindings).toEqual(document.nodes[2]?.bindings);
+    expect(rewritten.assets).toEqual({
+      mediaIds: ["m-dst", "m-fallback-dst"],
+    });
+    // The source is left as it was.
+    expect(document.nodes[0]?.bindings?.mediaId?.fallback).toBe(
+      "m-fallback-src"
+    );
+  });
+
   it("keeps a component's variant keys and maps the images they set", () => {
     const definition: ComponentDocument = {
       formatVersion: 1,
