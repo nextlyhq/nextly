@@ -116,7 +116,7 @@ async function openLibrary(): Promise<HTMLElement> {
   fireEvent.click(screen.getByRole("button", { name: "Choose from library" }));
   await screen.findByRole("option", { name: "spring-banner.jpg" });
   return screen.getByRole("combobox", {
-    name: "Find in the media library, or paste an address",
+    name: "Find an image, or paste an address",
   });
 }
 
@@ -183,17 +183,28 @@ describe("a fallback chosen from the media library", () => {
     const readMedia = vi.fn<(id: string) => Promise<MediaSummary | null>>(
       async () => ({ name: "spring-banner.jpg", thumbnail: "/t/spring.jpg" })
     );
-    const { onFallback } = mountRow({ readMedia }, "m-7");
+    const { onFallback } = mountRow(
+      { readMedia, searchMedia: searchOf() },
+      "m-7"
+    );
     const row = await screen.findByRole("group", {
       name: "Fallback: spring-banner.jpg",
     });
     expect(readMedia).toHaveBeenCalledWith("m-7");
     expect(row.getAttribute("title")).toBe("Fallback: spring-banner.jpg");
     expect(row.querySelector("img")?.getAttribute("src")).toBe("/t/spring.jpg");
-    // A long name is cut in its middle, its end (the extension) kept whole.
+    // A long name is cut in its middle: its extension and the three letters
+    // before it kept whole, its start left to shrink.
+    expect(row.querySelector(".nx-middle-cut__head")?.textContent).toBe(
+      "spring-ban"
+    );
+    expect(row.querySelector(".nx-middle-cut__tail")?.textContent).toBe(
+      "ner.jpg"
+    );
+    // The way to choose another file sits inside the file's box.
     expect(
-      row.querySelector(".nx-image-fallback__media-tail")?.textContent
-    ).toBe("nner.jpg");
+      within(row).getByRole("button", { name: "Choose from library" })
+    ).toBeTruthy();
     // The id is stored, not shown: not in the row's words, nor in a field.
     expect(document.body.textContent).not.toContain("m-7");
     expect(screen.queryByRole("textbox")).toBeNull();

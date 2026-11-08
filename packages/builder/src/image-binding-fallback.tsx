@@ -78,7 +78,7 @@ const SHOWN_WHEN = "Shown when the bound field has no image.";
 const CHOOSE_FROM_LIBRARY = "Choose from library";
 // The search takes an image address as well, so it says so where the author
 // types: the picker has no other place to paste one.
-const FIND_IN_LIBRARY = "Find in the media library, or paste an address";
+const FIND_IN_LIBRARY = "Find an image, or paste an address";
 
 /** How long the search waits after a keystroke before it asks the library. */
 const SEARCH_DELAY_MS = 200;
@@ -147,6 +147,15 @@ export function ImageBindingFallback({
     setPicking(false);
     setBrowsing(true);
   };
+  const libraryButton = (
+    <LibraryButton
+      searchable={searchMedia !== undefined}
+      dialog={Picker !== undefined}
+      open={picking}
+      disabled={disabled}
+      onDialog={openDialog}
+    />
+  );
 
   return (
     <div className="nx-binding__fallback nx-image-fallback">
@@ -176,21 +185,18 @@ export function ImageBindingFallback({
                   focusAddress.current = true;
                   onFallback("");
                 }}
+                // Inside the file's box, beside Remove: the name gets the
+                // width the button would take beside it.
+                libraryButton={libraryButton}
               />
             )}
             {/* The row's other way to fill it: the media library. Not drawn
-                while empty. */}
+                while empty, nor beside a chosen file, whose box holds it. */}
             <div
               className="nx-image-fallback__actions"
               data-fallback-actions=""
             >
-              <LibraryButton
-                searchable={searchMedia !== undefined}
-                dialog={Picker !== undefined}
-                open={picking}
-                disabled={disabled}
-                onDialog={openDialog}
-              />
+              {mediaId === undefined ? libraryButton : null}
             </div>
           </div>
         </PopoverAnchor>
@@ -436,12 +442,15 @@ function LibraryFallback({
   disabled,
   describedBy,
   onRemove,
+  libraryButton,
 }: {
   mediaId: string;
   read: ContentServices["readMedia"];
   disabled: boolean;
   describedBy: string | undefined;
   onRemove: () => void;
+  /** The way to choose another file, drawn at the box's end. */
+  libraryButton: React.ReactNode;
 }): React.JSX.Element {
   const summary = useMediaSummary(read, mediaId);
   const name =
@@ -476,7 +485,7 @@ function LibraryFallback({
           decoding="async"
         />
       )}
-      <MiddleCutName name={name} />
+      <MiddleCut text={name} className="nx-image-fallback__media-name" />
       <button
         type="button"
         className="nx-image-fallback__clear"
@@ -487,30 +496,53 @@ function LibraryFallback({
       >
         <X aria-hidden="true" size={12} />
       </button>
+      {libraryButton}
     </div>
   );
 }
 
-/** How much of a long file name's end stays whole: its extension and a bit. */
-const NAME_TAIL_LENGTH = 8;
+/** How many letters before a file's extension stay whole with it. */
+const KEPT_BEFORE_EXTENSION = 3;
+/** The longest ending read as an extension (".webp" and its dot is 5). */
+const LONGEST_EXTENSION = 6;
 
 /**
- * A file name cut in its middle where the row is narrow, its start and its
- * end kept ("canvas-harb…tzvv.png"): files are told apart by both, and the
- * end carries the extension. The start shrinks with an ellipsis; the end is
- * never cut. The whole name is on the row's tooltip and in its name.
+ * Where a file name's kept end starts: its extension and the few letters
+ * before it, or its last few letters where it has no extension; `undefined`
+ * for a name too short to cut, whose start would be all but gone.
  */
-function MiddleCutName({ name }: { name: string }): React.JSX.Element {
-  const cut = name.length > NAME_TAIL_LENGTH * 2;
-  const head = cut ? name.slice(0, -NAME_TAIL_LENGTH) : name;
+function keptEndAt(name: string): number | undefined {
+  const dot = name.lastIndexOf(".");
+  const at =
+    dot > 0 && name.length - dot <= LONGEST_EXTENSION
+      ? Math.max(0, dot - KEPT_BEFORE_EXTENSION)
+      : name.length - LONGEST_EXTENSION;
+  return at > KEPT_BEFORE_EXTENSION ? at : undefined;
+}
+
+/**
+ * A file name cut in its middle where it is drawn narrow, its start and its
+ * end kept ("spring-ba…ner.jpg"): files are told apart by their start, and
+ * the end carries the extension. The start shrinks with an ellipsis; the end
+ * is never cut. The whole name is on the tooltip and in the accessible name
+ * of what holds it, so this is hidden from assistive technology.
+ */
+function MiddleCut({
+  text,
+  className,
+}: {
+  text: string;
+  className: string;
+}): React.JSX.Element {
+  const at = keptEndAt(text);
   return (
-    <span className="nx-image-fallback__media-name" aria-hidden="true">
-      <span className="nx-image-fallback__media-head">{head}</span>
-      {cut ? (
-        <span className="nx-image-fallback__media-tail">
-          {name.slice(-NAME_TAIL_LENGTH)}
-        </span>
-      ) : null}
+    <span className={`${className} nx-middle-cut`} aria-hidden="true">
+      <span className="nx-middle-cut__head">
+        {at === undefined ? text : text.slice(0, at)}
+      </span>
+      {at === undefined ? null : (
+        <span className="nx-middle-cut__tail">{text.slice(at)}</span>
+      )}
     </span>
   );
 }
@@ -841,6 +873,9 @@ function PickerOption({
       id={id}
       role="option"
       aria-selected={selected}
+      // A tile's caption is drawn cut and hidden from assistive technology,
+      // so the tile carries its whole name itself.
+      aria-label={isAddress ? undefined : option.label}
       data-active={active ? "" : undefined}
       className={
         isAddress ? "nx-library-pick__address" : "nx-library-pick__tile"
@@ -886,7 +921,7 @@ function TileContent({
           decoding="async"
         />
       )}
-      <span className="nx-library-pick__caption">{label}</span>
+      <MiddleCut text={label} className="nx-library-pick__caption" />
     </>
   );
 }

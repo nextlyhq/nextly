@@ -11615,25 +11615,36 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
- * The name cut in its middle: the start shrinks with an ellipsis, the end
- * (the extension and a few letters before it) is never cut.
+ * A file name cut in its middle (the row's file, a picker tile's caption):
+ * the start shrinks with an ellipsis, the end (the extension and a few
+ * letters before it) is never cut.
  */
-.nx-image-fallback__media-name {
+.nx-middle-cut {
   display: flex;
-  flex: 1;
   min-inline-size: 0;
   overflow: hidden;
   white-space: nowrap;
 }
 
-.nx-image-fallback__media-head {
+.nx-middle-cut__head {
   min-inline-size: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.nx-image-fallback__media-tail {
+.nx-middle-cut__tail {
   flex: none;
+}
+
+.nx-image-fallback__media-name {
+  flex: 1;
+}
+
+/* The library button inside the chosen file's box, at its end. */
+.nx-image-fallback__media > .nx-image-fallback__library {
+  flex: none;
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
 }
 
 /* A file the library no longer has: said in the muted voice of a note. */
@@ -11690,6 +11701,8 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   block-size: 2rem;
   padding-inline-start: 1.75rem;
   font-size: 0.8125rem;
+  /* A placeholder longer than a narrow popover is cut, never clipped. */
+  text-overflow: ellipsis;
 }
 
 .nx-library-pick__grid {
@@ -11758,8 +11771,6 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   /* The admin's smallest text: a tile's name is how it is told apart. */
   font-size: 0.75rem;
   line-height: 1.4;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /*
