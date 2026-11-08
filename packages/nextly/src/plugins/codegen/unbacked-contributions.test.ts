@@ -1,17 +1,17 @@
 /**
- * A contributed admin component whose module has no file behind it is left
- * out of the component map, and named; one whose module is there is kept.
+ * A contributed admin component whose LOCAL module has no runtime file behind
+ * it is left out of the component map, and named; every other is kept.
  *
  * What separates it from a plausible wrong one: the app is real on disk, so a
- * judge that skipped every alias, every package or every contribution would
- * leave out the present ones too; the writer and the CI check are both asked,
- * so a writer that skipped while the check still demanded the path (or the
- * reverse) would fail the agreement; a widget naming a missing module
- * stays in the map, where its card's error state names it; a bare name no
- * tsconfig alias and no installed package answers is kept, as an alias only
- * the bundler declares would be; and a package whose export is declared but
- * whose target file is not built is left out, where a judge reading the
- * export's key alone would keep it.
+ * judge that skipped every alias or every contribution would leave out the
+ * present ones too; a declaration file alone is not a module, so a judge that
+ * counted one would keep a component whose import loads nothing; packages
+ * are never judged, so a judge guessing at a package's entry (installed but
+ * unbuilt, or not installed where looked for) would drop a valid component;
+ * an alias inherited through a package-based `extends` is followed, where a
+ * judge reading only relative `extends` would miss it; the writer and the CI
+ * check are both asked, so the two cannot disagree; and a widget naming a
+ * missing module stays in the map, where its card's error state names it.
  */
 import {
   mkdirSync,
@@ -52,34 +52,43 @@ function put(path: string, text: string): void {
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "nextly-unbacked-"));
-  // Written as an app writes it: comments, an alias, a trailing comma.
+  // Written as an app writes it: comments, an alias, a trailing comma, and
+  // a shared config extended by package spec, which declares an alias of
+  // its own the app's `paths` do not repeat.
   put(
     "tsconfig.json",
     `{
-  // The app's own alias.
+  // The app's own config, on top of a shared one.
+  "extends": "@acme/tsconfig/next.json",
+}`
+  );
+  put(
+    "node_modules/@acme/tsconfig/package.json",
+    JSON.stringify({ name: "@acme/tsconfig" })
+  );
+  // Relative `paths` resolve against the config that declares them: this
+  // package's folder, two levels up to the app.
+  put(
+    "node_modules/@acme/tsconfig/next.json",
+    `{
   "compilerOptions": {
-    "paths": { "@/*": ["./src/*"], },
+    "paths": {
+      "@/*": ["../../../src/*"],
+    },
   },
 }`
   );
   put("src/plugins/kept/contribution.tsx", "export const Kept = () => null;");
-  put(
-    "node_modules/@acme/x/package.json",
-    JSON.stringify({ name: "@acme/x", exports: { "./admin": "./admin.js" } })
-  );
-  put("node_modules/@acme/x/admin.js", "export const Panel = () => null;");
-  // A workspace plugin not built yet: its export names `dist`, which holds
-  // only the declaration, and `types` is not what the map's import loads.
+  // Types only: nothing here loads at run time.
+  put("src/plugins/typed/contribution.d.ts", "export {};");
+  // An installed package whose entry is not built: never judged here.
   put(
     "node_modules/@acme/unbuilt/package.json",
     JSON.stringify({
       name: "@acme/unbuilt",
-      exports: {
-        "./admin": { types: "./dist/admin.d.ts", import: "./dist/admin.js" },
-      },
+      exports: { "./admin": "./dist/admin.js" },
     })
   );
-  put("node_modules/@acme/unbuilt/dist/admin.d.ts", "export {};");
 });
 
 afterEach(() => {
@@ -88,12 +97,9 @@ afterEach(() => {
 
 const KEPT_ALIAS = "@/plugins/kept/contribution#Kept";
 const GONE_ALIAS = "@/plugins/gone/contribution#Gone";
-const KEPT_PACKAGE = "@acme/x/admin#Panel";
-const GONE_SUBPATH = "@acme/x/missing#Nothing";
-const GONE_UNBUILT = "@acme/unbuilt/admin#Panel";
-// Neither a tsconfig alias nor an installed package: a bundler alias looks
-// the same, so it is not proven missing.
-const KEPT_UNKNOWN = "~bundler-alias/admin#Panel";
+const GONE_TYPES_ONLY = "@/plugins/typed/contribution#Typed";
+const KEPT_UNBUILT = "@acme/unbuilt/admin#Panel";
+const KEPT_NOT_INSTALLED = "@acme/not-installed/admin#Panel";
 const GONE_WIDGET = "@/plugins/gone/widget#Card";
 
 const fixture = {
@@ -105,10 +111,9 @@ const fixture = {
       contributions: [
         KEPT_ALIAS,
         GONE_ALIAS,
-        KEPT_PACKAGE,
-        GONE_SUBPATH,
-        GONE_UNBUILT,
-        KEPT_UNKNOWN,
+        GONE_TYPES_ONLY,
+        KEPT_UNBUILT,
+        KEPT_NOT_INSTALLED,
       ].map((component, index) => ({
         id: `fixture.block-${String(index)}`,
         kind: "block",
@@ -122,11 +127,11 @@ const fixture = {
   },
 } as unknown as PluginDefinition;
 
-describe("a contributed component with no file behind it", () => {
-  it("is found, and every one with a file is not", () => {
+describe("a contributed component with no runtime file behind it", () => {
+  it("is found among local modules, and no package is", () => {
     expect(
       unbackedContributions([fixture], TYPES, root).map(each => each.path)
-    ).toEqual([GONE_ALIAS, GONE_SUBPATH, GONE_UNBUILT]);
+    ).toEqual([GONE_ALIAS, GONE_TYPES_ONLY]);
   });
 
   it("is left out of the map the writer writes, which keeps every other component", async () => {
@@ -134,7 +139,7 @@ describe("a contributed component with no file behind it", () => {
     const list = written.paths[1];
     if (list === undefined) throw new Error("no path list written");
     expect(listedPathsOf(readFileSync(list, "utf-8"))).toEqual(
-      [KEPT_PACKAGE, KEPT_ALIAS, KEPT_UNKNOWN, GONE_WIDGET].sort((a, b) =>
+      [KEPT_ALIAS, KEPT_UNBUILT, KEPT_NOT_INSTALLED, GONE_WIDGET].sort((a, b) =>
         a.localeCompare(b)
       )
     );
@@ -156,51 +161,41 @@ describe("a contributed component with no file behind it", () => {
   });
 });
 
-describe("a module path, judged as the app's build would find it", () => {
+describe("a module path, judged only where it is local", () => {
   const place = () => ({ cwd: root, mapDir: join(root, "src/types") });
 
-  it("reads a relative path from the map's own folder", () => {
-    put("src/types/local.ts", "export {};");
+  it("reads a relative path from the map's own folder, counting runtime files only", () => {
+    put("src/types/local.tsx", "export {};");
+    put("src/types/declared.d.ts", "export {};");
     expect(modulePresence("./local", place())).toBe("present");
+    expect(modulePresence("./declared", place())).toBe("absent");
     expect(modulePresence("./elsewhere", place())).toBe("absent");
   });
 
-  it("reads an alias through the app's tsconfig, and a package through its exports", () => {
+  it("follows an alias inherited through a package-based extends", () => {
     expect(modulePresence("@/plugins/kept/contribution", place())).toBe(
       "present"
     );
-    expect(modulePresence("@acme/x/admin", place())).toBe("present");
-    expect(modulePresence("@acme/x/missing", place())).toBe("absent");
-  });
-
-  it("follows an export to its file, through conditions and a `*` pattern", () => {
-    // Declared, but the file a server build loads is not there.
-    expect(modulePresence("@acme/unbuilt/admin", place())).toBe("absent");
-    put(
-      "node_modules/@acme/kit/package.json",
-      JSON.stringify({
-        name: "@acme/kit",
-        exports: {
-          "./widgets/*": { default: "./dist/widgets/*.js" },
-          "./strange": { browser: "./dist/strange.js" },
-        },
-      })
+    // The playground's contributions fixture names its component this way:
+    // an `@/*` alias with no file behind it.
+    expect(modulePresence("@/plugins/gone/contribution", place())).toBe(
+      "absent"
     );
-    put("node_modules/@acme/kit/dist/widgets/chart.js", "export {};");
-    expect(modulePresence("@acme/kit/widgets/chart", place())).toBe("present");
-    expect(modulePresence("@acme/kit/widgets/table", place())).toBe("absent");
-    // A condition a server build does not resolve proves nothing.
-    expect(modulePresence("@acme/kit/strange", place())).toBe("unknown");
   });
 
-  it("keeps a bare name no tsconfig alias and no installed package answers", () => {
-    expect(modulePresence("~bundler-alias/admin", place())).toBe("unknown");
+  it("never judges a package, installed without its entry or not installed", () => {
+    expect(modulePresence("@acme/unbuilt/admin", place())).toBe("unknown");
     expect(modulePresence("@acme/not-installed/admin", place())).toBe(
       "unknown"
     );
-    // Matched by the tsconfig alias, every target missing: proven absent.
+    // An alias only a bundler declares looks the same.
+    expect(modulePresence("~bundler-alias/admin", place())).toBe("unknown");
+  });
+
+  it("proves nothing about an alias when an extends cannot be resolved", () => {
+    put("tsconfig.json", '{ "extends": "@acme/missing-config/next.json" }');
     expect(modulePresence("@/plugins/gone/contribution", place())).toBe(
-      "absent"
+      "unknown"
     );
   });
 });

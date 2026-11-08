@@ -10,18 +10,21 @@
  * the development check all leave such a contribution out, from the one
  * answer here, and `generate:types` warns about each one by name.
  *
- * Judged as the app's TypeScript build would find the module: a relative path
- * from the map's own folder, where the map imports it as written; a
- * `compilerOptions.paths` alias of the app's `tsconfig.json`; and otherwise a
- * package in `node_modules`, its `exports` followed to the file a server build
- * loads. Only a module proven absent is left out. One this cannot judge, such
- * as an alias a bundler alone declares or a package not installed where it is
- * looked for, stays in the map as before.
+ * Only LOCAL modules are judged: a relative path from the map's own folder,
+ * where the map imports it as written, and a `compilerOptions.paths` alias of
+ * the app's `tsconfig.json`. One is left out only when no runtime file is
+ * behind it (a declaration file alone does not count, since it loads
+ * nothing). A package is never judged: telling whether its entry exists needs
+ * the app bundler's own resolver, with its conditions, entry fields and
+ * pattern rules, and a guess there either drops a valid component or keeps a
+ * broken one, so a package is left to the build. Anything this cannot judge,
+ * such as an alias only the bundler declares, stays in the map as before.
  *
  * @module plugins/codegen/unbacked-contributions
  */
 
 import { readFileSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import type { PluginDefinition } from "../plugin-context";
@@ -89,51 +92,46 @@ function moduleOf(path: string): string {
 }
 
 /**
- * Whether `specifier` reaches a file from `place`. A relative or absolute
- * path is read from the map's folder; anything else through the app's
- * `paths`, then `node_modules`.
+ * Whether `specifier` reaches a runtime file from `place`.
  *
- * `absent` only where it is proven: a relative path with no file, an
- * installed package whose resolved target has no file, or a `paths` alias
- * every target of which has no file (and no package of that name). A bare
- * specifier that no tsconfig alias matches and no installed package answers
- * is `unknown`, since an alias the app's bundler config alone declares looks
- * exactly like it.
+ * `absent` only for a local module proven to have none: a relative or
+ * absolute path, read from the map's folder, or a `paths` alias every target
+ * of which has none. A bare specifier no alias matches is `unknown`, installed
+ * or not, and so is an alias whose name is also an installed package, which
+ * TypeScript would fall back to: packages are left to the build to judge.
  */
 export function modulePresence(
   specifier: string,
   place: ModuleResolutionPlace
 ): ModulePresence {
   if (specifier.startsWith(".") || isAbsolute(specifier)) {
-    return fileFor(resolve(place.mapDir, specifier)) ? "present" : "absent";
+    return runtimeFileFor(resolve(place.mapDir, specifier))
+      ? "present"
+      : "absent";
   }
-  // A `paths` alias that reaches a file settles it. One that matches and
-  // reaches none falls through to `node_modules`, as TypeScript's own
-  // resolution does.
   const targets = aliasTargets(specifier, place.cwd);
-  if (targets.some(fileFor)) return "present";
-  const inPackage = packagePresence(specifier, place.cwd);
-  if (inPackage !== "not installed") return inPackage;
-  return targets.length > 0 ? "absent" : "unknown";
+  // No alias matches (a package, or a bundler-only alias), or the app's
+  // aliases cannot be read: not this module's to judge.
+  if (targets === undefined || targets.length === 0) return "unknown";
+  if (targets.some(runtimeFileFor)) return "present";
+  return isInstalledPackage(specifier, place.cwd) ? "unknown" : "absent";
 }
 
-/** The extensions a module file may have, in the order a bundler tries them. */
-const EXTENSIONS = [
-  ".tsx",
-  ".ts",
-  ".jsx",
-  ".js",
-  ".mts",
-  ".mjs",
-  ".cts",
-  ".cjs",
-  ".d.ts",
-];
+/** The extensions of a file that loads at run time, as the map's import does. */
+const RUNTIME_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs"];
 
-/** Whether a file is there for a module path: as written, with an extension, or as a folder's index. */
-function fileFor(base: string): boolean {
-  if (isFile(base)) return true;
-  return EXTENSIONS.some(
+/** A declaration file: types only, nothing that loads. */
+const DECLARATION_FILE = /\.d\.[cm]?ts$/;
+
+/**
+ * Whether a runtime file is there for a module path: as written, with a
+ * runtime extension, or as a folder's index. A declaration file (`.d.ts`,
+ * `.d.mts`, `.d.cts`) alone does not count, since the map's import of it
+ * would load nothing.
+ */
+function runtimeFileFor(base: string): boolean {
+  if (!DECLARATION_FILE.test(base) && isFile(base)) return true;
+  return RUNTIME_EXTENSIONS.some(
     ext => isFile(`${base}${ext}`) || isFile(join(base, `index${ext}`))
   );
 }
@@ -150,7 +148,7 @@ function isFile(path: string): boolean {
  * What a `*` pattern (`@/*`, `./admin/*`) or an exact key captures of
  * `specifier`: the text the `*` stands for (empty for an exact key), with the
  * length of the pattern's prefix, by which the most specific match is picked.
- * `undefined` when it does not match. One reader for `paths` and `exports`.
+ * `undefined` when it does not match.
  */
 function capture(
   pattern: string,
@@ -178,12 +176,14 @@ function capture(
 
 /**
  * The files an alias in the app's `compilerOptions.paths` maps a specifier
- * to, from the most specific matching pattern, as TypeScript picks one. None
- * when no pattern matches or there is no readable `tsconfig.json`.
+ * to, from the most specific matching pattern, as TypeScript picks one. An
+ * empty list when no pattern matches; `undefined` when what the app's
+ * `paths` are cannot be read (no readable `tsconfig.json`, or an `extends`
+ * this cannot resolve), so nothing about an alias is proven.
  */
-function aliasTargets(specifier: string, cwd: string): string[] {
-  const config = readPathsConfig(join(cwd, "tsconfig.json"), 0);
-  if (config === undefined) return [];
+function aliasTargets(specifier: string, cwd: string): string[] | undefined {
+  const config = readPathsConfig(join(cwd, "tsconfig.json"));
+  if (config === undefined) return undefined;
   let best:
     | { star: string; prefixLength: number; targets: string[] }
     | undefined;
@@ -201,60 +201,137 @@ function aliasTargets(specifier: string, cwd: string): string[] {
   );
 }
 
-/** A tsconfig's `paths`, with the folder its targets are read from. */
+/** A tsconfig's effective `paths`, with the folder their targets resolve against. */
 interface PathsConfig {
   readonly paths: Record<string, string[]>;
   readonly base: string;
 }
 
-/**
- * The `paths` a tsconfig declares, or the ones it inherits through a relative
- * `extends`, with the folder they resolve against (`baseUrl`, else the file
- * declaring them). `undefined` when there are none or the file cannot be read.
- */
-function readPathsConfig(file: string, depth: number): PathsConfig | undefined {
-  // A cycle of `extends` stops here rather than recursing for ever.
-  if (depth > 8) return undefined;
-  const parsed = readJsonc(file);
-  if (parsed === undefined) return undefined;
-  const declared = declaredPaths(parsed, dirname(file));
-  if (declared !== undefined) return declared;
-  const parent = extendedConfig(parsed, dirname(file));
-  return parent === undefined ? undefined : readPathsConfig(parent, depth + 1);
+/** The `paths` one tsconfig declares, with the folder of that file. */
+interface DeclaredPaths {
+  readonly paths: Record<string, string[]>;
+  readonly dir: string;
 }
 
-/** The `paths` one tsconfig declares itself, or `undefined` for none. */
-function declaredPaths(
-  parsed: Record<string, unknown>,
-  dir: string
-): PathsConfig | undefined {
-  const options = isRecord(parsed.compilerOptions)
-    ? parsed.compilerOptions
-    : {};
-  if (!isRecord(options.paths)) return undefined;
+/** One tsconfig file of an `extends` chain, as read. */
+interface ConfigFile {
+  readonly options: Record<string, unknown>;
+  readonly dir: string;
+}
+
+/**
+ * The `paths` the app's tsconfig resolves to through its `extends` chain, as
+ * TypeScript reads them: the nearest file declaring `paths` gives them, and
+ * the nearest declaring `baseUrl` gives the folder they resolve against,
+ * else the folder of the file that declares the `paths`. No `paths` anywhere
+ * is an empty map. `undefined` when a file of the chain cannot be read or an
+ * `extends` cannot be resolved before both are settled.
+ */
+function readPathsConfig(file: string): PathsConfig | undefined {
+  const settled = settledAcross(configChain(file));
+  if (settled === undefined) return undefined;
+  const { paths, base } = settled;
+  if (paths === undefined) return { paths: {}, base: dirname(file) };
+  return { paths: paths.paths, base: base ?? paths.dir };
+}
+
+/**
+ * The nearest `paths` and `baseUrl` of a chain, read until both are found.
+ * `undefined` when a file that cannot be read comes first, since it could
+ * declare either.
+ */
+function settledAcross(
+  chain: readonly (ConfigFile | undefined)[]
+): { paths: DeclaredPaths | undefined; base: string | undefined } | undefined {
+  let paths: DeclaredPaths | undefined;
+  let base: string | undefined;
+  for (const config of chain) {
+    if (config === undefined) return undefined;
+    paths ??= declaredPaths(config);
+    base ??= declaredBaseUrl(config);
+    if (paths !== undefined && base !== undefined) break;
+  }
+  return { paths, base };
+}
+
+/**
+ * The files of a tsconfig's `extends` chain, nearest first: the file, then
+ * each it extends, the later of an `extends` array before the earlier, as
+ * TypeScript gives them precedence. `undefined` stands for a file that cannot
+ * be read or an `extends` that cannot be resolved, and ends the chain.
+ */
+function configChain(file: string): (ConfigFile | undefined)[] {
+  const chain: (ConfigFile | undefined)[] = [];
+  const visit = (path: string | undefined, depth: number): boolean => {
+    // A cycle of `extends` stops here rather than recursing for ever.
+    const parsed =
+      path === undefined || depth > 8 ? undefined : readJsonc(path);
+    if (path === undefined || parsed === undefined) {
+      chain.push(undefined);
+      return false;
+    }
+    const dir = dirname(path);
+    const options = isRecord(parsed.compilerOptions)
+      ? parsed.compilerOptions
+      : {};
+    chain.push({ options, dir });
+    return extendsOf(parsed)
+      .reverse()
+      .every(spec => visit(resolveExtends(spec, dir), depth + 1));
+  };
+  visit(file, 0);
+  return chain;
+}
+
+/** The `extends` of a parsed tsconfig, as a list: one string, an array, or none. */
+function extendsOf(parsed: Record<string, unknown>): string[] {
+  const extended = parsed.extends;
+  if (typeof extended === "string") return [extended];
+  return Array.isArray(extended)
+    ? extended.filter((each): each is string => typeof each === "string")
+    : [];
+}
+
+/**
+ * The file an `extends` names, resolved as TypeScript does: a relative or
+ * absolute path from the config's folder, with `.json` added where it has no
+ * extension; a package spec through Node's resolver from that folder, as
+ * written, with `.json`, or as the package's `tsconfig.json`. `undefined`
+ * when none of those is a file.
+ */
+function resolveExtends(spec: string, dir: string): string | undefined {
+  if (spec.startsWith(".") || isAbsolute(spec)) {
+    const target = resolve(dir, spec);
+    return [target, `${target}.json`].find(isFile);
+  }
+  const require = createRequire(join(dir, "package.json"));
+  for (const candidate of [spec, `${spec}.json`, `${spec}/tsconfig.json`]) {
+    try {
+      return require.resolve(candidate);
+    } catch {
+      // Not this spelling; the next is tried.
+    }
+  }
+  return undefined;
+}
+
+/** The `paths` one tsconfig declares itself, with its folder, or `undefined` for none. */
+function declaredPaths(config: ConfigFile): DeclaredPaths | undefined {
+  if (!isRecord(config.options.paths)) return undefined;
   const paths: Record<string, string[]> = {};
-  for (const [pattern, targets] of Object.entries(options.paths)) {
+  for (const [pattern, targets] of Object.entries(config.options.paths)) {
     if (!Array.isArray(targets)) continue;
     paths[pattern] = targets.filter(
       (target): target is string => typeof target === "string"
     );
   }
-  const base =
-    typeof options.baseUrl === "string" ? resolve(dir, options.baseUrl) : dir;
-  return { paths, base };
+  return { paths, dir: config.dir };
 }
 
-/** The file a tsconfig's relative `extends` names, or `undefined` for none. */
-function extendedConfig(
-  parsed: Record<string, unknown>,
-  dir: string
-): string | undefined {
-  const extended = parsed.extends;
-  if (typeof extended !== "string" || !extended.startsWith(".")) {
-    return undefined;
-  }
-  const target = resolve(dir, extended);
-  return target.endsWith(".json") ? target : `${target}.json`;
+/** The `baseUrl` one tsconfig declares, resolved from its own folder, or `undefined`. */
+function declaredBaseUrl(config: ConfigFile): string | undefined {
+  const baseUrl = config.options.baseUrl;
+  return typeof baseUrl === "string" ? resolve(config.dir, baseUrl) : undefined;
 }
 
 /**
@@ -329,82 +406,26 @@ function withoutTrailingCommas(text: string): string {
 }
 
 /**
- * A bare specifier's package name and the subpath after it (`""` for the
- * package itself), or `undefined` for one that names no package.
+ * The package a bare specifier names (`@scope/name` or `name`), or
+ * `undefined` for one that names no package.
  */
-function packageParts(
-  specifier: string
-): { name: string; subpath: string } | undefined {
+function packageNameOf(specifier: string): string | undefined {
   const parts = specifier.split("/");
   const nameLength = specifier.startsWith("@") ? 2 : 1;
   if (parts.length < nameLength || parts.some(part => part === "")) {
     return undefined;
   }
-  return {
-    name: parts.slice(0, nameLength).join("/"),
-    subpath: parts.slice(nameLength).join("/"),
-  };
+  return parts.slice(0, nameLength).join("/");
 }
 
 /**
- * Whether a bare specifier reaches a package file from `cwd`: the package
- * found in a `node_modules` on the way up, then its `exports` (or, without
- * them, a file at the subpath). `not installed` where no `node_modules` on
- * the way up holds a package of that name, which proves nothing alone.
+ * Whether a bare specifier names a package installed in a `node_modules` on
+ * the way up from `cwd`. Only asked of an alias whose targets are missing:
+ * TypeScript then falls back to the package, which is left to the build.
  */
-function packagePresence(
-  specifier: string,
-  cwd: string
-): ModulePresence | "not installed" {
-  const parts = packageParts(specifier);
-  if (parts === undefined) return "unknown";
-  const packageDir = findPackageDir(parts.name, cwd);
-  if (packageDir === undefined) return "not installed";
-  const manifest = readJsonc(join(packageDir, "package.json"));
-  if (manifest === undefined) return "unknown";
-  return presenceInPackage(packageDir, manifest, parts.subpath);
-}
-
-/** Whether one installed package reaches a file for `subpath`. */
-function presenceInPackage(
-  packageDir: string,
-  manifest: Record<string, unknown>,
-  subpath: string
-): ModulePresence {
-  const exported = manifest.exports;
-  return exported === undefined || exported === null
-    ? presenceWithoutExports(packageDir, manifest, subpath)
-    : presenceThroughExports(packageDir, exported, subpath);
-}
-
-/**
- * A package with an `exports` map: the subpath followed to the file a server
- * build loads, which must be there. A declared key alone proves nothing, since
- * an unbuilt package declares targets it has not written yet.
- */
-function presenceThroughExports(
-  packageDir: string,
-  exported: unknown,
-  subpath: string
-): ModulePresence {
-  const target = exportTarget(exported, subpath === "" ? "." : `./${subpath}`);
-  if (target === "absent" || target === "unknown") return target;
-  return isFile(join(packageDir, target.file)) ? "present" : "absent";
-}
-
-/**
- * A package without `exports`: its `main` (or `index`) for the package
- * itself, and the subpath as a file under it otherwise, as a bundler reads
- * such a package.
- */
-function presenceWithoutExports(
-  packageDir: string,
-  manifest: Record<string, unknown>,
-  subpath: string
-): ModulePresence {
-  const main = typeof manifest.main === "string" ? manifest.main : "index";
-  const file = join(packageDir, subpath === "" ? main : subpath);
-  return fileFor(file) ? "present" : "absent";
+function isInstalledPackage(specifier: string, cwd: string): boolean {
+  const name = packageNameOf(specifier);
+  return name !== undefined && findPackageDir(name, cwd) !== undefined;
 }
 
 /** The folder of package `name` in the nearest `node_modules` from `cwd` up. */
@@ -417,106 +438,6 @@ function findPackageDir(name: string, cwd: string): string | undefined {
     if (parent === dir) return undefined;
     dir = parent;
   }
-}
-
-/**
- * The conditions a server build of the app resolves an export with, as
- * Node's own resolution does. `types` names a declaration, never the module
- * the map's import loads, so it is not among them.
- */
-const SERVER_CONDITIONS = new Set(["node", "import", "default"]);
-
-/** An export resolved to a file, relative to its package. */
-interface ExportFile {
-  readonly file: string;
-}
-
-/**
- * The file a package's `exports` sends `key` (`.` or `./sub`) to, relative to
- * the package: the exact key, else the `*` pattern with the longest prefix,
- * as Node picks one. `absent` where the map names no such key or maps it to
- * `null`, so it cannot be imported; `unknown` where the target is in a shape
- * this does not follow.
- */
-function exportTarget(
-  exported: unknown,
-  key: string
-): ExportFile | "absent" | "unknown" {
-  // A string, an array or a conditions object (`{ import, types }`) exports
-  // the package itself, and nothing else.
-  const itself = () => (key === "." ? conditionTarget(exported, "") : "absent");
-  if (!isRecord(exported)) return itself();
-  const subpaths = Object.keys(exported).filter(each => each.startsWith("."));
-  if (subpaths.length === 0) return itself();
-  let best: { pattern: string; star: string; prefixLength: number } | undefined;
-  for (const pattern of subpaths) {
-    const found = capture(pattern, key);
-    if (found === undefined) continue;
-    // An exact key wins over every pattern.
-    if (!pattern.includes("*")) return conditionTarget(exported[pattern], "");
-    if (best === undefined || found.prefixLength > best.prefixLength) {
-      best = { pattern, ...found };
-    }
-  }
-  return best === undefined
-    ? "absent"
-    : conditionTarget(exported[best.pattern], best.star);
-}
-
-/**
- * One export's target, followed through condition objects in their own key
- * order and through a fallback array to the first entry that resolves, with
- * the `*` the key captured put in its place.
- */
-function conditionTarget(
-  target: unknown,
-  star: string
-): ExportFile | "absent" | "unknown" {
-  if (target === null) return "absent";
-  if (typeof target === "string") return pathTarget(target, star);
-  if (Array.isArray(target)) return fallbackTarget(target, star);
-  return isRecord(target) ? conditionsTarget(target, star) : "unknown";
-}
-
-/**
- * A target written as a path: a file in the package only when it starts with
- * `./`, as Node requires of an export target; anything else is not followed.
- */
-function pathTarget(target: string, star: string): ExportFile | "unknown" {
-  return target.startsWith("./")
-    ? { file: target.split("*").join(star) }
-    : "unknown";
-}
-
-/**
- * A fallback array: its first entry that resolves, in order, as Node tries
- * them. `unknown` when none does.
- */
-function fallbackTarget(
-  targets: readonly unknown[],
-  star: string
-): ExportFile | "absent" | "unknown" {
-  for (const each of targets) {
-    const resolved = conditionTarget(each, star);
-    if (resolved !== "unknown") return resolved;
-  }
-  return "unknown";
-}
-
-/**
- * A conditions object: the first condition, in its own key order, that a
- * server build resolves (`SERVER_CONDITIONS`). `unknown` when it offers none.
- */
-function conditionsTarget(
-  conditions: Record<string, unknown>,
-  star: string
-): ExportFile | "absent" | "unknown" {
-  const chosen = Object.keys(conditions).find(each =>
-    SERVER_CONDITIONS.has(each)
-  );
-  return chosen === undefined
-    ? "unknown"
-    : conditionTarget(conditions[chosen], star);
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
