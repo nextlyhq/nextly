@@ -89,10 +89,14 @@ function chipOf(entry: PreviewedEntry, unavailable = false): PreviewChip {
 function previewOf(
   previewed: PreviewedEntry,
   latest: PreviewedEntry,
-  chip: PreviewChip | undefined = undefined
+  chip: PreviewChip | undefined = undefined,
+  /** The collection the reads are for, which their scope names. */
+  collection = "articles"
 ): TemplatePreview {
+  // Whose reads: the collection, language and person, as the hook spells it.
+  const scope = JSON.stringify([collection, null, "u1"]);
   return {
-    collection: "articles",
+    collection,
     fixed: false,
     labels: { singular: "Article", plural: "Articles" },
     blocksFields: [{ name: "body", label: "Body" }],
@@ -101,6 +105,7 @@ function previewOf(
     chip,
     previewed,
     latest,
+    scope,
     choose: vi.fn(),
     step: vi.fn(() => undefined),
     refresh: vi.fn(),
@@ -234,5 +239,22 @@ describe("a refresh whose entry read answers before the canvas's", () => {
       "Revised paragraph",
     ]);
     expect(result.current.applied?.hidden).toEqual([]);
+  });
+});
+
+describe("a change of collection that names the same entry id", () => {
+  it("is a switch, not a refresh: the old entry's Body is not kept", () => {
+    const { result, rerender } = drawnOver(NAMED);
+    // Another collection's entry under the same id, read but not named yet.
+    rerender({
+      preview: previewOf(LOADING, ARTICLE, chipOf(ARTICLE), "pages"),
+    });
+    expect(result.current.page.composed).toBe(TEMPLATE);
+  });
+
+  it("keeps the Body through a refresh within the same collection (the control)", () => {
+    const { result, rerender } = drawnOver(NAMED);
+    rerender({ preview: previewOf(LOADING, ARTICLE, chipOf(ARTICLE)) });
+    expect(drawnIn(result.current.page.composed)).toBe(1);
   });
 });

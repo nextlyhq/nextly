@@ -98,6 +98,12 @@ export interface TemplatePreview {
    * refresh does not take the entry's blocks out of the page they read.
    */
   readonly latest: PreviewedEntry;
+  /**
+   * Whose reads the preview holds: the collection, language and person they
+   * were asked for, as one value. A refresh reads again within one scope; a
+   * change of any of the three is a switch, whatever entry id it names.
+   */
+  readonly scope: string;
   /** Preview `entry`, a row of the list or of a search. */
   readonly choose: (entry: PreviewEntryItem) => void;
   /**
@@ -165,6 +171,19 @@ export function steppedEntry(
   return item === undefined || item.id === id ? undefined : item;
 }
 
+/**
+ * Whose reads these are, as one value: the collection, the language and the
+ * person they are asked for. Every read here is kept under it, so another
+ * collection's, language's or person's answer never stands in for this one.
+ */
+function readScopeOf(args: TemplatePreviewArgs): string {
+  return JSON.stringify([
+    args.collection ?? null,
+    args.locale ?? null,
+    args.userId,
+  ]);
+}
+
 /** What the list's answer says of the collection besides its entries. */
 interface ListFacts {
   readonly labels?: PreviewCollectionLabels;
@@ -181,7 +200,7 @@ function usePreviewList(
     readonly key: string;
     readonly list: PreviewList & ListFacts;
   } | null>(null);
-  const key = JSON.stringify([collection ?? null, locale ?? null, userId]);
+  const key = readScopeOf(args);
   useEffect(() => {
     // Asked of whoever the session names; the answer is kept under that
     // person, so another's never stands in for theirs.
@@ -236,7 +255,7 @@ function useEntryRead(
   const [read, setRead] = useState<
     (EntryRead & { readonly key: string }) | undefined
   >(undefined);
-  const key = JSON.stringify([collection ?? null, locale ?? null, userId]);
+  const key = readScopeOf(args);
   useEffect(() => {
     if (collection === undefined || id === undefined) return;
     let current = true;
@@ -318,6 +337,7 @@ export function useTemplatePreview(args: TemplatePreviewArgs): TemplatePreview {
     chip,
     previewed,
     latest,
+    scope: readScopeOf(args),
     choose,
     step,
     refresh,
@@ -347,8 +367,14 @@ function roundPreviewed(
  */
 const CANVAS_LOADING: PreviewedEntry = { kind: "none", reason: "loading" };
 
-/** An entry the strip has named: what the page settles on. */
-type NamedEntry = Extract<PreviewedEntry, { readonly kind: "entry" }>;
+/**
+ * An entry the strip has named, and whose reads named it (`scope`): what the
+ * page settles on.
+ */
+interface ShownEntry {
+  readonly entry: Extract<PreviewedEntry, { readonly kind: "entry" }>;
+  readonly scope: string;
+}
 
 /**
  * The entry the editor's page goes on drawing, and judging conditions with,
@@ -356,50 +382,64 @@ type NamedEntry = Extract<PreviewedEntry, { readonly kind: "entry" }>;
  * last named (`shown`).
  *
  * The entry named, once named. While a REFRESH of that same entry is read
- * again (the strip names no entry yet, and still names that one in its
- * chip), the entry as it was last named, so the page keeps its blocks and
- * the conditions it was judged by until the strip names the refreshed one:
- * its blocks and conditions then change with the canvas's bound values,
- * never before them, whatever the entry's own read has answered meanwhile.
- * Anything else as the strip says it: a SWITCH to another entry draws none
- * of the new entry until both its reads have answered, and an entry whose
- * read failed draws none at all.
+ * again (the strip names no entry yet, still names that one in its chip,
+ * and reads for the same collection, language and person), the entry as it
+ * was last named, so the page keeps its blocks and the conditions it was
+ * judged by until the strip names the refreshed one: they then change with
+ * the canvas's bound values, never before them, whatever the entry's own
+ * read has answered meanwhile. Anything else as the strip says it: a SWITCH
+ * to another entry, or to another collection, language or person, draws
+ * none of it until both its reads have answered, and an entry whose read
+ * failed draws none at all.
  */
 function settledEntry(
   preview: TemplatePreview | undefined,
-  shown: NamedEntry | undefined
+  shown: ShownEntry | undefined
 ): PreviewedEntry | undefined {
   if (preview === undefined) return undefined;
   const { previewed } = preview;
   const reading = previewed.kind === "none" && previewed.reason === "loading";
-  return reading && shown !== undefined && rereads(preview, shown.id)
-    ? shown
+  return reading && shown !== undefined && rereads(preview, shown)
+    ? shown.entry
     : previewed;
 }
 
 /**
- * Whether the preview reads again the entry it last named (`shownId`): the
- * chip still names it, readable.
+ * Whether the preview reads again the entry it last named (`shown`): within
+ * the same scope, the chip still names it, readable.
  */
-function rereads(preview: TemplatePreview, shownId: string): boolean {
+function rereads(preview: TemplatePreview, shown: ShownEntry): boolean {
   const { chip } = preview;
-  return chip !== undefined && !chip.unavailable && chip.id === shownId;
+  return (
+    preview.scope === shown.scope &&
+    chip !== undefined &&
+    !chip.unavailable &&
+    chip.id === shown.entry.id
+  );
 }
 
 /**
  * {@link settledEntry} for the preview as it changes: the entry it last
- * named is kept from render to render, so a refresh of that entry is told
- * apart from a switch to another, and is drawn as named until the strip
- * names it again.
+ * named, and whose reads named it, are kept from render to render, so a
+ * refresh of that entry is told apart from a switch to another, and is
+ * drawn as named until the strip names it again.
  */
 export function useSettledEntry(
   preview: TemplatePreview | undefined
 ): PreviewedEntry | undefined {
-  const named =
-    preview?.previewed.kind === "entry" ? preview.previewed : undefined;
+  const named: ShownEntry | undefined =
+    preview?.previewed.kind === "entry"
+      ? { entry: preview.previewed, scope: preview.scope }
+      : undefined;
   const [shown, setShown] = useState(named);
-  // Kept as soon as the strip names an entry, in this very render.
-  if (named !== undefined && named !== shown) setShown(named);
+  // Kept as soon as the strip names an entry, in this very render: a new
+  // entry, or the same one named for another scope.
+  if (
+    named !== undefined &&
+    (named.entry !== shown?.entry || named.scope !== shown.scope)
+  ) {
+    setShown(named);
+  }
   return settledEntry(preview, named ?? shown);
 }
 
