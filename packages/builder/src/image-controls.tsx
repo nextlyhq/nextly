@@ -561,24 +561,30 @@ function BoundPictureAltNote({
 }: BoundPicture): React.JSX.Element {
   const field = useBoundFieldOf(binding, document, nodeId, services);
   // A field visitors can't read never fills the published picture: they see
-  // the binding's fallback, or the block's own image, which the note under
-  // the group names. Whatever the field's kind, its alt text is not theirs.
-  const unreadable = useVisitorUnreadable(nodeId).some(
+  // the binding's fallback where it keeps one, else the block's own image, as
+  // the note under the group says. Whatever the field's kind, its alt text
+  // is not theirs.
+  const unreadable = useVisitorUnreadable(nodeId).find(
     each => each.prop === prop
   );
-  if (unreadable) {
+  if (unreadable !== undefined) {
     return (
       <p className="nx-inspector__note" data-bound-picture="unreadable">
-        Visitors can&apos;t read the bound field, so they see its fallback.
-        Choose Custom to describe the image they see.
+        Visitors can&apos;t read the bound field, so they see{" "}
+        {instead(unreadable.fallback !== undefined)}. Choose Custom to describe
+        the image they see.
       </p>
     );
   }
   const kind = field === undefined ? undefined : bindingKindOf(field);
   if (kind === "media") {
+    // The field's type says it holds a file, not that every entry fills it:
+    // an empty one shows what the binding falls back to, so the note says so.
     return (
       <p className="nx-inspector__note" data-bound-picture="media">
         The image comes from a bound library file, so its own alt text is used.
+        Where the field is empty, visitors see{" "}
+        {instead("fallback" in binding && binding.fallback !== undefined)}.
         Choose Custom to describe it here instead.
       </p>
     );
@@ -598,6 +604,15 @@ function BoundPictureAltNote({
       describe it.
     </p>
   );
+}
+
+/**
+ * What visitors see in place of a bound picture the field doesn't fill: the
+ * binding's fallback where it keeps one, else the block's own image, as the
+ * page resolves it.
+ */
+function instead(hasFallback: boolean): string {
+  return hasFallback ? "its fallback" : "the block's own image";
 }
 
 /** What Decorative says under the menu, alt text kept beside it included. */

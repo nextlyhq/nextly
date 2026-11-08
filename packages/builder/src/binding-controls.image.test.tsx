@@ -344,6 +344,11 @@ describe("a bound image", () => {
     mount({ mediaId: { $bind: "cover" } });
     const note = await screen.findByText(/comes from a bound library file/);
     expect(note.textContent).toMatch(/its own alt text is used/);
+    // An entry may leave the field empty: with no fallback kept, the block's
+    // own image is what visitors see then.
+    expect(note.textContent).toMatch(
+      /Where the field is empty, visitors see the block's own image\./
+    );
     expect(screen.queryByText(/No library file is chosen/)).toBeNull();
     // Known to be a file, by the field's type: no hedging about addresses.
     expect(note.textContent).not.toMatch(/address/);
@@ -395,6 +400,26 @@ describe("a bound image", () => {
     // The control is the upload test above: the same field, readable, gets
     // the library-file note.
     expect(screen.queryByText(/comes from a bound library file/)).toBeNull();
+  });
+
+  it("says an empty upload field shows the binding's fallback, where it keeps one", async () => {
+    // The control for the empty-field clause above: a fallback kept.
+    mount({ mediaId: { $bind: "cover", fallback: ADDRESS } });
+    const note = await screen.findByText(/comes from a bound library file/);
+    expect(note.textContent).toMatch(
+      /Where the field is empty, visitors see its fallback\./
+    );
+  });
+
+  it("says visitors see the block's own image where an unreadable binding keeps no fallback", async () => {
+    // The same unreadable field as above, with no fallback: the page keeps
+    // the block's own image, so the note must not name a fallback.
+    mount({ mediaId: { $bind: "cover" } }, undefined, SOURCES, {}, [
+      { prop: "mediaId", path: "cover" },
+    ]);
+    const note = await screen.findByText(/Visitors can't read the bound field/);
+    expect(note.textContent).toMatch(/they see the block's own image\./);
+    expect(note.textContent).not.toMatch(/fallback/);
   });
 
   it("reads the binding sources once for the chip and the alt note together", async () => {
