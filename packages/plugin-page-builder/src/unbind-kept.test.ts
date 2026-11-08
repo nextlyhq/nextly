@@ -342,7 +342,8 @@ describe("an image bound into a collection other than the media library", () => 
       type: "core/heading",
       version: 1,
       props: {},
-      bindings: { text: { $bind: "startsAt" } },
+      // A date reaches a text prop only through a format.
+      bindings: { text: { $bind: "startsAt", format: { type: "date" } } },
     };
     const runOf = (shape: Record<string, unknown>) =>
       createBindingRun({

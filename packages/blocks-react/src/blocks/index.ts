@@ -34,6 +34,7 @@ import { column } from "./column";
 import { columns } from "./columns";
 import { divider } from "./divider";
 import { embed } from "./embed";
+import { entryContent } from "./entry-content";
 import { form } from "./form";
 import { gallery } from "./gallery";
 import { heading } from "./heading";
@@ -45,6 +46,7 @@ import { quote } from "./quote";
 import { richText } from "./rich-text";
 import { section } from "./section";
 import { spacer } from "./spacer";
+import { tableOfContents } from "./table-of-contents";
 
 // `ACCORDION_BLOCK` / `ACCORDION_ITEM_BLOCK` are deliberately NOT re-exported,
 // for the reason recorded below for the columns pair: they exist so the two
@@ -67,6 +69,9 @@ export { column } from "./column";
 export { columns } from "./columns";
 export { divider, type DividerProps } from "./divider";
 export { embed, type EmbedProps } from "./embed";
+// The Entry content block: where a collection's template draws the entry's
+// own blocks content.
+export { entryContent, type EntryContentProps } from "./entry-content";
 export { icon, type IconProps } from "./icon";
 export {
   form,
@@ -100,6 +105,12 @@ export { richText, type RichTextBlockProps } from "./rich-text";
 export type { RichTextValue } from "@nextlyhq/blocks-engine";
 export { section } from "./section";
 export { spacer, type SpacerProps } from "./spacer";
+export {
+  tableOfContents,
+  TABLE_OF_CONTENTS_DEPTHS,
+  type TableOfContentsDepth,
+  type TableOfContentsProps,
+} from "./table-of-contents";
 export {
   CONTAINER_TAGS,
   CONTENT_WIDTH_CLASS,
@@ -170,6 +181,7 @@ type CoreBlockList = [
   typeof heading,
   typeof paragraph,
   typeof richText,
+  typeof tableOfContents,
   typeof list,
   typeof image,
   typeof button,
@@ -180,6 +192,7 @@ type CoreBlockList = [
   typeof embed,
   typeof icon,
   typeof collectionLoop,
+  typeof entryContent,
 ];
 
 export const coreBlocks: CoreBlockList[number][] = [
@@ -204,6 +217,7 @@ export const coreBlocks: CoreBlockList[number][] = [
   heading,
   paragraph,
   richText,
+  tableOfContents,
   list,
   image,
   button,
@@ -215,4 +229,7 @@ export const coreBlocks: CoreBlockList[number][] = [
   embed,
   icon,
   collectionLoop,
+  // Holds no child of its own to meet first: the entry's blocks are composed
+  // into it for drawing, never stored.
+  entryContent,
 ] satisfies CoreBlockList;

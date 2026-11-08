@@ -166,6 +166,15 @@ export function entryCreatePath(collection: string): string {
 }
 
 /**
+ * The admin's edit screen for entry `id` of `collection`, as its own route
+ * table spells it (`/admin/collections/<slug>/<id>`): where an Entry content
+ * block's Open opens the entry whose content it draws.
+ */
+export function entryEditPath(collection: string, id: string): string {
+  return `/admin/collections/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`;
+}
+
+/**
  * The query key naming the section the builder opens at.
  *
  * The admin keeps the same key in its list of a view's own address keys, so

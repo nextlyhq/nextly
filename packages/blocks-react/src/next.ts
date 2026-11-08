@@ -16,6 +16,7 @@
 import {
   bindingDemand,
   calendarDayIn,
+  composeEntryContent,
   mapForest,
   deriveSeoFromDocument,
   hashId,
@@ -994,6 +995,81 @@ function emptyDocument(): BlockDocument {
  * the renderer already repairs a malformed document forgivingly, and a second
  * opinion about shape in front of it could only disagree with the first.
  */
+/**
+ * Each entry's drawn document, by the field it is read from, composed once
+ * per entry the route resolved: its metadata, its list's pages and its render
+ * are asked of the same entry, and so of one composition.
+ */
+const DRAWN_DOCUMENTS = new WeakMap<ContentEntry, Map<string, BlockDocument>>();
+
+/**
+ * The document a route draws `entry` with: what `field` stores, with the
+ * entry's own blocks content composed into a template's Entry content block.
+ *
+ * Read from the entry as the route read it, with the public's access, so a
+ * field the public may not read is absent and draws nothing, and nothing of
+ * it reaches the page. A page that is no template is drawn as it is stored.
+ * Composed before anything reads the page, so the entry's blocks are drawn,
+ * styled, bound, paged and described with the template's, as one document.
+ * Reads nothing itself: it is the entry the route already holds.
+ */
+function drawnDocumentOf(
+  entry: ContentEntry,
+  field: string,
+  context: RenderContext,
+  config: BlocksPageConfig
+): BlockDocument {
+  let byField = DRAWN_DOCUMENTS.get(entry);
+  const kept = byField?.get(field);
+  if (kept !== undefined) return kept;
+  const document = composedFor(entry, field, context, config);
+  if (byField === undefined) {
+    byField = new Map();
+    DRAWN_DOCUMENTS.set(entry, byField);
+  }
+  byField.set(field, document);
+  return document;
+}
+
+/**
+ * The document a route draws `entry` with, composed under the page's own
+ * limits, so the entry's blocks are cut where the page is; given the
+ * definitions of the components the page places, the template is charged
+ * what it draws once they are expanded, so every instance still resolves.
+ */
+function composedFor(
+  entry: ContentEntry,
+  field: string,
+  context: RenderContext,
+  config: BlocksPageConfig,
+  definitions?: DefinitionsById
+): BlockDocument {
+  const { maxNodes, maxDepth } = effectiveLimits(config);
+  return composeEntryContent(readDocument(entry, field, context), {
+    valueOf: name => entry[name],
+    maxNodes,
+    maxDepth,
+    ...(definitions === undefined ? {} : { definitions }),
+  });
+}
+
+/**
+ * The drawn document fitted to the definitions read for it (`composedFor`),
+ * for `readPageInputs`' `fit`: the page as first drawn where it places no
+ * component, so nothing is composed twice for a page that need not be.
+ */
+function fittedFor(
+  entry: ContentEntry,
+  field: string,
+  context: RenderContext,
+  config: BlocksPageConfig
+): (definitions: DefinitionsById) => BlockDocument {
+  return definitions =>
+    definitions.size === 0
+      ? drawnDocumentOf(entry, field, context, config)
+      : composedFor(entry, field, context, config, definitions);
+}
+
 function readDocument(
   entry: ContentEntry,
   field: string,
@@ -3567,7 +3643,9 @@ function blocksRouteConfig(
     ...(metadata
       ? {
           buildMetadata: async (entry, context) => {
-            const document = readDocument(entry, field, context);
+            // The page as it is drawn, so its title, description and image
+            // come from the entry's own content where a template draws it.
+            const document = drawnDocumentOf(entry, field, context, config);
             // Its own budget: metadata generation and the render are separate
             // invocations, so sharing one counter would let the page's reads
             // starve the preview image, or the reverse. Shared BETWEEN the two
@@ -3593,12 +3671,14 @@ function blocksRouteConfig(
                 budget,
               }),
               document,
+              // Fitted to the components it places, as the render is.
+              fit: fittedFor(entry, field, context, config),
               entrySource,
               onIssues: bindingIssueLog(context),
               regionsOnlyWhenBound: true,
             });
             const derived = await derivePageSeo(
-              document,
+              inputs.document,
               resolver,
               mediaResolver(config, readerFor(config), budget).resolve,
               // A later page of the page's list is its own address, so its
@@ -3622,10 +3702,12 @@ function blocksRouteConfig(
     // terms for comparing days, so the route never serves a page the list's
     // own links do not name, nor refuses one they do.
     listPages: async (entry, context) => {
-      const document = readDocument(entry, field, context);
-      // Nothing is read for a page whose stored document neither splits a
-      // list into pages nor binds a list's split: composing it cannot add
-      // one its own nodes do not hold.
+      // The page as it is drawn: a list split into pages inside the entry's
+      // own content, which a template draws, is the page's list.
+      const document = drawnDocumentOf(entry, field, context, config);
+      // Nothing is read for a page whose drawn document neither splits a
+      // list into pages nor binds a list's split: composing it with its
+      // components cannot add one its own nodes do not hold.
       if (
         mayPaginateList(document.nodes, effectiveLimits(config).maxNodes) ===
         undefined
@@ -3651,17 +3733,20 @@ function blocksRouteConfig(
         window: listWindow,
         budget,
       });
-      const { page, bindings, presented } = await readPageInputs({
+      const inputs = await readPageInputs({
         terms,
         sources,
         document,
+        // Fitted to the components it places, as the render is.
+        fit: fittedFor(entry, field, context, config),
         entrySource,
         onIssues: bindingIssueLog(context),
       });
+      const { page, bindings, presented } = inputs;
       // The list as the render draws it: composed with its components'
       // definitions, repaired and held to the caps.
       const list = pagedListOf(
-        document,
+        inputs.document,
         page,
         effectiveLimits(config).maxNodes,
         bindings === undefined
@@ -3711,7 +3796,10 @@ function blocksRouteConfig(
         : listPagesOf(list.props, counted.matching);
     },
     render: async (entry, context) => {
-      const document = readDocument(entry, field, context);
+      // The page as it is drawn: a template's with the entry's own blocks
+      // content composed in (`drawnDocumentOf`), fitted below to the
+      // components it places once their definitions are read.
+      const drawnFirst = drawnDocumentOf(entry, field, context, config);
       const resolved = styles ? await styles(entry, context) : undefined;
 
       // Built from the reader the ROUTE resolved this entry through, handed
@@ -3833,14 +3921,23 @@ function blocksRouteConfig(
           window: listWindow,
           budget,
         }),
-        document,
+        document: drawnFirst,
+        // Fitted to the components it places: the entry's content is cut to
+        // the room their expansion leaves, so every placement resolves.
+        fit: fittedFor(entry, field, context, config),
         entrySource,
         where: context,
         budget,
         onIssues: bindingIssueLog(context),
       });
-      const { definitions, page, regions, regionDefinitions, bindings } =
-        staged;
+      const {
+        document,
+        definitions,
+        page,
+        regions,
+        regionDefinitions,
+        bindings,
+      } = staged;
       drawnPage.number = staged.listPage?.page;
       // What a list reads ahead for its entries, through the page's own
       // reads: relations as the public reads them, links as the blocks drawn

@@ -57,6 +57,50 @@ export type PreviewedEntry =
     };
 
 /**
+ * One top-level blocks field of a template's collection: what an Entry
+ * content block may draw.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export interface PreviewedBlocksField {
+  /** The field's name, which the block stores. */
+  readonly name: string;
+  /** What the admin calls it: "Body". */
+  readonly label: string;
+}
+
+/**
+ * The collection a template draws, as its editor names it: its names, its
+ * top-level blocks fields, and where one of its entries is edited.
+ *
+ * - `blocksFields` is `undefined` while they are not known (the first
+ *   answer is on its way, or the author may not read the collection), so a
+ *   choice is never called removed for want of an answer.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export interface PreviewedCollection {
+  /** The collection's slug. */
+  readonly slug: string;
+  /** Its name for one entry, as a sentence reads it: "post". */
+  readonly singular: string;
+  /** Its name, as a heading reads it: "Posts". */
+  readonly plural: string;
+  /** Its top-level blocks fields, in the collection's order. */
+  readonly blocksFields: readonly PreviewedBlocksField[] | undefined;
+  /**
+   * What a field of the collection is called, by its name: its label where
+   * it is one of {@link blocksFields}, else its name in words as the admin
+   * words a key ("membersOnly" is "Members Only"), for a field the
+   * collection no longer has. The one name a field is shown by, on the
+   * canvas, in Layers and in the inspector alike.
+   */
+  readonly fieldLabel: (name: string) => string;
+  /** The admin address where entry `id` is edited. */
+  readonly entryHref: (id: string) => string;
+}
+
+/**
  * The keys that preview the next and the previous entry of a template's
  * collection: Shift with the block-move chord, so the two read as related
  * and never collide (a chord's modifiers are matched exactly).
@@ -76,6 +120,11 @@ const PreviewedEntryContext = createContext<PreviewedEntry | undefined>(
   undefined
 );
 
+/** No provider, or one that names no collection: not a template. */
+const PreviewedCollectionContext = createContext<
+  PreviewedCollection | undefined
+>(undefined);
+
 /**
  * Hands the editor the entry a template is previewed with. The host mounts
  * it only around a template's editor, so a page, a component or a Layout
@@ -85,14 +134,22 @@ const PreviewedEntryContext = createContext<PreviewedEntry | undefined>(
  */
 export function PreviewedEntryProvider({
   value,
+  collection,
   children,
 }: {
   readonly value: PreviewedEntry;
+  /**
+   * The template's collection, for what reads its fields: an Entry content
+   * block's mark, its inspector and its canvas notes.
+   */
+  readonly collection?: PreviewedCollection | undefined;
   readonly children?: ReactNode;
 }): React.JSX.Element {
   return (
     <PreviewedEntryContext.Provider value={value}>
-      {children}
+      <PreviewedCollectionContext.Provider value={collection}>
+        {children}
+      </PreviewedCollectionContext.Provider>
     </PreviewedEntryContext.Provider>
   );
 }
@@ -106,3 +163,62 @@ export function PreviewedEntryProvider({
 export function usePreviewedEntry(): PreviewedEntry | undefined {
   return useContext(PreviewedEntryContext);
 }
+
+/**
+ * The collection the template being edited draws, or `undefined` where the
+ * document is not a template, or its editor names none.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export function usePreviewedCollection(): PreviewedCollection | undefined {
+  return useContext(PreviewedCollectionContext);
+}
+
+/**
+ * The words an Entry content block is named by on the canvas and in
+ * Layers, with the field it draws: "Entry content · Body", or the field's
+ * name where the collection's fields are not known.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export function entryContentLabel(
+  field: string | undefined,
+  collection: PreviewedCollection | undefined
+): string {
+  if (field === undefined) return ENTRY_CONTENT_NAME;
+  return `${ENTRY_CONTENT_NAME} · ${fieldName(field, collection)}`;
+}
+
+/**
+ * The name a field an Entry content block draws is shown by: the
+ * collection's (`PreviewedCollection.fieldLabel`), or the field's own name
+ * where no template's collection is known.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export function fieldName(
+  field: string,
+  collection: PreviewedCollection | undefined
+): string {
+  return collection?.fieldLabel(field) ?? field;
+}
+
+/**
+ * Whether the collection is known to have no top-level blocks field named
+ * `field`. Never while its fields are not known, so a choice is not called
+ * removed for want of an answer.
+ */
+export function entryFieldRemoved(
+  field: string | undefined,
+  collection: PreviewedCollection | undefined
+): boolean {
+  const fields = collection?.blocksFields;
+  return (
+    field !== undefined &&
+    fields !== undefined &&
+    !fields.some(each => each.name === field)
+  );
+}
+
+/** The block's own name, as the Add panel reads it. */
+const ENTRY_CONTENT_NAME = "Entry content";

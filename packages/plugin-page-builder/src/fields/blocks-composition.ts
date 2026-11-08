@@ -100,6 +100,7 @@ import {
   type DeclaredShapesReader,
 } from "./binding-judgement";
 import { isForest } from "./blocks-document";
+import type { EntryBlocksFieldsReader } from "./entry-content-judgement";
 import {
   LAYERS_LOCK_CHANGED,
   placedLockMessage,
@@ -292,6 +293,14 @@ export interface CompositionSetup {
    * than the templates collection. Absent, a template is judged as any entry.
    */
   readonly templates?: TemplateTargets;
+  /**
+   * A collection's top-level blocks fields, for judging which one a
+   * template's Entry content block draws. Absent, its field is judged by
+   * its shape alone.
+   *
+   * @experimental Settles when collection templates ship.
+   */
+  readonly entryBlocksFields?: EntryBlocksFieldsReader;
 }
 
 /** What the site defines that a page refers to by id. */
@@ -1043,7 +1052,12 @@ async function judgeComposedLists(args: {
       ...(args.setup.namedQueries === undefined
         ? {}
         : { namedQueries: args.setup.namedQueries }),
-    }
+      // A template's, against the collection it draws.
+      ...(args.setup.templates === undefined
+        ? {}
+        : { templates: args.setup.templates }),
+    },
+    args.data
   );
   for (const issue of bound) args.report.add(issue.code, issue.message);
 }

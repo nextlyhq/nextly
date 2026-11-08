@@ -30,6 +30,8 @@
  */
 
 import {
+  entryContentFieldOf,
+  entryContentPlacements,
   findNode,
   isPlainRecord,
   PAGE_ROOT_CLASS,
@@ -52,6 +54,7 @@ import {
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 import {
+  ENTRY_CONTENT_DRAWN_ATTRIBUTE,
   INSTANCE_ATTRIBUTE,
   layoutPartSheets,
   LIST_ACTION_ATTRIBUTE,
@@ -98,6 +101,10 @@ import { withConditionHiddenBlock } from "./condition-hidden-block";
 import { isElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
 import {
+  useAppliedDrawing,
+  useEntryContentDrawing,
+} from "./entry-content-canvas";
+import {
   canvasContentRect,
   canvasScroller,
   overlaySpaceOf,
@@ -108,6 +115,11 @@ import { useHoveredBlockSetter } from "./hovered-block";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
 import { useNearestThemeMarker } from "./nearest-theme";
+import {
+  entryContentLabel,
+  usePreviewedCollection,
+  type PreviewedCollection,
+} from "./previewed-entry";
 import { RefusalNotice } from "./refusal-notice";
 import { nodeElements } from "./rendered-nodes";
 import { observeRenderedTree } from "./rendered-tree";
@@ -316,6 +328,94 @@ function revealedDefinitions(
     if (definition !== undefined) next.set(id, revealConditioned(definition));
   }
   return next;
+}
+
+/**
+ * Marks an Entry content block, with the words its at-rest mark's tab reads:
+ * "Entry content · Body". The block draws the entry's own content rather
+ * than the template's, which is edited on the entry, so the canvas says so
+ * whether or not it is selected.
+ */
+export const ENTRY_CONTENT_ATTRIBUTE = "data-nx-entry-content";
+
+/**
+ * Every Entry content block's words, by its id, from one walk: the field it
+ * draws named as the template's collection names it.
+ */
+function entryContentMarksOf(
+  document: BlockDocument,
+  collection: PreviewedCollection | undefined,
+  maxNodes: number | undefined
+): Map<string, string> {
+  const marks = new Map<string, string>();
+  for (const { node } of entryContentPlacements(
+    document.nodes,
+    maxNodes ?? DEFAULT_LIMITS.maxNodes
+  )) {
+    marks.set(
+      node.id,
+      entryContentLabel(entryContentFieldOf(node), collection)
+    );
+  }
+  return marks;
+}
+
+/**
+ * The words an Entry content block's outermost element carries, by its
+ * address. Never inside a Layout region, a document of its own whose ids
+ * may repeat the page's.
+ */
+function entryContentMarkFor(
+  element: Element,
+  container: HTMLElement,
+  marks: ReadonlyMap<string, string>
+): string | undefined {
+  if (marks.size === 0) return undefined;
+  const address = nodeAddressOf(element);
+  if (address === null) return undefined;
+  if (element.closest(`.${CANVAS_REGION_CLASS}`) !== null) return undefined;
+  return isOutermostForAddress(element, address, container)
+    ? marks.get(address)
+    : undefined;
+}
+
+/**
+ * Marks the drawn element of each of the entry's own blocks this canvas draws
+ * in Entry content as ours to make `inert`.
+ */
+const ENTRY_CONTENT_INERT_ATTRIBUTE = "data-nx-entry-content-inert";
+
+/**
+ * Make the entry's blocks an Entry content block draws on this canvas inert,
+ * and nothing else: each child of a drawn wrapper, so no link, field or button
+ * inside takes focus, a caret or a press, while the wrapper, the block's own
+ * element, stays the one a click lands on and selects. The page's markup is
+ * not changed, so the canvas lays the blocks out as the published page does.
+ * An element no longer drawn there gives back the inert this set, and only
+ * that. Written only where it changes, as every mark here is.
+ */
+function markEntryContentInert(container: HTMLElement): void {
+  const wanted = new Set<Element>();
+  container
+    .querySelectorAll(`[${ENTRY_CONTENT_DRAWN_ATTRIBUTE}]`)
+    .forEach(wrapper => {
+      if (!ownedByCanvas(wrapper, container)) return;
+      for (const child of Array.from(wrapper.children)) wanted.add(child);
+    });
+  container
+    .querySelectorAll(`[${ENTRY_CONTENT_INERT_ATTRIBUTE}]`)
+    .forEach(element => {
+      // Another canvas's marks are that canvas's to clear, as they were its
+      // to set: a canvas drawn inside this one (a component's own view) keeps
+      // its entry's blocks inert whatever this one re-marks.
+      if (wanted.has(element) || !ownedByCanvas(element, container)) return;
+      element.removeAttribute(ENTRY_CONTENT_INERT_ATTRIBUTE);
+      element.removeAttribute("inert");
+    });
+  wanted.forEach(element => {
+    setFlag(element, ENTRY_CONTENT_INERT_ATTRIBUTE, true);
+    setFlag(element, "inert", true);
+  });
 }
 
 /**
@@ -789,7 +889,8 @@ function useCanvasMarkers(
   forcedState: StyleState | undefined,
   drag: CanvasDragState | undefined,
   lockedIds: ReadonlyMap<string, LockMark>,
-  conditionMarks: ConditionMarks
+  conditionMarks: ConditionMarks,
+  entryContentMarks: ReadonlyMap<string, string>
 ): void {
   /*
    * The drag's three marks are read into plain ids here rather than inside the
@@ -854,6 +955,7 @@ function useCanvasMarkers(
             `[${LOCKED_ATTRIBUTE}]`,
             `[${CONDITIONED_ATTRIBUTE}]`,
             `[${CONDITIONED_OWN_ATTRIBUTE}]`,
+            `[${ENTRY_CONTENT_ATTRIBUTE}]`,
             ...STYLE_STATES.map(state => `.${previewStateClass(state)}`),
           ].join(", ")
         )
@@ -942,6 +1044,12 @@ function useCanvasMarkers(
           element,
           CONDITIONED_OWN_ATTRIBUTE,
           condition?.own === true ? (condition.nested ?? "") : undefined
+        );
+        // An Entry content block's words, on its outermost element alike.
+        setMark(
+          element,
+          ENTRY_CONTENT_ATTRIBUTE,
+          entryContentMarkFor(element, container, entryContentMarks)
         );
         for (const [attribute, wanted] of dragMarks) {
           setFlag(element, attribute, id !== null && id === wanted);
@@ -1039,6 +1147,8 @@ function useCanvasMarkers(
           element.classList.add(wanted);
         }
       });
+      // The entry's blocks drawn in Entry content: looked at, never used.
+      markEntryContentInert(container);
     };
 
     mark();
@@ -1058,6 +1168,7 @@ function useCanvasMarkers(
     refusedId,
     lockedIds,
     conditionMarks,
+    entryContentMarks,
   ]);
 }
 
@@ -1508,8 +1619,21 @@ export interface CanvasProps {
    * previewed with (`appliedConditionsOf`): a block hidden for that entry is
    * drawn as a one-line marker in its place, and one shown is badged so.
    * Absent, every conditioned block is drawn and marked as conditional.
+   *
+   * Applied to the page as drawn: a template's with the previewed entry's
+   * own blocks already composed into its Entry content (`composed`), so the
+   * entry's blocks are judged with the template's and the canvas draws this
+   * document as it is, composing nothing of its own.
    */
   conditionsApplied?: AppliedConditions;
+  /**
+   * `document` with the previewed entry's own blocks composed into its Entry
+   * content block (`useComposedEntryContent`), where the host composed it
+   * for the conditions it applies: the canvas draws it rather than composing
+   * its own, so the page has one composition. Absent, the canvas composes
+   * `document` with the entry the seam names.
+   */
+  composed?: BlockDocument;
 }
 
 /**
@@ -2204,12 +2328,10 @@ function useDrawnPage({
   const drawn = useLayoutParts(regions, rendered, sheet);
   // Every conditioned block drawn, whoever the page would show it to, so the
   // author can see and select it; the marks say it isn't shown to everyone.
-  // While conditions are applied, a block hidden for the previewed entry is
-  // drawn as its marker instead.
-  const drawable = useMemo(
-    () => applied?.document ?? revealConditioned(document),
-    [applied, document]
-  );
+  // While conditions are applied, `document` is already the page as they
+  // leave it (a hidden block as its marker), with the previewed entry's
+  // blocks composed in, which are revealed as they are without conditions.
+  const drawable = useMemo(() => revealConditioned(document), [document]);
   // A placed component's definition too: its conditioned blocks are drawn,
   // as the page's are. While conditions are applied, the renderer also knows
   // the marker a hidden block is drawn as.
@@ -2259,6 +2381,7 @@ export function Canvas({
   regions,
   conditionsUnchecked,
   conditionsApplied,
+  composed,
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
   usePublishedRoot(root, rootRef, onRoot);
@@ -2283,11 +2406,29 @@ export function Canvas({
   const canvasScale = useCanvasFrame().scale;
 
   const environment = useCanvasEnvironment(root);
+  // The page as the conditions leave it while they are applied for the
+  // previewed entry (a hidden block as its marker), else the page itself.
+  const shownDocument = conditionsApplied?.document ?? document;
+  // A template draws its previewed entry's own blocks in its Entry content
+  // block; only the drawn page carries them, never the document edited.
+  // Composed once: by the host where it hands the page as drawn
+  // (`composed`), else here.
+  const entryDrawing = useEntryContentDrawing(document, render, composed);
+  // The page as composed, before any conditions are applied: what its
+  // conditioned blocks, the entry's among them, are badged on.
+  const composedPage = entryDrawing.document;
+  // Conditions applied, the page as they leave it, the entry composed into
+  // it here unless the host handed the page as composed.
+  const appliedDrawing = useAppliedDrawing(
+    conditionsApplied?.document,
+    composed,
+    render
+  );
   const { drawn, page } = useDrawnPage({
     regions,
-    rendered: render,
+    rendered: entryDrawing.render,
     sheet: siteStyles,
-    document,
+    document: appliedDrawing ?? composedPage,
     environment,
     applied: conditionsApplied,
   });
@@ -2302,7 +2443,7 @@ export function Canvas({
   const conditionMarks = useMemo(
     () =>
       conditionMarksOf(
-        document,
+        composedPage,
         conditionsUnchecked,
         {
           ...(render?.definitions === undefined
@@ -2313,12 +2454,26 @@ export function Canvas({
         conditionsApplied
       ),
     [
-      document,
+      composedPage,
       conditionsUnchecked,
       render?.definitions,
       render?.limits,
       conditionsApplied,
     ]
+  );
+
+  // Each Entry content block's words, named by the template's collection:
+  // of the blocks drawn, so one the conditions hide, drawn as its marker,
+  // says only that it is hidden, as a hidden block's badge does.
+  const previewedCollection = usePreviewedCollection();
+  const entryContentMarks = useMemo(
+    () =>
+      entryContentMarksOf(
+        shownDocument,
+        previewedCollection,
+        render?.limits?.maxNodes
+      ),
+    [shownDocument, previewedCollection, render?.limits]
   );
 
   useCanvasMarkers(
@@ -2329,7 +2484,8 @@ export function Canvas({
     forcedState,
     drag,
     lockedIds,
-    conditionMarks
+    conditionMarks,
+    entryContentMarks
   );
 
   // The refusal the cursor shows, asked of the same rule the notice draws by.

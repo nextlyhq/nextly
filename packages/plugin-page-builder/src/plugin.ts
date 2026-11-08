@@ -63,6 +63,7 @@ import {
   registerPageAddressClaims,
 } from "./address-claims/page-claims-hook";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
+import { bindingFieldsRoute } from "./binding-fields-route";
 import { BINDINGS_TO_FIX_PAGE_HREF } from "./bindings-report/contract";
 import { schemaFingerprint } from "./bindings-report/fingerprint";
 import { BINDINGS_REPORT_JOB, bindingsReportJob } from "./bindings-report/job";
@@ -363,6 +364,7 @@ import {
   holdTemplateCollection,
   templateCollectionDelete,
 } from "./templates/collection-delete";
+import { readEntryBlocksFields } from "./templates/entry-content-fields";
 import {
   designUnderWhere,
   registerEntryDesignCascade,
@@ -379,6 +381,7 @@ import {
   checkedTemplateAddresses,
   type PageBuilderTemplateOptions,
 } from "./templates/template-addresses";
+import { templateCollectionChoicesRoute } from "./templates/template-collection-choices-route";
 import {
   addressHolderReader,
   registerTemplateGuard,
@@ -402,6 +405,7 @@ import { unlinkCopies } from "./templates/unlink-copies";
 import { tokenUsageIndex } from "./token-usage";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
+import { unbindPlanRoute } from "./unbind-plan-route";
 import { usageBackfillJob } from "./usage-backfill-job";
 import {
   backfillScopes,
@@ -2738,6 +2742,13 @@ export const pageBuilder = (
         // template's lists and conditions are judged against the collection
         // it draws, read from the template itself.
         templates: templateTargets(ctx.services.ownCollections, templates),
+        // A collection's top-level blocks fields, for the field a template's
+        // Entry content block draws: read per write, so a field removed a
+        // moment ago is refused at the next save that newly chooses it.
+        // A failed read is thrown, so the save refuses rather than storing
+        // a field nobody checked.
+        entryBlocksFields: collection =>
+          readEntryBlocksFields(ctx.services.collections, collection),
         listFields: listFieldsFrom({
           record: collection =>
             ctx.services.collections.getCollection(collection, {}),
@@ -3916,6 +3927,10 @@ export const pageBuilder = (
         // what the template form asks before it offers the change, since the
         // collection list leaves out what the author may not read.
         templateCollectionRetargetRoute({ guard: requireTemplateGuard }),
+        // The collections the template form offers: those the caller may
+        // read that the guard lets a template draw, judged by the guard's
+        // own rule, for a caller who may create or change templates.
+        templateCollectionChoicesRoute({ guard: requireTemplateGuard }),
         // A collection's own designs, its template and its names, read as
         // the caller: what the admin's Design section, Design column and the
         // template's own designs list draw from.
@@ -3957,6 +3972,12 @@ export const pageBuilder = (
         // The canvas's bound props: the entry being edited, the Singles its
         // bindings read and the site settings, read as the author asking.
         canvasBindingsRoute(),
+        // The fields the inspector's picker offers a binding, as the author
+        // asking may read them, each marked by whether visitors may.
+        bindingFieldsRoute(),
+        // An unbind's plan for the inspector, against the document it holds:
+        // the same decision as the page actions API's, applied by the editor.
+        unbindPlanRoute({ limits: () => opts.limits ?? DEFAULT_LIMITS }),
         // The documents whose bindings no longer fit, for those who edit
         // pages, each listed only when the caller may read it.
         bindingsToFixRoute({

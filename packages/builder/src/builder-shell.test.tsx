@@ -484,6 +484,21 @@ describe("the strip pinned above the canvas", () => {
     expect(region.style.padding).toBe("16px");
   });
 
+  it.each([
+    ["null", null],
+    ["false", false],
+  ])(
+    "draws no band for a strip given as %s, as conditional JSX gives it",
+    (_label, strip) => {
+      renderShell({ children: <p>canvas content</p>, canvasStrip: strip });
+      // No padded slot is left above the page: the band a strip would sit in
+      // is not drawn at all, as with no strip.
+      expect(document.querySelector(".nx-canvas-strip-slot")).toBeNull();
+      const region = screen.getByRole("region", { name: "Canvas" });
+      expect(region.style.padding).toBe("16px");
+    }
+  );
+
   it("draws none where the host gives none, with the same gutter (the control)", () => {
     renderShell({ children: <p>canvas content</p> });
     const region = screen.getByRole("region", { name: "Canvas" });

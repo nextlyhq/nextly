@@ -72,6 +72,7 @@ import {
 } from "../entry-reads";
 import { pageStateOf } from "../pages-search-route";
 
+import { entryBlocksFieldsOf } from "./entry-content-fields";
 import {
   templateCollectionProblem,
   type TemplateGuardSetup,
@@ -403,6 +404,8 @@ export async function readPreviewEntries(
       hasPrev: false,
       mayCreate,
       labels: labelsOf(record, collection),
+      // What the template's Entry content block may draw, for its Field menu.
+      blocksFields: entryBlocksFieldsOf(record),
     },
   };
 }

@@ -62,12 +62,20 @@ function present(
   return new Set(fields.filter(field => Object.hasOwn(row, field)));
 }
 
-/** A collection's title field and its name, from its registry record. */
-async function collectionNaming(
+/**
+ * A collection's title field and its names, plural and one entry's, from its
+ * registry record.
+ */
+export async function collectionNaming(
   ctx: Pick<ReadableContext, "services">,
   slug: string
 ): Promise<
-  { readonly titleField?: string; readonly label: string } | undefined
+  | {
+      readonly titleField?: string;
+      readonly label: string;
+      readonly singular: string;
+    }
+  | undefined
 > {
   let record: Record<string, unknown>;
   try {
@@ -82,6 +90,7 @@ async function collectionNaming(
   return {
     ...(titleField === undefined ? {} : { titleField }),
     label: pluralLabelOf(record).pluralLabel ?? labelOf(record, slug),
+    singular: labelOf(record, slug),
   };
 }
 

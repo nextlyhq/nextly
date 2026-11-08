@@ -374,6 +374,11 @@ describe("every default the core library declares", () => {
       "core/image#picture",
       "core/quote#attribution",
       "core/quote#quotation",
+      "core/table-of-contents#item",
+      "core/table-of-contents#list",
+      "core/table-of-contents#note",
+      "core/table-of-contents#sublist",
+      "core/table-of-contents#title",
     ]);
   });
 

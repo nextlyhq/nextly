@@ -38,7 +38,7 @@ import {
   writePluginRoute,
   type DocumentIdentity,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   CANVAS_BINDINGS_ROUTE_PATH,
@@ -224,13 +224,16 @@ async function askRoute(
 /**
  * The sources an ask names, for `userId`: from the answers kept for that
  * person, or asked afresh. Another person's answers are dropped first.
+ * `fresh` asks afresh whatever is kept, for a read the editor asks again
+ * (a retry, the window back in focus), so what was kept never answers it.
  */
 export function canvasBindingsFor(
   request: CanvasBindingsRequest,
   userId: string,
   ask: (
     request: CanvasBindingsRequest
-  ) => Promise<CanvasBindingsResponse> = askRoute
+  ) => Promise<CanvasBindingsResponse> = askRoute,
+  fresh = false
 ): Promise<PageBindings> {
   if (keptFor !== userId) {
     KEPT.clear();
@@ -238,7 +241,7 @@ export function canvasBindingsFor(
   }
   const key = JSON.stringify(request);
   const kept = KEPT.get(key);
-  if (kept !== undefined && Date.now() - kept.at < KEPT_FOR_MS) {
+  if (!fresh && kept !== undefined && Date.now() - kept.at < KEPT_FOR_MS) {
     return kept.read;
   }
   const reading = ask(request).then(answer => {
@@ -261,12 +264,25 @@ export function canvasBindingsFor(
  */
 function readStateOf(
   key: string,
-  answer: { readonly key: string; readonly userId: string } | null,
+  answer: {
+    readonly key: string;
+    readonly userId: string;
+    readonly retry: number;
+  } | null,
   failed: string | null,
-  userId: string | null
+  userId: string | null,
+  retry: number
 ): CanvasEntryRead["state"] {
   if (key === "") return "none";
-  if (answer !== null && answer.key === key && answer.userId === userId) {
+  // Answered for THIS ask and this retry: a retry the editor asks for (the
+  // window back in focus) is pending until its own answer arrives, so the
+  // strip never names a refreshed entry over the bindings read before it.
+  if (
+    answer !== null &&
+    answer.key === key &&
+    answer.userId === userId &&
+    answer.retry === retry
+  ) {
     return "answered";
   }
   return failed === key ? "failed" : "pending";
@@ -308,6 +324,8 @@ export function useCanvasBindings(
     readonly key: string;
     readonly userId: string;
     readonly bindings: PageBindings;
+    /** The retry this answer is for. */
+    readonly retry: number;
   } | null>(null);
   // The ask that failed last, so its failure is told rather than taken for
   // an answer on its way.
@@ -316,10 +334,15 @@ export function useCanvasBindings(
   // again: a source can change while what the page asks stays the same (a
   // saved title, an updated Single).
   const [round, setRound] = useState(0);
+  // The retry this read last answered, so a retry the editor asks for reads
+  // afresh rather than from what was kept for the same ask.
+  const answeredRetry = useRef(retry);
   useEffect(() => {
     // The route answers whoever the session cookie names, so an answer is
     // only asked for, and kept, under a person known by id.
     if (key === "" || userId === null) return;
+    const fresh = answeredRetry.current !== retry;
+    answeredRetry.current = retry;
     let current = true;
     let stale: ReturnType<typeof setTimeout> | undefined;
     // Asked again, so an earlier failure of this ask is no longer the answer.
@@ -338,10 +361,15 @@ export function useCanvasBindings(
       }
       setRound(value => value + 1);
     };
-    canvasBindingsFor(JSON.parse(key) as CanvasBindingsRequest, userId).then(
+    canvasBindingsFor(
+      JSON.parse(key) as CanvasBindingsRequest,
+      userId,
+      askRoute,
+      fresh
+    ).then(
       bindings => {
         if (!current) return;
-        setAnswer({ key, userId, bindings });
+        setAnswer({ key, userId, bindings, retry });
         setFailed(null);
         stale = setTimeout(askAgain, KEPT_FOR_MS);
       },
@@ -363,7 +391,7 @@ export function useCanvasBindings(
   }, [key, userId, round, retry]);
   // Where this read stands, told to the editor that gave the entry, so what
   // it says the canvas shows is what the canvas shows.
-  const state = readStateOf(key, answer, failed, userId);
+  const state = readStateOf(key, answer, failed, userId, retry);
   const entryId = identity?.documentId;
   useEffect(() => {
     onRead?.({ entryId, state });

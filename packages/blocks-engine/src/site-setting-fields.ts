@@ -37,3 +37,18 @@ export const SITE_SETTING_FIELD_SHAPES: readonly BindingFieldShape[] =
     name,
     type,
   }));
+
+/**
+ * What each site setting a page may bind is called where an author picks or
+ * reads one in the page builder, in words: "Site URL", not the key's "site
+ * url".
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export const SITE_SETTING_LABELS: { readonly [K in SiteSettingName]: string } =
+  {
+    applicationName: "Application name",
+    siteUrl: "Site URL",
+    logoUrl: "Logo URL",
+    timezone: "Time zone",
+  };

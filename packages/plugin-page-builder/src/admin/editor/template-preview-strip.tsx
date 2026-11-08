@@ -23,14 +23,19 @@
  *
  * @module template-preview-strip
  */
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { keyHint } from "@nextlyhq/builder";
 import {
   PREVIEWED_ENTRY_KEYS,
   PreviewedEntryProvider,
+  useComposedEntryContent,
+  type EntryContentLimits,
+  type PreviewedCollection,
   type PreviewedEntry,
 } from "@nextlyhq/builder/shell";
 import {
   formatWidgetTime,
+  humanizeFieldName,
   useCurrentUserId,
   useDocumentIdentity,
   useDocumentLocale,
@@ -88,7 +93,7 @@ import {
 import { StatusPill } from "../status-pill";
 import { listPreviewEntries } from "../template-preview-client";
 
-import { entryCreatePath } from "./builder-address";
+import { entryCreatePath, entryEditPath } from "./builder-address";
 import { CanvasEntryProvider, type CanvasEntryRead } from "./canvas-entry";
 import {
   TemplateConditionsPart,
@@ -96,6 +101,7 @@ import {
 } from "./conditions-strip";
 import {
   followingCanvas,
+  useRefreshOnFocus,
   useTemplatePreview,
   type TemplatePreview,
 } from "./use-template-preview";
@@ -117,6 +123,34 @@ const TemplatePreviewState = createContext<TemplatePreview | undefined>(
  */
 export function useTemplatePreviewState(): TemplatePreview | undefined {
   return useContext(TemplatePreviewState);
+}
+
+/**
+ * The entry as its own read has it, before the canvas's read of it answers:
+ * what the canvas's reads are asked of. `undefined` for any other document.
+ */
+const EntryAsRead = createContext<PreviewedEntry | undefined>(undefined);
+
+/**
+ * `document` as the canvas's reads are asked of it: a template's with the
+ * entry it is previewed with composed into its Entry content block, as soon
+ * as that entry's own read has answered; any other document as it is.
+ *
+ * Composed from the entry's own read, never from the entry the seam names:
+ * the seam names it only once the canvas's read of this very document has
+ * answered, so composing from the seam would change that read's ask each
+ * time it answered, and ask again, and never settle.
+ */
+export function useDrawnTemplate(
+  document: BlockDocument,
+  /**
+   * The limits the canvas draws under, which bound the entry's walk, and
+   * the definitions of the components the page places, whose expansion the
+   * entry leaves room for.
+   */
+  limits?: EntryContentLimits
+): BlockDocument {
+  return useComposedEntryContent(document, useContext(EntryAsRead), limits);
 }
 
 /**
@@ -187,10 +221,7 @@ export function TemplatePreviewScope<TFieldValues extends FieldValues>({
     undefined
   );
   const [retry, setRetry] = useState(0);
-  const preview = useMemo(
-    () => followingCanvas(read, canvasRead, () => setRetry(count => count + 1)),
-    [read, canvasRead]
-  );
+  const preview = useFollowedPreview(read, canvasRead, setRetry);
   // The entry the strip names, read by the canvas from the moment it is
   // chosen, so the two never name different entries; none where its own
   // read failed, so bound text draws its fallback as the strip says. Taken
@@ -209,18 +240,75 @@ export function TemplatePreviewScope<TFieldValues extends FieldValues>({
           },
     [collection, previewedId]
   );
+  // The collection as the builder reads it, for an Entry content block's
+  // mark, inspector and canvas notes.
+  const previewedCollection = usePreviewedCollectionOf(collection, preview);
   return (
     <TemplatePreviewState.Provider value={preview}>
-      <CanvasEntryProvider
-        identity={canvasIdentity}
-        retry={retry}
-        onRead={setCanvasRead}
-      >
-        <PreviewedEntryProvider value={preview.previewed}>
-          {children}
-        </PreviewedEntryProvider>
-      </CanvasEntryProvider>
+      <EntryAsRead.Provider value={read.latest}>
+        <CanvasEntryProvider
+          identity={canvasIdentity}
+          retry={retry}
+          onRead={setCanvasRead}
+        >
+          <PreviewedEntryProvider
+            value={preview.previewed}
+            collection={previewedCollection}
+          >
+            {children}
+          </PreviewedEntryProvider>
+        </CanvasEntryProvider>
+      </EntryAsRead.Provider>
     </TemplatePreviewState.Provider>
+  );
+}
+
+/**
+ * The preview as the strip says it, following the canvas's read
+ * (`followingCanvas`), and asked again whole whenever the window regains
+ * focus: the list, the entry and the canvas's read of it together, so the
+ * chip never names a new title over the canvas's kept, older one.
+ */
+function useFollowedPreview(
+  read: TemplatePreview,
+  canvasRead: CanvasEntryRead | undefined,
+  setRetry: (next: (count: number) => number) => void
+): TemplatePreview {
+  const preview = useMemo(
+    () => followingCanvas(read, canvasRead, () => setRetry(count => count + 1)),
+    [read, canvasRead, setRetry]
+  );
+  useRefreshOnFocus(preview.refresh);
+  return preview;
+}
+
+/**
+ * The template's collection as the builder reads it: its names, its
+ * top-level blocks fields, and where one of its entries is edited; nothing
+ * while the template names no collection.
+ */
+function usePreviewedCollectionOf(
+  collection: string | undefined,
+  preview: TemplatePreview
+): PreviewedCollection | undefined {
+  const { labels, blocksFields } = preview;
+  return useMemo(
+    (): PreviewedCollection | undefined =>
+      collection === undefined
+        ? undefined
+        : {
+            slug: collection,
+            singular: inSentence(labels.singular),
+            plural: labels.plural,
+            blocksFields,
+            // Its label where the collection has the field, else its name
+            // in the admin's words, for one the collection no longer has.
+            fieldLabel: name =>
+              blocksFields?.find(each => each.name === name)?.label ??
+              humanizeFieldName(name),
+            entryHref: id => entryEditPath(collection, id),
+          },
+    [collection, labels.singular, labels.plural, blocksFields]
   );
 }
 
