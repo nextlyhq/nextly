@@ -215,11 +215,14 @@ function tagMarks(ctx: PageContext, nodeId: string): Record<string, string> {
 
 /**
  * Tell an editor that asks how many entries a list drew, only while an
- * author is looking. A throw from the editor's handler is contained, so it
+ * author is looking, and only for a list drawn once: one inside another
+ * list's entries is drawn once per entry, under one id, which no single
+ * count describes. A throw from the editor's handler is contained, so it
  * never fails the list.
  */
 function reportShown(ctx: PageContext, nodeId: string, shown: number): void {
   if (ctx.diagnostics !== true || ctx.listShown === undefined) return;
+  if (ctx.item !== undefined) return;
   try {
     ctx.listShown(nodeId, shown);
   } catch {

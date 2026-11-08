@@ -92,3 +92,39 @@ describe("a list telling an editor how many entries it drew", () => {
     expect(shown).not.toHaveBeenCalledWith(LIST, 3);
   });
 });
+
+describe("a list inside another list's entries", () => {
+  it("tells no count, being drawn once per entry under one id", async () => {
+    const [list] = document.nodes;
+    if (list === undefined) throw new Error("the page holds its list");
+    const nested: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "outer",
+          type: "core/collection-loop",
+          version: 1,
+          props: { collection: "posts", limit: 10 },
+          slots: { children: [{ ...list, id: "inner" }] },
+        },
+      ],
+    };
+    const shown = vi.fn<(nodeId: string, count: number) => void>();
+    await renderToHtml(
+      <PageRenderer
+        document={nested}
+        blocks={resolver}
+        siteStyles={false}
+        context={createStandaloneContext({
+          data: { find: () => Promise.resolve({ items: POSTS, total: 3 }) },
+          diagnostics: true,
+          listShown: shown,
+        })}
+      />
+    );
+    // CONTROL: the outer list, drawn once, tells its count.
+    expect(shown).toHaveBeenCalledWith("outer", 3);
+    expect(shown.mock.calls.some(([id]) => id === "inner")).toBe(false);
+  });
+});

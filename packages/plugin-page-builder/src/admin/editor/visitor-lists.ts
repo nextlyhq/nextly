@@ -11,8 +11,16 @@
  *
  * @module visitor-lists
  */
-import type { BlockNode } from "@nextlyhq/blocks-engine";
-import type { PageBindings } from "@nextlyhq/blocks-react";
+import type {
+  BlockDocument,
+  BlockNode,
+  DefinitionsById,
+} from "@nextlyhq/blocks-engine";
+import {
+  prepareDocumentAsDrawn,
+  registeredBlocks,
+  type PageBindings,
+} from "@nextlyhq/blocks-react";
 import {
   useItemHiddenAs,
   type ItemHiddenOptions,
@@ -24,6 +32,32 @@ import type { ListEntriesVisitor } from "../../list-entries-contract";
 import type { PageRenderInputs } from "../page-render-inputs";
 
 import type { VisitorLists } from "./canvas-page-context";
+
+/**
+ * The blocks a document is drawn with while a list's items are judged, as
+ * the renderer itself prepares them (`prepareDocumentAsDrawn`): its shape
+ * repaired, its components composed, migrated, gated keeping the blocks a
+ * list's item decides, and its addresses repaired, each by the id it is
+ * drawn under. So a list a placed component draws is found by the id its own
+ * report of what it drew names. None for a document the renderer can't read.
+ */
+export function drawnNodesOf(
+  document: BlockDocument,
+  render: Partial<Pick<PageRenderInputs, "styleContext" | "limits">>,
+  definitions: DefinitionsById | undefined
+): readonly BlockNode[] {
+  return (
+    prepareDocumentAsDrawn(document, {
+      resolver: registeredBlocks(),
+      ...(render.styleContext === undefined
+        ? {}
+        : { styleContext: render.styleContext }),
+      ...(definitions === undefined ? {} : { definitions }),
+      ...(render.limits === undefined ? {} : { limits: render.limits }),
+      itemsDecided: true,
+    })?.nodes ?? []
+  );
+}
 
 /** Whether the canvas's lists read as a visitor, and the switch's say in it. */
 export interface ListsAsVisitor {

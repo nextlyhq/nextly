@@ -19,7 +19,6 @@ import { describe, expect, it } from "vitest";
 import {
   appliedConditionsOf,
   conditionedBlocksIn,
-  expandedNodesOf,
   itemHiddenAsOf,
   revealedForCanvas,
   type ConditionsPreview,
@@ -588,51 +587,5 @@ describe("the page as the canvas draws it", () => {
     expect(drawn.nodes[1]?.slots?.[LIST_ENTRY_SLOT]?.[0]?.visibility).toEqual({
       conditions: [[guides]],
     });
-  });
-});
-
-describe("the blocks a page draws with its components expanded", () => {
-  const list = block("list", {
-    type: COLLECTION_LIST_TYPE,
-    props: { collection: "posts" },
-    slots: { [LIST_ENTRY_SLOT]: [worksheet] },
-  });
-  const placed = block("placed", {
-    type: COMPONENT_INSTANCE_TYPE,
-    props: { componentId: "promo" },
-  });
-  const definitions = new Map([
-    [
-      "promo",
-      {
-        formatVersion: DOCUMENT_FORMAT_VERSION,
-        kind: "component",
-        nodes: [list],
-      } as BlockDocument,
-    ],
-  ]);
-
-  it("holds the lists and conditions inside a placed component", () => {
-    const nodes = expandedNodesOf(page(placed), definitions);
-    // CONTROL: unexpanded, the page holds only the placement.
-    expect(page(placed).nodes.map(node => node.type)).toEqual([
-      COMPONENT_INSTANCE_TYPE,
-    ]);
-    const types: string[] = [];
-    const visit = (each: readonly BlockNode[]) => {
-      for (const node of each) {
-        types.push(node.type);
-        for (const children of Object.values(node.slots ?? {})) visit(children);
-      }
-    };
-    visit(nodes);
-    expect(types).toContain(COLLECTION_LIST_TYPE);
-    expect(conditionedBlocksIn(page(...nodes)).readingItems).toBe(true);
-  });
-
-  it("is the page's own blocks where it places no component", () => {
-    const own = page(list);
-    expect(expandedNodesOf(own, undefined)).toBe(own.nodes);
-    expect(expandedNodesOf(own, new Map())).toBe(own.nodes);
   });
 });

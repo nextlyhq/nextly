@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-With Apply conditions on, a list inside a placed component now gets the "Showing what visitors see" tag like any other list, and its entries' date conditions are judged in the site's time zone. A list whose read the page's allowance refused says it shows none of the entries. Where a placed component or Layout region also holds a condition the canvas can't check, the count says so ("Every block checked shows") even when the page's other conditions are all on list entries.
+With Apply conditions on, a list inside a placed component now gets the "Showing what visitors see" tag like any other list, and its entries' date conditions are judged in the site's time zone. A list whose read the page's allowance refused says it shows none of the entries. Where a placed component or Layout region also holds a condition the canvas can't check, the count says so ("some blocks aren't checked") even when the page's other conditions are all on list entries.

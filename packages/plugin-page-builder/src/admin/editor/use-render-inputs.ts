@@ -50,7 +50,6 @@ import {
   previewWidth,
   selectionIsInspectable,
   useCanvasDrag,
-  expandedNodesOf,
   type CanvasDrag,
   type CanvasZoom,
   type PageClassBlocks,
@@ -93,6 +92,7 @@ import {
   type ClassSurface,
 } from "./site-style-studios";
 import type { EditorMount } from "./use-editor-mount";
+import { drawnNodesOf } from "./visitor-lists";
 
 /**
  * The interaction state to SHOW, given the state being edited and how many
@@ -1097,19 +1097,28 @@ export function useBoundCanvasRender(
   // applied, though nothing on the page binds.
   // The regions of its Layout too, whose lists read as a visitor while
   // conditions are applied, judged in the same site zone.
-  // Each with its components expanded, so an ordering condition inside a
-  // placed component's list asks for the site's zone too.
-  const { definitions, limits } = canvasRender;
-  const conditions = useMemo(
-    () =>
-      listConditionsFor([
-        ...expandedNodesOf(document, definitions, limits),
-        ...regions.flatMap(region =>
-          expandedNodesOf(region.document, region.definitions, limits)
-        ),
-      ]),
-    [document, regions, definitions, limits]
-  );
+  // As stored, for the conditions the page's own blocks read, and as the
+  // renderer draws it while items are judged, so an ordering condition inside
+  // a placed component's list asks for the site's zone too.
+  const conditions = useMemo(() => {
+    const stored = [
+      ...document.nodes,
+      ...regions.flatMap(region => region.document.nodes),
+    ];
+    const own = listConditionsFor(stored);
+    // Asking for the zone already, or with no component to compose, the
+    // stored page says all there is: the renderer's preparation is spared.
+    if (own?.ordersValues === true || canvasRender.definitions.size === 0) {
+      return own;
+    }
+    return listConditionsFor([
+      ...stored,
+      ...drawnNodesOf(document, canvasRender, canvasRender.definitions),
+      ...regions.flatMap(region =>
+        drawnNodesOf(region.document, canvasRender, region.definitions)
+      ),
+    ]);
+  }, [document, regions, canvasRender]);
   const bindings = useCanvasBindings(
     trees,
     locale,
