@@ -4,7 +4,10 @@
  * A prop's binding controls in the inspector: a bind button named for its
  * prop, a picker offering only the fields that fit and saying in words which
  * visitors can't read and which hold a draft, a pick written as an edit, and
- * a bound prop's chip, whose unbind keeps what the host's plan says.
+ * a bound prop's chip, whose unbind keeps what the host's plan says, and
+ * whose menu opens the field's source where the host has a screen for it.
+ * Props drawn inside a group (an image's source and alt text, a link) offer
+ * the same button for each prop the group binds, and none for its qualifiers.
  */
 import {
   applyOp,
@@ -30,7 +33,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BindingFieldSource, UnbindPlanAnswer } from "./binding-services";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
+import { inspectSelection } from "./inspector";
 import { InspectorPanel } from "./inspector-panel";
+import { propGroupsOf } from "./prop-groups";
 
 afterEach(() => {
   cleanup();
@@ -45,8 +50,8 @@ const SOURCES: readonly BindingFieldSource[] = [
       { name: "title", type: "text", public: true, preview: "Spring sale" },
       { name: "internalNote", type: "text", public: false },
       { name: "lede", type: "text", public: true, draft: true },
-      // A date reaches text only through a format, which this picker can't
-      // set yet: not offered.
+      // A date reaches text only through a format: offered with the one a
+      // pick writes, named beside it.
       { name: "publishedOn", type: "date", public: true },
       // A relation itself can't fill text, but its own fields can.
       {
@@ -192,6 +197,7 @@ describe("the field picker", () => {
       "TitleSpring sale",
       "Internal noteNot public",
       "LedeDraft",
+      "Published onLong date",
       "Author › NameAda",
     ]);
     expect(within(list).getByRole("group", { name: "Site" })).toBeTruthy();
@@ -245,6 +251,164 @@ describe("the field picker", () => {
   });
 });
 
+describe("a date or a number picked for a text prop", () => {
+  it("is offered with the format a pick writes, named in the option", async () => {
+    mount(undefined);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Text to a field" })
+    );
+    const date = await screen.findByRole("option", {
+      name: /^Published on.*Long date$/,
+    });
+    expect(date).toBeTruthy();
+    // The control: a text field fills the prop as it is, and names none.
+    const title = screen.getByRole("option", { name: /^Title/ });
+    expect(title.textContent).not.toMatch(/Long date|Number/);
+  });
+
+  it("previews a date's and a number's value in the format a pick writes", async () => {
+    const UPDATED = "2026-11-08T12:00:00.000Z";
+    mount(undefined, {
+      listBindingFields: async () => [
+        {
+          binding: { source: "entry" },
+          label: "Post",
+          fields: [
+            { name: "updatedAt", type: "date", public: true, preview: UPDATED },
+            { name: "price", type: "number", public: true, preview: "1234.5" },
+            // The control: text that looks like a date is shown as it is.
+            { name: "code", type: "text", public: true, preview: "2026-11-08" },
+          ],
+        },
+      ],
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Text to a field" })
+    );
+    // As the browser's language and zone write them, which the picker uses.
+    const zone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const longDate = new Intl.DateTimeFormat(undefined, {
+      dateStyle: "long",
+      timeZone: zone,
+    }).format(new Date(UPDATED));
+    const date = await screen.findByRole("option", { name: /^Updated at/ });
+    expect(date.textContent).toContain("Long date");
+    expect(date.textContent).toContain(longDate);
+    expect(date.textContent).not.toContain("2026-11-08T");
+    const price = screen.getByRole("option", { name: /^Price/ });
+    expect(price.textContent).toContain("Number");
+    expect(price.textContent).toContain(new Intl.NumberFormat().format(1234.5));
+    expect(screen.getByRole("option", { name: /^Code/ }).textContent).toBe(
+      "Code2026-11-08"
+    );
+  });
+
+  it("writes the binding with Long date, in one edit", async () => {
+    const editor = mount(undefined);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Text to a field" })
+    );
+    fireEvent.click(
+      await screen.findByRole("option", { name: /^Published on/ })
+    );
+    expect(vi.mocked(editor.apply)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(editor.apply).mock.calls[0]?.[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: {
+        bindings: {
+          label: {
+            $bind: "publishedOn",
+            format: { type: "date", options: { dateStyle: "long" } },
+          },
+        },
+      },
+    });
+  });
+
+  it("writes a number's binding with Number", async () => {
+    const editor = mount(undefined, {
+      listBindingFields: async () => [
+        {
+          binding: { source: "entry" },
+          label: "Post",
+          fields: [{ name: "price", type: "number", public: true }],
+        },
+      ],
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Text to a field" })
+    );
+    fireEvent.click(
+      await screen.findByRole("option", { name: /^Price.*Number$/ })
+    );
+    expect(vi.mocked(editor.apply).mock.calls[0]?.[0]).toMatchObject({
+      patch: {
+        bindings: { label: { $bind: "price", format: { type: "number" } } },
+      },
+    });
+  });
+
+  it("writes no format for a date filling a date prop", async () => {
+    // The control: a date prop takes a date as it is, so nothing is added.
+    registerBlocks(
+      [
+        {
+          name: "acme/event",
+          version: 1,
+          description: "An event.",
+          example: { props: {} },
+          editor: { label: "Event" },
+          props: { when: { label: "When", role: "content", type: "date" } },
+          defaultProps: {},
+          render: () => null,
+        },
+      ] as never,
+      { source: "binding-controls-date-prop-test" }
+    );
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "e", type: "acme/event", version: 1, props: {} }],
+    } as BlockDocument;
+    const apply = vi.fn((_op: BuilderOp) => document);
+    render(
+      <InspectorPanel
+        editor={
+          {
+            document,
+            selectedId: "e",
+            selection: { ids: ["e"], primary: "e" },
+            applyAll: vi.fn(() => document),
+            select: vi.fn(),
+            apply,
+            undo: vi.fn(),
+            redo: vi.fn(),
+            canUndo: false,
+            canRedo: false,
+            undoDepth: 0,
+            composed: () => undefined,
+          } as unknown as EditorState
+        }
+        contentServices={{ listBindingFields: async () => SOURCES }}
+      />
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind When to a field" })
+    );
+    const option = await screen.findByRole("option", {
+      name: /^Published on/,
+    });
+    expect(option.textContent).not.toMatch(/Long date/);
+    fireEvent.click(option);
+    expect(apply.mock.calls[0]?.[0]).toEqual({
+      kind: "update",
+      id: "e",
+      patch: { bindings: { when: { $bind: "publishedOn" } } },
+    });
+  });
+});
+
 describe("a bound prop", () => {
   it("shows a chip naming the field and its source in full", async () => {
     mount({ label: { $bind: "title", fallback: "Untitled" } });
@@ -288,6 +452,439 @@ describe("a bound prop", () => {
     expect((await screen.findByRole("status")).textContent).toBe(
       "Unbound. The badge keeps what visitors saw: “Spring sale”."
     );
+  });
+});
+
+describe("a link's address bound inside its group", () => {
+  /** A button whose link may point at an entry, as `core/button` declares it. */
+  function mountButton(props: Record<string, unknown>): EditorState {
+    registerBlocks(
+      [
+        {
+          name: "acme/cta",
+          version: 1,
+          description: "A call to action.",
+          example: { props: {} },
+          editor: { label: "Call to action" },
+          props: {
+            label: { label: "Label", role: "content", type: "text" },
+            href: { label: "Link", role: "content", type: "url" },
+            entryCollection: { label: "Entry collection", type: "text" },
+            entryId: { label: "Entry", type: "text" },
+          },
+          defaultProps: {},
+          render: () => null,
+        },
+      ] as never,
+      { source: "binding-controls-link-test" }
+    );
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "b", type: "acme/cta", version: 1, props }],
+    } as BlockDocument;
+    const editor = {
+      document,
+      selectedId: "b",
+      selection: { ids: ["b"], primary: "b" },
+      applyAll: vi.fn(() => document),
+      select: vi.fn(),
+      apply: vi.fn(() => document),
+      undo: vi.fn(),
+      redo: vi.fn(),
+      canUndo: false,
+      canRedo: false,
+      undoDepth: 0,
+      composed: () => undefined,
+    } as unknown as EditorState;
+    render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{
+          listBindingFields: async () => [
+            {
+              binding: { source: "entry" },
+              label: "Post",
+              fields: [{ name: "website", type: "url", public: true }],
+            },
+          ],
+        }}
+      />
+    );
+    return editor;
+  }
+
+  /** Bind the link to the post's website through the picker. */
+  async function bindLink(editor: EditorState): Promise<BuilderOp> {
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Link to a field" })
+    );
+    fireEvent.click(await screen.findByRole("option", { name: /^Website/ }));
+    expect(vi.mocked(editor.apply)).toHaveBeenCalledTimes(1);
+    return vi.mocked(editor.apply).mock.calls[0]?.[0] as BuilderOp;
+  }
+
+  it("empties an entry the button pointed at, in the same edit as the binding", async () => {
+    // A button follows a complete entry reference before its address, so a
+    // bound address left beside one would never be followed.
+    const editor = mountButton({
+      label: "Read more",
+      entryCollection: "posts",
+      entryId: "p1",
+    });
+    const op = await bindLink(editor);
+    expect(op).toEqual({
+      kind: "update",
+      id: "b",
+      patch: {
+        bindings: { href: { $bind: "website" } },
+        props: { label: "Read more" },
+      },
+    });
+  });
+
+  it("writes the binding alone for a link that points at no entry", async () => {
+    // The control: the same bind, with no reference to empty, leaves the
+    // props as they are and out of the edit.
+    const editor = mountButton({ label: "Read more" });
+    const op = await bindLink(editor);
+    expect(op).toEqual({
+      kind: "update",
+      id: "b",
+      patch: { bindings: { href: { $bind: "website" } } },
+    });
+  });
+});
+
+describe("an image's alt text bound inside its group", () => {
+  /** An image's alt text and its decorative mark, as `core/image` declares them. */
+  function mountFigure(props: Record<string, unknown>): EditorState {
+    registerBlocks(
+      [
+        {
+          name: "acme/figure",
+          version: 1,
+          description: "A figure.",
+          example: { props: {} },
+          editor: { label: "Figure" },
+          props: {
+            alt: { label: "Alt text", role: "content", type: "text" },
+            decorative: { label: "Decorative (no alt text)", type: "checkbox" },
+          },
+          defaultProps: {},
+          render: () => null,
+        },
+      ] as never,
+      { source: "binding-controls-alt-test" }
+    );
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "f", type: "acme/figure", version: 1, props }],
+    } as BlockDocument;
+    const editor = {
+      document,
+      selectedId: "f",
+      selection: { ids: ["f"], primary: "f" },
+      applyAll: vi.fn(() => document),
+      select: vi.fn(),
+      apply: vi.fn(() => document),
+      undo: vi.fn(),
+      redo: vi.fn(),
+      canUndo: false,
+      canRedo: false,
+      undoDepth: 0,
+      composed: () => undefined,
+    } as unknown as EditorState;
+    render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{ listBindingFields: async () => SOURCES }}
+      />
+    );
+    return editor;
+  }
+
+  /** Bind the alt text to the post's title through the picker. */
+  async function bindAlt(editor: EditorState): Promise<BuilderOp> {
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Alt text to a field" })
+    );
+    fireEvent.click(await screen.findByRole("option", { name: /^Title/ }));
+    expect(vi.mocked(editor.apply)).toHaveBeenCalledTimes(1);
+    return vi.mocked(editor.apply).mock.calls[0]?.[0] as BuilderOp;
+  }
+
+  it("lifts the decorative mark in the same edit as the binding", async () => {
+    // The block reads the mark before the alt text: left on, the bound words
+    // would never reach a screen reader.
+    const editor = mountFigure({ alt: "Kept", decorative: true });
+    expect(await bindAlt(editor)).toEqual({
+      kind: "update",
+      id: "f",
+      patch: {
+        bindings: { alt: { $bind: "title" } },
+        props: { alt: "Kept" },
+      },
+    });
+  });
+
+  it("writes the binding alone for an image that is not decorative", async () => {
+    // The control: nothing to lift, so the props stay out of the edit.
+    const editor = mountFigure({ alt: "Kept" });
+    expect(await bindAlt(editor)).toEqual({
+      kind: "update",
+      id: "f",
+      patch: { bindings: { alt: { $bind: "title" } } },
+    });
+  });
+});
+
+/** The inspector over one document, with the selected block and services given. */
+function mountDocument(
+  document: BlockDocument,
+  selected: string,
+  services: Partial<ContentServices> = {
+    listBindingFields: async () => SOURCES,
+  }
+): void {
+  render(
+    <InspectorPanel
+      editor={
+        {
+          document,
+          selectedId: selected,
+          selection: { ids: [selected], primary: selected },
+          applyAll: vi.fn(() => document),
+          select: vi.fn(),
+          apply: vi.fn(() => document),
+          undo: vi.fn(),
+          redo: vi.fn(),
+          canUndo: false,
+          canRedo: false,
+          undoDepth: 0,
+          composed: () => undefined,
+        } as unknown as EditorState
+      }
+      contentServices={services}
+    />
+  );
+}
+
+describe("a bound link's Fallback", () => {
+  /** A block with a link prop and a yes-or-no, each bound. */
+  function mountTeaser(): void {
+    registerBlocks(
+      [
+        {
+          name: "acme/teaser",
+          version: 1,
+          description: "A teaser.",
+          example: { props: {} },
+          editor: { label: "Teaser" },
+          props: {
+            more: { label: "More", role: "content", type: "link" },
+            shown: { label: "Shown", role: "content", type: "checkbox" },
+          },
+          defaultProps: {},
+          render: () => null,
+        },
+      ] as never,
+      { source: "binding-controls-link-fallback-test" }
+    );
+    mountDocument(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "t",
+            type: "acme/teaser",
+            version: 1,
+            props: {},
+            bindings: {
+              more: { $bind: "siteUrl", source: "site" },
+              shown: { $bind: "featured" },
+            },
+          } as BlockNode,
+        ],
+      } as BlockDocument,
+      "t"
+    );
+  }
+
+  it("is offered for a link, whose value is an address", async () => {
+    mountTeaser();
+    const chip = await screen.findByRole("button", {
+      name: /^More: bound to/,
+    });
+    const row = chip.closest(".nx-binding");
+    expect(row?.querySelector("input")).not.toBeNull();
+    expect(within(row as HTMLElement).getByLabelText("Fallback")).toBeTruthy();
+  });
+
+  it("is not offered for a yes-or-no, which text can't hold", async () => {
+    // The control: the same block, a prop that isn't text.
+    mountTeaser();
+    const chip = await screen.findByRole("button", {
+      name: /^Shown: bound to/,
+    });
+    const row = chip.closest(".nx-binding") as HTMLElement;
+    expect(within(row).queryByLabelText("Fallback")).toBeNull();
+  });
+});
+
+describe("an alt text bound in a contentOnly area", () => {
+  /** A figure inside an area where its content may change and its design may not. */
+  function mountInArea(figure: Partial<BlockNode>): void {
+    registerBlocks(
+      [
+        {
+          name: "acme/figure",
+          version: 1,
+          description: "A figure.",
+          example: { props: {} },
+          editor: { label: "Figure" },
+          props: {
+            alt: { label: "Alt text", role: "content", type: "text" },
+            // Not content, so the area holds it.
+            decorative: { label: "Decorative (no alt text)", type: "checkbox" },
+          },
+          defaultProps: {},
+          render: () => null,
+        },
+        {
+          name: "acme/area",
+          version: 1,
+          description: "An area whose blocks keep their design.",
+          example: { props: {} },
+          editor: { label: "Area" },
+          props: {},
+          slots: {
+            children: {
+              lock: "contentOnly",
+              defaultBlock: [{ type: "acme/figure" }],
+            },
+          },
+          render: () => null,
+        },
+      ] as never,
+      { source: "binding-controls-area-test" }
+    );
+    mountDocument(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "area",
+            type: "acme/area",
+            version: 1,
+            props: {},
+            slots: {
+              children: [
+                {
+                  id: "f",
+                  type: "acme/figure",
+                  version: 1,
+                  props: {},
+                  ...figure,
+                } as BlockNode,
+              ],
+            },
+          } as BlockNode,
+        ],
+      } as BlockDocument,
+      "f",
+      {
+        listBindingFields: async () => SOURCES,
+        planUnbind: async () => ({ refusal: "unused" }),
+      }
+    );
+  }
+
+  it("keeps a bound alt's fallback and unbind, and holds the change that would lift the mark", async () => {
+    mountInArea({
+      props: { decorative: true },
+      bindings: { alt: { $bind: "title" } },
+    });
+    const chip = await screen.findByRole("button", {
+      name: /^Alt text: bound to/,
+    });
+    expect(
+      (screen.getByLabelText("Fallback") as HTMLInputElement).disabled
+    ).toBe(false);
+    fireEvent.keyDown(chip, { key: "Enter" });
+    expect(
+      await screen.findByRole("menuitem", { name: "Unbind, keep the alt text" })
+    ).toBeTruthy();
+    // A change of field would lift the decorative mark, which the area holds.
+    expect(
+      screen.queryByRole("menuitem", { name: "Change field…" })
+    ).toBeNull();
+  });
+
+  it("holds a fresh bind that would lift the mark", () => {
+    mountInArea({ props: { decorative: true } });
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Bind Alt text to a field",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+  });
+
+  it("offers a fresh bind that would lift nothing", () => {
+    // The control: the same area, no mark to lift, so the bind is offered.
+    mountInArea({});
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Bind Alt text to a field",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(false);
+  });
+});
+
+describe("a bound prop's Open source", () => {
+  /** The chip's menu, opened from the keyboard as a reader opens it. */
+  async function openMenu(): Promise<void> {
+    const chip = await screen.findByRole("button", { name: /^Text: bound to/ });
+    fireEvent.keyDown(chip, { key: "Enter" });
+    await screen.findByRole("menuitem", { name: "Change field…" });
+  }
+
+  it("opens the host's address for the source in a new tab, named with the field", async () => {
+    const sourceHref = vi.fn(
+      (_binding: unknown): string => "/admin/collections/posts/p1"
+    );
+    mount({ label: { $bind: "title" } }, { sourceHref });
+    await openMenu();
+    const item = screen.getByRole("menuitem", {
+      name: "Open Title's source",
+    });
+    // A link, opened apart from the editor and with no hold on its window.
+    expect(item.tagName).toBe("A");
+    expect(item.getAttribute("href")).toBe("/admin/collections/posts/p1");
+    expect(item.getAttribute("target")).toBe("_blank");
+    expect(item.getAttribute("rel")?.split(" ")).toContain("noopener");
+    // Asked about the binding the chip shows, not some other.
+    expect(sourceHref).toHaveBeenCalledWith({ $bind: "title" });
+  });
+
+  it("is not offered where the host has no screen for the source", async () => {
+    // The control for the test above: the same menu, its other items drawn,
+    // and no Open source, whether the host answers nothing or has no answer.
+    mount({ label: { $bind: "title" } }, { sourceHref: () => undefined });
+    await openMenu();
+    expect(screen.queryByRole("menuitem", { name: /source$/ })).toBeNull();
+    cleanup();
+    clearBlocks();
+    mount({ label: { $bind: "title" } });
+    await openMenu();
+    expect(screen.queryByRole("menuitem", { name: /source$/ })).toBeNull();
   });
 });
 
@@ -553,5 +1150,118 @@ describe("every bindable prop", () => {
     expect(
       screen.queryByRole("button", { name: "Bind Tint to a field" })
     ).toBeNull();
+  });
+
+  it("offers the bind button inside a group for each prop the group binds, and none for what qualifies it", () => {
+    // An image's source and alt text, and a link, declared as `core/image`
+    // and `core/button` declare them, so every prop is drawn by a group.
+    const props = {
+      mediaId: {
+        label: "Image",
+        role: "content",
+        type: "media",
+        accept: "image/*",
+        addressProp: "src",
+      },
+      src: { label: "Image address", role: "content", type: "url" },
+      alt: { label: "Alt text", role: "content", type: "text" },
+      decorative: { label: "Decorative (no alt text)", type: "checkbox" },
+      href: { label: "Link", role: "content", type: "url" },
+      target: {
+        label: "Open link in",
+        type: "select",
+        options: ["_self", "_blank"],
+      },
+      rel: { label: "Link relationship", type: "text" },
+    } as const;
+    registerBlocks(
+      [
+        {
+          name: "acme/linked-picture",
+          version: 1,
+          description: "A linked picture.",
+          example: { props: {} },
+          editor: { label: "Linked picture" },
+          props,
+          defaultProps: {},
+          render: () => null,
+        },
+      ] as never,
+      { source: "binding-controls-groups-test" }
+    );
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "g",
+          type: "acme/linked-picture",
+          version: 1,
+          // An address and a link stored, so the source shows its URL side
+          // and the link its target and rel rows: every prop is on screen.
+          props: {
+            src: "https://example.test/spring.jpg",
+            href: "https://example.test/",
+          },
+        },
+      ],
+    } as BlockDocument;
+    render(
+      <InspectorPanel
+        editor={
+          {
+            document,
+            selectedId: "g",
+            selection: { ids: ["g"], primary: "g" },
+            applyAll: vi.fn(() => document),
+            select: vi.fn(),
+            apply: vi.fn(() => document),
+            undo: vi.fn(),
+            redo: vi.fn(),
+            canUndo: false,
+            canRedo: false,
+            undoDepth: 0,
+            composed: () => undefined,
+          } as unknown as EditorState
+        }
+        contentServices={{ listBindingFields: async () => SOURCES }}
+      />
+    );
+    // The groups as the panel finds them, so the test follows the groups'
+    // own statement of what they bind rather than a copy of it.
+    const groups = propGroupsOf(inspectSelection(document, "g")?.props ?? []);
+    const grouped = groups.flatMap(group => [...group.drawn]);
+    // Every prop is drawn by a group: none of them falls to a row of its own,
+    // which the test above already covers.
+    expect(new Set(grouped)).toEqual(new Set(Object.keys(props)));
+    const offered = new Set(groups.flatMap(group => [...group.bindable]));
+    for (const name of grouped) {
+      const schema = props[name as keyof typeof props];
+      const button = screen.queryByRole("button", {
+        name: `Bind ${schema.label} to a field`,
+      });
+      if (offered.has(name)) {
+        // A group offers only what a field can fill, and draws its button.
+        expect(bindablePropKind(schema as never), name).not.toBeUndefined();
+        expect(button, name).not.toBeNull();
+      } else {
+        expect(button, name).toBeNull();
+      }
+    }
+    // Named, so neither a group binding nothing nor one binding everything
+    // passes: the image, its address, its words and the link offer the
+    // button; whether it is decorative, and how the link opens, do not,
+    // though a row of their own would bind them.
+    expect([...offered].sort()).toEqual(["alt", "href", "mediaId", "src"]);
+    expect(
+      grouped
+        .filter(
+          name =>
+            !offered.has(name) &&
+            bindablePropKind(props[name as keyof typeof props] as never) !==
+              undefined
+        )
+        .sort()
+    ).toEqual(["decorative", "rel", "target"]);
   });
 });

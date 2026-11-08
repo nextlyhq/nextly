@@ -18,8 +18,12 @@ import {
   canBindFieldToProp,
   fieldFitsProp,
   findNode,
+  getBlock,
+  isPlainRecord,
   sameJsonValue,
   type Binding,
+  type BindingFieldShape,
+  type BindingFormat,
   type BlockDocument,
   type BuilderOp,
 } from "@nextlyhq/blocks-engine";
@@ -36,9 +40,22 @@ import {
   PopoverTrigger,
   Textarea,
 } from "@nextlyhq/ui";
-import { Check, ChevronDown, Database, EyeOff, Unlink } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Database,
+  ExternalLink,
+  EyeOff,
+  Unlink,
+} from "lucide-react";
 import * as React from "react";
 
+import {
+  BindingFormatField,
+  defaultFormatFor,
+  offersFormat,
+  previewWithFormat,
+} from "./binding-format-field";
 import { bindOp, unbindOp } from "./binding-ops";
 import type {
   BindingFieldChoice,
@@ -49,7 +66,9 @@ import type {
 import { ChoiceList, type ListedChoice } from "./choice-list";
 import type { UnbindAnswer } from "./composition-actions";
 import type { ContentServices } from "./content-controls";
+import { ImageBindingFallback } from "./image-binding-fallback";
 import { fieldLabel, propLabel, type EditableProp } from "./inspector";
+import { useItemSource, type ItemSource } from "./item-binding-source";
 
 /** One field the picker offers, with where it is read from. */
 interface FieldOption extends ListedChoice {
@@ -58,26 +77,57 @@ interface FieldOption extends ListedChoice {
   readonly field: BindingFieldChoice;
   /** The relation or group it sits in, named, for a field one step in. */
   readonly parent?: string;
+  /**
+   * The format a pick writes, for a date or a number filling a text prop,
+   * which reaches it only through one; named in the option.
+   */
+  readonly format?: { readonly label: string; readonly format: BindingFormat };
 }
 
-/** The binding a pick writes: the path, and the source when not the entry. */
+/**
+ * The binding a pick writes: the path, the source when not the entry, and
+ * the format the option names, where it names one.
+ */
 function bindingFor(option: FieldOption, kept: Binding | undefined): Binding {
   const source = option.source.binding;
-  const fallback =
-    kept !== undefined && "fallback" in kept ? { fallback: kept.fallback } : {};
+  // The fallback is kept across a change of field, and the option's format
+  // is written with the pick, so a date or a number shows from the start.
+  const carried = {
+    ...(kept !== undefined && "fallback" in kept
+      ? { fallback: kept.fallback }
+      : {}),
+    ...(option.format === undefined ? {} : { format: option.format.format }),
+  };
   if (source.source === "single") {
     return {
       $bind: option.path,
       source: "single",
       sourceKey: source.sourceKey,
-      ...fallback,
+      ...carried,
     };
   }
   return {
     $bind: option.path,
     ...(source.source === "entry" ? {} : { source: source.source }),
-    ...fallback,
+    ...carried,
   };
+}
+
+/**
+ * Whether a bind would empty a prop that may not be written: one of
+ * `locked` the block holds. A held bind is not offered; one that would empty
+ * nothing is, whatever the lock.
+ */
+function clearHeld(
+  document: BlockDocument,
+  nodeId: string,
+  locked: readonly string[] | undefined
+): boolean {
+  if (locked === undefined || locked.length === 0) return false;
+  const props = findNode(document.nodes, nodeId)?.props;
+  return (
+    isPlainRecord(props) && locked.some(name => Object.hasOwn(props, name))
+  );
 }
 
 /** The binding with `fallback` as its fallback; none when it is empty. */
@@ -97,6 +147,11 @@ function isBoundTo(option: FieldOption, binding: Binding): boolean {
     source.source !== "single" ||
     ("sourceKey" in binding && binding.sourceKey === source.sourceKey)
   );
+}
+
+/** The binding with `format` as its format, through the same write as a fallback. */
+function withFormat(binding: Binding, format: BindingFormat): Binding {
+  return { ...binding, format };
 }
 
 /** A source's name as the chip and the picker say it: "This post", "Site". */
@@ -121,18 +176,26 @@ function fittingOptions(
     for (const field of source.fields) {
       const label = choiceLabel(field);
       if (fits(field, prop)) {
-        options.push(option(source, group, field, field.name, label));
+        options.push(
+          withFormatOnBind(
+            option(source, group, field, field.name, label),
+            prop
+          )
+        );
       }
       for (const inner of field.fields ?? []) {
         if (!fits(inner, prop)) continue;
         options.push(
-          option(
-            source,
-            group,
-            inner,
-            `${field.name}.${inner.name}`,
-            choiceLabel(inner),
-            label
+          withFormatOnBind(
+            option(
+              source,
+              group,
+              inner,
+              `${field.name}.${inner.name}`,
+              choiceLabel(inner),
+              label
+            ),
+            prop
           )
         );
       }
@@ -142,14 +205,54 @@ function fittingOptions(
 }
 
 /**
- * Whether a field fills the prop as it is: one that needs a format to (a
- * date or a number into text) waits for the Format control, since a binding
- * without one shows its fallback.
+ * Whether a field fills the prop: as it is, or, for a date or a number into
+ * text, with the format a pick writes (see {@link formatOnBind}). One that
+ * fills it neither way is not offered, since a binding to it shows its
+ * fallback.
  */
 function fits(field: BindingFieldChoice, prop: EditableProp): boolean {
   return (
-    canBindFieldToProp(field, prop.schema) && fieldFitsProp(field, prop.schema)
+    canBindFieldToProp(field, prop.schema) &&
+    (fieldFitsProp(field, prop.schema) ||
+      formatOnBind(field, prop) !== undefined)
   );
+}
+
+/**
+ * The format a pick of `field` writes: the inspector's starting preset where
+ * the field fills the prop only through a format, none where it fills it as
+ * it is.
+ */
+function formatOnBind(
+  field: BindingFieldChoice,
+  prop: EditableProp
+): FieldOption["format"] {
+  if (fieldFitsProp(field, prop.schema)) return undefined;
+  return defaultFormatFor(bindablePropKind(prop.schema), field);
+}
+
+/** An option with the format its pick writes, where it writes one. */
+function withFormatOnBind(
+  choice: FieldOption,
+  prop: EditableProp
+): FieldOption {
+  const format = formatOnBind(choice.field, prop);
+  if (format === undefined) return choice;
+  const { preview } = choice.field;
+  if (preview === undefined) return { ...choice, format };
+  // Its value as the pick will show it, in the format the option names.
+  const shown = previewWithFormat(
+    preview,
+    format.format,
+    bindablePropKind(prop.schema),
+    choice.field
+  );
+  return {
+    ...choice,
+    format,
+    field: { ...choice.field, preview: shown },
+    search: [choice.label, shown].join(" "),
+  };
 }
 
 /** One option, with its text as the list searches it and a reader hears it. */
@@ -184,6 +287,11 @@ function OptionRow({ option }: { option: FieldOption }): React.JSX.Element {
         )}
         {choiceLabel(field)}
       </span>
+      {/* The format a pick writes, said quietly beside the name and read
+          with it, so the author knows the value will be formatted. */}
+      {option.format === undefined ? null : (
+        <span className="nx-binding-option__tag">{option.format.label}</span>
+      )}
       {/* Words, not a colour or an icon alone: each is part of the option's
           own text, so a screen reader announces it with the field. */}
       {!field.public ? (
@@ -315,9 +423,18 @@ export interface BindingControlProps {
   readonly document: BlockDocument;
   readonly services: ContentServices | undefined;
   readonly disabled: boolean;
-  /** Apply one op as an edit. */
   /** Apply one op as an edit; `false` where the editor refused it. */
   readonly onApply: (op: BuilderOp) => boolean;
+  /**
+   * Props emptied in the same edit as a bind: what would win over the bound
+   * prop, such as a button's entry reference over its address.
+   */
+  readonly clearsOnBind?: readonly string[] | undefined;
+  /**
+   * Those of `clearsOnBind` that may not be written where the block sits: a
+   * bind or a change of field that would empty one is held.
+   */
+  readonly clearsLocked?: readonly string[] | undefined;
   /** The prop's own control, drawn while it is not bound. */
   readonly children: React.ReactNode;
 }
@@ -369,6 +486,8 @@ function BindButton({
   services,
   disabled,
   onApply,
+  clearsOnBind,
+  clearsLocked,
   onBound,
   onRefused,
 }: BindingControlProps & {
@@ -390,7 +509,7 @@ function BindButton({
           className="nx-binding-row__bind"
           aria-label={`Bind ${name} to a field`}
           title={`Bind ${name} to a field`}
-          disabled={disabled}
+          disabled={disabled || clearHeld(document, nodeId, clearsLocked)}
           data-open={open ? "" : undefined}
         >
           <Database aria-hidden="true" size={14} />
@@ -427,7 +546,8 @@ function BindButton({
               document,
               nodeId,
               prop.name,
-              bindingFor(picked, undefined)
+              bindingFor(picked, undefined),
+              clearsOnBind
             );
             setOpen(false);
             if (op === null || !onApply(op)) {
@@ -449,6 +569,20 @@ const TEXT_PROP_TYPES: ReadonlySet<string> = new Set([
   "textarea",
   "url",
 ]);
+
+/**
+ * The bindable kinds whose value is plain text: text, and a link or an
+ * address (`url` and `link` props both bind as "link").
+ */
+const TEXT_KINDS: ReadonlySet<string> = new Set(["text", "link"]);
+
+/** Whether a prop's fallback is written as text: by its type or its kind. */
+function takesTextFallback(prop: EditableProp): boolean {
+  return (
+    TEXT_PROP_TYPES.has(prop.schema.type) ||
+    TEXT_KINDS.has(bindablePropKind(prop.schema) ?? "")
+  );
+}
 
 /** Said under a field where the editor refused the binding's edit. */
 const EDIT_REFUSED = "The page refused this edit, so nothing changed.";
@@ -485,7 +619,9 @@ function noteFor(
   blockLabel: string,
   propName: string,
   /** The bound field, named as the chip names it. */
-  fieldName: string
+  fieldName: string,
+  /** The block's label for the prop an image's address went into. */
+  intoLabel?: string
 ): string {
   const block = `The ${blockLabel.toLowerCase()}`;
   const value =
@@ -493,18 +629,32 @@ function noteFor(
       ? `: “${answer.value}”`
       : "";
   // A field visitors can't read: its value was never copied in, and the note
-  // says so before what was kept in its place.
+  // says so before what was kept in its place. Said first, since what was
+  // kept matters less than that the field is private.
   if (answer.unreadable === true) {
     const unread = `Visitors can't read “${fieldName}”, so its value wasn't copied in.`;
     return answer.kept === "fallback"
       ? `${unread} ${block} keeps the fallback${value}.`
       : `${unread} ${block} keeps its own ${propName.toLowerCase()}.`;
   }
+  // An image kept by its address goes to another prop than the one unbound,
+  // which is left empty, so the note names where the address went.
+  if (answer.into !== undefined) {
+    const into = intoLabel ?? fieldLabel(answer.into);
+    switch (answer.kept) {
+      case "visitor":
+        return `Visitors saw an image address, not a library image, so it's kept in ${into}.`;
+      // The fallback is said where it is what visitors saw: the binding's
+      // own address, not one the field gave.
+      case "fallback":
+        return `Visitors saw the fallback's image address, so it's kept in ${into}.`;
+      default:
+        return `The image address given is kept in ${into}.`;
+    }
+  }
   switch (answer.kept) {
     case "visitor":
-      return answer.into === undefined
-        ? `${block} keeps what visitors saw${value}.`
-        : `${block} keeps the image visitors saw, by its address.`;
+      return `${block} keeps what visitors saw${value}.`;
     case "fallback":
       return `Visitors saw the fallback, so ${block.toLowerCase()} keeps it${value}.`;
     case "own":
@@ -514,11 +664,17 @@ function noteFor(
   }
 }
 
+/** A field as the chip names it and a format judges it, wherever it was read. */
+type NamedField = Omit<BindingFieldShape, "fields"> & {
+  readonly label?: string;
+  readonly fields?: readonly NamedField[];
+};
+
 /**
  * The name a field is listed by: the host's label where it gives one ("Site
  * URL"), else its stored name as a person reads it.
  */
-function choiceLabel(field: BindingFieldChoice): string {
+function choiceLabel(field: NamedField): string {
   return field.label ?? fieldLabel(field.name);
 }
 
@@ -529,7 +685,7 @@ function choiceLabel(field: BindingFieldChoice): string {
  */
 function pathName(
   path: string,
-  fields: readonly BindingFieldChoice[] | undefined
+  fields: readonly NamedField[] | undefined
 ): string {
   const names: string[] = [];
   let level = fields;
@@ -541,27 +697,182 @@ function pathName(
   return names.join(" › ");
 }
 
-/** The field a binding reads, named, and its source, once the sources are read. */
-function boundNames(
+/** The source a binding reads, once the sources are read and it is among them. */
+function boundSource(
   binding: Binding,
   sources: readonly BindingFieldSource[] | "loading" | "failed"
-): { readonly field: string; readonly source: string | undefined } {
-  const path = binding.$bind;
-  if (typeof sources === "string") {
-    return { field: pathName(path, undefined), source: undefined };
-  }
+): BindingFieldSource | undefined {
+  if (typeof sources === "string") return undefined;
   const wanted = binding.source ?? "entry";
-  const found = sources.find(
+  return sources.find(
     candidate =>
       candidate.binding.source === wanted &&
       (candidate.binding.source !== "single" ||
         ("sourceKey" in binding &&
           candidate.binding.sourceKey === binding.sourceKey))
   );
+}
+
+/**
+ * A source named from the binding alone, for one the host did not list: a
+ * Single with nothing saved yet, or an entry it could not read. Named from
+ * its key, so the chip still says where the field comes from.
+ */
+function unlistedSourceName(binding: Binding): string {
+  if (binding.source === "single") return fieldLabel(binding.sourceKey);
+  return binding.source === "site" ? "Site" : "This entry";
+}
+
+/** Where a binding reads, named, and that source's fields where they are read. */
+interface BoundFrom {
+  /** `undefined` only while the sources are being read. */
+  readonly name: string | undefined;
+  readonly fields: readonly NamedField[] | undefined;
+}
+
+/**
+ * Where a binding reads: a list's item from its list's collection, any other
+ * source from the host's sources, and one the host did not list from the
+ * binding itself once the sources are read.
+ */
+function boundFrom(
+  binding: Binding,
+  sources: readonly BindingFieldSource[] | "loading" | "failed",
+  item: ItemSource | undefined
+): BoundFrom {
+  if (item !== undefined) return { name: item.name, fields: item.fields };
+  const found = boundSource(binding, sources);
+  if (found !== undefined) {
+    return { name: sourceName(found), fields: found.fields };
+  }
   return {
-    field: pathName(path, found?.fields),
-    source: found === undefined ? undefined : sourceName(found),
+    name: sources === "loading" ? undefined : unlistedSourceName(binding),
+    fields: undefined,
   };
+}
+
+/** The field a binding reads, named, and its source. */
+function boundNames(
+  binding: Binding,
+  from: BoundFrom
+): { readonly field: string; readonly source: string | undefined } {
+  return { field: pathName(binding.$bind, from.fields), source: from.name };
+}
+
+/**
+ * The field a binding reads, as its source lists it: one step into a
+ * relation or a group at most, as a path may go. `undefined` until the
+ * source's fields are read, and for a field they don't list.
+ */
+function boundField(binding: Binding, from: BoundFrom): NamedField | undefined {
+  const [first, inner, ...rest] = binding.$bind.split(".");
+  if (rest.length > 0) return undefined;
+  const top = from.fields?.find(field => field.name === first);
+  if (inner === undefined) return top;
+  return top?.fields?.find(field => field.name === inner);
+}
+
+/** What the block names a prop, for a note naming another prop than the bound one. */
+function blockPropLabel(
+  document: BlockDocument,
+  nodeId: string,
+  name: string | undefined
+): string | undefined {
+  if (name === undefined) return undefined;
+  const node = findNode(document.nodes, nodeId);
+  const schema =
+    node === undefined ? undefined : getBlock(node.type)?.props?.[name];
+  return schema === undefined ? undefined : propLabel(name, schema);
+}
+
+/**
+ * The chip menu's way to the field's source: a link, so it opens as one, in a
+ * new tab with the editor kept and no hold on this window. Named with the
+ * field, so the item says whose source it opens.
+ */
+function OpenSourceItem({
+  href,
+  field,
+}: {
+  href: string;
+  field: string;
+}): React.JSX.Element {
+  return (
+    <DropdownMenuItem asChild>
+      <a href={href} target="_blank" rel="noopener noreferrer">
+        <ExternalLink aria-hidden="true" size={14} />
+        {`Open ${field}'s source`}
+      </a>
+    </DropdownMenuItem>
+  );
+}
+
+/** A bound prop's own rows under its chip: its Fallback, and its Format. */
+function BoundValueRows({
+  prop,
+  binding,
+  field,
+  services,
+  disabled,
+  labelId,
+  onRebind,
+}: {
+  prop: EditableProp;
+  binding: Binding;
+  /** The field the binding reads, once its source's fields are read. */
+  field: NamedField | undefined;
+  services: ContentServices | undefined;
+  disabled: boolean;
+  /** The id of the prop's name, which each row is about. */
+  labelId: string;
+  /** Write the binding with a new fallback or format. */
+  onRebind: (next: Binding) => void;
+}): React.JSX.Element {
+  const kind = bindablePropKind(prop.schema);
+  const fallback =
+    "fallback" in binding && typeof binding.fallback === "string"
+      ? binding.fallback
+      : "";
+  return (
+    <>
+      {kind === "image" ? (
+        // An image's fallback is an address, with its picture shown.
+        <ImageBindingFallback
+          binding={binding}
+          services={services}
+          disabled={disabled}
+          describedBy={labelId}
+          onFallback={next => onRebind(withFallback(binding, next))}
+        />
+      ) : takesTextFallback(prop) ? (
+        // A text input writes text: offered for a prop whose value is text
+        // alone, so a number's, a choice's or a passage's fallback is never
+        // rewritten.
+        <FallbackInput
+          describedBy={labelId}
+          fallback={fallback}
+          disabled={disabled}
+          // A long-text prop keeps its fallback's line breaks.
+          multiline={prop.schema.type === "textarea"}
+          onCommit={next => onRebind(withFallback(binding, next))}
+        />
+      ) : null}
+      {offersFormat(kind, field) ? (
+        <BindingFormatField
+          // Keyed by what the binding reads, so a rebind to another field
+          // starts the row afresh: a currency picked but not yet given a code
+          // belongs to the field it was picked for, not to the next one.
+          key={`${binding.source ?? ""}:${binding.sourceKey ?? ""}:${binding.$bind}`}
+          stored={binding.format}
+          kind={kind}
+          field={field}
+          disabled={disabled}
+          describedBy={labelId}
+          onFormat={format => onRebind(withFormat(binding, format))}
+        />
+      ) : null}
+    </>
+  );
 }
 
 /**
@@ -776,12 +1087,15 @@ function ChipMenuItems({
   canChange,
   canUnbind,
   propName,
+  source,
   onChange,
   onUnbind,
 }: {
   canChange: boolean;
   canUnbind: boolean;
   propName: string;
+  /** Where the field's source is edited, where the host has a screen for it. */
+  source: { readonly href: string; readonly field: string } | undefined;
   onChange: () => void;
   onUnbind: () => void;
 }): React.JSX.Element {
@@ -793,6 +1107,9 @@ function ChipMenuItems({
           Change field…
         </DropdownMenuItem>
       ) : null}
+      {source === undefined ? null : (
+        <OpenSourceItem href={source.href} field={source.field} />
+      )}
       {canUnbind ? (
         <>
           <DropdownMenuSeparator />
@@ -816,6 +1133,7 @@ function ChipWithMenu({
   canChange,
   canUnbind,
   propName,
+  source,
   onUnbind,
   picker,
 }: {
@@ -830,13 +1148,17 @@ function ChipWithMenu({
   canChange: boolean;
   canUnbind: boolean;
   propName: string;
+  /** Where the field's source is edited, where the host has a screen for it. */
+  source: { readonly href: string; readonly field: string } | undefined;
   onUnbind: () => void;
   /** The change picker, handed how to close itself. */
   picker: (close: () => void) => React.ReactNode;
 }): React.JSX.Element {
   const chipRef = React.useRef<HTMLButtonElement>(null);
   const [changing, setChanging] = React.useState(false);
-  if (!canChange && !canUnbind) return <BoundChip {...chip} menu={false} />;
+  if (!canChange && !canUnbind && source === undefined) {
+    return <BoundChip {...chip} menu={false} />;
+  }
   return (
     // The menu opens from the chip; "Change field" opens the picker at the
     // same place, anchored to it rather than triggered by it, so one press
@@ -853,6 +1175,7 @@ function ChipWithMenu({
             canChange={canChange}
             canUnbind={canUnbind}
             propName={propName}
+            source={source}
             onChange={() => setChanging(true)}
             onUnbind={onUnbind}
           />
@@ -886,6 +1209,8 @@ function BoundField({
   services,
   disabled,
   onApply,
+  clearsOnBind,
+  clearsLocked,
   onUnbound,
 }: Omit<BindingControlProps, "binding" | "children"> & {
   binding: Binding;
@@ -894,14 +1219,18 @@ function BoundField({
   const labelId = React.useId();
   const [refusal, setRefusal] = React.useState<string | null>(null);
   const sources = useBindingSources(services, true);
+  const item = useItemSource(binding, document, nodeId, services);
+  const from = boundFrom(binding, sources, item);
   const name = propLabel(prop.name, prop.schema);
-  const names = boundNames(binding, sources);
+  const names = boundNames(binding, from);
+  // Where "Open source" leads: the host's answer, absent where it has none.
+  const sourceHref = services?.sourceHref?.(binding);
   // The whole of it, on the tooltip and in the accessible name: the chip
   // cuts the source first, then the field, where the panel is narrow.
   const whole =
     names.source === undefined
       ? names.field
-      : `${names.field} of ${names.source.replace(/^This /, "this ")}`;
+      : `${names.field} of ${names.source.replace(/^(This|Each) /, word => word.toLowerCase())}`;
   const unbind = useUnbind({
     nodeId,
     prop,
@@ -911,15 +1240,17 @@ function BoundField({
     onApply,
     onUnbound,
     onRefused: setRefusal,
-    note: answer => noteFor(answer, blockLabel, name, names.field),
+    // An image kept by its address names the prop the address went into,
+    // as the block labels it.
+    note: answer =>
+      noteFor(
+        answer,
+        blockLabel,
+        name,
+        names.field,
+        blockPropLabel(document, nodeId, answer.into)
+      ),
   });
-  const fallback =
-    "fallback" in binding && typeof binding.fallback === "string"
-      ? binding.fallback
-      : "";
-  // A text input writes text: offered for a prop whose value is text alone,
-  // so a number's, a choice's or a passage's fallback is never rewritten.
-  const textFallback = TEXT_PROP_TYPES.has(prop.schema.type);
   return (
     <div className="nx-inspector__field nx-binding" data-bound="">
       <p className="nx-inspector__field-name" id={labelId}>
@@ -938,9 +1269,17 @@ function BoundField({
             source: names.source,
             disabled,
           }}
-          canChange={services?.listBindingFields !== undefined}
+          canChange={
+            services?.listBindingFields !== undefined &&
+            !clearHeld(document, nodeId, clearsLocked)
+          }
           canUnbind={services?.planUnbind !== undefined}
           propName={name}
+          source={
+            sourceHref === undefined
+              ? undefined
+              : { href: sourceHref, field: names.field }
+          }
           onUnbind={() => void unbind()}
           picker={close => (
             <BindingPicker
@@ -953,7 +1292,8 @@ function BoundField({
                   document,
                   nodeId,
                   prop.name,
-                  bindingFor(picked, binding)
+                  bindingFor(picked, binding),
+                  clearsOnBind
                 );
                 close();
                 // A refusal said of the earlier field is no longer true; one
@@ -963,23 +1303,20 @@ function BoundField({
             />
           )}
         />
-        {!textFallback ? null : (
-          <FallbackInput
-            describedBy={labelId}
-            fallback={fallback}
-            disabled={disabled}
-            multiline={prop.schema.type === "textarea"}
-            onCommit={next => {
-              const op = bindOp(
-                document,
-                nodeId,
-                prop.name,
-                withFallback(binding, next)
-              );
-              setRefusal(op !== null && onApply(op) ? null : EDIT_REFUSED);
-            }}
-          />
-        )}
+        <BoundValueRows
+          prop={prop}
+          binding={binding}
+          field={boundField(binding, from)}
+          services={services}
+          disabled={disabled}
+          labelId={labelId}
+          // One write for the fallback and the format alike: the binding
+          // replaced, as a pick replaces it.
+          onRebind={next => {
+            const op = bindOp(document, nodeId, prop.name, next);
+            setRefusal(op !== null && onApply(op) ? null : EDIT_REFUSED);
+          }}
+        />
         {refusal === null ? null : (
           <UnboundNote note={{ text: refusal, tone: "refused" }} />
         )}

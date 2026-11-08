@@ -31,21 +31,33 @@ function bindingsOf(node: {
  * The op binding `prop` of block `id` to `binding`, replacing a binding the
  * prop already had; `null` when the document holds no such block.
  *
+ * `clear` names props emptied in the same op, for a prop another prop would
+ * win over once bound: a button's entry reference is followed before its
+ * address, so binding the address alone would leave the button going to the
+ * entry. Only props the block holds are named in the patch, so a bind with
+ * nothing to clear writes the bindings alone.
+ *
  * @experimental Settles with the editor's binding controls.
  */
 export function bindOp(
   document: BlockDocument,
   id: string,
   prop: string,
-  binding: Binding
+  binding: Binding,
+  clear: readonly string[] = []
 ): BuilderOp | null {
   const node = findNode(document.nodes, id);
   if (node === undefined) return null;
-  return {
-    kind: "update",
-    id,
-    patch: { bindings: { ...bindingsOf(node), [prop]: binding } },
-  };
+  const bindings = { ...bindingsOf(node), [prop]: binding };
+  const props: Record<string, unknown> = isPlainRecord(node.props)
+    ? { ...node.props }
+    : {};
+  const held = clear.filter(name => Object.hasOwn(props, name));
+  if (held.length === 0) {
+    return { kind: "update", id, patch: { bindings } };
+  }
+  for (const name of held) delete props[name];
+  return { kind: "update", id, patch: { bindings, props } };
 }
 
 /**
