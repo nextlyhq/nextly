@@ -1290,6 +1290,7 @@ export type {
   BindingSchemaRef,
   BindingSchemaSource,
   CheckedBinding,
+  CrossedRelation,
   ImageValue,
 } from "./binding-rules";
 // A document's bindings judged against the schema of what they read, as a
