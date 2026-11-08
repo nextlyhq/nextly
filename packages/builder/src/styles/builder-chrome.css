@@ -3810,6 +3810,19 @@
 }
 
 /*
+ * Chrome held at the frame's viewport (`pinned` in `canvas-frame.tsx`): over
+ * the viewport, inset from the layer's bleed there, and not moved with the
+ * page's scroll as the content box is, so a long page scrolls under it. Above
+ * the content's marks; it takes no presses of its own, so the page under it
+ * is still reached, and the controls in it claim theirs back.
+ */
+.nx-canvas-layer__pinned {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+}
+
+/*
  * The cue over the site's own layout around the canvas, on a page the site
  * serves. The layout is inert in the page, so the cue answers the pointer in
  * its place: a not-allowed cursor, the tooltip, and on hover a tag in the
@@ -8977,7 +8990,8 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  * The one row the canvas's preview tags share, where the variant's tag sits
  * alone: the variant previewed and the site mode picked, side by side and
  * never over each other. Inside it the row places each tag, so the variant's
- * tag gives up its own position.
+ * tag gives up its own position. Drawn in the frame's pinned chrome, so its
+ * top right is the viewport's and it stays there while the page scrolls.
  */
 .nx-canvas-tags {
   position: absolute;

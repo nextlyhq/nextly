@@ -938,10 +938,12 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             // The site mode the author picked, on the frame's document and
             // the frame element only; nothing picked draws the page's own.
             theme={previewed.theme}
+            // One row: the variant previewed and the mode picked. Pinned to
+            // the frame's viewport, so it stays in view while the page
+            // scrolls rather than leaving with the page's top.
+            pinned={previewed.tags}
             overlay={
               <>
-                {/* One row: the variant previewed and the mode picked. */}
-                {previewed.tags}
                 {/* A selected block the page hides on this device is drawn
                     anyway, and its ring says so. */}
                 <CanvasMarks

@@ -38,7 +38,7 @@ export function useCanvasPreviewMode(): CanvasPreviewMode {
 export interface PreviewedCanvas {
   /** The frame's `theme`: the picked mode, or nothing to draw the page's own. */
   readonly theme: TokenMode | undefined;
-  /** The one row of tags over the canvas, for the frame's overlay. */
+  /** The one row of tags over the canvas, for the frame's pinned chrome. */
   readonly tags: JSX.Element;
 }
 
