@@ -3,6 +3,8 @@
  * repaired them: the scan holds itself to the caps the read pipeline applies.
  * And what an image binding's fallback fills: an image address or a media
  * library id, each said for what it is, so the renderer draws either.
+ * And the language and zone a render formats in, which the editor's previews
+ * ask of the same rule.
  */
 import { describe, expect, it } from "vitest";
 
@@ -15,6 +17,7 @@ import {
 import { DEFAULT_LIMITS } from "./limits";
 import {
   bindingDemand,
+  bindingFormatEnv,
   createBindingRun,
   resolveNodeBindings,
 } from "./resolve-bindings";
@@ -221,5 +224,43 @@ describe("an image binding's fallback", () => {
       holds: "media",
       from: "own",
     });
+  });
+});
+
+describe("the language and time zone a render formats in", () => {
+  it("keeps a language and a zone the runtime knows", () => {
+    expect(
+      bindingFormatEnv({ locale: "ar-EG", timeZone: "Asia/Karachi" })
+    ).toEqual({
+      env: { locale: "ar-EG", timeZone: "Asia/Karachi" },
+      timeZoneValid: true,
+    });
+  });
+
+  it("is English and UTC for a page with neither, by intent", () => {
+    expect(bindingFormatEnv({})).toEqual({
+      env: { locale: "en", timeZone: "UTC" },
+      timeZoneValid: true,
+    });
+  });
+
+  it("is UTC for a zone given and refused, saying so", () => {
+    expect(bindingFormatEnv({ timeZone: "Not/AZone" })).toEqual({
+      env: { locale: "en", timeZone: "UTC" },
+      timeZoneValid: false,
+    });
+  });
+
+  it("is what a render's pass formats in", () => {
+    // Asked of the pass a render starts, not of the rule, so a pass that
+    // resolved its language or zone some other way fails here.
+    const run = createBindingRun({
+      sources: {},
+      props: { get: () => undefined },
+      locale: "ar-EG",
+      timeZone: "Not/AZone",
+    });
+    expect(run.env).toEqual({ locale: "ar-EG", timeZone: "UTC" });
+    expect(run.timeZoneValid).toBe(false);
   });
 });

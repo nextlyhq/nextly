@@ -1317,6 +1317,7 @@ export type {
 export {
   bindDocument,
   bindingDemand,
+  bindingFormatEnv,
   bindingRefsFor,
   createBindingRun,
   DEFAULT_BINDING_LOCALE,
