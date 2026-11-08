@@ -28,9 +28,12 @@
  *   also holds that list's later pages (`<address>/<slug>/page/*`) as one
  *   space, as a page does: its save is refused where a document is published
  *   among them, and a template's or own design's write that starts the list
- *   paging leaves the entry waiting for them. Paging or unpaging a published
- *   template's list settles every entry it draws, and an own design's
- *   publish, republish, unpublish or removal settles its entry.
+ *   paging leaves the entry waiting for them, as it does an entry left
+ *   waiting for its address, which is given both together. Until the
+ *   start-up pass has claimed every page, the pages published among them are
+ *   claimed first, as those at the entry's address are. Paging or unpaging a
+ *   published template's list settles every entry it draws, and an own
+ *   design's publish, republish, unpublish or removal settles its entry.
  * - A collection created at runtime is addressed only by its template, so
  *   once the template is deleted its entries hold nothing, own designs or
  *   not: there is no address left to serve them at.
@@ -59,7 +62,12 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { drawingDesign } from "../templates/entry-designs";
 import { addressSegments } from "../templates/template-addresses";
 
-import { claimKey, type ServedAddress } from "./claim-key";
+import {
+  addressesInSpaces,
+  claimKey,
+  spaceHolding,
+  type ServedAddress,
+} from "./claim-key";
 import {
   claimAddress,
   claimOrWait,
@@ -108,6 +116,13 @@ export interface ServingTemplate {
 export interface OwnDesign {
   /** Whether it splits a list into pages (see `splitsList`). */
   readonly paginates: boolean;
+}
+
+/** A published page as the pre-claim reads it: its id and what it holds. */
+interface PageHolding {
+  readonly id: string;
+  readonly addresses: readonly ServedAddress[];
+  readonly spaces: readonly ServedAddress[];
 }
 
 /** What entries' claims need, resolved per save. */
@@ -212,13 +227,18 @@ export interface EntryClaimsDeps {
    * the addresses and list spaces each holds: the pages an entry's address
    * could fall on before the start-up pass has claimed them.
    */
-  readonly pagesWithSlugs: (slugs: readonly string[]) => Promise<
-    readonly {
-      id: string;
-      addresses: readonly ServedAddress[];
-      spaces: readonly ServedAddress[];
-    }[]
-  >;
+  readonly pagesWithSlugs: (
+    slugs: readonly string[]
+  ) => Promise<readonly PageHolding[]>;
+  /**
+   * Every published page, a batch at a time, with what each holds, read on
+   * `tx`, the write's own transaction, so a write holding the pool's last
+   * connection never waits for a second one: the pages an entry's list's
+   * later pages could fall on before the start-up pass has claimed them.
+   * Every one is read, since under a host's page path (`/{slug}/{title}`) a
+   * page's slug says nothing about where it is served.
+   */
+  readonly publishedPagesOn: (tx: Tx) => AsyncIterable<readonly PageHolding[]>;
   /**
    * One page (from 1) of `collection`'s published entries, as last
    * committed, oldest first, `size` to a page.
@@ -457,7 +477,12 @@ async function claimEntry(
       ? []
       : await wantedAddresses(deps, tx, holder.collection, address, data);
   const spaces = await listSpaces(designs, holder.id, wanted);
-  await claimPagesAt(deps, tx, wanted, "refuse");
+  await claimPagesAt(
+    deps,
+    tx,
+    { addresses: wanted, spaces },
+    { mode: "refuse", pages: publishedPagesRead(deps, tx) }
+  );
   await reconcileHolder(
     deps.claims,
     tx,
@@ -624,29 +649,76 @@ function noAddressRefusal(
 }
 
 /**
+ * The published pages that may stand among an entry's list's later pages,
+ * read on `tx` at most once per write, however many entries it settles:
+ * those served at a later page of some list, the only ones a list's space
+ * can hold.
+ */
+type PublishedPages = () => Promise<readonly PageHolding[]>;
+
+/** {@link PublishedPages}, read through `deps` on `tx` when first asked. */
+function publishedPagesRead(deps: EntryClaimsDeps, tx: Tx): PublishedPages {
+  return once(async () => {
+    const found: PageHolding[] = [];
+    for await (const batch of deps.publishedPagesOn(tx)) {
+      for (const page of batch) {
+        if (page.addresses.some(address => spaceHolding(address) !== null)) {
+          found.push(page);
+        }
+      }
+    }
+    return found;
+  });
+}
+
+/**
  * Until the start-up pass has claimed every existing page, a page already
- * published at one of `addresses` may hold no claim yet, and an entry
- * taking the address would push the page out of it. So such pages claim
- * their addresses first, in this transaction, and the entry is then refused
- * naming them, or waits for them.
+ * published at one of an entry's addresses, or among its list's later
+ * pages, may hold no claim yet, and an entry taking the address or the
+ * space would push the page out of it, the page then waiting behind the
+ * entry once the pass reaches it. So such pages claim those addresses
+ * first, in this transaction, and the entry is then refused naming them, or
+ * waits for them.
  */
 async function claimPagesAt(
   deps: EntryClaimsDeps,
   tx: Tx,
-  addresses: readonly ServedAddress[],
-  mode: "refuse" | "wait"
+  wanted: {
+    readonly addresses: readonly ServedAddress[];
+    readonly spaces: readonly ServedAddress[];
+  },
+  read: { readonly mode: "refuse" | "wait"; readonly pages: PublishedPages }
 ): Promise<void> {
-  if (deps.pagesBackfilled() || addresses.length === 0) return;
-  const candidates = pageCandidates(addresses);
+  if (deps.pagesBackfilled() || wanted.addresses.length === 0) return;
+  const candidates = pageCandidates(wanted.addresses);
   for (const page of await deps.pagesWithSlugs(candidates.slugs)) {
-    await claimForPage(deps, tx, page, candidates, mode);
+    await claimForPage(deps, tx, page, candidates, read.mode);
   }
+  await claimPagesIn(deps, tx, wanted.spaces, read.pages);
 }
 
-/** A page as the pre-claim reads it: its id and what it should hold. */
-type CandidatePage = Awaited<
-  ReturnType<EntryClaimsDeps["pagesWithSlugs"]>
->[number];
+/**
+ * Claim, for the page each belongs to, every published page's address
+ * among the later pages of `spaces`, as `addressesInSpaces` places them,
+ * waiting where another document holds it, as the start-up pass would have
+ * claimed it: the entry's list then waits for the page, or its save is
+ * refused naming it, as where the page had been claimed already.
+ */
+async function claimPagesIn(
+  deps: EntryClaimsDeps,
+  tx: Tx,
+  spaces: readonly ServedAddress[],
+  pages: PublishedPages
+): Promise<void> {
+  if (spaces.length === 0) return;
+  const keys = new Set(spaces.map(list => claimKey("space", list)));
+  for (const page of await pages()) {
+    const holder: Holder = { collection: deps.pages, id: page.id };
+    for (const address of addressesInSpaces(page.addresses, keys)) {
+      await claimOrWait(deps.claims, tx, { address, holder });
+    }
+  }
+}
 
 /**
  * Claim for `page` the list space and the addresses among `candidates` it
@@ -656,7 +728,7 @@ type CandidatePage = Awaited<
 async function claimForPage(
   deps: EntryClaimsDeps,
   tx: Tx,
-  page: CandidatePage,
+  page: PageHolding,
   candidates: PageCandidates,
   mode: "refuse" | "wait"
 ): Promise<void> {
@@ -873,8 +945,9 @@ async function settleDesigned(
 
 /**
  * What every entry of one walk is settled against: where its collection is
- * served, in which languages, whether its entries have a lifecycle, and the
- * designs that may draw them.
+ * served, in which languages, whether its entries have a lifecycle, the
+ * designs that may draw them, and the pages that may stand among their
+ * lists' later pages, read once for the whole walk.
  */
 interface ServedBatchContext {
   readonly collection: string;
@@ -882,6 +955,7 @@ interface ServedBatchContext {
   readonly locales: ReturnType<EntryClaimsDeps["locales"]>;
   readonly lifecycle: Awaited<ReturnType<EntryClaimsDeps["lifecycle"]>>;
   readonly designs: DrawingDesigns;
+  readonly pages: PublishedPages;
 }
 
 /** The context a walk of `collection`'s entries at `address` settles against. */
@@ -898,6 +972,7 @@ async function servedContext(
     locales: deps.locales(),
     lifecycle: await deps.lifecycle(collection, tx),
     designs,
+    pages: publishedPagesRead(deps, tx),
   };
 }
 
@@ -1150,7 +1225,12 @@ async function settleEntry(
   // which tells its author.
   const wanted = found === NO_ADDRESS ? [] : found;
   const spaces = await listSpaces(served.designs, String(id), wanted);
-  await claimPagesAt(deps, tx, wanted, "wait");
+  await claimPagesAt(
+    deps,
+    tx,
+    { addresses: wanted, spaces },
+    { mode: "wait", pages: served.pages }
+  );
   await reconcileHolder(
     deps.claims,
     tx,

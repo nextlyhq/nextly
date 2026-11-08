@@ -5,6 +5,10 @@
  * published design.
  *
  * What separates a correct wiring from a plausible broken one:
+ * - a template published with its list paged over an entry whose address a
+ *   page holds leaves the entry waiting for its address and its later pages
+ *   alike, never paging a list it is not served at, and hands it both
+ *   together once the page gives the address up;
  * - a template published with its list paged over an entry whose later pages
  *   a page is published among leaves the entry at its address, waiting for
  *   them rather than refusing or taking them, and hands them to the entry
@@ -228,6 +232,36 @@ describe.each(getConfiguredTestDialects())(
           kind: "space",
         });
       }
+    });
+
+    it("leaves an entry waiting for both its address and its list's later pages when its paged template is published while a page holds the address, and hands both over once the page is released", async () => {
+      const t = await boot();
+      const entry = await post(t, "post");
+      const blocker = await page(t, "blog/post");
+      await template(t, true);
+
+      // The page keeps the address; the entry waits for it and, behind the
+      // same claim, for its list's later pages, which nobody holds meanwhile.
+      expect(await held(t)).toEqual([`address /blog/post pages:${blocker}`]);
+      expect(await held(t, ["waiting"])).toEqual([
+        `waiting /blog/post posts:${entry}`,
+        `waiting /blog/post posts:${entry}`,
+      ]);
+      expect(await holderAt(t, "/blog/post/page/2")).toBeNull();
+
+      // The page is unpublished: the entry is handed its address and its
+      // later pages together, in the same transaction.
+      await update(t, "pages", blocker, { status: "draft" });
+      expect(await held(t)).toEqual([
+        `address /blog/post posts:${entry}`,
+        `space /blog/post posts:${entry}`,
+      ]);
+      expect(await held(t, ["waiting"])).toEqual([]);
+      expect(await holderAt(t, "/blog/post/page/2")).toEqual({
+        collection: "posts",
+        id: entry,
+        kind: "space",
+      });
     });
 
     it("refuses an entry saved under a paged template where a page is published among its later pages, naming the page, and keeps nothing", async () => {

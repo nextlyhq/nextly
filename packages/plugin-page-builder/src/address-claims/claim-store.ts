@@ -598,13 +598,24 @@ export async function claimSpace(
  * or another holder of the space. It takes them once every one of those is
  * released. Used where nobody is saving the page (the start-up pass), so its
  * list goes unpaged rather than its page being refused.
+ *
+ * The list's later pages go only with its own address: a holder waiting for
+ * `list` itself (another document is served there) waits for the later
+ * pages behind the same claims, so the hand-over that serves it at the
+ * address pages its list, and until then the later pages are no one's.
  */
 export async function claimSpaceOrWait(
   claims: Claims,
   tx: Tx,
   claim: { readonly list: ServedAddress; readonly holder: Holder }
 ): Promise<"claimed" | "waiting"> {
-  const blocking = await spaceBlockers(claims, tx, claim);
+  const atList = await listAddressBlockers(claims, tx, claim);
+  // Not served at the list's address, and nothing there to wait on: every
+  // caller claims or waits for the address first, so this takes nothing
+  // rather than pages a list no one is served at.
+  if (atList !== "held" && atList.length === 0) return "waiting";
+  const blocking =
+    atList === "held" ? await spaceBlockers(claims, tx, claim) : atList;
   if (blocking === "claimed") return "claimed";
   for (const row of blocking) {
     // Already waiting on this one is a duplicate key, and changes nothing.
@@ -621,6 +632,24 @@ export async function claimSpaceOrWait(
     });
   }
   return "waiting";
+}
+
+/**
+ * The claims in the way of `claim.holder` being served at its list's own
+ * address, read under the address's locks: "held" where it holds the
+ * address, else each other document's claim there (the address itself, or
+ * a list's space holding it), which its wait for the later pages waits on.
+ */
+async function listAddressBlockers(
+  claims: Claims,
+  tx: Tx,
+  claim: { readonly list: ServedAddress; readonly holder: Holder }
+): Promise<ClaimRow[] | "held"> {
+  const held = await heldAt(claims, tx, claim.list);
+  const address = storedKey(claimKey("address", claim.list));
+  const own = (row: ClaimRow) => sameHolder(row.holder, claim.holder);
+  if (held.some(row => row.key === address && own(row))) return "held";
+  return held.filter(row => !own(row));
 }
 
 /**
@@ -800,7 +829,14 @@ async function handOver(claims: Claims, tx: Tx, key: string): Promise<void> {
     { kind: { equals: "waiting" }, blockedBy: { equals: key } },
     row => row.kind === "waiting" && row.blockedBy === key
   );
-  for (const wait of waits) {
+  // The waits for addresses first: a list's later pages go to a holder only
+  // once it is served at the list's address, so a holder waiting for both on
+  // this claim is given the address before its list is paged.
+  const ordered = [
+    ...waits.filter(row => !isSpaceWait(row)),
+    ...waits.filter(row => isSpaceWait(row)),
+  ];
+  for (const wait of ordered) {
     const { holder, address } = wait;
     if (holder === null || address === null) continue;
     await remove(claims, tx, wait);

@@ -212,3 +212,19 @@ export function spaceHolding(address: ServedAddress): ServedAddress | null {
   }
   return { locale: address.locale, segments: segments.slice(0, -2) };
 }
+
+/**
+ * The addresses among `addresses` that are later pages of one of the lists
+ * whose space keys are `spaces`, as {@link spaceHolding} places them: the
+ * one answer to whether a document is published inside a list's space,
+ * which a page's save and an entry's ask of the pages already there.
+ */
+export function addressesInSpaces(
+  addresses: readonly ServedAddress[],
+  spaces: ReadonlySet<string>
+): ServedAddress[] {
+  return addresses.filter(address => {
+    const space = spaceHolding(address);
+    return space !== null && spaces.has(claimKey("space", space));
+  });
+}

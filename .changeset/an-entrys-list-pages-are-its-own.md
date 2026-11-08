@@ -34,6 +34,8 @@ list's later pages (`/blog/hello/page/2`, …) beside its address, as a page doe
 the content route serves them. The design is the entry's published own design, else
 its collection's published template. Saving an entry where a document is published
 among those pages is refused, naming it; publishing a paged template or own design, or
-turning on Split into pages in a published one, leaves such an entry waiting for them
-until the document frees the address. Turning pagination off, or unpublishing or
-removing the paged design, frees them.
+turning on Split into pages in a published one, leaves such an entry waiting for them,
+its list shown on one page with no links to later pages, until the document frees the
+address. An entry left waiting for its own address waits for its later pages too, and
+is given both together. Turning pagination off, or unpublishing or removing the paged
+design, frees them.

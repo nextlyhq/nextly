@@ -42,6 +42,7 @@ import { version as PLUGIN_VERSION } from "../package.json";
 import {
   backfillPageClaims,
   publishedPages,
+  publishedPagesOn,
   type PagesReader,
 } from "./address-claims/backfill";
 import { committedClaims, type Tx } from "./address-claims/claim-store";
@@ -3048,6 +3049,18 @@ export const pageBuilder = (
           if (rows.length === 0 || page * 500 >= total) return waiting.size;
         }
       };
+      // Each published page among `rows`, with the claims it holds.
+      const pageHoldings = (rows: readonly unknown[]) =>
+        (rows as Readonly<Record<string, unknown>>[]).flatMap(row =>
+          typeof row.id === "string" || typeof row.id === "number"
+            ? [
+                {
+                  id: String(row.id),
+                  ...pageClaims(row, siteLocales(), opts.pagePreviewPath),
+                },
+              ]
+            : []
+        );
       const claimsDeps: EntryClaimsDeps = {
         claims: claimsStore,
         addresses: templateAddresses,
@@ -3074,17 +3087,14 @@ export const pageBuilder = (
             overrideAccess: true,
             depth: 0,
           });
-          return (found.items as Readonly<Record<string, unknown>>[]).flatMap(
-            row =>
-              typeof row.id === "string" || typeof row.id === "number"
-                ? [
-                    {
-                      id: String(row.id),
-                      ...pageClaims(row, siteLocales(), opts.pagePreviewPath),
-                    },
-                  ]
-                : []
-          );
+          return pageHoldings(found.items);
+        },
+        // On the write's own transaction (see `publishedPagesOn`).
+        publishedPagesOn: async function* (tx) {
+          const own = ctx.services.ownCollections;
+          for await (const batch of publishedPagesOn(own, pagesSlug, tx)) {
+            yield pageHoldings(batch);
+          }
         },
         // Hook-free and as the system, as the template guard reads it, so a
         // read hook cannot hide a template that serves entries.

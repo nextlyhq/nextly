@@ -59,6 +59,61 @@ export interface BackfillDeps {
 /** Which pages the walk reads. */
 const PUBLISHED = { status: { equals: "published" } };
 
+/** The plugin's own read of its pages on a write's transaction. */
+export interface PagesOnTransactionReader {
+  listEntriesInTransaction(
+    tx: Tx,
+    slug: string,
+    options: {
+      where: Record<string, unknown>;
+      sort: { field: string; direction: "asc" | "desc" };
+      pagination: { limit: number; page: number };
+      depth: number;
+    },
+    opts: { lock: "none" }
+  ): Promise<{ data: readonly unknown[] }>;
+}
+
+/**
+ * Every published page, a batch at a time, read on the write's transaction
+ * `tx`, so a write holding the pool's last connection never waits for a
+ * second one: the pages an entry's list's later pages could fall on before
+ * this pass has claimed them. Each batch starts past the last id the one
+ * before it read, so a page unpublished meanwhile shifts none it has not
+ * read. With no row lock: a page saved meanwhile claims its own address
+ * under the store's locks, which the write's claims take turns with, and a
+ * lock on every page would hold each page's save behind the write.
+ */
+export async function* publishedPagesOn(
+  own: PagesOnTransactionReader,
+  pages: string,
+  tx: Tx
+): AsyncGenerator<readonly Readonly<Record<string, unknown>>[]> {
+  let after: string | undefined;
+  for (;;) {
+    const found = await own.listEntriesInTransaction(
+      tx,
+      pages,
+      {
+        where: {
+          ...PUBLISHED,
+          ...(after === undefined ? {} : { id: { greater_than: after } }),
+        },
+        sort: { field: "id", direction: "asc" },
+        pagination: { limit: BATCH, page: 1 },
+        depth: 0,
+      },
+      { lock: "none" }
+    );
+    const batch = found.data as readonly Readonly<Record<string, unknown>>[];
+    yield batch;
+    // A short page ends the walk: the total beside it is a count.
+    const last = batch.at(-1);
+    if (batch.length < BATCH || last === undefined) return;
+    after = String(last.id);
+  }
+}
+
 /**
  * Every published page, oldest first (ids are random, so their order says
  * nothing), a batch at a time, as committed. The one walk over a site's

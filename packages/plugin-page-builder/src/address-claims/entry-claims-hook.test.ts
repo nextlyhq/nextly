@@ -22,7 +22,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { collectionLockKey } from "./claim-key";
+import { collectionLockKey, servedAddress } from "./claim-key";
 import { storedKey, type Claims } from "./claim-store";
 import {
   registerEntryAddressClaims,
@@ -151,6 +151,7 @@ function harness(options: {
     pages: "pages",
     pagesBackfilled: () => true,
     pagesWithSlugs: async () => [],
+    publishedPagesOn: async function* () {},
     publishedEntries: async () => [],
     describe: () => async holder => holder.id,
   };
@@ -406,9 +407,23 @@ function designHarness(options: {
   templatePublished?: boolean;
   /** Whether the collection's template splits a list into pages. */
   templatePaged?: boolean;
+  /**
+   * Published pages the start-up pass has not claimed yet, by id and slug,
+   * each served at its slug's path; given, the pass is still running.
+   */
+  unclaimedPages?: Readonly<Record<string, string>>;
 }) {
   /** The ids each read of entries by id asked for, in order. */
   const entryReads: string[][] = [];
+  /** The transaction each read of every published page was made on. */
+  const pageReads: unknown[] = [];
+  const unclaimed = Object.entries(options.unclaimedPages ?? {}).map(
+    ([id, slug]) => {
+      const at = servedAddress("en", `/${slug}`);
+      if (at === null) throw new Error(`no address at ${slug}`);
+      return { id, slug, addresses: [at], spaces: [] };
+    }
+  );
   const { claims, held } = memoryClaims();
   const collection = options.declared ? "posts" : "events";
   const stored = options.declared ? null : "/events";
@@ -480,8 +495,16 @@ function designHarness(options: {
       return true;
     },
     pages: "pages",
-    pagesBackfilled: () => true,
-    pagesWithSlugs: async () => [],
+    pagesBackfilled: () => options.unclaimedPages === undefined,
+    // Found by slug, as the real read finds them.
+    pagesWithSlugs: async slugs =>
+      unclaimed.filter(page => slugs.includes(page.slug)),
+    publishedPagesOn: async function* (tx) {
+      // Asked inside a write, so always on its transaction.
+      if (tx === undefined) throw new Error("pages read off the write");
+      pageReads.push(tx);
+      yield unclaimed;
+    },
     publishedEntries: async (asked, page, size) =>
       ours(asked)
         ? [...state.entries.values()]
@@ -504,6 +527,16 @@ function designHarness(options: {
     if (handler === undefined) throw new Error(`no hook on ${slug}`);
     await handler({ transaction: {}, ...write });
   };
+  /** The words a refused entry's save gives. */
+  const refusal = (save: Promise<unknown>) =>
+    save.then(
+      () => "no refusal",
+      (error: unknown) =>
+        String(
+          (error as { publicMessage?: unknown }).publicMessage ??
+            (error as Error).message
+        )
+    );
   const entryHook = options.declared ? collection : "*";
   const templateRow = (status: string, paged = state.templatePaged) => ({
     id: "t1",
@@ -563,6 +596,8 @@ function designHarness(options: {
   return {
     held,
     entryReads,
+    pageReads,
+    refusal,
     /** Make the collection one that may, or may no longer, have a template. */
     setEligible: (eligible: boolean) => {
       state.eligible = eligible;
@@ -934,6 +969,63 @@ describe("an entry drawn with a design that splits a list into pages", () => {
       "address /blog/hello posts:hello",
       "space /blog/hello posts:hello",
     ]);
+  });
+
+  describe("while the start-up pass has not claimed every page", () => {
+    it("leaves the entry waiting for its list's later pages where a page no claim holds yet is published among them, when its paged template is published", async () => {
+      const h = designHarness({
+        declared: true,
+        templatePublished: false,
+        templatePaged: true,
+        unclaimedPages: { p2: "blog/hello/page/2" },
+      });
+      await h.save("hello");
+
+      await h.publishTemplate();
+
+      // The page holds its own address, claimed first on the publish's
+      // transaction, and the entry waits for its later pages behind it.
+      expect(h.held()).toEqual([
+        "address /blog/hello posts:hello",
+        "address /blog/hello/page/2 pages:p2",
+        "waiting /blog/hello posts:hello",
+      ]);
+      expect(h.pageReads.length).toBeGreaterThan(0);
+    });
+
+    it("refuses the entry's save under a paged template where such a page is published among its later pages, naming the page", async () => {
+      const h = designHarness({
+        declared: true,
+        templatePaged: true,
+        unclaimedPages: { p2: "blog/hello/page/2" },
+      });
+
+      const words = await h.refusal(h.save("hello"));
+
+      expect(words).toContain("/blog/hello/page/2 is already the address of");
+      expect(words).toContain("p2");
+    });
+
+    it("reads every published page once for a template's whole walk", async () => {
+      const h = designHarness({
+        declared: true,
+        templatePublished: false,
+        templatePaged: true,
+        unclaimedPages: { p9: "elsewhere/page/2" },
+      });
+      await h.save("hello");
+      await h.save("other");
+
+      await h.publishTemplate();
+
+      expect(h.pageReads).toHaveLength(1);
+      expect(h.held()).toEqual([
+        "address /blog/hello posts:hello",
+        "address /blog/other posts:other",
+        "space /blog/hello posts:hello",
+        "space /blog/other posts:other",
+      ]);
+    });
   });
 
   it("claims its later pages when its template is first published paged, at a runtime collection's stored address", async () => {

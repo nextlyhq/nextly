@@ -501,8 +501,10 @@ and a page past the list's last is not found. Saving an entry where a document i
 published among those later pages is refused, naming it. Publishing a paged template,
 turning on Split into pages in a published one, or publishing a paged own design
 leaves an entry whose later pages a page already holds at its own address, waiting:
-its list shows one page until the page frees the address, then pages without the
-entry being saved. Turning Split into pages off, unpublishing the paged design, or
+its list shows one page, linking to no later page, until the page frees the address,
+then pages without the entry being saved. An entry left waiting for its own address,
+because another document holds it, waits for its later pages as well, and is given both
+together once that document frees the address. Turning Split into pages off, unpublishing the paged design, or
 removing it frees the later pages and keeps the entry's address. Later pages are not
 pre-rendered by `createPublicContentPage`; each renders on its first request.
 
