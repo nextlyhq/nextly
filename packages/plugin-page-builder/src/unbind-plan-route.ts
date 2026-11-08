@@ -47,6 +47,7 @@ import {
   type UnbindPlanRequest,
   type UnbindPlanResponse,
 } from "./unbind-plan-contract";
+import { unbindReadsOf } from "./visitor-entry-title";
 
 /** A collection's slug. */
 const SLUG = z
@@ -181,7 +182,17 @@ function directUnbindPlanReads(ctx: PluginRouteContext): UnbindPlanReads {
             ...at,
           });
     },
-    plan: planUnbind,
+    // The one decision, with the reads only a route can make: the title of
+    // the entry a link keeps going to.
+    plan: async (source, document, nodeId, prop, keep) =>
+      await planUnbind(
+        source,
+        document,
+        nodeId,
+        prop,
+        keep,
+        unbindReadsOf(ctx.services.collections)
+      ),
     templates: ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG,
   };
 }

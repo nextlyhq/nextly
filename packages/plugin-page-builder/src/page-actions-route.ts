@@ -110,7 +110,13 @@ import {
   templateTargetOf,
   type TemplateTarget,
 } from "./templates/template-target";
-import { planUnbind, unboundAsWritten, type UnbindSource } from "./unbind-kept";
+import {
+  planUnbind,
+  unboundAsWritten,
+  type UnbindReads,
+  type UnbindSource,
+} from "./unbind-kept";
+import { unbindReadsOf } from "./visitor-entry-title";
 
 /** The blocks field a page action edits when the address names none. */
 const DEFAULT_FIELD = "content";
@@ -512,7 +518,12 @@ async function opsFor(
     case "bind-prop":
       return { ops: [bindUpdate(document, action)] };
     case "unbind-prop":
-      return unbindOps(document, action, source);
+      return unbindOps(
+        document,
+        action,
+        source,
+        unbindReadsOf(ctx.services.collections)
+      );
     case "choose-variant":
       return {
         ops: [
@@ -816,14 +827,16 @@ function bindUpdate(
 async function unbindOps(
   document: BlockDocument,
   action: Extract<PageAction, { kind: "unbind-prop" }>,
-  source: UnbindSource
+  source: UnbindSource,
+  reads: UnbindReads
 ): Promise<{ ops: readonly BuilderOp[]; unbound: UnbindAnswer }> {
   const plan = await planUnbind(
     source,
     document,
     action.nodeId,
     action.prop,
-    action.keep ?? "visitor"
+    action.keep ?? "visitor",
+    reads
   );
   if ("refusal" in plan) throw refusedAction([plan.refusal]);
   const op = unbindOp(document, action.nodeId, action.prop, plan.kept);

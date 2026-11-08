@@ -7559,6 +7559,17 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   box-shadow: inset 2px 0 0 var(--nx-foreground);
 }
 
+/* A choice listed but not to be had yet: its name drawn muted, its row's own
+   words saying why, and a click doing nothing. Still reached by the arrow
+   keys, so a keyboard reader hears the reason too. */
+.nx-font-pick__option[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+.nx-font-pick__option[aria-disabled="true"] .nx-binding-option__name {
+  color: var(--nx-muted-foreground);
+}
+
 .nx-font-pick__none {
   padding: 0.5rem;
 }

@@ -120,9 +120,15 @@ function bindingIdentity(binding: unknown): string {
 /**
  * The props a link's entry reference is stored in: the names the renderer's
  * `linkFor` and the inspector's link group read, the collection the entry is
- * of and its id.
+ * of and its id. Shared with whatever else judges a link's entry, such as an
+ * unbind keeping where the link goes.
+ *
+ * @experimental Settles with the editor's binding controls.
  */
-const ENTRY_LINK = { collection: "entryCollection", id: "entryId" } as const;
+export const ENTRY_LINK_PROPS = {
+  collection: "entryCollection",
+  id: "entryId",
+} as const;
 
 /** A node's bound props' problems, against the judgement's schema. */
 function nodeFindings(
@@ -141,7 +147,7 @@ function nodeFindings(
     const at = pointer(pointer(path, "bindings"), prop);
     const check = bindingCheckOf(bound, judgement, item);
     findings.push(...propFindings(bound, at, check));
-    if (prop === ENTRY_LINK.id) {
+    if (prop === ENTRY_LINK_PROPS.id) {
       findings.push(...entryLinkFindings({ node, bindings, bound, check }, at));
     }
   }
@@ -177,8 +183,11 @@ function judgedEntryLinkTarget(link: EntryLink): string | undefined {
   const { bindings, bound, check } = link;
   if (check.outcome !== "resolve") return undefined;
   const declared =
-    bound.props === undefined || ENTRY_LINK.collection in bound.props;
-  if (!declared || ownEntry(bindings, ENTRY_LINK.collection) !== undefined) {
+    bound.props === undefined || ENTRY_LINK_PROPS.collection in bound.props;
+  if (
+    !declared ||
+    ownEntry(bindings, ENTRY_LINK_PROPS.collection) !== undefined
+  ) {
     return undefined;
   }
   return relatedEntryCollection(check.binding);
@@ -190,7 +199,7 @@ function storedEntryCollection(
 ): unknown {
   const props = node.props;
   return isPlainRecord(props)
-    ? ownEntry(props, ENTRY_LINK.collection)
+    ? ownEntry(props, ENTRY_LINK_PROPS.collection)
     : undefined;
 }
 
