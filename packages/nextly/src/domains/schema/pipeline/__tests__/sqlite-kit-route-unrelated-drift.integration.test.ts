@@ -65,6 +65,17 @@ function runBuilderSql(sql: string): void {
   }
 }
 
+/**
+ * Each index on `table` with the statement that created it, which names its
+ * columns: a dropped, renamed or redefined index all change this.
+ */
+const indexesOf = (table: string) =>
+  sqlite
+    .prepare(
+      `SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? ORDER BY name`
+    )
+    .all(table) as Array<{ name: string; sql: string | null }>;
+
 const storedSql = (table: string): string | undefined =>
   (
     sqlite
@@ -182,6 +193,12 @@ describe("a SQLite push through drizzle-kit on a database with unrelated drift",
     await existingDatabase();
     const legacyBefore = storedSql(LEGACY_GROUP);
     const currentBefore = storedSql(CURRENT_GROUP);
+    const legacyIndexes = indexesOf(LEGACY_GROUP);
+    const currentIndexes = indexesOf(CURRENT_GROUP);
+    // Each has its parent index, so the comparison below has one to lose.
+    for (const indexes of [legacyIndexes, currentIndexes]) {
+      expect(indexes.some(index => index.name.endsWith("_parent"))).toBe(true);
+    }
 
     const result = await push();
 
@@ -202,10 +219,12 @@ describe("a SQLite push through drizzle-kit on a database with unrelated drift",
       .get() as { sizes: string | null };
     expect(media.sizes).toBe(SIZES);
 
-    // Neither field-group table was rebuilt: each is as it was created, rows
-    // and all.
+    // Neither field-group table was rebuilt: each is as it was created,
+    // indexes and rows and all.
     expect(storedSql(LEGACY_GROUP)).toBe(legacyBefore);
     expect(storedSql(CURRENT_GROUP)).toBe(currentBefore);
+    expect(indexesOf(LEGACY_GROUP)).toEqual(legacyIndexes);
+    expect(indexesOf(CURRENT_GROUP)).toEqual(currentIndexes);
     for (const table of [LEGACY_GROUP, CURRENT_GROUP]) {
       const row = sqlite
         .prepare(`SELECT note FROM ${table} WHERE id = 'row-1'`)
