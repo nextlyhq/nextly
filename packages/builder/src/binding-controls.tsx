@@ -249,9 +249,11 @@ function fittingOptions(
   formatIn: PreviewFormatIn,
   entryLink: EntryLink | undefined
 ): readonly FieldOption[] {
+  // A related entry is offered only where visitors may read it: a link
+  // bound to one they can't read never goes there, so it is not a choice.
   const offered = (field: BindingFieldChoice): boolean =>
     field.linksTo !== undefined
-      ? entryLink?.writable === true
+      ? entryLink?.writable === true && field.public
       : prop.name !== entryLink?.id && fits(field, prop);
   const options: FieldOption[] = [];
   sources.forEach((source, index) => {
@@ -363,8 +365,25 @@ function option(
     source,
     field,
     ...(parent === undefined ? {} : { parent }),
+    // A related entry whose collection has no page yet is listed, said why,
+    // and can't be picked: the link would find no page to go to.
+    ...(field.noPageFor === undefined ? {} : { disabled: true }),
     search: [parent, label, field.preview].filter(Boolean).join(" "),
   };
+}
+
+/**
+ * A row's tooltip: its name, then why it can't be picked yet, or the value
+ * as the author reads it, whole where the row cuts it short.
+ */
+function optionTitle(option: FieldOption): string {
+  const { field } = option;
+  if (field.noPageFor !== undefined) {
+    return `${option.label}: No page for ${field.noPageFor} yet`;
+  }
+  return field.preview === undefined
+    ? option.label
+    : `${option.label}: ${field.preview}`;
 }
 
 /** The picker's row: the name, then the value as the author reads it, or why not. */
@@ -385,7 +404,12 @@ function OptionRow({ option }: { option: FieldOption }): React.JSX.Element {
       )}
       {/* Words, not a colour or an icon alone: each is part of the option's
           own text, so a screen reader announces it with the field. */}
-      {!field.public ? (
+      {field.noPageFor !== undefined ? (
+        // Why a related entry can't be picked yet, in words read with it.
+        <span className="nx-binding-option__tag">
+          {`No page for ${field.noPageFor} yet`}
+        </span>
+      ) : !field.public ? (
         <span className="nx-binding-option__tag" data-tone="private">
           <EyeOff aria-hidden="true" size={12} />
           Not public
@@ -529,11 +553,7 @@ function BindingPicker({
             : []
         )}
         renderChoice={choice => <OptionRow option={choice} />}
-        choiceTitle={choice =>
-          choice.field.preview === undefined
-            ? choice.label
-            : `${choice.label}: ${choice.field.preview}`
-        }
+        choiceTitle={optionTitle}
         searchFrom={0}
         leading={
           failed.length === 0 ? undefined : (
@@ -788,6 +808,15 @@ function noteFor(
       ? `${unread} ${block} keeps the fallback${value}.`
       : `${unread} ${block} keeps its own ${propName.toLowerCase()}.`;
   }
+  // A link's entry kept by reference: the link goes on to the page visitors
+  // were sent to, named by its title where a visitor may read it, never by
+  // the id the prop now holds.
+  if (answer.entry !== undefined) {
+    const title = answer.entry.title;
+    const page =
+      title === undefined ? "the page visitors saw" : `${title}'s page`;
+    return `The link keeps going to ${page}.`;
+  }
   // An image kept by its address goes to another prop than the one unbound,
   // which is left empty, so the note names where the address went.
   if (answer.into !== undefined) {
@@ -905,9 +934,18 @@ function boundFrom(
 /** The field a binding reads, named, and its source. */
 function boundNames(
   binding: Binding,
-  from: BoundFrom
+  from: BoundFrom,
+  /** The bound prop, and the link it is the entry of, where it is one. */
+  at: { readonly prop: string; readonly entryLink?: EntryLink | undefined }
 ): { readonly field: string; readonly source: string | undefined } {
-  return { field: pathName(binding.$bind, from.fields), source: from.name };
+  // A link's entry is named by the relation it goes through ("Author"): the
+  // entry the link goes to, not the id the binding reads of it.
+  const segments = binding.$bind.split(".");
+  const path =
+    at.prop === at.entryLink?.id && segments.length > 1
+      ? segments.slice(0, -1).join(".")
+      : binding.$bind;
+  return { field: pathName(path, from.fields), source: from.name };
 }
 
 /**
@@ -1407,7 +1445,7 @@ function BoundField({
   const item = useItemSource(binding, document, nodeId, services);
   const from = boundFrom(binding, sources, item);
   const name = propLabel(prop.name, prop.schema);
-  const names = boundNames(binding, from);
+  const names = boundNames(binding, from, { prop: prop.name, entryLink });
   // Where "Open source" leads: the host's answer, absent where it has none.
   const sourceHref = services?.sourceHref?.(binding);
   // The whole of it, on the tooltip and in the accessible name: the chip
@@ -1475,7 +1513,13 @@ function BoundField({
               entryLink={entryLink}
               onPick={picked => {
                 const { op } = pickOp(
-                  { document, nodeId, prop: prop.name, clearsOnBind, entryLink },
+                  {
+                    document,
+                    nodeId,
+                    prop: prop.name,
+                    clearsOnBind,
+                    entryLink,
+                  },
                   picked,
                   binding
                 );

@@ -48,8 +48,11 @@ import {
 } from "./binding-fields-contract";
 import { collectionNaming } from "./bindings-report/readable";
 import { labelOf } from "./collection-labels";
+import { PAGES_SLUG } from "./collections/pages";
+import { TEMPLATES_SLUG } from "./collections/templates";
 import { readBodyWith } from "./composition-route-kit";
 import { editorReaderAsCaller, publicSourceReader } from "./entry-reads";
+import { pageBuilderContent } from "./page-content";
 
 /** A collection's or a Single's slug. */
 const SLUG = z
@@ -123,6 +126,15 @@ export interface BindingFieldsReads {
   >;
   /** A collection's label, for the entry's group. */
   collectionLabel(slug: string): Promise<string>;
+  /**
+   * Whether the site serves a page for one entry, and its collection's
+   * plural name: a related entry is offered for a link only where it has a
+   * page to go to, and named as waiting for one otherwise.
+   */
+  pagesFor(entry: {
+    readonly collection: string;
+    readonly id: string;
+  }): Promise<{ readonly served: boolean; readonly label: string }>;
   /** The site settings, as every visitor reads them. */
   site(): Promise<Readonly<Record<string, unknown>>>;
 }
@@ -294,16 +306,20 @@ function throughRelation(
  * related collection is, through the relation, and a draft's where the entry
  * is not published. Not listed under an upload, whose record has no page to
  * link to, nor where the collection declares a field called `id`, which is
- * listed as its own.
+ * listed as its own. Where the collection has no page yet, it is listed
+ * naming the collection it waits for, and the picker offers it disabled.
  */
-function relatedEntryLink(
+async function relatedEntryLink(
   shape: BindingFieldShape,
-  target: string,
+  entry: { readonly collection: string; readonly id: string },
   related: SourceRead,
-  relation: PickerField
-): readonly PickerField[] {
+  relation: PickerField,
+  reads: BindingFieldsReads
+): Promise<readonly PickerField[]> {
+  const target = entry.collection;
   if (shape.type !== "relationship") return [];
   if (related.shapes.some(inner => inner.name === "id")) return [];
+  const pages = await reads.pagesFor(entry);
   const link: PickerField = {
     name: "id",
     type: "text",
@@ -313,6 +329,7 @@ function relatedEntryLink(
     ...(related.publicSource && related.published === null
       ? { draft: true as const }
       : {}),
+    ...(pages.served ? {} : { noPageFor: pages.label }),
   };
   return [throughRelation(link, relation)];
 }
@@ -345,7 +362,13 @@ async function sourceFields(
           ...related.shapes.map(inner =>
             throughRelation(pickerField(inner, related), field)
           ),
-          ...relatedEntryLink(shape, target, related, field),
+          ...(await relatedEntryLink(
+            shape,
+            { collection: target, id: String(id) },
+            related,
+            field,
+            reads
+          )),
         ],
       };
     })
@@ -500,6 +523,35 @@ export async function readBindingFields(
 }
 
 /** The reads the route binds: as the caller, and as a visitor for the published. */
+/**
+ * Whether the site serves a page for one entry, and its collection's plural
+ * name. The plugin's own pages are served at their own addresses; any other
+ * entry by the published design the public page draws it with, its own or
+ * its collection's template, found as that page finds it
+ * (`pageBuilderContent`'s `templates.readFor`), so a link offered here finds
+ * the page a visitor is sent to, and an entry whose own design outlives its
+ * collection's template is still offered. A collection a host route of its
+ * own serves without a template is not known here, and is said to have none.
+ */
+async function pagesOf(
+  ctx: PluginRouteContext,
+  entry: { readonly collection: string; readonly id: string },
+  locale: string | undefined
+): Promise<{ readonly served: boolean; readonly label: string }> {
+  const { collection } = entry;
+  const label = (await collectionNaming(ctx, collection))?.label ?? collection;
+  if (collection === (ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG)) {
+    return { served: true, label };
+  }
+  const content = pageBuilderContent({
+    templatesCollection: ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG,
+  });
+  const design = await content.templates
+    .readFor(collection, entry.id, locale)
+    .catch(() => null);
+  return { served: design !== null, label };
+}
+
 function directBindingFieldsReads(
   ctx: PluginRouteContext,
   locale: string | undefined
@@ -507,6 +559,11 @@ function directBindingFieldsReads(
   const editor = editorReaderAsCaller(ctx, locale);
   const visitor = publicSourceReader(locale);
   const at = locale === undefined ? {} : { locale };
+  // Asked once per entry in an ask, however many relations name it.
+  const pages = new Map<
+    string,
+    Promise<{ readonly served: boolean; readonly label: string }>
+  >();
   return {
     declared: async ref => {
       const { declaredFieldShapes } = await import("nextly/runtime");
@@ -556,6 +613,14 @@ function directBindingFieldsReads(
     },
     collectionLabel: async slug =>
       (await collectionNaming(ctx, slug))?.singular ?? slug,
+    pagesFor: async entry => {
+      const key = `${entry.collection}\u0000${entry.id}`;
+      const known = pages.get(key);
+      if (known !== undefined) return await known;
+      const answer = pagesOf(ctx, entry, locale);
+      pages.set(key, answer);
+      return await answer;
+    },
     site: async () => {
       const nextly = await getCachedNextly();
       const settings: unknown = await nextly.publicSiteSettings();

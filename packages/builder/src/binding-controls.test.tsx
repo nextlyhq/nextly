@@ -50,7 +50,10 @@ beforeAll(() => {
     .CSS;
   if (css?.escape === undefined) {
     Object.defineProperty(globalThis, "CSS", {
-      value: { ...css, escape: (text: string) => text.replace(/["\\]/g, "\\$&") },
+      value: {
+        ...css,
+        escape: (text: string) => text.replace(/["\\]/g, "\\$&"),
+      },
       configurable: true,
     });
   }
@@ -728,7 +731,10 @@ describe("a link's entry bound to the entry a relation names", () => {
           editor: { label: "Area" },
           props: {},
           slots: {
-            children: { lock: "contentOnly", defaultBlock: [{ type: "acme/cta" }] },
+            children: {
+              lock: "contentOnly",
+              defaultBlock: [{ type: "acme/cta" }],
+            },
           },
           render: () => null,
         },
@@ -795,7 +801,8 @@ describe("a link's entry bound to the entry a relation names", () => {
     const entry = within(list)
       .getAllByRole("option")
       .find(option => option.textContent === "Author › Link to this entry");
-    if (entry === undefined) throw new Error("The author's entry is not offered.");
+    if (entry === undefined)
+      throw new Error("The author's entry is not offered.");
     return entry;
   }
 
@@ -900,7 +907,9 @@ describe("a link's entry bound to the entry a relation names", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Bind Link to a field" })
     );
-    const list = await screen.findByRole("listbox", { name: "Fields for Link" });
+    const list = await screen.findByRole("listbox", {
+      name: "Fields for Link",
+    });
     const names = within(list)
       .getAllByRole("option")
       .map(option => option.textContent);
@@ -1014,15 +1023,207 @@ describe("a link's entry bound to the entry a relation names", () => {
       { label: "Read more", entryCollection: "users" },
       { entryId: { $bind: "author.id" } }
     );
-    expect(
-      await screen.findByRole("button", {
-        name: "Entry: bound to Author › Link to this entry of this post",
-      })
-    ).toBeTruthy();
+    // Named by the relation the link goes through, the entry it goes to,
+    // never the id the binding reads of it.
+    const chip = await screen.findByRole("button", {
+      name: "Entry: bound to Author of this post",
+    });
+    expect(chip.textContent).toBe("Author\u00a0· This post");
     expect(
       screen.queryByRole("button", { name: "Bind Link to a field" })
     ).toBeNull();
     expect(screen.queryByLabelText("Fallback")).toBeNull();
+  });
+});
+
+describe("a related entry for a link, as visitors and pages allow", () => {
+  /** The post's relations: the author, a private reviewer, a page-less editor. */
+  const RELATED: readonly BindingFieldSource[] = [
+    {
+      binding: { source: "entry" },
+      label: "Post",
+      fields: [
+        ...(SOURCES[0]?.fields ?? []),
+        {
+          name: "reviewer",
+          type: "relationship",
+          relationTo: "users",
+          public: false,
+          fields: [
+            {
+              name: "id",
+              type: "text",
+              label: "Link to this entry",
+              linksTo: "users",
+              public: false,
+            },
+          ],
+        },
+        {
+          name: "editor",
+          type: "relationship",
+          relationTo: "staff",
+          public: true,
+          fields: [
+            {
+              name: "id",
+              type: "text",
+              label: "Link to this entry",
+              linksTo: "staff",
+              public: true,
+              noPageFor: "Staff",
+            },
+          ],
+        },
+      ],
+    },
+  ];
+
+  /** A button whose link may point at an entry, as `core/button` declares it. */
+  function mountLink(
+    bindings?: BlockNode["bindings"],
+    planUnbind?: ContentServices["planUnbind"]
+  ): EditorState {
+    registerBlocks(
+      [
+        {
+          name: "acme/cta",
+          version: 1,
+          description: "A call to action.",
+          example: { props: {} },
+          editor: { label: "Call to action" },
+          props: {
+            label: { label: "Label", role: "content", type: "text" },
+            href: { label: "Link", role: "content", type: "url" },
+            entryCollection: {
+              label: "Entry collection",
+              role: "content",
+              type: "text",
+            },
+            entryId: { label: "Entry", role: "content", type: "text" },
+          },
+          defaultProps: {},
+          render: () => null,
+        },
+      ] as never,
+      { source: "binding-controls-related-entry-test" }
+    );
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "b",
+          type: "acme/cta",
+          version: 1,
+          props: { label: "Read more", entryCollection: "users" },
+          ...(bindings === undefined ? {} : { bindings }),
+        },
+      ],
+    } as BlockDocument;
+    const editor = {
+      document,
+      selectedId: "b",
+      selection: { ids: ["b"], primary: "b" },
+      applyAll: vi.fn(() => document),
+      select: vi.fn(),
+      apply: vi.fn(() => document),
+      undo: vi.fn(),
+      redo: vi.fn(),
+      canUndo: false,
+      canRedo: false,
+      undoDepth: 0,
+      composed: () => undefined,
+    } as unknown as EditorState;
+    render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{
+          listBindingFields: async () => RELATED,
+          ...(planUnbind === undefined ? {} : { planUnbind }),
+        }}
+      />
+    );
+    return editor;
+  }
+
+  /** The Link picker's options, by their text, once it lists them. */
+  async function linkOptions(): Promise<HTMLElement[]> {
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Link to a field" })
+    );
+    const list = await screen.findByRole("listbox", {
+      name: "Fields for Link",
+    });
+    return within(list).getAllByRole("option");
+  }
+
+  it("offers a related entry only where visitors may read it", async () => {
+    mountLink();
+    const options = (await linkOptions()).map(option => option.textContent);
+    // The author, whom visitors read, is the control.
+    expect(options).toContain("Author › Link to this entry");
+    // The reviewer's entry: a link visitors would never be sent along.
+    expect(options.some(text => text?.startsWith("Reviewer"))).toBe(false);
+  });
+
+  it("lists a related entry whose collection has no page yet, saying so, and never picks it", async () => {
+    const editor = mountLink();
+    const options = await linkOptions();
+    const waiting = options.find(option =>
+      option.textContent?.startsWith("Editor › Link to this entry")
+    );
+    expect(waiting?.textContent).toBe(
+      "Editor › Link to this entryNo page for Staff yet"
+    );
+    expect(waiting?.getAttribute("aria-disabled")).toBe("true");
+    // The reason whole on the tooltip too, where a narrow row wraps it.
+    expect(waiting?.getAttribute("title")).toBe(
+      "Editor › Link to this entry: No page for Staff yet"
+    );
+    if (waiting === undefined)
+      throw new Error("The editor's entry is not listed.");
+    fireEvent.click(waiting);
+    expect(vi.mocked(editor.apply)).not.toHaveBeenCalled();
+    // The author's entry, which has a page, is not disabled: the control.
+    const author = options.find(
+      option => option.textContent === "Author › Link to this entry"
+    );
+    expect(author?.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("says, after an unbind, that the link keeps going to the entry visitors saw, by its title", async () => {
+    const planned = (entry: { title?: string }): UnbindPlanAnswer => ({
+      kept: { set: { entryId: "u1" } },
+      answer: {
+        kept: "visitor",
+        value: "u1",
+        entry,
+        reason: "The link keeps going to the entry's page.",
+      },
+    });
+    for (const [entry, said] of [
+      [{ title: "Ada Lovelace" }, "Ada Lovelace's page"],
+      // No title a visitor may read: never the id the prop now holds.
+      [{}, "the page visitors saw"],
+    ] as const) {
+      const planUnbind = vi.fn(async () => planned(entry));
+      mountLink({ entryId: { $bind: "author.id" } }, planUnbind);
+      const chip = await screen.findByRole("button", {
+        name: "Entry: bound to Author of this post",
+      });
+      fireEvent.keyDown(chip, { key: "Enter" });
+      const unbind = await screen.findByRole("menuitem", {
+        name: /^Unbind/,
+      });
+      fireEvent.pointerUp(unbind, { pointerType: "mouse", button: 0 });
+      await waitFor(() => expect(planUnbind).toHaveBeenCalled());
+      expect((await screen.findByRole("status")).textContent).toBe(
+        `Unbound. The link keeps going to ${said}.`
+      );
+      cleanup();
+      clearBlocks();
+    }
   });
 });
 

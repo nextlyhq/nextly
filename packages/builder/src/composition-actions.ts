@@ -215,6 +215,13 @@ export interface UnbindAnswer {
    * not copied in, and the fallback or the prop's own value was kept.
    */
   readonly unreadable?: true;
+  /**
+   * Set where the unbound prop is a link's entry id, bound to a related
+   * entry: the id visitors saw is kept beside the link's collection, so the
+   * link keeps going to that entry's page, by reference. Its title where a
+   * visitor may read it.
+   */
+  readonly entry?: { readonly title?: string };
   /** Why, in words an author reads. */
   readonly reason: string;
 }

@@ -25,6 +25,11 @@ export interface ListedChoice {
    * the line drawn under it, so what is searched is what is seen.
    */
   readonly search?: string;
+  /**
+   * Listed, and reached by the arrow keys, but never picked: a choice whose
+   * row says why it can't be had yet.
+   */
+  readonly disabled?: boolean;
 }
 
 /** How many entries the list holds before it offers a search. */
@@ -152,7 +157,7 @@ export function ChoiceList<C extends ListedChoice>({
     }
     if (event.key === "Enter" && activeChoice !== undefined) {
       event.preventDefault();
-      onPick(activeChoice);
+      if (activeChoice.disabled !== true) onPick(activeChoice);
     }
   };
 
@@ -165,6 +170,7 @@ export function ChoiceList<C extends ListedChoice>({
       id={optionId(choice)}
       role="option"
       aria-selected={choice === activeChoice}
+      aria-disabled={choice.disabled === true ? "true" : undefined}
       data-current={choice.key === currentKey ? "" : undefined}
       className={
         choiceClassName === undefined
@@ -175,7 +181,9 @@ export function ChoiceList<C extends ListedChoice>({
       title={choiceTitle === undefined ? choice.label : choiceTitle(choice)}
       style={choiceStyle?.(choice)}
       onMouseMove={() => setActive(shown.indexOf(choice))}
-      onClick={() => onPick(choice)}
+      onClick={() => {
+        if (choice.disabled !== true) onPick(choice);
+      }}
     >
       {renderChoice === undefined ? choice.label : renderChoice(choice)}
     </li>
