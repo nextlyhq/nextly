@@ -6,8 +6,9 @@
  * Every reference the export reads (`transfer-references`) is one this
  * rewrites, in the same places: a placement's `componentId` and its image
  * values, a node's classes, styles and hide settings, a document's own styles
- * and asset list, a media prop and the media id its binding falls back to,
- * and a component's variants. A breakpoint the
+ * and asset list (completed with every media id the document shows), a media
+ * prop and the media id its binding falls back to, and a component's
+ * variants. A breakpoint the
  * import drops takes its styles and hide settings with it, and so does one the
  * file does not define, since the source drew nothing under it either; what is
  * kept is only ever written under a breakpoint the destination defines.
@@ -31,6 +32,8 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import {
+  collectDocumentReferences,
+  emptyReferences,
   fallbackMediaIdOf,
   imageExposureIds,
   mediaIdOf,
@@ -74,7 +77,7 @@ export function rewriteDocument<T extends BlockDocument>(
   if (document.assets?.mediaIds !== undefined) {
     rewritten.assets = {
       ...document.assets,
-      mediaIds: document.assets.mediaIds.map(id => mapped(maps.media, id)),
+      mediaIds: rewrittenMediaIndex(document, maps, lookups),
     };
   }
   if (document.kind === "component") {
@@ -93,6 +96,23 @@ export function rewriteDocument<T extends BlockDocument>(
     }
   }
   return rewritten as T;
+}
+
+/**
+ * A document's media index under the destination's ids, derived from the
+ * export's own reference walk (`collectDocumentReferences`): every id the
+ * stored index lists, and every media id the document shows, a binding's
+ * fallback included. The media usage record reads only the index of a
+ * document that has one, so an id left out of it would read as unused here.
+ */
+function rewrittenMediaIndex(
+  document: BlockDocument,
+  maps: ReferenceMaps,
+  lookups: RewriteLookups
+): string[] {
+  const references = emptyReferences();
+  collectDocumentReferences(document, references, lookups);
+  return [...new Set([...references.media].map(id => mapped(maps.media, id)))];
 }
 
 /** A shared style with its variables and breakpoints mapped. */

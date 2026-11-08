@@ -241,8 +241,8 @@ An image prop (`media` or `upload`) binds to a media field or a URL field:
   a relative path and `//host` are not image addresses, so they render the
   fallback. The address keeps the block's own alternative text, and has no
   size.
-- **The fallback** is an image address or a media library image's id, read
-  as the prop's own value is: a media id draws as a picked image does, with
+- **The fallback** of a block's image is an image address or a media library
+  image's id, read as the prop's own value is: a media id draws as a picked image does, with
   the record's address, alternative text and size. Any other value
   (`javascript:`, `data:`, `//host`, a number) is refused when the document
   is saved and ignored when it renders. A page's export carries a fallback's
@@ -361,8 +361,10 @@ page its own metadata:
   at most 32 segments, each literal at most 1,000 characters.
 - **The image is one binding**, to a media field (its address when the read
   populates it, its media otherwise) or a URL field. Any other field renders the
-  binding's fallback. An address goes through the same scheme and host checks
-  as a picture on the page.
+  binding's fallback, which is an image address only: unlike a block's image,
+  the social image can't fall back to a media library image, and one is
+  refused when the document is saved. An address goes through the same scheme
+  and host checks as a picture on the page.
 - **Sources** are the entry, a Single and the site settings. A list item is
   refused when the document is saved, since the metadata is read once for the
   page.

@@ -306,6 +306,13 @@ export interface BindingCheckInput {
   readonly props?: Readonly<Partial<Record<string, PropSchema>>>;
   readonly schema?: BindingSchemaSource;
   readonly refs?: BindingRefs;
+  /**
+   * `"address"` where an image binding's fallback may be an image address
+   * only, never a media library id: the document's social image, whose media
+   * a page's export and import do not carry. A block's image prop takes
+   * either, so it passes nothing.
+   */
+  readonly imageFallback?: "address";
 }
 
 /** A stored binding whose shape was read. */
@@ -876,11 +883,41 @@ function malformed(input: BindingCheckInput): BindingCheck {
     fallback === undefined ||
     schema === undefined ||
     kind === undefined ||
-    !isValidPropValue(kind, schema, fallback)
+    !fallbackFits(input, kind, schema, fallback)
   ) {
     return { outcome: "fallback", issues };
   }
   return { outcome: "fallback", fallback: { value: fallback }, issues };
+}
+
+/**
+ * Whether a fallback is a value the prop can hold, as this binding's place
+ * reads an image's: an address or a media id, or an address only where the
+ * place says so. Narrowed from the one image reading (`imageValueOf`), so
+ * the two places can't disagree about what an address is.
+ */
+function fallbackFits(
+  input: BindingCheckInput,
+  kind: BindablePropKind,
+  schema: PropSchema,
+  value: unknown
+): boolean {
+  if (!isValidPropValue(kind, schema, value)) return false;
+  if (kind !== "image" || input.imageFallback !== "address") return true;
+  return imageValueOf(value)?.holds === "address";
+}
+
+/** Why a stored fallback was refused, in the words of its kind and place. */
+function fallbackRefusal(
+  input: BindingCheckInput,
+  kind: BindablePropKind
+): string {
+  if (kind !== "image") {
+    return `This binding's fallback is not a valid ${kind} value, so the prop's own value is shown instead.`;
+  }
+  return input.imageFallback === "address"
+    ? "This binding's fallback is not an image address (https://, http:// or a path on the site), so it is not used; the social image takes an address, not a media library image."
+    : "This image binding's fallback is neither an image address (https://, http:// or a path on the site) nor a media library image, so the prop's own value is shown instead.";
 }
 
 /** The prop check's answer for a binding that goes on to be read. */
@@ -897,7 +934,7 @@ function checkedFallback(
   if (
     prop.kind === undefined ||
     prop.schema === undefined ||
-    isValidPropValue(prop.kind, prop.schema, stored.fallback)
+    fallbackFits(input, prop.kind, prop.schema, stored.fallback)
   ) {
     return { value: stored.fallback };
   }
@@ -906,9 +943,7 @@ function checkedFallback(
       input,
       stored.path,
       "binding-fallback-invalid",
-      prop.kind === "image"
-        ? "This image binding's fallback is neither an image address (https://, http:// or a path on the site) nor a media library image, so the prop's own value is shown instead."
-        : `This binding's fallback is not a valid ${prop.kind} value, so the prop's own value is shown instead.`
+      fallbackRefusal(input, prop.kind)
     )
   );
   return undefined;

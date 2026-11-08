@@ -352,3 +352,78 @@ describe("saving a document's metadata", () => {
     ]);
   });
 });
+
+describe("a social image's fallback", () => {
+  // A page's export and import carry no media from the document's own
+  // metadata, so its fallback is an image address only, while a block's
+  // image may fall back to a media library image.
+  const bothBound = (fallback: string): BlockDocument => ({
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "template",
+    nodes: [
+      {
+        id: "picture",
+        type: "core/image",
+        version: 1,
+        props: {},
+        bindings: { mediaId: { $bind: "cover", fallback } },
+      },
+    ],
+    settings: { seo: { image: { $bind: "cover", fallback } } },
+  });
+  const saved = (document: BlockDocument) =>
+    validate(document, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      bindingSchema: schema,
+      bindingEntry: { collection: "posts" },
+      definitions: {
+        get: type =>
+          type === "core/image"
+            ? { version: 1, props: { mediaId: { type: "media" } } }
+            : undefined,
+      },
+    });
+
+  it("refuses a media id on the social image at save, and accepts it on a block's image", () => {
+    const issues = saved(bothBound("m-fallback"));
+    expect(
+      issues.map(issue => ({ path: issue.path, code: issue.code }))
+    ).toEqual([
+      { path: "/settings/seo/image", code: "binding-fallback-invalid" },
+    ]);
+    expect(issues[0]?.message).toContain(
+      "is not an image address (https://, http:// or a path on the site)"
+    );
+    expect(issues[0]?.message).toContain("the social image takes an address");
+  });
+
+  it("accepts an address on both at save", () => {
+    expect(saved(bothBound("/media/fallback.jpg"))).toEqual([]);
+  });
+
+  it("is drawn when it is an address", () => {
+    const document = documentWith({
+      image: { $bind: "cover", fallback: "/media/fallback.jpg" },
+    });
+    expect(resolveDocumentSeo(document, runFor({ cover: null })).image).toEqual(
+      { kind: "url", value: "/media/fallback.jpg" }
+    );
+    expect(resolveDocumentSeo(document, undefined).image).toEqual({
+      kind: "url",
+      value: "/media/fallback.jpg",
+    });
+  });
+
+  it("is never looked up as media when it is a media id, with or without a binding pass", () => {
+    const document = documentWith({
+      image: { $bind: "cover", fallback: "m-fallback" },
+    });
+    const read = resolveDocumentSeo(document, runFor({ cover: null }));
+    expect(read).not.toHaveProperty("image");
+    expect(read.issues.map(issue => issue.code)).toEqual([
+      "binding-fallback-invalid",
+    ]);
+    expect(resolveDocumentSeo(document, undefined)).not.toHaveProperty("image");
+  });
+});

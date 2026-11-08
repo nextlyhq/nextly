@@ -169,6 +169,63 @@ describe("rewriteDocument", () => {
     );
   });
 
+  it("completes a media index that lists only the prop's id with the fallback's, mapped", () => {
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      assets: { mediaIds: ["m-src"] },
+      nodes: [
+        {
+          id: "img",
+          type: "core/image",
+          version: 1,
+          props: { mediaId: "m-src" },
+          bindings: {
+            mediaId: { $bind: "cover", fallback: "m-fallback-src" },
+          },
+        },
+      ],
+    };
+    const withFallback: ReferenceMaps = {
+      ...maps,
+      media: new Map([
+        ["m-src", "m-dst"],
+        ["m-fallback-src", "m-fallback-dst"],
+      ]),
+    };
+
+    const rewritten = rewriteDocument(document, withFallback, lookups);
+
+    // The media usage record reads only the index, so the fallback's file
+    // would otherwise read as unused on the new site.
+    expect(rewritten.assets).toEqual({
+      mediaIds: ["m-dst", "m-fallback-dst"],
+    });
+    expect(document.assets).toEqual({ mediaIds: ["m-src"] });
+  });
+
+  it("adds no media index to a document that has none", () => {
+    const rewritten = rewriteDocument(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "img",
+            type: "core/image",
+            version: 1,
+            props: { mediaId: "m-src" },
+            bindings: { mediaId: { $bind: "cover", fallback: "m-src" } },
+          },
+        ],
+      },
+      maps,
+      lookups
+    );
+    // A document without one is walked whole by the usage record.
+    expect(rewritten).not.toHaveProperty("assets");
+  });
+
   it("keeps a component's variant keys and maps the images they set", () => {
     const definition: ComponentDocument = {
       formatVersion: 1,
