@@ -16,7 +16,6 @@
  */
 import type { BindingIssue, BindingIssueCode } from "./binding-issues";
 import {
-  bindingSourceRef,
   checkBinding,
   type BindingCheck,
   type BindingSchemaRef,
@@ -143,14 +142,7 @@ function nodeFindings(
     const check = bindingCheckOf(bound, judgement, item);
     findings.push(...propFindings(bound, at, check));
     if (prop === ENTRY_LINK.id) {
-      findings.push(
-        ...entryLinkFindings(
-          { node, bindings, bound, check },
-          at,
-          judgement,
-          item
-        )
-      );
+      findings.push(...entryLinkFindings({ node, bindings, bound, check }, at));
     }
   }
   return findings;
@@ -158,27 +150,21 @@ function nodeFindings(
 
 /**
  * The collection a bound entry id names entries of: the one collection the
- * relation its path crosses points at, where the path reads that related
- * entry's `id` (`author.id`). `undefined` for any other path, or a relation
- * whose target is not one collection, which the path's own check judges.
+ * relation its path crosses points at, where the path ends at that related
+ * entry's own `id` (`author.id`, `details.author.id`). Read from the walk the
+ * binding's check made (`CheckedBinding.relation`), so this judges the path
+ * the check judged. `undefined` for any other path, or a relation whose
+ * target is not one collection, which the path's own check judges.
  */
-function relatedEntryCollection(
-  binding: CheckedBinding,
-  judgement: BindingSchemaJudgement,
-  item: BindingSchemaRef | undefined
-): string | undefined {
-  const [relation, read, ...rest] = binding.segments;
-  if (relation === undefined || read !== "id" || rest.length > 0) {
-    return undefined;
-  }
-  const ref = bindingSourceRef(binding, schemaOf(judgement, item).refs);
-  const field =
-    ref === undefined
-      ? undefined
-      : judgement.schema.fieldsOf(ref)?.find(each => each.name === relation);
-  return field?.hasMany !== true && typeof field?.relationTo === "string"
-    ? field.relationTo
-    : undefined;
+function relatedEntryCollection(binding: CheckedBinding): string | undefined {
+  const relation = binding.relation;
+  const { segments } = binding;
+  if (relation === undefined || segments.at(-1) !== "id") return undefined;
+  // The id right after the relation is the related entry's own, not one in a
+  // group of its fields.
+  if (relation.segment !== segments.length - 2) return undefined;
+  const target = relation.field.relationTo;
+  return typeof target === "string" ? target : undefined;
 }
 
 /**
@@ -187,11 +173,7 @@ function relatedEntryCollection(
  * Linked collection, that collection is stored as a value (one bound too is
  * read per page and cannot be judged here), and the id is a related entry's.
  */
-function judgedEntryLinkTarget(
-  link: EntryLink,
-  judgement: BindingSchemaJudgement,
-  item: BindingSchemaRef | undefined
-): string | undefined {
+function judgedEntryLinkTarget(link: EntryLink): string | undefined {
   const { bindings, bound, check } = link;
   if (check.outcome !== "resolve") return undefined;
   const declared =
@@ -199,7 +181,7 @@ function judgedEntryLinkTarget(
   if (!declared || ownEntry(bindings, ENTRY_LINK.collection) !== undefined) {
     return undefined;
   }
-  return relatedEntryCollection(check.binding, judgement, item);
+  return relatedEntryCollection(check.binding);
 }
 
 /** The Linked collection a block stores, as stored. */
@@ -238,17 +220,14 @@ interface EntryLink {
  * the link would look the entry up in the wrong collection and draw no link,
  * silently.
  */
-function entryLinkFindings(
-  link: EntryLink,
-  path: string,
-  judgement: BindingSchemaJudgement,
-  item: BindingSchemaRef | undefined
-): BindingFinding[] {
-  const target = judgedEntryLinkTarget(link, judgement, item);
+function entryLinkFindings(link: EntryLink, path: string): BindingFinding[] {
+  const target = judgedEntryLinkTarget(link);
   if (target === undefined || link.check.outcome !== "resolve") return [];
   const stored = storedEntryCollection(link.node);
   if (stored === target) return [];
-  const relation = link.check.binding.segments[0] ?? "";
+  // The relation as the path names it, a group it sits in included.
+  const { segments } = link.check.binding;
+  const relation = segments.slice(0, -1).join(".");
   return [
     {
       path,

@@ -18,6 +18,12 @@ const POSTS: readonly BindingFieldShape[] = [
     relationTo: "users",
     hasMany: true,
   },
+  // A group holding a relation: the walk goes into the group, then across.
+  {
+    name: "details",
+    type: "group",
+    fields: [{ name: "author", type: "relationship", relationTo: "users" }],
+  },
 ];
 
 /**
@@ -105,6 +111,23 @@ describe("a link bound to a related entry, judged at save", () => {
       )
     );
     expect(mismatches(issues)).toEqual([]);
+  });
+
+  it("judges a relation inside a group as the path's walk crosses it", () => {
+    // `details.author.id` passes the binding's own check, so its collection
+    // is judged too, named by the path to the relation.
+    const issues = mismatches(
+      judged(button("details.author.id", { entryCollection: "pages" }))
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.message).toContain('"details.author"');
+    expect(issues[0]?.message).toContain('Set Linked collection to "users"');
+    // The control: the same path, the right collection.
+    expect(
+      mismatches(
+        judged(button("details.author.id", { entryCollection: "users" }))
+      )
+    ).toEqual([]);
   });
 
   it("judges only a related entry's id, not another field read into the id", () => {
