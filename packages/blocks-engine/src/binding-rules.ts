@@ -720,20 +720,24 @@ function crossRelation(
   };
 }
 
-/** The schema ref a binding's source is looked up under, when one is known. */
-function refFor(
-  stored: StoredBinding,
+/**
+ * The schema ref a binding's source is looked up under, when one is known:
+ * the one lookup a path's walk starts from, which a judgement of what the
+ * path crosses (a link's related entry) starts from too.
+ */
+export function bindingSourceRef(
+  binding: { readonly source: BindingSource; readonly sourceKey?: string },
   refs: BindingRefs | undefined
 ): BindingSchemaRef | undefined {
-  switch (stored.source) {
+  switch (binding.source) {
     case "entry":
       return refs?.entry;
     case "item":
       return refs?.item;
     case "single":
-      return stored.sourceKey === undefined
+      return binding.sourceKey === undefined
         ? undefined
-        : { single: stored.sourceKey };
+        : { single: binding.sourceKey };
     case "site":
       return { site: true };
   }
@@ -745,7 +749,7 @@ function checkPath(
   segments: readonly string[],
   input: BindingCheckInput
 ): PathWalk {
-  const ref = refFor(stored, input.refs);
+  const ref = bindingSourceRef(stored, input.refs);
   const root =
     ref === undefined || input.schema === undefined
       ? undefined

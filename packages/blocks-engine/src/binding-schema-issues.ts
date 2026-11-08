@@ -16,9 +16,12 @@
  */
 import type { BindingIssue, BindingIssueCode } from "./binding-issues";
 import {
+  bindingSourceRef,
   checkBinding,
+  type BindingCheck,
   type BindingSchemaRef,
   type BindingSchemaSource,
+  type CheckedBinding,
 } from "./binding-rules";
 import type { PropSchema } from "./block";
 import { DEFAULT_BINDING_SOURCE, MAX_SEO_SEGMENTS } from "./document";
@@ -115,6 +118,13 @@ function bindingIdentity(binding: unknown): string {
   });
 }
 
+/**
+ * The props a link's entry reference is stored in: the names the renderer's
+ * `linkFor` and the inspector's link group read, the collection the entry is
+ * of and its id.
+ */
+const ENTRY_LINK = { collection: "entryCollection", id: "entryId" } as const;
+
 /** A node's bound props' problems, against the judgement's schema. */
 function nodeFindings(
   node: Readonly<Record<string, unknown>>,
@@ -128,16 +138,96 @@ function nodeFindings(
   const props = declaredProps(node.type, judgement.definitions);
   const findings: BindingFinding[] = [];
   for (const prop of ownKeys(bindings)) {
-    findings.push(
-      ...propFindings(
-        { id, prop, binding: ownEntry(bindings, prop), props },
-        pointer(pointer(path, "bindings"), prop),
-        judgement,
-        item
-      )
-    );
+    const bound = { id, prop, binding: ownEntry(bindings, prop), props };
+    const at = pointer(pointer(path, "bindings"), prop);
+    const check = bindingCheckOf(bound, judgement, item);
+    findings.push(...propFindings(bound, at, check));
+    if (prop === ENTRY_LINK.id) {
+      findings.push(
+        ...entryLinkFindings(
+          { node, bindings, bound, check },
+          at,
+          judgement,
+          item
+        )
+      );
+    }
   }
   return findings;
+}
+
+/**
+ * The collection a bound entry id names entries of: the one collection the
+ * relation its path crosses points at, where the path reads that related
+ * entry's `id` (`author.id`). `undefined` for any other path, or a relation
+ * whose target is not one collection, which the path's own check judges.
+ */
+function relatedEntryCollection(
+  binding: CheckedBinding,
+  judgement: BindingSchemaJudgement,
+  item: BindingSchemaRef | undefined
+): string | undefined {
+  const [relation, read, ...rest] = binding.segments;
+  if (relation === undefined || read !== "id" || rest.length > 0) {
+    return undefined;
+  }
+  const ref = bindingSourceRef(binding, schemaOf(judgement, item).refs);
+  const field =
+    ref === undefined
+      ? undefined
+      : judgement.schema.fieldsOf(ref)?.find(each => each.name === relation);
+  return field?.hasMany !== true && typeof field?.relationTo === "string"
+    ? field.relationTo
+    : undefined;
+}
+
+/**
+ * A link whose entry id is bound to a related entry's id, refused where its
+ * stored Linked collection is not the collection that relation points at:
+ * the link would look the entry up in the wrong collection and draw no link,
+ * silently. Judged only when the binding itself passed its check, and only
+ * against a Linked collection stored as a value: one bound too is read per
+ * page and cannot be judged here.
+ */
+function entryLinkFindings(
+  link: {
+    readonly node: Readonly<Record<string, unknown>>;
+    readonly bindings: Readonly<Record<string, unknown>>;
+    readonly bound: BoundProp;
+    readonly check: BindingCheck;
+  },
+  path: string,
+  judgement: BindingSchemaJudgement,
+  item: BindingSchemaRef | undefined
+): BindingFinding[] {
+  const { node, bindings, bound, check } = link;
+  if (check.outcome !== "resolve") return [];
+  if (bound.props !== undefined && !(ENTRY_LINK.collection in bound.props)) {
+    return [];
+  }
+  if (ownEntry(bindings, ENTRY_LINK.collection) !== undefined) return [];
+  const target = relatedEntryCollection(check.binding, judgement, item);
+  if (target === undefined) return [];
+  const props = node.props;
+  const stored = isPlainRecord(props)
+    ? ownEntry(props, ENTRY_LINK.collection)
+    : undefined;
+  if (stored === target) return [];
+  const relation = check.binding.segments[0] ?? "";
+  return [
+    {
+      path,
+      nodeId: bound.id,
+      code: "binding-entry-collection-mismatch",
+      message:
+        typeof stored === "string" && stored !== ""
+          ? `Linked collection is "${stored}", but "${relation}" points at entries of "${target}". Set Linked collection to "${target}".`
+          : `Linked collection is not set, and "${relation}" points at entries of "${target}". Set Linked collection to "${target}".`,
+      // The binding and the collection it is judged with: a stored mismatch
+      // stays held only while neither changes.
+      identity: `${bound.prop}\u0000${bindingIdentity(bound.binding)}\u0000${canonicalText(stored)}`,
+    },
+  ];
 }
 
 /**
@@ -200,25 +290,35 @@ function findingsOf(
   );
 }
 
-/** One bound prop's problems, where it sits. */
-function propFindings(
-  bound: {
-    readonly id: string;
-    readonly prop: string;
-    readonly binding: unknown;
-    readonly props: Partial<Record<string, PropSchema>> | undefined;
-  },
-  path: string,
+/** One bound prop of a block, as stored, with the props the block declares. */
+interface BoundProp {
+  readonly id: string;
+  readonly prop: string;
+  readonly binding: unknown;
+  readonly props: Partial<Record<string, PropSchema>> | undefined;
+}
+
+/** One bound prop's check against the judgement's schema. */
+function bindingCheckOf(
+  bound: BoundProp,
   judgement: BindingSchemaJudgement,
   item: BindingSchemaRef | undefined
-): BindingFinding[] {
-  const check = checkBinding({
+): BindingCheck {
+  return checkBinding({
     nodeId: bound.id,
     prop: bound.prop,
     binding: bound.binding,
     ...(bound.props === undefined ? {} : { props: bound.props }),
     ...schemaOf(judgement, item),
   });
+}
+
+/** One bound prop's problems, where it sits. */
+function propFindings(
+  bound: BoundProp,
+  path: string,
+  check: BindingCheck
+): BindingFinding[] {
   return findingsOf(
     check.issues,
     path,
