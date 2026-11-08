@@ -99,22 +99,37 @@ function moduleOf(path: string): string {
  * of which has none. A bare specifier no alias matches is `unknown`, installed
  * or not, and so is an alias whose name is also an installed package, which
  * TypeScript would fall back to: packages are left to the build to judge.
+ * A local folder with its own `package.json` is a package too, whose entry
+ * its manifest names, so it is `unknown` as well.
  */
 export function modulePresence(
   specifier: string,
   place: ModuleResolutionPlace
 ): ModulePresence {
   if (specifier.startsWith(".") || isAbsolute(specifier)) {
-    return runtimeFileFor(resolve(place.mapDir, specifier))
-      ? "present"
-      : "absent";
+    return localPresence([resolve(place.mapDir, specifier)]);
   }
   const targets = aliasTargets(specifier, place.cwd);
   // No alias matches (a package, or a bundler-only alias), or the app's
   // aliases cannot be read: not this module's to judge.
   if (targets === undefined || targets.length === 0) return "unknown";
-  if (targets.some(runtimeFileFor)) return "present";
+  const local = localPresence(targets);
+  if (local !== "absent") return local;
   return isInstalledPackage(specifier, place.cwd) ? "unknown" : "absent";
+}
+
+/**
+ * Whether any of the module paths a local specifier stands for has a runtime
+ * file. A folder with its own `package.json` is a package whose entry its
+ * manifest names (`exports`, `module`, `main`), read by the bundler's own
+ * rules, so it is `unknown` rather than judged by its `index.*` alone.
+ */
+function localPresence(bases: readonly string[]): ModulePresence {
+  if (bases.some(runtimeFileFor)) return "present";
+  if (bases.some(base => isFile(join(base, "package.json")))) {
+    return "unknown";
+  }
+  return "absent";
 }
 
 /** The extensions of a file that loads at run time, as the map's import does. */
@@ -180,6 +195,8 @@ function isFile(path: string): boolean {
  * What a `*` pattern (`@/*`, `./admin/*`) or an exact key captures of
  * `specifier`: the text the `*` stands for (empty for an exact key), with the
  * length of the pattern's prefix, by which the most specific match is picked.
+ * An exact key ranks above every pattern, as TypeScript gives it precedence,
+ * so a zero-width `panel*` never wins over `panel` by coming first.
  * `undefined` when it does not match.
  */
 function capture(
@@ -189,7 +206,7 @@ function capture(
   const star = pattern.indexOf("*");
   if (star === -1) {
     return pattern === specifier
-      ? { star: "", prefixLength: pattern.length }
+      ? { star: "", prefixLength: Number.POSITIVE_INFINITY }
       : undefined;
   }
   const prefix = pattern.slice(0, star);

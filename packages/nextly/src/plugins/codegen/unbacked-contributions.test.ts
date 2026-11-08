@@ -11,7 +11,9 @@
  * an alias inherited through a package-based `extends` is followed, where a
  * judge reading only relative `extends` would miss it, and so is a package's
  * `tsconfig` field; a path written with its emitted extension is read from
- * its source, where a judge reading it literally would drop it; the writer and the CI
+ * its source, where a judge reading it literally would drop it; a local
+ * folder with its own manifest is a package, left to the build; an exact
+ * alias wins over a pattern listed before it; the writer and the CI
  * check are both asked, so the two cannot disagree; and a widget naming a
  * missing module stays in the map, where its card's error state names it.
  */
@@ -221,6 +223,44 @@ describe("a module path, judged only where it is local", () => {
     );
     // An alias only a bundler declares looks the same.
     expect(modulePresence("~bundler-alias/admin", place())).toBe("unknown");
+  });
+
+  it("leaves a local folder with its own package.json to the build", () => {
+    put(
+      "tsconfig.json",
+      JSON.stringify({
+        compilerOptions: { paths: { "@app/ui": ["packages/ui"] } },
+      })
+    );
+    // Its entry is what its manifest names, not an `index.*`.
+    put(
+      "packages/ui/package.json",
+      JSON.stringify({ name: "ui", main: "dist/panel.js" })
+    );
+    put(
+      "src/types/vendor/package.json",
+      JSON.stringify({ name: "vendor", exports: "./lib/panel.js" })
+    );
+    expect(modulePresence("@app/ui", place())).toBe("unknown");
+    expect(modulePresence("./vendor", place())).toBe("unknown");
+    // A folder without a manifest is still judged by its files.
+    put("src/types/bare-folder/notes.md", "No module here.");
+    expect(modulePresence("./bare-folder", place())).toBe("absent");
+  });
+
+  it("picks an exact alias over a pattern that matches as well, whatever their order", () => {
+    put(
+      "tsconfig.json",
+      JSON.stringify({
+        compilerOptions: {
+          paths: { "panel*": ["missing/*"], panel: ["src/panel"] },
+        },
+      })
+    );
+    put("src/panel.tsx", "export const Panel = () => null;");
+    expect(modulePresence("panel", place())).toBe("present");
+    // The pattern still answers for what the exact key does not name.
+    expect(modulePresence("panel-extra", place())).toBe("absent");
   });
 
   it("proves nothing about an alias when an extends cannot be resolved", () => {
