@@ -116,7 +116,7 @@ async function openLibrary(): Promise<HTMLElement> {
   fireEvent.click(screen.getByRole("button", { name: "Choose from library" }));
   await screen.findByRole("option", { name: "spring-banner.jpg" });
   return screen.getByRole("combobox", {
-    name: "Find in the media library, or paste an address",
+    name: "Find an image, or paste an address",
   });
 }
 
@@ -179,21 +179,70 @@ describe("a bound image's Fallback", () => {
 });
 
 describe("a fallback chosen from the media library", () => {
+  it("cuts a name with an emoji before its extension by whole characters", async () => {
+    // The emoji sits where a cut by UTF-16 units would split its two halves.
+    const name = "holiday😀de.jpg";
+    const readMedia = vi.fn<(id: string) => Promise<MediaSummary | null>>(
+      async () => ({ name, thumbnail: "/t/holiday.jpg" })
+    );
+    mountRow({ readMedia }, "m-8");
+    const row = await screen.findByRole("group", {
+      name: `Fallback: ${name}`,
+    });
+    const head = row.querySelector(".nx-middle-cut__head")?.textContent;
+    const tail = row.querySelector(".nx-middle-cut__tail")?.textContent;
+    // The extension and the three characters before it, the emoji whole
+    // among them; a cut by code units would start the end mid-emoji.
+    expect(tail).toBe("😀de.jpg");
+    expect(head).toBe("holiday");
+    expect(`${head ?? ""}${tail ?? ""}`).toBe(name);
+  });
+
+  it("cuts a name by whole graphemes, a joined emoji kept as one", async () => {
+    // A family emoji is one character a reader sees, made of five code
+    // points joined; a cut by code points would leave its parts either side.
+    const name = "holiday👨‍👩‍👧de.jpg";
+    const readMedia = vi.fn<(id: string) => Promise<MediaSummary | null>>(
+      async () => ({ name, thumbnail: "/t/holiday.jpg" })
+    );
+    mountRow({ readMedia }, "m-8");
+    const row = await screen.findByRole("group", {
+      name: `Fallback: ${name}`,
+    });
+    expect(row.querySelector(".nx-middle-cut__tail")?.textContent).toBe(
+      "👨‍👩‍👧de.jpg"
+    );
+    expect(row.querySelector(".nx-middle-cut__head")?.textContent).toBe(
+      "holiday"
+    );
+  });
+
   it("is named by the file readMedia reads, never by its id", async () => {
     const readMedia = vi.fn<(id: string) => Promise<MediaSummary | null>>(
       async () => ({ name: "spring-banner.jpg", thumbnail: "/t/spring.jpg" })
     );
-    const { onFallback } = mountRow({ readMedia }, "m-7");
+    const { onFallback } = mountRow(
+      { readMedia, searchMedia: searchOf() },
+      "m-7"
+    );
     const row = await screen.findByRole("group", {
       name: "Fallback: spring-banner.jpg",
     });
     expect(readMedia).toHaveBeenCalledWith("m-7");
     expect(row.getAttribute("title")).toBe("Fallback: spring-banner.jpg");
     expect(row.querySelector("img")?.getAttribute("src")).toBe("/t/spring.jpg");
-    // A long name is cut in its middle, its end (the extension) kept whole.
+    // A long name is cut in its middle: its extension and the three letters
+    // before it kept whole, its start left to shrink.
+    expect(row.querySelector(".nx-middle-cut__head")?.textContent).toBe(
+      "spring-ban"
+    );
+    expect(row.querySelector(".nx-middle-cut__tail")?.textContent).toBe(
+      "ner.jpg"
+    );
+    // The way to choose another file sits inside the file's box.
     expect(
-      row.querySelector(".nx-image-fallback__media-tail")?.textContent
-    ).toBe("nner.jpg");
+      within(row).getByRole("button", { name: "Choose from library" })
+    ).toBeTruthy();
     // The id is stored, not shown: not in the row's words, nor in a field.
     expect(document.body.textContent).not.toContain("m-7");
     expect(screen.queryByRole("textbox")).toBeNull();
@@ -256,6 +305,28 @@ describe("the Fallback's library picker", () => {
       screen.getByText("Shown when a post has no cover image.")
     ).toBeTruthy();
     expect(screen.queryByText(/Or paste an image address/)).toBeNull();
+  });
+
+  it("captions each tile with its whole name, cut only at its end", async () => {
+    mountRow({ searchMedia: searchOf() });
+    await openLibrary();
+    const grid = screen.getByRole("listbox", {
+      name: "Images in the media library",
+    });
+    // Tiles side by side are told apart by how their names begin, so a
+    // caption is never cut in its middle, as the row's chosen file is.
+    expect(grid.querySelectorAll(".nx-middle-cut")).toHaveLength(0);
+    expect(
+      Array.from(grid.querySelectorAll(".nx-library-pick__caption")).map(
+        caption => caption.textContent
+      )
+    ).toEqual([
+      "spring-banner.jpg",
+      "campus.jpg",
+      "workbook.png",
+      "team.jpg",
+      "The course room",
+    ]);
   });
 
   it("writes a picked tile's id through onFallback, and closes", async () => {

@@ -11593,7 +11593,8 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   display: flex;
   flex: 1;
   align-items: center;
-  gap: 0.5rem;
+  /* Tight, so the name keeps the width the library button gave up outside. */
+  gap: 0.375rem;
   min-inline-size: 0;
   block-size: var(--nx-control-height);
   padding-inline: 0.375rem 0.25rem;
@@ -11606,7 +11607,7 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-image-fallback__media-thumb {
   flex: none;
-  inline-size: 1.75rem;
+  inline-size: 1.5rem;
   block-size: 1.25rem;
   border: 1px solid var(--nx-border);
   border-radius: var(--radius-sm);
@@ -11615,25 +11616,42 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
- * The name cut in its middle: the start shrinks with an ellipsis, the end
- * (the extension and a few letters before it) is never cut.
+ * A file name cut in its middle (the row's chosen file):
+ * the start shrinks with an ellipsis, the end (the extension and a few
+ * letters before it) is never cut.
  */
-.nx-image-fallback__media-name {
+.nx-middle-cut {
   display: flex;
-  flex: 1;
   min-inline-size: 0;
   overflow: hidden;
   white-space: nowrap;
 }
 
-.nx-image-fallback__media-head {
+.nx-middle-cut__head {
   min-inline-size: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.nx-image-fallback__media-tail {
+.nx-middle-cut__tail {
   flex: none;
+}
+
+.nx-image-fallback__media-name {
+  flex: 1;
+}
+
+/*
+ * The library button inside the chosen file's box, at its end, against
+ * Remove with no gap between them: the pair take no more of the row than
+ * Remove and the button outside the box did, less the space between them,
+ * which goes to the name.
+ */
+.nx-image-fallback__media > .nx-image-fallback__library {
+  flex: none;
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  margin-inline-start: -0.375rem;
 }
 
 /* A file the library no longer has: said in the muted voice of a note. */
@@ -11690,6 +11708,8 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   block-size: 2rem;
   padding-inline-start: 1.75rem;
   font-size: 0.8125rem;
+  /* A placeholder longer than a narrow popover is cut, never clipped. */
+  text-overflow: ellipsis;
 }
 
 .nx-library-pick__grid {
