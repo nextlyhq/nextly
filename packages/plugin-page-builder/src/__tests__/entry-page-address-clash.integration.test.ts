@@ -53,11 +53,8 @@ const SIDES: readonly Side[] = [POSTS, "pages"];
 /** How long a gate waits before giving up, so a broken race fails, not hangs. */
 const GATE_MS = 10_000;
 
-/**
- * How long the save that claimed first stays open after letting the other
- * go, so the other's claim meets the first's while it is uncommitted.
- */
-const HOLD_MS = 300;
+/** How often the database is asked whether the second save is waiting. */
+const POLL_MS = 20;
 
 /** A one-shot signal, and whether it has been given. */
 interface Latch {
@@ -99,15 +96,17 @@ function openedWithin(gate: Latch, ms: number): Promise<boolean> {
  * The race the gate plugin steers. Each save stops at `arrived` with its
  * document written and its transaction open, before the page builder claims
  * anything for it, until its `go` opens; once it has claimed, it opens its
- * `claimed`.
+ * `claimed`, and the save let go first then stays open until `released`.
  */
 interface Race {
   armed: boolean;
-  /** The save let go first, held open a moment after it claims. */
+  /** The save let go first, held open after it claims until `released`. */
   first: Side | null;
   arrived: Record<Side, Latch>;
   go: Record<Side, Latch>;
   claimed: Record<Side, Latch>;
+  /** Opened once the other save is seen waiting on the first's claim. */
+  released: Latch;
 }
 
 function newRace(first: Side | null = null): Race {
@@ -121,7 +120,39 @@ function newRace(first: Side | null = null): Race {
     arrived: each(),
     go: each(),
     claimed: each(),
+    released: latch(),
   };
+}
+
+/**
+ * Whether another session on this test's database is seen waiting on a lock
+ * within `ms`, asked from the test's own pool: a connection outside both
+ * saves' transactions. Every boot here runs on a database of its own (see
+ * `createTestNextly`), so the only sessions it can count are the two saves;
+ * the first is parked in the gate plugin, between statements, so a waiter is
+ * the second, blocked on what the first holds uncommitted.
+ *
+ * Raw SQL, and only in a test: the lock views are the database's own, and no
+ * API reports another session's wait. On PostgreSQL the waiter's backend
+ * reports a `Lock` wait; on MySQL 8 the lock-wait view lists it with its
+ * thread's database (`innodb_trx` does not list every waiting session).
+ */
+async function seenWaitingOnALock(
+  adapter: Pick<TestNextly["adapter"], "executeQuery">,
+  dialect: TestDialect,
+  ms: number
+): Promise<boolean> {
+  const sql =
+    dialect === "postgresql"
+      ? "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND wait_event_type = 'Lock'"
+      : "SELECT COUNT(*) AS n FROM performance_schema.data_lock_waits w JOIN performance_schema.threads t ON t.THREAD_ID = w.REQUESTING_THREAD_ID WHERE t.PROCESSLIST_DB = DATABASE() AND t.PROCESSLIST_ID <> CONNECTION_ID()";
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const [counted] = await adapter.executeQuery<{ n: unknown }>(sql);
+    if (Number(counted?.n ?? 0) > 0) return true;
+    await new Promise(resolve => setTimeout(resolve, POLL_MS));
+  }
+  return false;
 }
 
 const sideOf = (collection: unknown): Side | null =>
@@ -155,8 +186,11 @@ function gatePlugin(race: () => Race): PluginDefinition {
           const current = race();
           if (!current.armed || current.claimed[side].opened) return;
           current.claimed[side].open();
+          // Held open, its claim uncommitted, until the other save is seen
+          // blocked on it: a fixed pause could end before the other reached
+          // its claim, and the two would then meet one after the other.
           if (current.first === side) {
-            await new Promise(resolve => setTimeout(resolve, HOLD_MS));
+            await openedWithin(current.released, GATE_MS);
           }
         });
       }
@@ -177,6 +211,7 @@ describe.each(getConfiguredTestDialects())(
       for (const side of SIDES) {
         race.go[side].open();
       }
+      race.released.open();
       await current?.destroy();
       current = undefined;
       race = newRace();
@@ -199,8 +234,9 @@ describe.each(getConfiguredTestDialects())(
     /**
      * Publish the post `hello` and a page at `blog/hello` at once, `first`
      * let through to its claim while the other waits with its transaction
-     * open, and the other let go once the first has claimed, while the
-     * first is still uncommitted.
+     * open, and the other let go once the first has claimed. The first is
+     * held uncommitted until the other is seen blocked on its claim, and
+     * only then let commit, so the two claims meet while both are open.
      */
     async function publishAtOnce(t: TestNextly, first: Side) {
       race = newRace(first);
@@ -215,9 +251,19 @@ describe.each(getConfiguredTestDialects())(
       race.go[first].open();
       const firstClaimed = await openedWithin(race.claimed[first], GATE_MS);
       race.go[second].open();
+      let secondWaited = false;
+      try {
+        secondWaited =
+          firstClaimed &&
+          (await seenWaitingOnALock(t.adapter, dialect, GATE_MS));
+      } finally {
+        // Let go whatever was seen, so a race that never met ends and fails
+        // on its assertions rather than holding the first save open.
+        race.released.open();
+      }
       const [entry, page] = await saves;
       race.armed = false;
-      return { bothOpen, firstClaimed, entry, page };
+      return { bothOpen, firstClaimed, secondWaited, entry, page };
     }
 
     /*
@@ -228,14 +274,17 @@ describe.each(getConfiguredTestDialects())(
     describe.skipIf(dialect === "sqlite")("published at once", () => {
       it("gives the address to the entry when it claims first, and refuses the page naming it", async () => {
         const t = await boot();
-        const { bothOpen, firstClaimed, entry, page } = await publishAtOnce(
-          t,
-          POSTS
-        );
+        const { bothOpen, firstClaimed, secondWaited, entry, page } =
+          await publishAtOnce(t, POSTS);
         // The race happened: both saves were open before either claimed,
-        // and the page claimed only after the entry had.
+        // the page claimed only after the entry had, and it was blocked on
+        // the entry's claim while the entry was still uncommitted.
         expect(bothOpen).toBe(true);
         expect(firstClaimed).toBe(true);
+        expect(
+          secondWaited,
+          "the second save never waited on the first's claim"
+        ).toBe(true);
         expect(entry.status).toBe("fulfilled");
         expect(page.status).toBe("rejected");
         if (entry.status !== "fulfilled" || page.status !== "rejected") return;
@@ -252,12 +301,14 @@ describe.each(getConfiguredTestDialects())(
 
       it("gives the address to the page when it claims first, and refuses the entry naming it", async () => {
         const t = await boot();
-        const { bothOpen, firstClaimed, entry, page } = await publishAtOnce(
-          t,
-          "pages"
-        );
+        const { bothOpen, firstClaimed, secondWaited, entry, page } =
+          await publishAtOnce(t, "pages");
         expect(bothOpen).toBe(true);
         expect(firstClaimed).toBe(true);
+        expect(
+          secondWaited,
+          "the second save never waited on the first's claim"
+        ).toBe(true);
         expect(page.status).toBe("fulfilled");
         expect(entry.status).toBe("rejected");
         if (page.status !== "fulfilled" || entry.status !== "rejected") return;

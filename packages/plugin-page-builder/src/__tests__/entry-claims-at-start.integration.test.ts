@@ -89,20 +89,35 @@ async function siteDatabase(dialect: TestDialect): Promise<SiteDatabase> {
   vi.stubEnv("DB_DIALECT", dialect);
   const name = scratchName();
   const server = await createAdapter({ type: dialect, url: serverUrl });
-  await server.executeQuery(`CREATE DATABASE ${name}`);
-  const url = new URL(serverUrl);
-  url.pathname = `/${name}`;
-  return {
-    dialect,
-    url: url.toString(),
-    drop: async () => {
-      try {
-        await server.executeQuery(`DROP DATABASE IF EXISTS ${name}`);
-      } finally {
-        await server.disconnect();
-      }
-    },
-  };
+  // Until it is handed back, nothing else can drop the database or close the
+  // server connection: a setup that fails part way does both itself, the
+  // drop only once the database exists, and then rethrows its own failure.
+  let created = false;
+  try {
+    await server.executeQuery(`CREATE DATABASE ${name}`);
+    created = true;
+    const url = new URL(serverUrl);
+    url.pathname = `/${name}`;
+    return {
+      dialect,
+      url: url.toString(),
+      drop: async () => {
+        try {
+          await server.executeQuery(`DROP DATABASE IF EXISTS ${name}`);
+        } finally {
+          await server.disconnect();
+        }
+      },
+    };
+  } catch (error) {
+    if (created) {
+      await server
+        .executeQuery(`DROP DATABASE IF EXISTS ${name}`)
+        .catch(() => {});
+    }
+    await server.disconnect().catch(() => {});
+    throw error;
+  }
 }
 
 /**
