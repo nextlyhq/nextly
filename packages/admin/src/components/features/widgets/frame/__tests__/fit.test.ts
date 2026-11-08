@@ -7,7 +7,12 @@ import { LIST_ROW_HEIGHT_PX } from "nextly/card-geometry";
 import { describe, expect, it } from "vitest";
 
 import { cardHeightPx } from "../../sizes";
-import { cellRowStyle, leavesRowsEmpty, requestedCardHeightPx } from "../fit";
+import {
+  cellRowStyle,
+  leavesRowsEmpty,
+  oneItemBodyPx,
+  requestedCardHeightPx,
+} from "../fit";
 import { cardBodyHeightPx } from "../measures";
 
 /** What the frame draws around a card's body: the same at every height. */
@@ -42,6 +47,19 @@ describe("requestedCardHeightPx", () => {
     expect(requestedCardHeightPx(4, undefined)).toBe(cardHeightPx(4));
     expect(requestedCardHeightPx(4, Number.NaN)).toBe(cardHeightPx(4));
     expect(requestedCardHeightPx(4, -1)).toBe(cardHeightPx(4));
+  });
+});
+
+describe("oneItemBodyPx", () => {
+  it("is one list row at the card's density, the row a one-item answer draws", () => {
+    // 🔴 Fails where a loading card's height is counted any other way than its answer's row: the
+    // row then changes height as the answer lands.
+    expect(oneItemBodyPx("default")).toBe(LIST_ROW_HEIGHT_PX.default);
+    expect(oneItemBodyPx("compact")).toBe(LIST_ROW_HEIGHT_PX.compact);
+    // The card a loading four-row card asks for: the frame and one row.
+    expect(requestedCardHeightPx(4, oneItemBodyPx("default"))).toBe(
+      FRAME + LIST_ROW_HEIGHT_PX.default
+    );
   });
 });
 

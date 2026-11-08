@@ -24,7 +24,11 @@ import {
 import type { AdminBranding } from "@admin/types/branding";
 
 import { useCardCollapsed } from "../frame/collapse";
-import { useCardFitsContent } from "../frame/fit";
+import {
+  oneItemBodyPx,
+  requestedCardHeightPx,
+  useCardFitsContent,
+} from "../frame/fit";
 import { cardBodyHeightPx } from "../frame/measures";
 import { cardHeightPx, CONTENT_ROWS_GRID_CLASS } from "../sizes";
 import { WidgetGrid } from "../WidgetGrid";
@@ -800,6 +804,37 @@ describe("WidgetGrid — sizing", () => {
     fireEvent.click(within(cell).getByRole("button", { name: "Fill" }));
     expect(cell.style.gridRow).toBe("span 4 / span 4");
     expect(requested(cell)).toBe(`${cardHeightPx(4)}px`);
+  });
+
+  it("asks, while a content-sized card is loading, for the height its one-item answer takes, and for any other card's stored height", async () => {
+    // 🔴 Fails where the loading state reports nothing: each loading cell asks for its stored
+    // height, 336 px here, and the row shrinks by 170 px under the cards below once one item
+    // arrives.
+    registerComponents({ "@acme/admin#A": () => <div>a</div> });
+    // The answers never arrive, so every card stays loading.
+    vi.mocked(protectedApi.post).mockImplementation(
+      () => new Promise(() => {})
+    );
+    mockBranding = brandingWith([
+      { ...sized("core/needs-attention", 8, 4), title: "Needs your attention" },
+      { ...sized("core/upcoming-releases", 4, 4), title: "Upcoming releases" },
+      { ...sized("other", 12, 4), title: "Other" },
+    ]);
+    renderGrid();
+    const attention = screen.getByTestId("widget-cell-core/needs-attention");
+    const releases = screen.getByTestId("widget-cell-core/upcoming-releases");
+    const other = screen.getByTestId("widget-cell-other");
+    await within(attention).findByTestId("card-skeleton");
+    await within(other).findByTestId("card-skeleton");
+    // One list row, the height a one-item answer's row is drawn at, in the card that holds it.
+    const oneItem = `${requestedCardHeightPx(4, oneItemBodyPx("default"))}px`;
+    expect(oneItem).toBe(
+      `${cardHeightPx(4) - cardBodyHeightPx(4) + LIST_ROW_HEIGHT_PX.default}px`
+    );
+    expect(requested(attention)).toBe(oneItem);
+    expect(requested(releases)).toBe(oneItem);
+    // Any other card's loading state asks for its stored height, as before.
+    expect(requested(other)).toBe(`${cardHeightPx(4)}px`);
   });
 
   it("lays its cards on twelve columns in rows as tall as their cards at rest, in order, with the gaps a card's predicted width counts", () => {

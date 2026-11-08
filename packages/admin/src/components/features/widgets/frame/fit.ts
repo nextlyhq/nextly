@@ -16,7 +16,10 @@
  *
  * Only a body certain that all of its content fits its stored rows reports it, since a card drawn
  * at its content's height has no body edge to fold rows behind: a list that fills its body, or
- * folds rows behind "Show N more", keeps its stored height. Nothing is written to the layout, and
+ * folds rows behind "Show N more", keeps its stored height. While one of the widgets whose bodies
+ * report (`CONTENT_SIZED_WIDGETS`) is loading, its cell asks for the height a one-item answer
+ * takes ({@link useLoadingFitsOneItem}), so the common answer lands at the height the loading
+ * card already stood at and nothing below it moves. Nothing is written to the layout, and
  * never in customise mode, where the rows are fixed and the card's stored size is what is being
  * edited.
  *
@@ -32,10 +35,12 @@ import {
   type RefObject,
 } from "react";
 
+import { CONTENT_SIZED_WIDGETS } from "../content-sized";
 import { cardHeightPx, cardRowStyle } from "../sizes";
 
-import { rowsInBody } from "./list-rows";
+import { LIST_ROW_HEIGHT_PX, rowsInBody, useListDensity } from "./list-rows";
 import { cardBodyHeightPx } from "./measures";
+import { CardHeightContext } from "./tier";
 
 /** Report the body height a card's content takes, in pixels, or `undefined` for its own rows. */
 export type ReportFitHeight = (bodyPx: number | undefined) => void;
@@ -79,6 +84,45 @@ export function useCardFitsContent(
     return () => observer.disconnect();
   }, [report, content, fits, contentKey]);
   useLayoutEffect(() => () => report?.(undefined), [report]);
+}
+
+/**
+ * The body height a one-item answer of a content-sized card takes at `density`: one list row,
+ * which every `EntityRow` is drawn in (`LIST_ROW_HEIGHT_CLASS`, whose pixels these are). What the
+ * loading card asks for (`useLoadingFitsOneItem`), and what the answered card then measures for
+ * its one row, so the two are one height. A single row has no hairline above it, and Upcoming
+ * releases' attention line is drawn only for stopped or overdue releases, which a lone scheduled
+ * release does not have, so neither is counted.
+ */
+export function oneItemBodyPx(density: ListDensity): number {
+  return LIST_ROW_HEIGHT_PX[density];
+}
+
+/**
+ * While the card of `widgetId` is loading, asks its cell for the height a one-item answer takes
+ * ({@link oneItemBodyPx}) where it is one of the content-sized widgets (`CONTENT_SIZED_WIDGETS`),
+ * and only where that one item would leave a row of its stored body empty, as the answered body
+ * reports by ({@link leavesRowsEmpty}); its stored height otherwise. Withdrawn in a layout effect's
+ * cleanup as the loading state leaves, before the body that replaces it reports in its own, so
+ * the cell is asked once per commit and a one-item answer asks for the height already drawn.
+ *
+ * Answers whether it asked, so the skeleton holds the place of the one row the card is drawn
+ * tall enough for rather than of rows past its foot.
+ */
+export function useLoadingFitsOneItem(widgetId: string | undefined): boolean {
+  const report = useContext(CardFitContext);
+  const storedRows = useContext(CardHeightContext);
+  const density = useListDensity();
+  const fits =
+    widgetId !== undefined &&
+    CONTENT_SIZED_WIDGETS.has(widgetId) &&
+    leavesRowsEmpty(1, storedRows, density);
+  useLayoutEffect(() => {
+    if (report === undefined) return;
+    report(fits ? oneItemBodyPx(density) : undefined);
+    return () => report(undefined);
+  }, [report, fits, density]);
+  return fits;
 }
 
 /**

@@ -20,6 +20,10 @@
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
+// The cards that report the height their content takes, and so may stand shorter than their
+// stored rows at rest: the admin's own set, read here rather than copied.
+import { CONTENT_SIZED_WIDGETS } from "../../packages/admin/src/components/features/widgets/content-sized";
+
 import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { cardHeightPx, sizeBoundsOf } from "./support/dashboard-sizes";
@@ -51,15 +55,6 @@ interface Layout {
 }
 
 /** One drawn card: its placement, its stored size and its box. */
-/**
- * The cards that report the height their content takes, and so may stand shorter than their
- * stored rows at rest (`frame/fit` in the admin package).
- */
-const CONTENT_SIZED_WIDGETS: ReadonlySet<string> = new Set([
-  "core/needs-attention",
-  "core/upcoming-releases",
-]);
-
 interface DrawnCard {
   placementId: string;
   widgetId: string;

@@ -8,16 +8,21 @@
  * own tests.
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
+import { LIST_ROW_HEIGHT_PX } from "nextly/card-geometry";
 import type { CoreListWidgetData } from "nextly/core-widget-data";
 import { describe, expect, it, vi } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
-import { CardFitContext } from "@admin/components/features/widgets/frame/fit";
+import {
+  CardFitContext,
+  oneItemBodyPx,
+} from "@admin/components/features/widgets/frame/fit";
 import { render, screen, within } from "@admin/__tests__/utils";
 import {
   CardHeightContext,
   CardTierContext,
 } from "@admin/components/features/widgets/frame/tier";
+import { WidgetCard } from "@admin/components/features/widgets/WidgetCard";
 
 import { UpcomingReleasesCard } from "./UpcomingReleases";
 
@@ -243,5 +248,69 @@ describe("the upcoming rows", () => {
     expect(asked([...ATTENTION, ...releases(3)])).toBeUndefined();
     // More than it draws: the rows it draws fill the body, so the stored height too.
     expect(asked(releases(6))).toBeUndefined();
+  });
+
+  it("asks, while loading, for exactly the height a one-release answer then asks for", () => {
+    // 🔴 Fails where the loading card asks for nothing: its cell then stands at its stored
+    // height until the answer arrives and shrinks the row it shares, moving every card below.
+    const report = vi.fn();
+    const loading = render(
+      <CardFitContext.Provider value={report}>
+        <WidgetCard
+          title="Upcoming releases"
+          widgetId="core/upcoming-releases"
+          h={4}
+          state={{ kind: "loading" }}
+          skeleton="rows"
+        >
+          {null}
+        </WidgetCard>
+      </CardFitContext.Provider>
+    );
+    const asked = report.mock.calls.at(-1)?.[0];
+    loading.unmount();
+    expect(asked).toBe(oneItemBodyPx("default"));
+
+    // The answer with one scheduled release, laid out as it is drawn: one row, and no attention
+    // line, which only stopped or overdue releases bring.
+    const measure = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const rows = this.querySelector(':scope > [data-testid="list-card"]')
+          ? this.querySelectorAll('[data-testid="entity-row"]').length
+          : 0;
+        const height = rows * LIST_ROW_HEIGHT_PX.default;
+        return {
+          top: 0,
+          bottom: height,
+          left: 0,
+          right: 0,
+          width: 0,
+          height,
+        } as DOMRect;
+      });
+    const answered = vi.fn();
+    render(
+      <CardFitContext.Provider value={answered}>
+        <CardHeightContext.Provider value={4}>
+          <CardTierContext.Provider value="medium">
+            {inFrame(
+              <UpcomingReleasesCard
+                widgetId="core/upcoming-releases"
+                placementId="card-1"
+                settings={{}}
+                size={{ w: 4, h: 4, tier: "medium" }}
+                data={answer([release(1)])}
+                refreshing={false}
+                retry={() => undefined}
+              />
+            )}
+          </CardTierContext.Provider>
+        </CardHeightContext.Provider>
+      </CardFitContext.Provider>
+    );
+    expect(screen.queryByTestId("release-attention")).toBeNull();
+    expect(answered.mock.calls.at(-1)?.[0]).toBe(asked);
+    measure.mockRestore();
   });
 });
