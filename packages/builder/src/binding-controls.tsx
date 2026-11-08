@@ -42,6 +42,7 @@ import { bindOp, unbindOp } from "./binding-ops";
 import type {
   BindingFieldChoice,
   BindingFieldSource,
+  UnbindAsk,
   UnbindPlanAnswer,
 } from "./binding-services";
 import { ChoiceList, type ListedChoice } from "./choice-list";
@@ -576,17 +577,11 @@ function useUnbind(args: {
   latest.current = args.document;
   const { nodeId, prop, binding, services } = args;
   return async () => {
-    let plan: UnbindPlanAnswer | undefined;
-    try {
-      plan = await services?.planUnbind?.({
-        document: latest.current,
-        nodeId,
-        prop: prop.name,
-      });
-    } catch {
-      args.onRefused("The unbind could not be planned. Try again.");
-      return;
-    }
+    const plan = await planOf(services, {
+      document: latest.current,
+      nodeId,
+      prop: prop.name,
+    });
     if (plan === undefined) return;
     if ("refusal" in plan) {
       args.onRefused(plan.refusal);
@@ -610,6 +605,21 @@ function useUnbind(args: {
       tone: plan.answer.unreadable === true ? "private" : "kept",
     });
   };
+}
+
+/**
+ * The host's plan for an unbind; a refusal saying so where the plan could
+ * not be read, and nothing where the host plans no unbinds.
+ */
+async function planOf(
+  services: ContentServices | undefined,
+  ask: UnbindAsk
+): Promise<UnbindPlanAnswer | undefined> {
+  try {
+    return await services?.planUnbind?.(ask);
+  } catch {
+    return { refusal: "The unbind could not be planned. Try again." };
+  }
 }
 
 /** A bound text prop's fallback, written when the field is left. */
@@ -755,6 +765,76 @@ function ChipMenuItems({
   );
 }
 
+/**
+ * The bound chip and what it offers: a menu to change the field or unbind,
+ * the change picker anchored to it, and focus given back to it when the
+ * picker closes. With nothing to offer, the chip is a label with no menu.
+ */
+function ChipWithMenu({
+  chip,
+  canChange,
+  canUnbind,
+  propName,
+  onUnbind,
+  picker,
+}: {
+  chip: {
+    id: string;
+    label: string;
+    whole: string;
+    field: string;
+    source: string | undefined;
+    disabled: boolean;
+  };
+  canChange: boolean;
+  canUnbind: boolean;
+  propName: string;
+  onUnbind: () => void;
+  /** The change picker, handed how to close itself. */
+  picker: (close: () => void) => React.ReactNode;
+}): React.JSX.Element {
+  const chipRef = React.useRef<HTMLButtonElement>(null);
+  const [changing, setChanging] = React.useState(false);
+  if (!canChange && !canUnbind) return <BoundChip {...chip} menu={false} />;
+  return (
+    // The menu opens from the chip; "Change field" opens the picker at the
+    // same place, anchored to it rather than triggered by it, so one press
+    // never opens both.
+    <Popover open={changing} onOpenChange={setChanging}>
+      <DropdownMenu modal={false}>
+        <PopoverAnchor asChild>
+          <DropdownMenuTrigger asChild>
+            <BoundChip ref={chipRef} {...chip} menu />
+          </DropdownMenuTrigger>
+        </PopoverAnchor>
+        <DropdownMenuContent align="end" className="nx-binding-menu">
+          <ChipMenuItems
+            canChange={canChange}
+            canUnbind={canUnbind}
+            propName={propName}
+            onChange={() => setChanging(true)}
+            onUnbind={onUnbind}
+          />
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <PopoverContent
+        align="end"
+        className="nx-binding-popover"
+        // Anchored, not triggered, so Radix has no trigger to give focus back
+        // to: it goes to the chip, which stays.
+        onCloseAutoFocus={event => {
+          const target = chipRef.current;
+          if (target === null) return;
+          event.preventDefault();
+          target.focus();
+        }}
+      >
+        {picker(() => setChanging(false))}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 /** A bound prop: the chip, its menu, and the fallback a visitor sees without a value. */
 function BoundField({
   nodeId,
@@ -771,10 +851,6 @@ function BoundField({
   onUnbound: (note: UnbindNote) => void;
 }): React.JSX.Element {
   const labelId = React.useId();
-  const chipRef = React.useRef<HTMLButtonElement>(null);
-  const canChange = services?.listBindingFields !== undefined;
-  const canUnbind = services?.planUnbind !== undefined;
-  const [changing, setChanging] = React.useState(false);
   const [refusal, setRefusal] = React.useState<string | null>(null);
   const sources = useBindingSources(services, true);
   const name = propLabel(prop.name, prop.schema);
@@ -812,77 +888,40 @@ function BoundField({
         {/* The menu opens from the chip; "Change field" opens the picker at
             the same place, anchored to it rather than triggered by it, so
             one press never opens both. */}
-        {!canChange && !canUnbind ? (
-          // Nothing to offer from it: named, as a label is, with no menu.
-          <BoundChip
-            id={`${nodeId}:${prop.name}`}
-            label={`${name}: bound to ${whole}`}
-            whole={whole}
-            field={names.field}
-            source={names.source}
-            disabled={disabled}
-            menu={false}
-          />
-        ) : (
-          <Popover open={changing} onOpenChange={setChanging}>
-            <DropdownMenu modal={false}>
-              <PopoverAnchor asChild>
-                <DropdownMenuTrigger asChild>
-                  <BoundChip
-                    ref={chipRef}
-                    id={`${nodeId}:${prop.name}`}
-                    label={`${name}: bound to ${whole}`}
-                    whole={whole}
-                    field={names.field}
-                    source={names.source}
-                    disabled={disabled}
-                    menu
-                  />
-                </DropdownMenuTrigger>
-              </PopoverAnchor>
-              <DropdownMenuContent align="end" className="nx-binding-menu">
-                <ChipMenuItems
-                  canChange={canChange}
-                  canUnbind={canUnbind}
-                  propName={name}
-                  onChange={() => setChanging(true)}
-                  onUnbind={() => void unbind()}
-                />
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <PopoverContent
-              align="end"
-              className="nx-binding-popover"
-              // Anchored, not triggered, so Radix has no trigger to give focus
-              // back to: it goes to the chip, which stays.
-              onCloseAutoFocus={event => {
-                const chip = chipRef.current;
-                if (chip === null) return;
-                event.preventDefault();
-                chip.focus();
+        <ChipWithMenu
+          chip={{
+            id: `${nodeId}:${prop.name}`,
+            label: `${name}: bound to ${whole}`,
+            whole,
+            field: names.field,
+            source: names.source,
+            disabled,
+          }}
+          canChange={services?.listBindingFields !== undefined}
+          canUnbind={services?.planUnbind !== undefined}
+          propName={name}
+          onUnbind={() => void unbind()}
+          picker={close => (
+            <BindingPicker
+              prop={prop}
+              blockLabel={blockLabel}
+              services={services}
+              current={binding}
+              onPick={picked => {
+                const op = bindOp(
+                  document,
+                  nodeId,
+                  prop.name,
+                  bindingFor(picked, binding)
+                );
+                close();
+                // A refusal said of the earlier field is no longer true; one
+                // of this edit is said in its place.
+                setRefusal(op !== null && onApply(op) ? null : EDIT_REFUSED);
               }}
-            >
-              <BindingPicker
-                prop={prop}
-                blockLabel={blockLabel}
-                services={services}
-                current={binding}
-                onPick={picked => {
-                  const op = bindOp(
-                    document,
-                    nodeId,
-                    prop.name,
-                    bindingFor(picked, binding)
-                  );
-                  setChanging(false);
-                  // A refusal said of the earlier field is no longer true; one
-                  // of this edit is said in its place.
-                  setRefusal(op !== null && onApply(op) ? null : EDIT_REFUSED);
-                }}
-              />
-            </PopoverContent>
-          </Popover>
-        )}
+            />
+          )}
+        />
         {!textFallback ? null : (
           <FallbackInput
             describedBy={labelId}
