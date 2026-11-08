@@ -10413,10 +10413,17 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 /* On the outline's top edge, a tab of it: its top corners round, its foot
    sits on the dash. */
-.nx-visitor-unreadable__badge:not([data-inside])
+.nx-visitor-unreadable__badge:not([data-inside]):not([data-below])
   .nx-visitor-unreadable__button {
   border-end-start-radius: 0;
   border-end-end-radius: 0;
+}
+
+/* On the outline's bottom edge, where another tab or the block toolbar takes
+   the top: hanging from the dash, its bottom corners round. */
+.nx-visitor-unreadable__badge[data-below] .nx-visitor-unreadable__button {
+  border-start-start-radius: 0;
+  border-start-end-radius: 0;
 }
 
 /* Inside the outline's top corner, its outer corner square with the dash. */
