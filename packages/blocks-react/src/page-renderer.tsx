@@ -730,6 +730,9 @@ export function PageRenderer({
       styleContext,
       definitions,
       ...(bindingRun === undefined ? {} : { bindings: bindingRun }),
+      // An editor drawing a list item's hidden block keeps such blocks for
+      // the list to judge; a published page's route decides them itself.
+      ...(itemHiddenAs === undefined ? {} : { itemsDecided: true }),
     },
     prepared
   );
