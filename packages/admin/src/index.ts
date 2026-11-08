@@ -106,6 +106,8 @@ export {
   useMedia,
   useMediaItem,
   useMediaResolver,
+  // The library's images searched by name, for a picker outside a dialog.
+  useMediaSearcher,
   useUploadMedia,
   useUpdateMedia,
   useDeleteMedia,
