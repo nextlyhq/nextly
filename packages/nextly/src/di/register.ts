@@ -75,6 +75,7 @@ import {
   resolveKnownTypeColumns,
   resolveTypeColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
+import { stopGrantsExpiryRetry } from "../domains/flush-content-change";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import { LanguageRegistry } from "../domains/i18n/language-registry";
 import {
@@ -4995,6 +4996,10 @@ export async function shutdownServices(): Promise<void> {
 async function releaseServices(opts: {
   disconnectAdapter: boolean;
 }): Promise<void> {
+  // This registration's retries of grants expiries flush through the services
+  // released below, so they stop first; what they owe stays queued for the
+  // next registration's jobs runs.
+  stopGrantsExpiryRetry();
   // Before the adapter disconnects, so destroy can still use db.
   await destroyRegisteredPlugins();
   // Before the adapter disconnects, so a sweep under way finishes with it.
@@ -5054,6 +5059,8 @@ async function releaseServices(opts: {
  * tears them down in reverse before it initialises any plugin.
  */
 export function clearServices(): void {
+  // Stopped first, for the reason `releaseServices` gives.
+  stopGrantsExpiryRetry();
   // Plugins still running are torn down at the next registration, and their
   // `destroy` may still need the services they were started with: those move
   // aside for them rather than vanish, their contexts re-pointed at them for

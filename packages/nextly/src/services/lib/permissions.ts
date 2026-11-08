@@ -1066,14 +1066,20 @@ export async function inPermissionSweep<T>(run: () => Promise<T>): Promise<T> {
   // Open for the batch's whole length, not from its first write. A batch exists
   // to write permission rows, and the alternative is a window between the run
   // starting and its first write in which answers derived from rows the batch
-  // is about to change are still being filed as current.
-  return duringRetirement(async () => {
-    try {
-      return await permissionSweep.run(batch, run);
-    } finally {
-      if (batch.dirty) await flushPermissionCaches();
-    }
-  });
+  // is about to change are still being filed as current. The content expiry
+  // the batch owes is queued ahead of its first write and taken by the flush
+  // at its end; a batch that writes nothing queues nothing.
+  return aheadOfGrantsChange(
+    () =>
+      duringRetirement(async () => {
+        try {
+          return await permissionSweep.run(batch, run);
+        } finally {
+          if (batch.dirty) await flushPermissionCaches();
+        }
+      }),
+    { queue: false }
+  );
 }
 
 /**
@@ -1146,11 +1152,31 @@ export async function writingPermissions<TTable, T>(
   permissions: TTable,
   run: (permissions: TTable) => Promise<T>
 ): Promise<T> {
-  try {
-    return await run(permissions);
-  } finally {
-    await invalidateAllPermissionCaches();
-  }
+  // The content expiry the write owes is queued before the write starts, so it
+  // is owed in the database before the write commits; the expiry the
+  // retirement below reaches (or a sweep's, at its end) takes it.
+  return aheadOfGrantsChange(async () => {
+    try {
+      return await run(permissions);
+    } finally {
+      await invalidateAllPermissionCaches();
+    }
+  });
+}
+
+/**
+ * {@link aheadOfGrantsChange}, loaded when a gate is entered rather than with
+ * this module, which most of the package imports, for the reason
+ * `expireContentReads` gives.
+ */
+async function aheadOfGrantsChange<T>(
+  write: () => Promise<T>,
+  options?: { queue?: boolean }
+): Promise<T> {
+  const { aheadOfGrantsChange: ahead } = await import(
+    "../../domains/flush-content-change"
+  );
+  return ahead(write, options);
 }
 
 /**
