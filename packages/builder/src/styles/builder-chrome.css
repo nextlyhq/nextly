@@ -6159,13 +6159,12 @@ fieldset.nx-inspector__fields {
  * A number field's label drags its value: the resize cursor says so, and the
  * words are not selected by the drag. Touch is left to scroll and tap.
  *
- * Important because the admin gives every `[data-slot="label"]` a pointer
- * cursor marked important, which reads as "click me" here and outranks any
- * plain rule; this selector is the more specific of the two. Said in words,
- * not as the flag, so the design lint counts the one real override here.
+ * A plain declaration is enough: a draggable label carries no
+ * `data-slot="label"` (`label-scrub.tsx`), so the admin's pointer cursor for
+ * every such label does not reach it.
  */
 .nx-style-inspector .nx-inspector__field > label[data-scrub] {
-  cursor: ew-resize !important;
+  cursor: ew-resize;
   user-select: none;
   /* A pen's horizontal drag is the scrub's, where the browser would take it
      and cancel the pointer; a finger still scrolls the panel and taps. */

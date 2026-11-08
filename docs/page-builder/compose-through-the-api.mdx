@@ -69,6 +69,9 @@ a client can validate what it reads:
 ```ts
 import { compositionManifestSchema } from "@nextlyhq/plugin-page-builder";
 
+// The answer to your `GET /manifest` request.
+declare const response: Response;
+
 const manifest = compositionManifestSchema.parse(await response.json());
 const card = manifest.components.items.find(item => item.title === "Card");
 const dark = card?.variants.find(variant => variant.label === "Dark");
@@ -450,7 +453,13 @@ import {
   pageActionSchema,
   planDefinitionAction,
 } from "@nextlyhq/builder/ops";
-import { registryBlockSource } from "@nextlyhq/blocks-engine";
+import {
+  registryBlockSource,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
+
+// The component's definition: its row's `componentField` in `collections.components`.
+declare const definition: BlockDocument;
 
 const action = definitionActionSchema.parse({
   kind: "add-variant",
@@ -492,8 +501,14 @@ import {
   PAGE_BUILDER_PLUGIN,
   type CompositionService,
 } from "@nextlyhq/plugin-page-builder";
+import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
 
-// Inside your plugin's route handler, with its `ctx`:
+// Inside your plugin's route handler: its `ctx`, and the page and the
+// placement the request names.
+declare const ctx: PluginRouteContext;
+declare const pageId: string;
+declare const instanceId: string;
+
 const composition = ctx.services.plugins[PAGE_BUILDER_PLUGIN]?.[
   COMPOSITION_SERVICE
 ] as CompositionService;
