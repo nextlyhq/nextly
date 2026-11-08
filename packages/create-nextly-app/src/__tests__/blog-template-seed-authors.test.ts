@@ -26,6 +26,13 @@ type Where = Record<string, { equals?: unknown }>;
 
 const AVATAR = "https://cdn.example/avatars/ada.png";
 
+/** An image server's answer: a PNG. */
+const pngAnswer = async () =>
+  new Response(new Uint8Array([137, 80, 78, 71]), {
+    status: 200,
+    headers: { "content-type": "image/png" },
+  });
+
 /** One author with one post, as a custom seed would give them. */
 function seedData(avatarUrl?: string) {
   return {
@@ -224,6 +231,35 @@ describe("the blog seed's author avatars from an absolute address", () => {
         expect.stringContaining(`media "${AVATAR}": fetch-failed`),
       ]);
     }
+  });
+  it("uploads no avatar again for a profile that has one", async () => {
+    vi.stubGlobal("fetch", vi.fn(pngAnswer));
+    const { nextly, rows, upload } = memoryNextly();
+
+    await runSeed(nextly, seedData(AVATAR));
+    await runSeed(nextly, seedData(AVATAR));
+
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(rows.media).toHaveLength(1);
+    expect(rows.authors).toHaveLength(1);
+    expect(rows.authors[0].avatar).toBe(rows.media[0].id);
+  });
+
+  it("gives a profile the avatar an earlier run could not load", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("unavailable", { status: 503 }))
+    );
+    const { nextly, rows } = memoryNextly();
+    await runSeed(nextly, seedData(AVATAR));
+    expect(rows.authors[0].avatar).toBeUndefined();
+
+    vi.stubGlobal("fetch", vi.fn(pngAnswer));
+    const second = await runSeed(nextly, seedData(AVATAR));
+    expect(second.warnings).toEqual([]);
+    expect(rows.authors).toHaveLength(1);
+    expect(rows.media).toHaveLength(1);
+    expect(rows.authors[0].avatar).toBe(rows.media[0].id);
   });
 });
 

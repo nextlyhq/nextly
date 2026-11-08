@@ -189,6 +189,15 @@ async function bodyColumns(page: Page): Promise<BodyColumns> {
   return columns;
 }
 
+/** The address of the first OpenGraph image metadata names. */
+function firstImageAddress(metadata: ReturnType<typeof buildMetadata>): string {
+  const images = metadata.openGraph?.images;
+  const image = Array.isArray(images) ? images[0] : images;
+  return typeof image === "object" && "url" in image
+    ? String(image.url)
+    : String(image);
+}
+
 /** Open `path` as an anonymous visitor, once it is served with the template. */
 async function visit(
   browser: Browser,
@@ -408,11 +417,11 @@ test.describe("the blog post page, rebuilt with a template", () => {
       ).toBeVisible();
     });
 
-    test("carries the hand-written page's title, description, canonical address, image and robots metadata", async () => {
+    /** The metadata the hand-written page derives, at the fixture's address. */
+    const expectedMetadata = () => {
       const media = recordAt(post, "featuredImage");
       const seo = (post.seo ?? {}) as Record<string, unknown>;
-      // As the hand-written page calls it, at the fixture's address.
-      const expected = buildMetadata(
+      return buildMetadata(
         { seo: (post.seo ?? null) as MetadataEntry["seo"] },
         {
           fallback: {
@@ -425,33 +434,42 @@ test.describe("the blog post page, rebuilt with a template", () => {
           },
         }
       );
+    };
+
+    test("carries the hand-written page's title and description", async () => {
+      const expected = expectedMetadata();
       await expect(page).toHaveTitle(String(expected.title));
       await expect(page.locator('meta[name="description"]')).toHaveAttribute(
         "content",
         String(expected.description)
       );
+    });
+
+    test("names the fixture's own address as canonical", async () => {
       const canonical = await page
         .locator('link[rel="canonical"]')
         .getAttribute("href");
       expect(pathOf(canonical, page.url())).toBe(
-        expected.alternates?.canonical
+        expectedMetadata().alternates?.canonical
       );
       // The intentional difference: the hand-written page names `/blog/`.
       expect(pathOf(canonical, page.url())).not.toContain("/blog/");
-      const images = expected.openGraph?.images;
-      const image = Array.isArray(images) ? images[0] : images;
+    });
+
+    test("carries the hand-written page's social image", async () => {
       const ogImage = await page
         .locator('meta[property="og:image"]')
         .getAttribute("content");
       expect(pathOf(ogImage, page.url())).toBe(
-        pathOf(
-          typeof image === "object" && "url" in image
-            ? String(image.url)
-            : String(image),
-          page.url()
-        )
+        pathOf(firstImageAddress(expectedMetadata()), page.url())
       );
-      const robots = expected.robots as { index: boolean; follow: boolean };
+    });
+
+    test("carries the hand-written page's robots metadata", async () => {
+      const robots = expectedMetadata().robots as {
+        index: boolean;
+        follow: boolean;
+      };
       await expect(page.locator('meta[name="robots"]')).toHaveAttribute(
         "content",
         `${robots.index ? "index" : "noindex"}, ${robots.follow ? "follow" : "nofollow"}`
@@ -530,6 +548,45 @@ test.describe("the blog post page, rebuilt with a template", () => {
         await expectNoAxeViolations(page);
       } finally {
         await close();
+      }
+    });
+  });
+
+  // The fixture's posts keep the template's hooks, made again for its own
+  // authors collection: a post written with no byline is credited to the
+  // writer's profile among the journal's authors, as on a scaffolded blog.
+  test.describe("a post written with no byline", () => {
+    test("is credited to the writer's own profile among the fixture's authors", async ({
+      browser,
+    }) => {
+      const context = await browser.newContext();
+      try {
+        const api = await signIn(await context.newPage());
+        const session = await api.get("/admin/api/auth/session");
+        expect(session.ok(), await session.text()).toBe(true);
+        const { user } = (await session.json()) as { user: { id: string } };
+        const profile = await created(api, JOURNAL.authors, {
+          title: "Dev Writer",
+          name: "Dev Writer",
+          slug: slugOf("Dev Writer", STAMP),
+          account: user.id,
+        });
+        const post = await created(api, JOURNAL.posts, {
+          title: `Uncredited on purpose ${STAMP}`,
+          slug: slugOf("Uncredited on purpose", STAMP),
+          // Published, as the seeded posts are, so it reads back by its id.
+          status: "published",
+        });
+        const read = await api.get(
+          `${entriesOf(JOURNAL.posts)}/${post.id}?depth=0`
+        );
+        expect(read.ok(), await read.text()).toBe(true);
+        const body = (await read.json()) as Record<string, unknown> & {
+          item?: Record<string, unknown>;
+        };
+        expect((body.item ?? body).byline).toBe(profile.id);
+      } finally {
+        await context.close();
       }
     });
   });

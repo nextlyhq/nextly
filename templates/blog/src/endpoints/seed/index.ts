@@ -722,18 +722,13 @@ export async function seed({
     }
   };
 
-  // Post cover images go through the media upload path, and so do the
-  // avatars the author profiles show, a file name and an absolute address
-  // alike: the profile's avatar is a media record either way. The users' own
-  // `avatarUrl` stays a text address (resolved below), which no page reads.
+  // Post cover images go through the media upload path. The avatars the
+  // author profiles show do too, but only for a profile that will hold one,
+  // decided when the profiles are made below. The users' own `avatarUrl`
+  // stays a text address (resolved below), which no page reads.
   for (const post of seedData.posts) {
     if (post.featuredImage) {
       await uploadAndTrack(post.featuredImage, post.title);
-    }
-  }
-  for (const user of seedData.users) {
-    if (user.avatarUrl) {
-      await uploadAndTrack(user.avatarUrl, user.name);
     }
   }
 
@@ -830,20 +825,48 @@ export async function seed({
         where: { slug: { equals: user.slug } },
         limit: 1,
       });
-      if (existing.meta.total > 0) {
-        authorIdMap[user.slug] = existing.items[0].id as string;
-        continue;
+      const found = existing.meta.total > 0 ? existing.items[0] : undefined;
+      // The avatar (a file name or an absolute address) is uploaded into the
+      // media library only for a profile that will hold it: a new one, or an
+      // existing one an earlier run left without (its avatar could not be
+      // loaded then). A profile that has one gets nothing, so a rerun adds no
+      // media.
+      const avatarMissing =
+        found === undefined ||
+        found.avatar === undefined ||
+        found.avatar === null ||
+        found.avatar === "";
+      let avatarId: string | undefined;
+      if (user.avatarUrl && avatarMissing) {
+        await uploadAndTrack(user.avatarUrl, user.name);
+        avatarId = mediaIdByUpload.get(uploadKey(user.avatarUrl, user.name));
+        // An avatar that could not be loaded leaves the profile without one
+        // (the pages draw the author's initial); the miss is also in the
+        // media warnings, and a later run tries it again.
+        if (!avatarId) {
+          console.log(
+            `  Warning: author "${user.slug}" is left without an avatar: ${user.avatarUrl} could not be loaded.`
+          );
+        }
       }
-      const avatarId = user.avatarUrl
-        ? mediaIdByUpload.get(uploadKey(user.avatarUrl, user.name))
-        : undefined;
-      // An avatar that could not be loaded leaves the profile without one
-      // (the pages draw the author's initial); the miss is also in the
-      // media warnings.
-      if (user.avatarUrl && !avatarId) {
-        console.log(
-          `  Warning: author "${user.slug}" is created without an avatar: ${user.avatarUrl} could not be loaded.`
-        );
+      if (found) {
+        authorIdMap[user.slug] = found.id as string;
+        if (avatarId) {
+          const rev = found._rev;
+          await nextly.update({
+            collection: "authors",
+            id: String(found.id),
+            data: {
+              avatar: avatarId,
+              // The version the lookup read, so a change made since refuses
+              // the patch rather than being overwritten by it.
+              ...(typeof rev === "string"
+                ? { _rev: rev }
+                : { _overwrite: true }),
+            },
+          });
+        }
+        continue;
       }
       const createdAuthor = await nextly.create({
         collection: "authors",

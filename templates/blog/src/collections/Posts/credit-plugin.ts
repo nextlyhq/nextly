@@ -20,6 +20,8 @@ import type { PluginDefinition } from "nextly";
 import { authorIsCreator } from "./hooks/author-is-creator";
 import { bylineFromCreator } from "./hooks/byline-from-creator";
 
+const credit = bylineFromCreator({ authors: "authors" });
+
 export const postsCreditPlugin: PluginDefinition = {
   name: "blog-posts-credit",
   version: "1.0.0",
@@ -30,6 +32,8 @@ export const postsCreditPlugin: PluginDefinition = {
     // The phase the code-first collection declares them in, after the
     // validation gate, in the same order.
     ctx.hooks.on("beforeChange", "posts", authorIsCreator);
-    ctx.hooks.on("beforeChange", "posts", bylineFromCreator);
+    ctx.hooks.on("beforeChange", "posts", credit.beforeChange);
+    // `afterChange` as the collection declares it: its create half.
+    ctx.hooks.on("afterCreate", "posts", credit.afterChange);
   },
 };

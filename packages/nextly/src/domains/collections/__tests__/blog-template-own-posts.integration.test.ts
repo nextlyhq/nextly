@@ -38,6 +38,8 @@ import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
 import type { CollectionConfig } from "../../../collections/config/define-collection";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
+import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
+import type { CollectionsHandler } from "../../../services/collections-handler";
 import {
   account,
   role,
@@ -101,6 +103,7 @@ interface Direct {
   create(a: Record<string, unknown>): Promise<{ item: { id: string } }>;
   update(a: Record<string, unknown>): Promise<{ item: { id: string } }>;
   delete(a: Record<string, unknown>): Promise<unknown>;
+  find(a: Record<string, unknown>): Promise<{ items: unknown[] }>;
 }
 
 interface World {
@@ -131,14 +134,16 @@ async function templatePlugin(): Promise<PluginDefinition> {
 }
 
 /**
- * Posts as a visual blog registers it: the same fields, with no hooks and
- * no field rules, since the snapshot it comes from can hold no function.
+ * A collection as a visual blog registers it: the same fields, with no hooks,
+ * no access rules and no field rules, since the snapshot it comes from can
+ * hold no function.
  */
-function asVisual(posts: CollectionConfig): CollectionConfig {
+function asVisual(collection: CollectionConfig): CollectionConfig {
   return {
-    ...posts,
+    ...collection,
     hooks: undefined,
-    fields: posts.fields.map(field => {
+    access: undefined,
+    fields: collection.fields.map(field => {
       const { access: _access, ...rest } = field as typeof field & {
         access?: unknown;
       };
@@ -165,12 +170,10 @@ async function boot(
   ]);
   const t = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
-    collections: [
-      approach === "code-first" ? Posts : asVisual(Posts),
-      Authors,
-      Categories,
-      Tags,
-    ],
+    collections:
+      approach === "code-first"
+        ? [Posts, Authors, Categories, Tags]
+        : [Posts, Authors, Categories, Tags].map(asVisual),
     ...(approach === "visual" ? { plugins: [await templatePlugin()] } : {}),
   });
   current = t;
@@ -250,6 +253,22 @@ async function stored(
 /** Who a stored post names as its author. */
 const authorOf = async (t: TestNextly, id: string) =>
   (await stored(t, id))?.author;
+
+/** The entry service, whose writes take a caller's transaction. */
+const entriesOf = (t: TestNextly): CollectionEntryService =>
+  (
+    t.getService("collectionsHandler") as CollectionsHandler
+  ).getEntryService() as CollectionEntryService;
+
+/**
+ * What a visitor is answered reading `collection`: how many entries, or the
+ * refusal's code.
+ */
+const visitorRead = (direct: Direct, collection: string) =>
+  direct.find({ collection, overrideAccess: false }).then(
+    found => `${found.items.length} entries`,
+    (error: { code?: string }) => `refused (${error.code ?? "no code"})`
+  );
 
 /** The profile a stored post credits, `null` for none. */
 const bylineOf = async (t: TestNextly, id: string) =>
@@ -510,6 +529,37 @@ describe.each(getConfiguredTestDialects())(
       expect(rows.filter(row => row.account === author)).toHaveLength(1);
     });
 
+    // A batch written inside its caller's transaction: the profile is read
+    // once that transaction commits, so the post is credited even with a
+    // profile the same transaction made, which a pooled read inside it could
+    // not see on PostgreSQL or MySQL, and on SQLite would wait behind.
+    it("credit a new post written inside its caller's transaction, from a profile made in it", async () => {
+      const { t, editor } = await boot(dialect);
+      let profile = "";
+      let created = "";
+      await t.adapter.transaction(async tx => {
+        const made = await entriesOf(t).createEntryInTransaction(
+          tx,
+          { collectionName: AUTHORS, overrideAccess: true },
+          { title: "Editor", name: "Editor", slug: "editor", account: editor }
+        );
+        expect(made.success, JSON.stringify(made)).toBe(true);
+        profile = String((made.data as { id: string }).id);
+        const batch = await entriesOf(t).createEntriesInTransaction(
+          tx,
+          {
+            collectionName: POSTS,
+            user: { id: editor, email: "editor@example.com" },
+          },
+          [{ title: "Written in a batch" }]
+        );
+        expect(batch.successful, JSON.stringify(batch)).toBe(1);
+        created = String(batch.ids[0] ?? "");
+      });
+      expect(created).not.toBe("");
+      expect(await bylineOf(t, created)).toBe(profile);
+    });
+
     // A visual blog's Posts has no hooks of its own; the template's plugin
     // registers them, so a new post there is owned and credited as on a
     // code-first blog. Without the plugin the same post is neither, which is
@@ -537,6 +587,24 @@ describe.each(getConfiguredTestDialects())(
         (await authorOf(bare.t, String(plain.item.id))) ?? null
       ).toBeNull();
       expect(await bylineOf(bare.t, String(plain.item.id))).toBeNull();
+    });
+
+    // A visual blog's collections carry no read rule, so nothing grants the
+    // Public role their read: a visitor is answered for an author as for a
+    // post. Its pages read both on the server, where the Public role does not
+    // apply, so they draw the byline either way.
+    it("answer a visitor on a visual blog for an author as for a post", async () => {
+      const { direct, posts } = await boot(dialect, "visual");
+      const author = await visitorRead(direct, AUTHORS);
+      expect(author).toBe(await visitorRead(direct, POSTS));
+      expect(author).toMatch(/^refused/);
+
+      const read = (await direct.find({
+        collection: POSTS,
+        where: { id: { equals: posts.own } },
+        depth: 1,
+      })) as { items: { byline?: { name?: string } }[] };
+      expect(read.items[0]?.byline?.name).toBe("Author");
     });
   }
 );
