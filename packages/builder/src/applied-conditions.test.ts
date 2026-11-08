@@ -201,6 +201,7 @@ describe("the page with its conditions applied", () => {
     );
     // Judged for each item drawn, so nothing is left unjudged.
     expect(applied.unjudged).toBe(false);
+    expect(applied.byEntry).toBe(true);
     expect(applied.shown).toEqual(new Set(["intro"]));
     // The page's own shown block is lifted, as before; the item's keeps its
     // conditions, and its devices, for the renderer to judge per item.
@@ -438,6 +439,7 @@ describe("the conditioned blocks a document holds", () => {
     expect(conditionedBlocksIn(page(worksheet))).toEqual({
       any: true,
       readingEntry: true,
+      readingItems: false,
     });
     const list = block("list", {
       type: COLLECTION_LIST_TYPE,
@@ -447,10 +449,17 @@ describe("the conditioned blocks a document holds", () => {
     expect(conditionedBlocksIn(page(list))).toEqual({
       any: true,
       readingEntry: false,
+      readingItems: true,
+    });
+    expect(conditionedBlocksIn(page(worksheet, list))).toEqual({
+      any: true,
+      readingEntry: true,
+      readingItems: true,
     });
     expect(conditionedBlocksIn(page(block("plain")))).toEqual({
       any: false,
       readingEntry: false,
+      readingItems: false,
     });
   });
 });

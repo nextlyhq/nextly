@@ -76,9 +76,13 @@ export function conditionsCountWords(
 ): string {
   if (applied === undefined) return "";
   const hidden = applied.hidden.length;
-  // Said only of the blocks checked: one a list's item decides is not.
+  // Counted of the blocks that read the entry; one a list's entry decides
+  // is checked for each entry drawn, and marked there.
+  if (hidden === 0 && applied.byEntry && applied.shown.size === 0) {
+    return "Checked for each entry its list shows";
+  }
   if (hidden === 0) {
-    return applied.unjudged
+    return applied.unjudged || applied.byEntry
       ? `Every block checked shows for this ${noun}`
       : `Every conditioned block shows for this ${noun}`;
   }

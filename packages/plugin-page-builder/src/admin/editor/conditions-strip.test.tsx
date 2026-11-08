@@ -26,6 +26,7 @@ function appliedHiding(...names: string[]): AppliedConditions {
   return {
     document: { formatVersion: 1, kind: "template", nodes: [] },
     unjudged: false,
+    byEntry: false,
     shown: new Set(),
     hidden: names.map(name => ({
       id: name,
@@ -68,6 +69,24 @@ describe("what the conditions did, in words", () => {
     expect(
       conditionsCountWords({ ...appliedHiding(), unjudged: true }, "post")
     ).toBe("Every block checked shows for this post");
+  });
+
+  it("says a list's blocks are checked for each entry, claiming nothing of them", () => {
+    // Only blocks inside a list's entries: each is checked, and marked, where
+    // its entry is drawn.
+    expect(
+      conditionsCountWords({ ...appliedHiding(), byEntry: true }, "page")
+    ).toBe("Checked for each entry its list shows");
+    // Beside the page's own blocks, all shown: said only of those checked.
+    expect(
+      conditionsCountWords(
+        { ...appliedHiding(), byEntry: true, shown: new Set(["intro"]) },
+        "page"
+      )
+    ).toBe("Every block checked shows for this page");
+    expect(
+      conditionsCountWords({ ...appliedHiding("a"), byEntry: true }, "page")
+    ).toBe("1 block hidden for this page");
   });
 });
 

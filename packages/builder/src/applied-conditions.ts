@@ -110,6 +110,12 @@ export interface AppliedConditions {
    * page places.
    */
   readonly unjudged: boolean;
+  /**
+   * Whether the page holds conditioned blocks judged for each list entry
+   * drawn, by the renderer, which `shown` and `hidden` do not count: each
+   * one an entry hides is drawn as its marker in that entry.
+   */
+  readonly byEntry: boolean;
 }
 
 /** Where the page's own blocks read: the entry it is drawn for. */
@@ -161,6 +167,7 @@ export function appliedConditionsOf(
     shown,
     hidden,
     unjudged: unjudged || drawsUnjudged(document, drawn),
+    byEntry: itemGated.size > 0,
   };
 }
 
@@ -431,17 +438,21 @@ export function conditionedBlocksIn(
 ): {
   readonly any: boolean;
   readonly readingEntry: boolean;
+  /** Whether any is in a list's per-entry slot, read against each item. */
+  readonly readingItems: boolean;
 } {
   let any = false;
   let readingEntry = false;
+  let readingItems = false;
   walkScoped(document, limits, (block, scope) => {
     if (gatedAsStored(block)) {
       any = true;
       readingEntry ||= scope.source === "entry";
+      readingItems ||= scope.source !== "entry";
     }
-    return !readingEntry;
+    return !(readingEntry && readingItems);
   });
-  return { any, readingEntry };
+  return { any, readingEntry, readingItems };
 }
 
 /**

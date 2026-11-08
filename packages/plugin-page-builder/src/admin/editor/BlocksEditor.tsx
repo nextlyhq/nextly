@@ -1881,6 +1881,9 @@ function useAppliedConditionsSwitch(
   options: Omit<AppliedConditionsOptions, "noun">
 ): AppliedConditionsSwitch {
   const [on, setOn] = useState(false);
+  // Something to check: a block reading the entry, or one a list's entry
+  // decides, checked for each entry the list draws.
+  const checks = held.readingEntry || held.readingItems;
   // Each time the conditions are applied, counted, so a failed read of the
   // page is asked again rather than kept.
   const [attempt, setAttempt] = useState(0);
@@ -1892,7 +1895,7 @@ function useAppliedConditionsSwitch(
   // its conditions.
   const pageRead = usePageConditionsRead(
     pageSource,
-    on && held.readingEntry && pageSource !== undefined,
+    on && checks && pageSource !== undefined,
     attempt
   );
   const noun =
@@ -1908,12 +1911,12 @@ function useAppliedConditionsSwitch(
   // draws the page as a visitor reading that entry would get it.
   const applied = useAppliedConditions(
     composed,
-    on && held.readingEntry ? previewed : undefined,
+    on && checks ? previewed : undefined,
     { ...options, noun }
   );
   const template = useMemo<TemplateConditions | undefined>(
     () =>
-      preview === undefined || !held.readingEntry
+      preview === undefined || !checks
         ? undefined
         : {
             on,
@@ -1922,11 +1925,11 @@ function useAppliedConditionsSwitch(
             applied,
             noun,
           },
-    [preview, held.readingEntry, on, toggle, previewed, applied, noun]
+    [preview, checks, on, toggle, previewed, applied, noun]
   );
   const page = useMemo<TemplateConditions | undefined>(
     () =>
-      pageSource === undefined || !held.readingEntry
+      pageSource === undefined || !checks
         ? undefined
         : // The editor opens only a saved page, so there is always one to read.
           {
@@ -1937,7 +1940,7 @@ function useAppliedConditionsSwitch(
             noun,
             failed: pageRead.failed,
           },
-    [pageSource, held.readingEntry, on, toggle, applied, noun, pageRead.failed]
+    [pageSource, checks, on, toggle, applied, noun, pageRead.failed]
   );
   return { template, page, applied, held: held.any, noun, composed };
 }
