@@ -486,7 +486,27 @@ export function blogPostTemplate(): Record<string, unknown> {
                     },
                     {
                       bindings: { content: { $bind: "content" } },
-                      styles: styled({ fontSize: "0.875rem", lineHeight: 1.6 }),
+                      // A card, as the hand-written page boxes its contents:
+                      // a hairline border, rounded corners and the page's
+                      // background, its entries in the text's colour and a
+                      // quieter one under the pointer. The H3s are set in by
+                      // the block's own nested list.
+                      styles: styled({
+                        border: {
+                          width: sides("1px"),
+                          style: "solid",
+                          color: TOKEN("color.border"),
+                        },
+                        borderRadius: "8px",
+                        padding: sides("1.5rem"),
+                        backgroundColor: TOKEN("color.background"),
+                        color: TOKEN("color.text"),
+                        linkColor: TOKEN("color.text"),
+                        linkColorHover: TOKEN("color.muted"),
+                        fontSize: "0.875rem",
+                        fontWeight: 500,
+                        lineHeight: 1.6,
+                      }),
                     }
                   ),
                 ],
