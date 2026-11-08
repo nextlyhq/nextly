@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS "dc_posts" (
   "word_count" INTEGER,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-  "created_by" TEXT
+  "created_by" TEXT,
+  -- A post whose author profile is deleted keeps no dangling credit.
+  CONSTRAINT "fk_posts_byline" FOREIGN KEY ("byline") REFERENCES "dc_authors"("id") ON DELETE SET NULL
 );
 
 -- Categories collection
@@ -77,7 +79,11 @@ CREATE TABLE IF NOT EXISTS "dc_authors" (
   "first_published_at" INTEGER,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-  "created_by" TEXT
+  "created_by" TEXT,
+  -- Inline, as SQLite adds a key only when its table is made (text keys:
+  -- media.id and users.id are text in the core schema).
+  CONSTRAINT "fk_authors_avatar" FOREIGN KEY ("avatar") REFERENCES "media"("id") ON DELETE SET NULL,
+  CONSTRAINT "fk_authors_account" FOREIGN KEY ("account") REFERENCES "users"("id") ON DELETE SET NULL
 );
 
 -- ============ USER EXTENSION TABLE ============

@@ -245,6 +245,29 @@ describe("the blog template's migration", () => {
     expect(authors?.fields.find(f => f.name === "account")?.unique).toBe(true);
   });
 
+  // A relationship's key, as nextly gives the ones it builds: deleting the
+  // profile, image or account a row names clears the reference rather than
+  // leaving a dangling id. SQLite declares them inside its CREATE TABLE, the
+  // others add them after; each counts the same.
+  it("keys the author relationships, clearing a reference whose row is deleted, in every dialect", () => {
+    const keys: Array<[string, string, string]> = [
+      ["byline", "dc_authors", "id"],
+      ["avatar", "media", "id"],
+      ["account", "users", "id"],
+    ];
+    for (const [dialect, file] of Object.entries(MIGRATION_FILES)) {
+      const sql = readFileSync(new URL(file, TEMPLATE), "utf8");
+      for (const [column, target, targetColumn] of keys) {
+        const q = '[`"]';
+        expect(sql, `${dialect} ${column}`).toMatch(
+          new RegExp(
+            `FOREIGN KEY\\s*\\(${q}${column}${q}\\)\\s*REFERENCES\\s+${q}${target}${q}\\s*\\(${q}${targetColumn}${q}\\)\\s+ON DELETE SET NULL`
+          )
+        );
+      }
+    }
+  });
+
   for (const dialect of Object.keys(MIGRATION_FILES) as SupportedDialect[]) {
     it(`creates every table and column nextly expects (${dialect})`, async () => {
       const sql = readFileSync(
@@ -401,7 +424,10 @@ describe("the blog template's MySQL migration", () => {
     expect(
       keys.map(([t, c, target, tc]) => `${t}.${c} -> ${target}.${tc}`).sort()
     ).toEqual([
+      "dc_authors.account -> users.id",
+      "dc_authors.avatar -> media.id",
       "dc_posts.author -> users.id",
+      "dc_posts.byline -> dc_authors.id",
       "dc_posts.featured_image -> media.id",
       "dc_posts_categories.category_id -> dc_categories.id",
       "dc_posts_categories.post_id -> dc_posts.id",

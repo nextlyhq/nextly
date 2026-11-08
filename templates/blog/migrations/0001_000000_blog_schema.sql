@@ -237,6 +237,20 @@ ALTER TABLE "dc_posts"
 ADD CONSTRAINT "fk_posts_author"
 FOREIGN KEY ("author") REFERENCES "users"("id") ON DELETE SET NULL;
 
+-- Posts byline -> authors: a post whose profile is deleted keeps no dangling credit
+ALTER TABLE "dc_posts"
+ADD CONSTRAINT "fk_posts_byline"
+FOREIGN KEY ("byline") REFERENCES "dc_authors"("id") ON DELETE SET NULL;
+
+-- Authors avatar -> media, and account -> users, as posts' own
+ALTER TABLE "dc_authors"
+ADD CONSTRAINT "fk_authors_avatar"
+FOREIGN KEY ("avatar") REFERENCES "media"("id") ON DELETE SET NULL;
+
+ALTER TABLE "dc_authors"
+ADD CONSTRAINT "fk_authors_account"
+FOREIGN KEY ("account") REFERENCES "users"("id") ON DELETE SET NULL;
+
 -- Site Settings logo -> media (text FK — media.id is text in the core schema)
 ALTER TABLE "single_site_settings"
 ADD CONSTRAINT "fk_site_settings_logo"
@@ -263,6 +277,9 @@ ON CONFLICT DO NOTHING;
 -- Drop foreign keys first
 ALTER TABLE "dc_posts" DROP CONSTRAINT IF EXISTS "fk_posts_author";
 ALTER TABLE "dc_posts" DROP CONSTRAINT IF EXISTS "fk_posts_featured_image";
+ALTER TABLE "dc_posts" DROP CONSTRAINT IF EXISTS "fk_posts_byline";
+ALTER TABLE "dc_authors" DROP CONSTRAINT IF EXISTS "fk_authors_avatar";
+ALTER TABLE "dc_authors" DROP CONSTRAINT IF EXISTS "fk_authors_account";
 ALTER TABLE "single_site_settings" DROP CONSTRAINT IF EXISTS "fk_site_settings_logo";
 ALTER TABLE "user_ext" DROP CONSTRAINT IF EXISTS "fk_user_ext_user_id";
 

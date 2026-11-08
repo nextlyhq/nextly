@@ -282,6 +282,23 @@ describe("the blog seed run again", () => {
     expect(rows.posts[0].byline).toBe(rows.authors[0].id);
   });
 
+  // An editor may rename a profile; it is still that user's, found by its
+  // account, so the rerun makes no second profile and uploads nothing.
+  it("finds a profile an editor renamed since by its account", async () => {
+    vi.stubGlobal("fetch", vi.fn(pngAnswer));
+    const { nextly, rows, upload } = memoryNextly({ failAuthorCreates: 0 });
+    await runSeed(nextly, seedData(AVATAR));
+    rows.authors[0].slug = "ada-the-countess";
+    rows.posts[0].byline = undefined;
+
+    const second = await runSeed(nextly, seedData(AVATAR));
+    expect(second.warnings).toEqual([]);
+    expect(rows.authors).toHaveLength(1);
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(rows.media).toHaveLength(1);
+    expect(rows.posts[0].byline).toBe(rows.authors[0].id);
+  });
+
   it("keeps a byline the post was given since", async () => {
     const { nextly, rows } = memoryNextly();
     await runSeed(nextly, seedData());

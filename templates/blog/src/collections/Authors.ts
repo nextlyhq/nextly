@@ -23,6 +23,7 @@ import {
 // file through plain Node.js module resolution; see codefirst.config.ts.
 import { anyone } from "../access/anyone";
 import { hasPermission } from "../access/has-permission";
+import { mayManageAuthors } from "../access/manage-authors";
 import { autoSlug } from "../hooks/auto-slug";
 
 export const Authors = defineCollection({
@@ -37,11 +38,14 @@ export const Authors = defineCollection({
     // sizes, and a template built with the page builder binds it as an image.
     upload({ name: "avatar", relationTo: "media" }),
     // One profile per account, so the profile a new post is credited to is
-    // never a choice between two (see bylineFromCreator).
+    // never a choice between two (see bylineFromCreator). Read only by those
+    // who may change profiles: the account is a private user id, and the
+    // profile itself is public.
     relationship({
       name: "account",
       relationTo: "users",
       unique: true,
+      access: { read: mayManageAuthors },
       admin: {
         description:
           "The account this profile belongs to. Posts that account writes are credited to this author. An account has one profile at most.",

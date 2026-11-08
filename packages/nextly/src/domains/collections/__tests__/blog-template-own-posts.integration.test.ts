@@ -160,7 +160,11 @@ type Approach = "code-first" | "visual" | "visual without the plugin";
 
 async function boot(
   dialect: TestDialect,
-  approach: Approach = "code-first"
+  approach: Approach = "code-first",
+  options: {
+    /** Make the Public role and what boot grants it, as a real boot does. */
+    seedPublic?: boolean;
+  } = {}
 ): Promise<World> {
   const [Posts, Authors, Categories, Tags] = await Promise.all([
     templateCollection("src/collections/Posts/index.ts", "Posts"),
@@ -175,6 +179,7 @@ async function boot(
         ? [Posts, Authors, Categories, Tags]
         : [Posts, Authors, Categories, Tags].map(asVisual),
     ...(approach === "visual" ? { plugins: [await templatePlugin()] } : {}),
+    ...(options.seedPublic ? { seedPublic: true } : {}),
   });
   current = t;
   await seedPermissions(t);
@@ -589,12 +594,68 @@ describe.each(getConfiguredTestDialects())(
       expect(await bylineOf(bare.t, String(plain.item.id))).toBeNull();
     });
 
+    // A profile is public, the account it belongs to is not: a visitor reads
+    // the profiles without it and may not filter on it, while a caller who
+    // may change profiles reads and filters both.
+    it("hide a profile's account from a visitor, and refuse a visitor's filter on it", async () => {
+      const { t, direct, author } = await boot(dialect, "code-first", {
+        seedPublic: true,
+      });
+      const managerRole = await role(t, "blogtest-profiles", [
+        `read-${AUTHORS}`,
+        `update-${AUTHORS}`,
+      ]);
+      const manager = await account(t, "profiles@example.com", [managerRole]);
+      type Profiles = { items: Record<string, unknown>[] };
+      const visitor = { overrideAccess: false };
+      const byAccount = { where: { account: { equals: author } } };
+
+      const seen = (await direct.find({
+        collection: AUTHORS,
+        depth: 0,
+        ...visitor,
+      })) as Profiles;
+      expect(seen.items.map(item => item.name).sort()).toEqual([
+        "Author",
+        "Other",
+      ]);
+      expect(seen.items.map(item => item.account ?? null)).toEqual([
+        null,
+        null,
+      ]);
+      const filtered = await direct
+        .find({ collection: AUTHORS, ...byAccount, ...visitor })
+        .then(
+          found => `${found.items.length} entries`,
+          (error: { code?: string }) => `refused (${error.code ?? "no code"})`
+        );
+      expect(filtered).toMatch(/^(refused|0 entries)/);
+
+      // The control: the same reads, by a caller who may change profiles.
+      const managed = (await direct.find({
+        collection: AUTHORS,
+        depth: 0,
+        ...as(manager),
+      })) as Profiles;
+      expect(managed.items.map(item => item.account).sort()).toEqual(
+        expect.arrayContaining([author])
+      );
+      const managedFilter = (await direct.find({
+        collection: AUTHORS,
+        ...byAccount,
+        ...as(manager),
+      })) as Profiles;
+      expect(managedFilter.items).toHaveLength(1);
+    });
+
     // A visual blog's collections carry no read rule, so nothing grants the
     // Public role their read: a visitor is answered for an author as for a
     // post. Its pages read both on the server, where the Public role does not
     // apply, so they draw the byline either way.
     it("answer a visitor on a visual blog for an author as for a post", async () => {
-      const { direct, posts } = await boot(dialect, "visual");
+      const { direct, posts } = await boot(dialect, "visual", {
+        seedPublic: true,
+      });
       const author = await visitorRead(direct, AUTHORS);
       expect(author).toBe(await visitorRead(direct, POSTS));
       expect(author).toMatch(/^refused/);

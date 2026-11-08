@@ -820,12 +820,24 @@ export async function seed({
   const authorIdMap: Record<string, string> = {};
   for (const user of seedData.users) {
     try {
-      const existing = await nextly.find({
-        collection: "authors",
-        where: { slug: { equals: user.slug } },
-        limit: 1,
-      });
-      const found = existing.meta.total > 0 ? existing.items[0] : undefined;
+      // Found by its account first, which stays put, then by its slug, which
+      // an editor may have changed since: a renamed profile is still this
+      // user's, and making another would be refused by the unique account.
+      const accountId = userIdMap[user.slug];
+      const lookup = async (
+        where: { account: { equals: string } } | { slug: { equals: string } }
+      ) => {
+        const result = await nextly.find({
+          collection: "authors",
+          where,
+          limit: 1,
+        });
+        return result.meta.total > 0 ? result.items[0] : undefined;
+      };
+      const found =
+        (accountId
+          ? await lookup({ account: { equals: accountId } })
+          : undefined) ?? (await lookup({ slug: { equals: user.slug } }));
       // The avatar (a file name or an absolute address) is uploaded into the
       // media library only for a profile that will hold it: a new one, or an
       // existing one an earlier run left without (its avatar could not be
