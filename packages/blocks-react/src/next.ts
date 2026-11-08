@@ -1979,7 +1979,8 @@ interface MediaReads {
 function mediaResolver(
   config: BlocksPageConfig,
   reader: NextlyContentReader,
-  budget: QueryBudget
+  budget: QueryBudget,
+  cache: MediaReadCache | undefined
 ): MediaReads {
   const known = new Map<string, Promise<ResolvedMedia | null>>();
   // The ids a batch on its way will answer, by that batch's read.
@@ -1987,7 +1988,7 @@ function mediaResolver(
     string,
     Promise<ReadonlyMap<string, ResolvedMedia | null> | undefined>
   >();
-  const readOne = mediaReadOne(config, reader);
+  const readOne = mediaReadOne(config, reader, cache);
   // A read is a read: a page whose images all resolve through the media
   // library spends the same budget a loop does, and an exhausted budget
   // resolves to no picture rather than to an unbounded page. A refusal is
@@ -2065,7 +2066,7 @@ function mediaResolver(
       return ownRead(id, claim);
     },
     ahead: async (ids, claim) => {
-      const readMany = mediaReadMany(config, reader);
+      const readMany = mediaReadMany(config, reader, cache);
       // A route that reads each image by its own id reads none ahead, and
       // stops the reads ahead here, so each image's own read, made as it is
       // drawn, comes before a later step's.
@@ -2103,11 +2104,44 @@ function mediaResolver(
  */
 function mediaReadMany(
   config: BlocksPageConfig,
-  reader: NextlyContentReader
+  reader: NextlyContentReader,
+  cache: MediaReadCache | undefined
 ):
   | ((
       ids: readonly string[]
     ) => Promise<ReadonlyMap<string, ResolvedMedia | null> | undefined>)
+  | undefined {
+  const readRows = mediaRowsReader(config, reader);
+  if (readRows === undefined) return undefined;
+  return async ids => {
+    // Kept as pairs rather than a Map, and an unmatched answer as `null`:
+    // the cache keeps values as JSON, where a Map and `undefined` are lost.
+    const drawn = await cachedMediaRead(
+      config,
+      cache,
+      "nextly-media-batch",
+      ids,
+      async () => {
+        const rows = await readRows(ids);
+        return rows === undefined ? null : [...drawnEach(ids, rows)];
+      },
+      null
+    );
+    return drawn === null ? undefined : new Map(drawn);
+  };
+}
+
+/**
+ * The rows a batch of images reads, by id, where the route's images can be
+ * read so; `undefined` for an answer that cannot be matched to the ids.
+ */
+function mediaRowsReader(
+  config: BlocksPageConfig,
+  reader: NextlyContentReader
+):
+  | ((
+      ids: readonly string[]
+    ) => Promise<ReadonlyMap<string, Record<string, unknown>> | undefined>)
   | undefined {
   const library = mediaNamespaceOf(reader);
   const findByIDs = library?.findByIDs?.bind(library);
@@ -2131,8 +2165,7 @@ function mediaReadMany(
         limit: ids.length,
         ...mediaPosture(config),
       });
-      const rows = rowsById(found, ids);
-      return rows === undefined ? undefined : drawnEach(ids, rows);
+      return rowsById(found, ids);
     };
   }
   // Narrowed for the type: the check above already required it.
@@ -2142,7 +2175,7 @@ function mediaReadMany(
     for (const row of await findByIDs({ ids })) {
       if (typeof row.id === "string") rows.set(row.id, row);
     }
-    return drawnEach(ids, rows);
+    return rows;
   };
 }
 
@@ -2201,10 +2234,84 @@ function mediaPosture(config: BlocksPageConfig): {
   };
 }
 
+/**
+ * How a public route keeps its image reads: in the cache its other reads use,
+ * within the route's own window, so a read never outlives the page around it.
+ * `undefined` on an access-enforced route, which reads them per request.
+ */
+interface MediaReadCache {
+  readonly window: number | false | undefined;
+}
+
+/**
+ * An image read on a public route, run inside the cache the route's other
+ * reads use, and tagged as a media write expires it: the media collection's
+ * tag, and each id's. Run as it is on a route that caches nothing.
+ *
+ * Under Cache Components a prerender refuses an uncached read that takes the
+ * current time, and a read of a missing record takes it: the media library
+ * builds its not-found error, which records when it was made, before
+ * `disableErrors` turns it into `null`. Inside the cache that error is made,
+ * if at all, where the clock may be read, and the miss is kept as an answer,
+ * so a later render of the page reads nothing for it until the id or the
+ * collection is written.
+ *
+ * A refusal is answered as `refused` inside the read for the same reason:
+ * `cachedFind` keeps a refusal as one and throws it again on every hit,
+ * outside the cache, where building that error takes the clock too. Any other
+ * failure still throws and is not kept, so a fault never stands as a miss.
+ */
+async function cachedMediaRead<T>(
+  config: BlocksPageConfig,
+  cache: MediaReadCache | undefined,
+  name: string,
+  ids: readonly string[],
+  read: () => Promise<T>,
+  refused: T
+): Promise<T> {
+  if (cache === undefined) return await read();
+  const collection = config.mediaCollection ?? MEDIA_TAG_COLLECTION;
+  // The named collection's posture is part of the answer: its lifecycle and
+  // language decide which row is read. The library has neither.
+  const posture =
+    config.mediaCollection === undefined ? undefined : mediaPosture(config);
+  return await cachedFind(
+    async () => {
+      try {
+        return await read();
+      } catch (error) {
+        if (isReadRefusal(error)) return refused;
+        throw error;
+      }
+    },
+    {
+      // The collection's tag first, so it is never the one a long batch
+      // drops: it is the tag every media write expires.
+      tags: [
+        ...nextlyTags(collection),
+        ...ids.map(id => entryIdTag(collection, id)),
+      ],
+      keyParts: [
+        name,
+        posture === undefined ? "library" : `collection:${collection}`,
+        posture?.status ?? "",
+        posture?.locale ?? "",
+        // The tenant discriminator, as every public read of the route keys it:
+        // two sites over different databases ask for the same ids.
+        config.cacheScope ?? "",
+        // Sorted, so one set of ids asked in another order shares the entry.
+        ...[...ids].sort(),
+      ],
+      revalidate: await releaseBoundedRevalidate(cache.window),
+    }
+  );
+}
+
 /** One image's read by id, claimed by the caller. */
 function mediaReadOne(
   config: BlocksPageConfig,
-  reader: NextlyContentReader
+  reader: NextlyContentReader,
+  cache: MediaReadCache | undefined
 ): (id: string) => Promise<ResolvedMedia | null> {
   if (config.resolveMedia) {
     const custom = config.resolveMedia;
@@ -2224,12 +2331,12 @@ function mediaReadOne(
       return usableMedia(record) ? record : null;
     };
   }
-  return async (id: string) => {
-    // `disableErrors` on both paths, because `PageContext.resolveMedia`
-    // promises `null` for an id it cannot resolve and the readers THROW
-    // not-found otherwise. The core image block happens to catch that, so the
-    // contract looked kept; a custom block reading the same context would get a
-    // rejected promise instead of the documented answer.
+  // `disableErrors` on both paths, because `PageContext.resolveMedia`
+  // promises `null` for an id it cannot resolve and the readers THROW
+  // not-found otherwise. The core image block happens to catch that, so the
+  // contract looked kept; a custom block reading the same context would get a
+  // rejected promise instead of the documented answer.
+  const readOne = async (id: string): Promise<ResolvedMedia | null> => {
     const record = config.mediaCollection
       ? // An explicitly named collection IS a dynamic collection — a site
         // storing its images somewhere of its own — so it reads as one, and
@@ -2245,6 +2352,19 @@ function mediaReadOne(
         })
       : await mediaNamespaceOf(reader)?.findByID({ id, disableErrors: true });
     return record ? drawnMedia(record) : null;
+  };
+  return async (id: string) => {
+    // A blank id names no record, and has no tag to keep a read under: the
+    // id tag refuses a blank segment by throwing.
+    if (id.trim() === "") return null;
+    return await cachedMediaRead(
+      config,
+      cache,
+      "nextly-media",
+      [id],
+      async () => await readOne(id),
+      null
+    );
   };
 }
 
@@ -3677,6 +3797,12 @@ function blocksRouteConfig(
   // was made with.
   const resolver = blocks ?? registeredBlocks();
   warnOfUnknownTimeZone(config.timeZone);
+  // A public route reads its images inside the cache, as it reads the rest of
+  // the page, within the page's own window; an access-enforced one reads them
+  // per request, as it reads the rest.
+  const mediaCache: MediaReadCache | undefined = isPublic
+    ? { window: listWindow }
+    : undefined;
 
   return {
     ...routeConfig,
@@ -3742,7 +3868,8 @@ function blocksRouteConfig(
             const derived = await derivePageSeo(
               inputs.document,
               resolver,
-              mediaResolver(config, readerFor(config), budget).resolve,
+              mediaResolver(config, readerFor(config), budget, mediaCache)
+                .resolve,
               // A later page of the page's list is its own address, so its
               // canonical names it rather than the list's first page.
               listPageSlug(context.slug, context.page),
@@ -3886,7 +4013,12 @@ function blocksRouteConfig(
         config.maxQueries ?? DEFAULT_MAX_QUERIES,
         { onRefused: () => overrun.refused(budget) }
       );
-      const media = mediaResolver(config, readerFor(config), budget);
+      const media = mediaResolver(
+        config,
+        readerFor(config),
+        budget,
+        mediaCache
+      );
       // The one provider this render's lists read through: their entries,
       // and what they read ahead for them.
       const listData = dataFor(data, config, context.locale, listWindow);
