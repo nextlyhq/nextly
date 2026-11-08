@@ -87,9 +87,14 @@ function draw(
 /**
  * Lays the card out as the frame draws it at `h` grid rows: a body of `cardBodyHeightPx(h)`, rows
  * `rowPx` high from its top (the list's own height unless a case wraps them taller), and the
- * fold's control wherever it is drawn.
+ * fold's control wherever it is drawn. `drawnBodyPx` draws the body shorter than its rows give
+ * it, as a card sized to its content stands while it loads.
  */
-function layOut(h: number, rowPx = LIST_ROW_HEIGHT_PX.default): void {
+function layOut(
+  h: number,
+  rowPx = LIST_ROW_HEIGHT_PX.default,
+  drawnBodyPx = cardBodyHeightPx(h)
+): void {
   const rect = (top: number, bottom: number) =>
     ({
       top,
@@ -100,7 +105,7 @@ function layOut(h: number, rowPx = LIST_ROW_HEIGHT_PX.default): void {
       height: bottom - top,
     }) as DOMRect;
   const row = rowPx;
-  const body = cardBodyHeightPx(h);
+  const body = drawnBodyPx;
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
     function (this: Element) {
       if (this.getAttribute("data-testid") === "widget-card-body")
@@ -164,6 +169,17 @@ function askedOfCell(items: readonly object[], drawn?: number): unknown {
 }
 
 describe("NeedsAttention", () => {
+  it("keeps every row that fits its stored rows while it is drawn at the loading height", () => {
+    // Drawn one row high, as the loading card stood, with two items its four stored rows hold:
+    // judged against its drawn body the second row would fold and the card would ask for its
+    // full rows for a frame, then unfold once drawn there. Judged against its stored rows, both
+    // show and it asks for their height at once. Fails on a fold measured against the drawn body.
+    layOut(4, LIST_ROW_HEIGHT_PX.default, oneItemBodyPx("default"));
+    expect(askedOfCell([STOPPED, OVERDUE], 2)).toBe(
+      LIST_ROW_HEIGHT_PX.default * 2
+    );
+  });
+
   it("draws each item with its severity, label and count, reason and one Review, in the answer's order", () => {
     draw([OVERDUE, SEO]);
     const [overdue, seo] = screen.getAllByTestId("needs-attention-item");
