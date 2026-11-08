@@ -394,6 +394,90 @@ const INERT_ADDED = "added";
 const INERT_KEPT = "kept";
 
 /**
+ * Each canvas's observer of who owns its marked elements' `inert`, by
+ * container, so a marking pass reads what it has not delivered yet first.
+ */
+const inertOwnership = new WeakMap<HTMLElement, MutationObserver>();
+
+/**
+ * Watch whose `inert` each element marked in Entry content holds, as its block
+ * changes its own after the canvas marked it. Returns the unsubscribe.
+ *
+ * A block that starts rendering inert on an element the canvas already made
+ * inert changes nothing the tree shows, so only the mutation tells: React's
+ * `setAttribute` on a present attribute still queues a record, with the old
+ * value. The canvas writes `inert` only where it is absent, so a record with an
+ * old value that leaves the attribute present is the block's write, and the
+ * element's inert is now its own. One that leaves it absent is the block
+ * dropping its inert, and the canvas holds the element inert in its place.
+ */
+export function observeEntryContentInertOwnership(
+  container: HTMLElement
+): () => void {
+  // From the container's own window, as the rendered tree's observer is.
+  const Mutations = container.ownerDocument.defaultView?.MutationObserver;
+  if (typeof Mutations !== "function") return () => undefined;
+  const observer = new Mutations(records =>
+    readInertOwnership(container, records)
+  );
+  observer.observe(container, {
+    attributes: true,
+    attributeFilter: ["inert"],
+    attributeOldValue: true,
+    subtree: true,
+  });
+  inertOwnership.set(container, observer);
+  return () => {
+    readInertOwnership(container, observer.takeRecords());
+    observer.disconnect();
+    if (inertOwnership.get(container) === observer) {
+      inertOwnership.delete(container);
+    }
+  };
+}
+
+function readInertOwnership(
+  container: HTMLElement,
+  records: readonly MutationRecord[]
+): void {
+  const marked = new Set<Element>();
+  records.forEach((record, index) => {
+    // An attribute record's target is always an element.
+    const element = record.target as Element;
+    if (
+      !element.hasAttribute(ENTRY_CONTENT_INERT_ATTRIBUTE) ||
+      !ownedByCanvas(element, container)
+    ) {
+      return;
+    }
+    marked.add(element);
+    // Absent before: an add, which is how the canvas writes it.
+    if (record.oldValue === null) return;
+    // What this write left: the next record's old value, or the tree now.
+    const next = records
+      .slice(index + 1)
+      .find(later => later.target === element);
+    const present =
+      next === undefined
+        ? element.hasAttribute("inert")
+        : next.oldValue !== null;
+    if (present) setMark(element, ENTRY_CONTENT_INERT_ATTRIBUTE, INERT_KEPT);
+  });
+  marked.forEach(holdEntryContentInert);
+}
+
+/**
+ * Make a marked element inert where it is not. Not inert now, the inert it
+ * gets is the canvas's to give back, also where its block had one and dropped
+ * it: left `kept`, it would stay inert once no longer drawn in Entry content.
+ */
+function holdEntryContentInert(element: Element): void {
+  if (element.hasAttribute("inert")) return;
+  setMark(element, ENTRY_CONTENT_INERT_ATTRIBUTE, INERT_ADDED);
+  element.setAttribute("inert", "");
+}
+
+/**
  * Make the entry's blocks an Entry content block draws on this canvas inert,
  * and nothing else: each child of a drawn wrapper, so no link, field or button
  * inside takes focus, a caret or a press, while the wrapper, the block's own
@@ -405,6 +489,11 @@ const INERT_KEPT = "kept";
  * Written only where it changes, as every mark here is.
  */
 export function markEntryContentInert(container: HTMLElement): void {
+  // A block's write to its inert this commit, before this pass gives any back.
+  const pending = inertOwnership.get(container);
+  if (pending !== undefined) {
+    readInertOwnership(container, pending.takeRecords());
+  }
   const wanted = new Set<Element>();
   container
     .querySelectorAll(`[${ENTRY_CONTENT_DRAWN_ATTRIBUTE}]`)
@@ -425,15 +514,16 @@ export function markEntryContentInert(container: HTMLElement): void {
       if (ours) element.removeAttribute("inert");
     });
   wanted.forEach(element => {
-    // Marked once: whether the inert was the block's own is read when the
-    // canvas first marks the element, before it adds any.
+    // Whether the inert was the block's own is read when the canvas first
+    // marks the element, before it adds any; after that, its block changing
+    // it is read by `observeEntryContentInertOwnership` and the hold below.
     if (!element.hasAttribute(ENTRY_CONTENT_INERT_ATTRIBUTE)) {
       element.setAttribute(
         ENTRY_CONTENT_INERT_ATTRIBUTE,
         element.hasAttribute("inert") ? INERT_KEPT : INERT_ADDED
       );
     }
-    setFlag(element, "inert", true);
+    holdEntryContentInert(element);
   });
 }
 
@@ -1170,12 +1260,20 @@ function useCanvasMarkers(
       markEntryContentInert(container);
     };
 
+    // Before the first pass, so a block's change to an element's inert after
+    // the pass marks it is seen; it writes only `inert` and the inert mark,
+    // neither of which counts as the tree changing.
+    const stopOwnership = observeEntryContentInertOwnership(container);
     mark();
     // Subscribed AFTER the first pass, because an observer reports what changes
     // from the moment it attaches and says nothing about the tree already
     // there. Writing the markers cannot re-enter this: what counts as the tree
     // changing excludes every attribute `mark` writes.
-    return observeRenderedTree(container, mark);
+    const stopTree = observeRenderedTree(container, mark);
+    return () => {
+      stopTree();
+      stopOwnership();
+    };
   }, [
     box,
     selectedId,

@@ -7,7 +7,11 @@
 import { ENTRY_CONTENT_DRAWN_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { describe, expect, it } from "vitest";
 
-import { ENTRY_CONTENT_INERT_ATTRIBUTE, markEntryContentInert } from "./canvas";
+import {
+  ENTRY_CONTENT_INERT_ATTRIBUTE,
+  markEntryContentInert,
+  observeEntryContentInertOwnership,
+} from "./canvas";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 /** A canvas holding one Entry content wrapper with the two blocks in it. */
@@ -24,6 +28,11 @@ function drawn() {
   canvas.append(wrapper);
   document.body.append(canvas);
   return { canvas, wrapper, ownInert, plain };
+}
+
+/** Lets a mutation observer deliver what it has queued. */
+function delivered(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
 }
 
 describe("the inert the canvas gives Entry content's blocks", () => {
@@ -60,6 +69,64 @@ describe("the inert the canvas gives Entry content's blocks", () => {
     canvas.append(ownInert);
     markEntryContentInert(canvas);
     expect(ownInert.hasAttribute("inert")).toBe(true);
+    canvas.remove();
+  });
+
+  it("frees a block that gave up its own inert while drawn there", () => {
+    const { canvas, ownInert } = drawn();
+    markEntryContentInert(canvas);
+    // The block re-renders without inert, as React removes the attribute.
+    ownInert.removeAttribute("inert");
+    markEntryContentInert(canvas);
+    // Still drawn in Entry content, so still inert: now the canvas's.
+    expect(ownInert.hasAttribute("inert")).toBe(true);
+    canvas.append(ownInert);
+    markEntryContentInert(canvas);
+    expect(ownInert.hasAttribute("inert")).toBe(false);
+    canvas.remove();
+  });
+
+  it("holds a block inert at once when it drops its own, with no new pass", async () => {
+    const { canvas, ownInert } = drawn();
+    const stop = observeEntryContentInertOwnership(canvas);
+    markEntryContentInert(canvas);
+    ownInert.removeAttribute("inert");
+    await delivered();
+    expect(ownInert.hasAttribute("inert")).toBe(true);
+    expect(ownInert.getAttribute(ENTRY_CONTENT_INERT_ATTRIBUTE)).toBe("added");
+    stop();
+    canvas.remove();
+  });
+
+  it("keeps the inert a block takes on after the canvas made it inert", async () => {
+    const { canvas, plain } = drawn();
+    const stop = observeEntryContentInertOwnership(canvas);
+    markEntryContentInert(canvas);
+    await delivered();
+    // The control: the canvas's own write leaves the inert the canvas's.
+    expect(plain.getAttribute(ENTRY_CONTENT_INERT_ATTRIBUTE)).toBe("added");
+    // The block re-renders inert itself: a write to an attribute present.
+    plain.setAttribute("inert", "");
+    await delivered();
+    expect(plain.getAttribute(ENTRY_CONTENT_INERT_ATTRIBUTE)).toBe("kept");
+    canvas.append(plain);
+    markEntryContentInert(canvas);
+    expect(plain.hasAttribute("inert")).toBe(true);
+    stop();
+    canvas.remove();
+  });
+
+  it("reads the block's write before a pass in the same commit frees it", () => {
+    const { canvas, plain } = drawn();
+    const stop = observeEntryContentInertOwnership(canvas);
+    markEntryContentInert(canvas);
+    // The block turns inert and leaves Entry content in one commit, and the
+    // pass runs before the observer has delivered the block's write.
+    plain.setAttribute("inert", "");
+    canvas.append(plain);
+    markEntryContentInert(canvas);
+    expect(plain.hasAttribute("inert")).toBe(true);
+    stop();
     canvas.remove();
   });
 });
