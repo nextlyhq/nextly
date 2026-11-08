@@ -4019,7 +4019,9 @@
   flex: none;
 }
 
-/* At the top of what's on screen: tabs on the outline's bottom edge. */
+/* At the top of what's on screen, or where the block above's tabs take the
+   top edge (a block shorter than a tab under another): tabs on the
+   outline's bottom edge. */
 .nx-canvas-mark[data-tab-at="below"] > .nx-canvas-mark__tabs {
   top: 100%;
   bottom: auto;

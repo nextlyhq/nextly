@@ -799,7 +799,7 @@ function atRestTabsOf(element: Element): AtRestTabs | undefined {
  * block with its tabs on the outline's edge, a block that is both carrying
  * both tabs on the one outline. Placed outside the block, above it where
  * there's room and below it where there isn't, so the tabs never cover what
- * the block draws.
+ * the block draws, and apart from every other block's tabs (`tabsApart`).
  */
 function atRestMarks(
   root: HTMLElement,
@@ -837,8 +837,10 @@ function atRestMarks(
         gathered.primary ||= selected === "primary";
       }
     });
-  return [...badges.values()].map(badge =>
-    atRestMark(badge, onScreen, toolbarAbove, shownLabel)
+  return tabsApart(
+    [...badges.values()].map(badge =>
+      atRestMark(badge, onScreen, toolbarAbove, shownLabel)
+    )
   );
 }
 
@@ -880,36 +882,156 @@ function badgeKey(
     : `${String(copyOf(copies, element))}\u0000${placement}`;
 }
 
-/** One marked block's at-rest mark: its outline and where its tabs go. */
+/** Where an at-rest mark's tabs may go, as the stylesheet reads it. */
+type TabsAt = NonNullable<Mark["tabsAt"]>;
+
+/**
+ * One marked block's at-rest mark before its tabs are placed: the mark, the
+ * places its tabs may go in order of preference, and about how wide they are.
+ */
+interface AtRestDraft {
+  readonly mark: Mark;
+  readonly places: readonly TabsAt[];
+  readonly width: number;
+}
+
+/** One marked block's at-rest mark: its outline and where its tabs may go. */
 function atRestMark(
   badge: ConditionBadge,
   onScreen: Rect,
   toolbarAbove: (rect: Rect) => boolean,
   shownLabel: string
-): Mark {
+): AtRestDraft {
   const outline = placementOutline(badge.parts);
   // The top is taken by a selected placement's name, or by the block
   // toolbar above the primary block: the tab then takes the bottom edge.
   const topTaken =
     (badge.selected && badge.placement) ||
     (badge.primary && toolbarAbove(outline.rect));
+  const places = tabPlacesOf(outline.rect, onScreen, topTaken);
   return {
-    ...outline,
-    kind: "at-rest",
-    secondary: false,
-    component: false,
-    locked: false,
-    hidden: false,
-    tag: "below",
-    tagEdge: "right",
-    tagInset: {
-      bottom: 0,
-      side: tabInset(outline.rect, onScreen, badge.tabs, shownLabel),
+    mark: {
+      ...outline,
+      kind: "at-rest",
+      secondary: false,
+      component: false,
+      locked: false,
+      hidden: false,
+      tag: "below",
+      tagEdge: "right",
+      tagInset: {
+        bottom: 0,
+        side: tabInset(outline.rect, onScreen, badge.tabs, shownLabel),
+      },
+      ...badge.tabs,
+      tabsAt: places[0] ?? "inside",
+      ...(badge.selected ? { atRestSelected: true } : {}),
     },
-    ...badge.tabs,
-    tabsAt: tabsAtOf(outline.rect, onScreen, topTaken),
-    ...(badge.selected ? { atRestSelected: true } : {}),
+    places,
+    width: tabsWidthOf(badge.tabs, shownLabel),
   };
+}
+
+/**
+ * The height an at-rest mark's tabs take, as the stylesheet draws them: a
+ * 16px line, with 1px of padding and a 1px border above and below it.
+ */
+const AT_REST_TAB_HEIGHT = 20;
+
+/**
+ * The gap between two blocks' tabs stepped apart along one edge: the gap
+ * between one mark's own tabs.
+ */
+const AT_REST_TAB_GAP = 2;
+
+/** Whether two rectangles share any area: touching edges share none. */
+function overlaps(a: Rect, b: Rect): boolean {
+  return (
+    a.x < b.x + b.width &&
+    b.x < a.x + a.width &&
+    a.y < b.y + b.height &&
+    b.y < a.y + a.height
+  );
+}
+
+/**
+ * About where an at-rest mark's tabs are drawn, placed `at` the outline's
+ * edge and `side` in from its right: measured from the edge they stand on,
+ * since a tab's foot shares the dash with the outline. No wider than the
+ * outline, as the stylesheet keeps them.
+ */
+function tabsBoxOf(rect: Rect, at: TabsAt, side: number, width: number): Rect {
+  const drawn = Math.min(width, rect.width);
+  const y =
+    at === "above"
+      ? rect.y - AT_REST_TAB_HEIGHT
+      : at === "below"
+        ? rect.y + rect.height
+        : rect.y;
+  return {
+    x: rect.x + rect.width - side - drawn,
+    y,
+    width: drawn,
+    height: AT_REST_TAB_HEIGHT,
+  };
+}
+
+/**
+ * The at-rest marks with their tabs placed so no two blocks' tabs overlap.
+ *
+ * Each mark's tabs sit on its own outline's top edge, so on blocks drawn
+ * shorter than a tab (a line of text at a zoomed-out canvas, a spacer) stacked
+ * one on another, the lower block's tabs land on the upper one's: both run
+ * leftwards from the same right edge, and the second covers the first. No
+ * rule one block can apply from its own height alone keeps two such stacked
+ * tabs apart, since every block shifting its tab alike shifts both, so the
+ * marks are placed together, in a fixed order: from the top of the page down,
+ * then from the left, the document's order breaking ties (an outer block
+ * before the one it holds). The first keeps its tabs where they go alone. A
+ * later one whose tabs would overlap one already placed takes its next place
+ * in the order it may use (`tabPlacesOf`: above, below, inside its top), the
+ * first that is clear, so a short block under another carries its tabs on its
+ * bottom edge, still on its own outline. Where every place it may use is
+ * taken, as in a stack of several very short blocks, its tabs keep their
+ * first place and step left along that edge, past the tabs they would cover.
+ * A block whose tabs are clear (any block taller than a tab, or one beside
+ * another rather than under it) is drawn exactly as it is alone.
+ */
+function tabsApart(drafts: readonly AtRestDraft[]): Mark[] {
+  const order = drafts
+    .map((draft, index) => ({ rect: draft.mark.rect, index }))
+    .sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x)
+    .map(({ index }) => index);
+  const placed: Rect[] = [];
+  const marks: Mark[] = drafts.map(draft => draft.mark);
+  for (const index of order) {
+    const draft = drafts[index];
+    if (draft === undefined) continue;
+    const { mark, places, width } = draft;
+    const hit = (box: Rect): Rect | undefined =>
+      placed.find(other => overlaps(box, other));
+    const boxAt = (at: TabsAt, side: number): Rect =>
+      tabsBoxOf(mark.rect, at, side, width);
+    const clear = places.find(
+      at => hit(boxAt(at, mark.tagInset.side)) === undefined
+    );
+    const at = clear ?? mark.tabsAt ?? "inside";
+    let side = mark.tagInset.side;
+    let box = boxAt(at, side);
+    // Ends: each step leaves the tabs wholly left of the ones they hit, and
+    // they only move left, so no placed tab is hit twice.
+    for (let over = hit(box); over !== undefined; over = hit(box)) {
+      side = mark.rect.x + mark.rect.width - (over.x - AT_REST_TAB_GAP);
+      box = boxAt(at, side);
+    }
+    placed.push(box);
+    marks[index] = {
+      ...mark,
+      tabsAt: at,
+      tagInset: { ...mark.tagInset, side },
+    };
+  }
+  return marks;
 }
 
 /**
@@ -959,21 +1081,26 @@ function copyOf(copies: Map<Element | null, number>, element: Element): number {
 }
 
 /**
- * Where an at-rest mark's tabs go: above the block where there's room on
- * screen and nothing else takes that corner, else below it, else, for a
- * block taller than what's on screen, inside its top edge, so the tabs are
- * always seen.
+ * Where an at-rest mark's tabs may go, in order of preference: above the
+ * block where there's room on screen and nothing else takes that corner,
+ * below it where there's room, and inside its top edge, which is always on
+ * screen. The first is where they go alone, so a block taller than what's on
+ * screen carries them inside; `tabsApart` takes a later one where another
+ * block's tabs are in the way.
  */
-function tabsAtOf(
+function tabPlacesOf(
   rect: Rect,
   onScreen: Rect,
   topTaken: boolean
-): "above" | "below" | "inside" {
-  if (!topTaken && rect.y - onScreen.y >= MARK_TAG_HEIGHT) return "above";
-  if (rect.y + rect.height + MARK_TAG_HEIGHT <= onScreen.y + onScreen.height) {
-    return "below";
-  }
-  return "inside";
+): readonly TabsAt[] {
+  const above = !topTaken && rect.y - onScreen.y >= MARK_TAG_HEIGHT;
+  const below =
+    rect.y + rect.height + MARK_TAG_HEIGHT <= onScreen.y + onScreen.height;
+  return [
+    ...(above ? (["above"] as const) : []),
+    ...(below ? (["below"] as const) : []),
+    "inside",
+  ];
 }
 
 /**

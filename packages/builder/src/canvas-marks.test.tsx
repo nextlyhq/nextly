@@ -722,6 +722,110 @@ describe("selection marks", () => {
     ]);
   });
 
+  /*
+   * The tabs of conditioned blocks drawn at `boxes` (by id, in page order), on
+   * a screen 1000px wide and 500px tall: where each block's tabs sit, and how
+   * far in from its right edge.
+   */
+  const tabsOfBlocksAt = async (
+    boxes: Readonly<Record<string, DOMRect>>
+  ): Promise<{ at: (string | null)[]; inset: string[] }> => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        const id = this.getAttribute(NODE_ID_ATTRIBUTE);
+        return (
+          (id === null ? undefined : boxes[id]) ?? new DOMRect(0, 0, 1000, 2000)
+        );
+      }
+    );
+    const { container } = render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <Canvas
+          document={{
+            formatVersion: 1,
+            kind: "page",
+            nodes: Object.keys(boxes).map(id => ({
+              id,
+              type: "acme/leaf",
+              version: 1,
+              props: {},
+              visibility: {
+                conditions: [[{ field: "tier", op: "equals", value: "vip" }]],
+              },
+            })) as never,
+          }}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          overlay={<CanvasMarks />}
+        />
+      </div>
+    );
+    await act(async () => undefined);
+    const badges = () =>
+      Array.from(
+        container.querySelectorAll<HTMLElement>(
+          '.nx-canvas-mark[data-mark="at-rest"]'
+        )
+      );
+    await waitFor(() =>
+      expect(badges()).toHaveLength(Object.keys(boxes).length)
+    );
+    return {
+      at: badges().map(badge => badge.getAttribute("data-tab-at")),
+      inset: badges().map(badge =>
+        badge.style.getPropertyValue("--nx-tag-inset-side")
+      ),
+    };
+  };
+
+  it("keeps the tabs of two short blocks stacked one on another apart: the lower one's go on its bottom edge", async () => {
+    // Each block 12px tall, shorter than a 20px tab, the second right under
+    // the first, both as wide: above each block, the second's tabs would sit
+    // over the first's, running from the same right edge.
+    const short = await tabsOfBlocksAt({
+      upper: new DOMRect(0, 200, 1000, 12),
+      lower: new DOMRect(0, 212, 1000, 12),
+    });
+    expect(short.at).toEqual(["above", "below"]);
+    expect(short.inset).toEqual(["0px", "0px"]);
+  });
+
+  it("keeps the tabs of stacked blocks taller than a tab, and of short blocks side by side, on their top edges", async () => {
+    // CONTROLS: nothing overlaps, so each block's tabs go where they go alone.
+    // Stacked, 50px each: the lower one's tabs stand clear of the upper one's.
+    const tall = await tabsOfBlocksAt({
+      upper: new DOMRect(0, 200, 1000, 50),
+      lower: new DOMRect(0, 250, 1000, 50),
+    });
+    expect(tall.at).toEqual(["above", "above"]);
+    cleanup();
+    // As short as above, but side by side in a row: their tabs are apart
+    // across, so neither moves although each is shorter than a tab.
+    const row = await tabsOfBlocksAt({
+      left: new DOMRect(0, 200, 400, 12),
+      right: new DOMRect(600, 200, 400, 12),
+    });
+    expect(row.at).toEqual(["above", "above"]);
+    expect(row.inset).toEqual(["0px", "0px"]);
+  });
+
+  it("steps a block's tabs left past another's when every edge it may use is taken", async () => {
+    // Three blocks 8px tall, stacked: the first's tabs go above it and the
+    // second's below it, and for the third, above, below and inside its top
+    // all meet one of those. Its tabs keep the top edge and step left past
+    // the first block's, by their estimated width ("Conditional", 77px of
+    // words, 12px of padding and 16px for the icon: 105px) and the 2px gap.
+    const stack = await tabsOfBlocksAt({
+      first: new DOMRect(0, 200, 1000, 8),
+      second: new DOMRect(0, 208, 1000, 8),
+      third: new DOMRect(0, 216, 1000, 8),
+    });
+    expect(stack.at).toEqual(["above", "below", "above"]);
+    expect(stack.inset).toEqual(["0px", "0px", "107px"]);
+  });
+
   it("draws a dashed reach mark on each block a look edit reaches, and clears it", async () => {
     const { container } = render(
       <Canvas
