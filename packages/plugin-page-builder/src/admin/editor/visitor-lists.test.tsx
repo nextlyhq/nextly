@@ -13,6 +13,7 @@ import {
 import {
   createStandaloneContext,
   PageRenderer,
+  prepareDocumentAsDrawn,
   registeredBlocks,
 } from "@nextlyhq/blocks-react";
 import { createElement } from "react";
@@ -109,73 +110,110 @@ describe("the lists the canvas finds in what it draws", () => {
   });
 });
 
-describe("what the canvas's reads are asked for a page's conditions", () => {
-  /** A component whose list's entry block orders a value. */
-  const DATED: BlockDocument = {
-    formatVersion: DOCUMENT_FORMAT_VERSION,
-    kind: "component",
-    nodes: [
-      {
-        id: "dated-list",
-        type: "core/collection-loop",
-        version: 1,
-        props: { collection: "posts", limit: 10 },
-        slots: {
-          children: [
-            {
-              id: "soon",
-              type: "core/text",
-              version: 1,
-              props: { text: "Soon" },
-              visibility: {
-                conditions: [
-                  [
-                    {
-                      field: "publishedAt",
-                      op: "greater_than",
-                      value: "2026-03-02",
-                    },
-                  ],
-                ],
-              },
-            },
-          ],
+describe("a list beneath a component's conditioned block", () => {
+  it("is found, as the canvas draws the component with its conditions lifted", () => {
+    const gated: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        {
+          id: "members-only",
+          type: "core/box",
+          version: 1,
+          props: {},
+          visibility: {
+            conditions: [
+              [{ field: "title", op: "contains", value: "Members" }],
+            ],
+          },
+          slots: {
+            children: [PROMO.nodes[0] as BlockDocument["nodes"][number]],
+          },
         },
-      },
-    ],
+      ],
+    };
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "placed",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "gated" },
+        },
+      ],
+    };
+    const definitions = new Map([["gated", gated]]);
+    // CONTROL: prepared from the stored definitions, the condition holds the
+    // list back, as no canvas draws it.
+    const stored = prepareDocumentAsDrawn(page, {
+      resolver: registeredBlocks(),
+      definitions,
+      itemsDecided: true,
+    });
+    expect(drawnListsOf(stored?.nodes ?? [])).toHaveLength(0);
+    expect(drawnListsOf(drawnNodesOf(page, {}, definitions))).toHaveLength(1);
+  });
+});
+
+describe("what the canvas's reads are asked for a page's conditions", () => {
+  /** A list whose entry block orders a date. */
+  const datedList = {
+    id: "dated-list",
+    type: "core/collection-loop",
+    version: 1,
+    props: { collection: "posts", limit: 10 },
+    slots: {
+      children: [
+        {
+          id: "soon",
+          type: "core/text",
+          version: 1,
+          props: { text: "Soon" },
+          visibility: {
+            conditions: [
+              [
+                {
+                  field: "publishedAt",
+                  op: "greater_than",
+                  value: "2026-03-02",
+                },
+              ],
+            ],
+          },
+        },
+      ],
+    },
   };
-  const placing: BlockDocument = {
-    formatVersion: DOCUMENT_FORMAT_VERSION,
-    kind: "page",
-    nodes: [
+  const page = (nodes: unknown[]): BlockDocument =>
+    ({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes,
+    }) as BlockDocument;
+  const plain = page([
+    { id: "h", type: "core/text", version: 1, props: { text: "Hi" } },
+  ]);
+
+  it("asks for the site's zone for a dated list a Layout region draws", () => {
+    // CONTROL: a page and region with no condition ask nothing.
+    expect(canvasConditionsFor(plain, [{ document: plain }])).toBeUndefined();
+    expect(
+      canvasConditionsFor(plain, [{ document: page([datedList]) }])
+        ?.ordersValues
+    ).toBe(true);
+  });
+
+  it("asks nothing for a placed component's conditions, which the canvas draws lifted", () => {
+    const placing = page([
       {
         id: "dated",
         type: COMPONENT_INSTANCE_TYPE,
         version: 1,
         props: { componentId: "dated" },
       },
-    ],
-  };
-  const plainPage: BlockDocument = {
-    formatVersion: DOCUMENT_FORMAT_VERSION,
-    kind: "page",
-    nodes: [{ id: "h", type: "core/text", version: 1, props: { text: "Hi" } }],
-  };
-
-  it("asks for the site's zone for a dated list inside a component a Layout region places", () => {
-    const definitions = new Map([["dated", DATED]]);
-    // CONTROL: read as stored, the region holds only the placement.
-    expect(
-      canvasConditionsFor(plainPage, [{ document: placing }], {
-        definitions: new Map(),
-      })
-    ).toBeUndefined();
-    // The page composes nothing; the region does.
-    const demand = canvasConditionsFor(
-      plainPage,
-      [{ document: placing, definitions }],
-      { definitions: new Map() }
-    );
-    expect(demand?.ordersValues).toBe(true);
+    ]);
+    expect(canvasConditionsFor(placing, [{ document: plain }])).toBeUndefined();
   });
 });

@@ -312,8 +312,13 @@ function nestedPlacementOf(node: BlockNode): string | undefined {
  * setting a placement rewrites, is lifted exactly when it is drawn. Only
  * those are walked, so a large component library costs nothing on a page
  * that places none of it.
+ *
+ * Exported so a surface that reads the page as the canvas draws it composes
+ * it from these same definitions.
+ *
+ * @experimental
  */
-function revealedDefinitions(
+export function revealedDefinitions(
   document: BlockDocument,
   definitions: DefinitionsById,
   limits: DocumentLimits | undefined

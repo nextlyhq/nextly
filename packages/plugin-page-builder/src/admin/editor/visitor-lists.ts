@@ -23,6 +23,7 @@ import {
   type PageBindings,
 } from "@nextlyhq/blocks-react";
 import {
+  revealedDefinitions,
   useItemHiddenAs,
   type ItemHiddenOptions,
 } from "@nextlyhq/builder/shell";
@@ -38,10 +39,13 @@ import type { VisitorLists } from "./canvas-page-context";
 /**
  * The blocks a document is drawn with while a list's items are judged, as
  * the renderer itself prepares them (`prepareDocumentAsDrawn`): its shape
- * repaired, its components composed, migrated, gated keeping the blocks a
- * list's item decides, and its addresses repaired, each by the id it is
- * drawn under. So a list a placed component draws is found by the id its own
- * report of what it drew names. None for a document the renderer can't read.
+ * repaired, its components composed from the definitions as the canvas
+ * draws them (`revealedDefinitions`, each reached one's conditions lifted),
+ * migrated, gated keeping the blocks a list's item decides, and its
+ * addresses repaired, each by the id it is drawn under. So a list a placed
+ * component draws is found by the id its own report of what it drew names,
+ * one beneath a conditioned block of the component's among them. None for a
+ * document the renderer can't read.
  */
 export function drawnNodesOf(
   document: BlockDocument,
@@ -54,7 +58,15 @@ export function drawnNodesOf(
       ...(render.styleContext === undefined
         ? {}
         : { styleContext: render.styleContext }),
-      ...(definitions === undefined ? {} : { definitions }),
+      ...(definitions === undefined
+        ? {}
+        : {
+            definitions: revealedDefinitions(
+              document,
+              definitions,
+              render.limits
+            ),
+          }),
       ...(render.limits === undefined ? {} : { limits: render.limits }),
       itemsDecided: true,
     })?.nodes ?? []
@@ -62,40 +74,18 @@ export function drawnNodesOf(
 }
 
 /**
- * What a page's conditions ask of the canvas's reads, the page and each
- * region of its Layout read together: as stored, for the conditions their
- * own blocks read, and, where a component is composed in any of them and the
- * stored trees don't already ask for the site's zone, as the renderer draws
- * them while items are judged, so an ordering condition inside a placed
- * component's list asks for the zone too.
+ * What a page's conditions ask of the canvas's reads: the page and each
+ * region of its Layout read together, as stored. A placed component's
+ * blocks are drawn with their conditions lifted (`revealedDefinitions`), so
+ * none of them is judged on the canvas, and they ask nothing of its reads.
  */
 export function canvasConditionsFor(
   document: BlockDocument,
-  regions: readonly {
-    readonly document: BlockDocument;
-    readonly definitions?: DefinitionsById;
-  }[],
-  render: Partial<Pick<PageRenderInputs, "styleContext" | "limits">> & {
-    readonly definitions: DefinitionsById;
-  }
+  regions: readonly { readonly document: BlockDocument }[]
 ): ConditionDemand | undefined {
-  const stored = [
+  return listConditionsFor([
     ...document.nodes,
     ...regions.flatMap(region => region.document.nodes),
-  ];
-  const own = listConditionsFor(stored);
-  const composes =
-    render.definitions.size > 0 ||
-    regions.some(region => (region.definitions?.size ?? 0) > 0);
-  // Asking for the zone already, or composing nothing, the stored trees say
-  // all there is: the renderer's preparation is spared.
-  if (own?.ordersValues === true || !composes) return own;
-  return listConditionsFor([
-    ...stored,
-    ...drawnNodesOf(document, render, render.definitions),
-    ...regions.flatMap(region =>
-      drawnNodesOf(region.document, render, region.definitions)
-    ),
   ]);
 }
 

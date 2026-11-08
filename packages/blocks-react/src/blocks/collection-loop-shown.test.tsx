@@ -111,7 +111,7 @@ describe("a list inside another list's entries", () => {
       ],
     };
     const shown = vi.fn<(nodeId: string, count: number) => void>();
-    await renderToHtml(
+    const html = await renderToHtml(
       <PageRenderer
         document={nested}
         blocks={resolver}
@@ -123,8 +123,10 @@ describe("a list inside another list's entries", () => {
         })}
       />
     );
-    // CONTROL: the outer list, drawn once, tells its count.
+    // CONTROL: the outer list, drawn once, tells its count; the inner list
+    // is drawn for each of its three entries, three entries each.
     expect(shown).toHaveBeenCalledWith("outer", 3);
+    expect(html.match(/>Entry</g)).toHaveLength(9);
     expect(shown.mock.calls.some(([id]) => id === "inner")).toBe(false);
   });
 });
