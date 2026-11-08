@@ -14,6 +14,7 @@
 import type {
   BlockDocument,
   BlockNode,
+  ConditionDemand,
   DefinitionsById,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -29,6 +30,7 @@ import { useDocumentIdentity } from "@nextlyhq/plugin-sdk/admin";
 import { useEffect, useMemo, useState } from "react";
 
 import type { ListEntriesVisitor } from "../../list-entries-contract";
+import { listConditionsFor } from "../canvas-bindings-client";
 import type { PageRenderInputs } from "../page-render-inputs";
 
 import type { VisitorLists } from "./canvas-page-context";
@@ -57,6 +59,44 @@ export function drawnNodesOf(
       itemsDecided: true,
     })?.nodes ?? []
   );
+}
+
+/**
+ * What a page's conditions ask of the canvas's reads, the page and each
+ * region of its Layout read together: as stored, for the conditions their
+ * own blocks read, and, where a component is composed in any of them and the
+ * stored trees don't already ask for the site's zone, as the renderer draws
+ * them while items are judged, so an ordering condition inside a placed
+ * component's list asks for the zone too.
+ */
+export function canvasConditionsFor(
+  document: BlockDocument,
+  regions: readonly {
+    readonly document: BlockDocument;
+    readonly definitions?: DefinitionsById;
+  }[],
+  render: Partial<Pick<PageRenderInputs, "styleContext" | "limits">> & {
+    readonly definitions: DefinitionsById;
+  }
+): ConditionDemand | undefined {
+  const stored = [
+    ...document.nodes,
+    ...regions.flatMap(region => region.document.nodes),
+  ];
+  const own = listConditionsFor(stored);
+  const composes =
+    render.definitions.size > 0 ||
+    regions.some(region => (region.definitions?.size ?? 0) > 0);
+  // Asking for the zone already, or composing nothing, the stored trees say
+  // all there is: the renderer's preparation is spared.
+  if (own?.ordersValues === true || !composes) return own;
+  return listConditionsFor([
+    ...stored,
+    ...drawnNodesOf(document, render, render.definitions),
+    ...regions.flatMap(region =>
+      drawnNodesOf(region.document, render, region.definitions)
+    ),
+  ]);
 }
 
 /** Whether the canvas's lists read as a visitor, and the switch's say in it. */

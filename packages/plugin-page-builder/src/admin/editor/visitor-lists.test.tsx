@@ -26,7 +26,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
 }));
 
 const { drawnListsOf } = await import("./canvas-page-context");
-const { drawnNodesOf } = await import("./visitor-lists");
+const { canvasConditionsFor, drawnNodesOf } = await import("./visitor-lists");
 
 /** A component holding a list of posts. */
 const PROMO: BlockDocument = {
@@ -106,5 +106,76 @@ describe("the lists the canvas finds in what it draws", () => {
     // Two placements, two lists, each by the id it is drawn under.
     expect(found).toHaveLength(3);
     expect(new Set(found)).toEqual(new Set(reported));
+  });
+});
+
+describe("what the canvas's reads are asked for a page's conditions", () => {
+  /** A component whose list's entry block orders a value. */
+  const DATED: BlockDocument = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "component",
+    nodes: [
+      {
+        id: "dated-list",
+        type: "core/collection-loop",
+        version: 1,
+        props: { collection: "posts", limit: 10 },
+        slots: {
+          children: [
+            {
+              id: "soon",
+              type: "core/text",
+              version: 1,
+              props: { text: "Soon" },
+              visibility: {
+                conditions: [
+                  [
+                    {
+                      field: "publishedAt",
+                      op: "greater_than",
+                      value: "2026-03-02",
+                    },
+                  ],
+                ],
+              },
+            },
+          ],
+        },
+      },
+    ],
+  };
+  const placing: BlockDocument = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [
+      {
+        id: "dated",
+        type: COMPONENT_INSTANCE_TYPE,
+        version: 1,
+        props: { componentId: "dated" },
+      },
+    ],
+  };
+  const plainPage: BlockDocument = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [{ id: "h", type: "core/text", version: 1, props: { text: "Hi" } }],
+  };
+
+  it("asks for the site's zone for a dated list inside a component a Layout region places", () => {
+    const definitions = new Map([["dated", DATED]]);
+    // CONTROL: read as stored, the region holds only the placement.
+    expect(
+      canvasConditionsFor(plainPage, [{ document: placing }], {
+        definitions: new Map(),
+      })
+    ).toBeUndefined();
+    // The page composes nothing; the region does.
+    const demand = canvasConditionsFor(
+      plainPage,
+      [{ document: placing, definitions }],
+      { definitions: new Map() }
+    );
+    expect(demand?.ordersValues).toBe(true);
   });
 });
