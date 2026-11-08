@@ -61,9 +61,7 @@ import { test } from "../support/visible";
  *   hand-written page names its `/blog/<slug>`;
  * - the date is formatted in the site's time zone, where the hand-written
  *   page uses the server's (the same here, both UTC), and its `datetime` is
- *   that day, where the hand-written page writes the stored instant;
- * - the author's name is not yet a link (the test that would check it is
- *   `fixme`, and says why).
+ *   that day, where the hand-written page writes the stored instant.
  *
  * Not compared, because the rebuilt page does not draw them: the reading
  * progress bar, the share bar, the author card's biography, the previous and
@@ -307,14 +305,20 @@ test.describe("the blog post page, rebuilt with a template", () => {
       );
     });
 
-    // The hand-written page links the name to `/authors/<slug>`. A binding
-    // cannot yet follow the one-to-one byline to the author's entry, so no
-    // link block can name it; a list can, which is how the categories and
-    // tags link.
-    test.fixme(
-      "links the author's name to their page, as the hand-written page does",
-      () => {}
-    );
+    // The hand-written page links the name to `/authors/<slug>`; the
+    // rebuilt one links it through the byline's id, read across the relation.
+    test("links the author's name to their page, as the hand-written page does", async () => {
+      const byline = recordAt(post, "byline");
+      expect(typeof byline.slug === "string" && byline.slug !== "").toBe(true);
+      const name = page.getByRole("link", {
+        name: String(byline.name),
+        exact: true,
+      });
+      await expect(name).toBeVisible();
+      expect(pathOf(await name.getAttribute("href"), page.url())).toBe(
+        `/authors/${String(byline.slug)}`
+      );
+    });
 
     test("lists the categories and tags in the post's order, each linked to its page", async () => {
       for (const [field, route] of [

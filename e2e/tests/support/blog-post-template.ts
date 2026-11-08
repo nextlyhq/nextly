@@ -356,22 +356,29 @@ export function blogPostTemplate(): Record<string, unknown> {
                   ),
                   node(
                     "post-author",
-                    // The name as text, not yet a link: a binding cannot
-                    // follow the one-to-one byline to the author's entry, so
-                    // no link block can name it (a list can, which is how
-                    // the categories and tags link).
-                    "core/text",
-                    { text: "Author" },
+                    // The name, linked to the author's page: the entry the
+                    // byline names, by its id read across the relation. Set
+                    // as the hand-written page's link: plain bold text that
+                    // fades on hover, never a button's fill.
+                    "core/button",
+                    { label: "Author", entryCollection: JOURNAL.authors },
                     {
                       bindings: {
-                        text: { $bind: "byline.name", fallback: "Author" },
+                        label: { $bind: "byline.name", fallback: "Author" },
+                        entryId: { $bind: "byline.id" },
                       },
-                      styles: styled({
-                        color: TOKEN("color.text"),
-                        fontSize: "0.75rem",
-                        fontWeight: 700,
-                        margin: sides("0"),
-                      }),
+                      styles: {
+                        ...styled({
+                          backgroundColor: "transparent",
+                          color: TOKEN("color.text"),
+                          padding: sides("0"),
+                          borderRadius: "0",
+                          fontSize: "0.75rem",
+                          fontWeight: 700,
+                          margin: sides("0"),
+                        }),
+                        hover: { base: { opacity: 0.7 } },
+                      },
                     }
                   ),
                 ],
