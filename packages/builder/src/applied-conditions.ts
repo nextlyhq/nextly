@@ -394,6 +394,32 @@ function judgedBlocks(
 }
 
 /**
+ * The page as the canvas draws it: every conditioned block drawn, its
+ * conditions lifted, but, while a list's entries are judged (`byEntry`),
+ * a block a list's entry decides, which keeps its conditions for the
+ * renderer to judge against each entry drawn.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export function revealedForCanvas(
+  document: BlockDocument,
+  applied: Pick<AppliedConditions, "byEntry"> | undefined,
+  limits?: DocumentLimits
+): BlockDocument {
+  if (applied?.byEntry !== true) return revealConditioned(document);
+  const kept = new Set<string>();
+  walkScoped(document, limits, (block, scope) => {
+    if (gatedAsStored(block) && scope.source !== "entry") {
+      kept.add(occurrenceKey(block));
+    }
+    return true;
+  });
+  return kept.size === 0
+    ? revealConditioned(document)
+    : liftedExcept(document, kept);
+}
+
+/**
  * The page with every block's conditions lifted but those of `kept`, by
  * occurrence, which the renderer judges for each list item it draws.
  */

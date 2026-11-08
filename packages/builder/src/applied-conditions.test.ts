@@ -20,6 +20,7 @@ import {
   appliedConditionsOf,
   conditionedBlocksIn,
   itemHiddenAsOf,
+  revealedForCanvas,
   type ConditionsPreview,
 } from "./applied-conditions";
 import { conditionFieldsOfShapes } from "./condition-model";
@@ -515,5 +516,35 @@ describe("what the canvas draws where a list's item hides a block", () => {
     expect(
       hiddenAs(badge, { values: { category: "Guides" }, collection: "posts" })
     ).toBeUndefined();
+  });
+});
+
+describe("the page as the canvas draws it", () => {
+  const featured = block("featured", {
+    visibility: { conditions: [[guides]] },
+  });
+  const intro = block("intro", { visibility: { conditions: [[guides]] } });
+  const list = block("list", {
+    type: COLLECTION_LIST_TYPE,
+    props: { collection: "posts" },
+    slots: { [LIST_ENTRY_SLOT]: [featured] },
+  });
+
+  it("lifts every block's conditions while a list's entries are not judged", () => {
+    for (const applied of [undefined, { byEntry: false }]) {
+      const drawn = revealedForCanvas(page(intro, list), applied);
+      expect(drawn.nodes[0]?.visibility).toBeUndefined();
+      expect(
+        drawn.nodes[1]?.slots?.[LIST_ENTRY_SLOT]?.[0]?.visibility
+      ).toBeUndefined();
+    }
+  });
+
+  it("keeps a list entry's block's conditions while the entries are judged", () => {
+    const drawn = revealedForCanvas(page(intro, list), { byEntry: true });
+    expect(drawn.nodes[0]?.visibility).toBeUndefined();
+    expect(drawn.nodes[1]?.slots?.[LIST_ENTRY_SLOT]?.[0]?.visibility).toEqual({
+      conditions: [[guides]],
+    });
   });
 });
