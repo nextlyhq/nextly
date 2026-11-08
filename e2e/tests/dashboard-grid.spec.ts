@@ -51,6 +51,15 @@ interface Layout {
 }
 
 /** One drawn card: its placement, its stored size and its box. */
+/**
+ * The cards that report the height their content takes, and so may stand shorter than their
+ * stored rows at rest (`frame/fit` in the admin package).
+ */
+const CONTENT_SIZED_WIDGETS: ReadonlySet<string> = new Set([
+  "core/needs-attention",
+  "core/upcoming-releases",
+]);
+
 interface DrawnCard {
   placementId: string;
   widgetId: string;
@@ -204,11 +213,31 @@ async function expectCardsInBand(
       card.expectedWidth,
       0
     );
-    // 🔴 `h` never changes with the band: the same rows at every width.
-    expect(card.height, `${card.widgetId} height at ${label}`).toBeCloseTo(
-      card.expectedHeight,
-      0
-    );
+    // 🔴 `h` never changes with the band: the same rows at every width. At rest a row is as tall
+    // as the tallest content among its cards, with the stored rows its cap, so a card that sizes
+    // to its content may stand shorter, never taller; every other card holds its stored height.
+    if (CONTENT_SIZED_WIDGETS.has(card.widgetId)) {
+      expect(
+        card.height,
+        `${card.widgetId} height at ${label}`
+      ).toBeLessThanOrEqual(card.expectedHeight + 0.5);
+    } else {
+      expect(card.height, `${card.widgetId} height at ${label}`).toBeCloseTo(
+        card.expectedHeight,
+        0
+      );
+    }
+  }
+  // The cards that share a row stand at one height, their bottoms aligned.
+  for (const card of cards) {
+    for (const other of cards) {
+      if (Math.abs(card.top - other.top) < 1 && card.h === other.h) {
+        expect(
+          Math.abs(card.height - other.height),
+          `${card.widgetId} and ${other.widgetId} share a row at ${label}`
+        ).toBeLessThanOrEqual(1);
+      }
+    }
   }
   for (const card of cards) {
     expect(
