@@ -210,7 +210,10 @@ describe("a list the canvas reads as a visitor reads it", () => {
 
   it("is counted once for each list the page draws, none inside another's entries", () => {
     const nested = list("inner");
-    const outer = list("outer", { slots: { children: [nested] } });
+    // A list in another's empty state is drawn once, so it counts.
+    const outer = list("outer", {
+      slots: { children: [nested], empty: [list("when-empty")] },
+    });
     const box = {
       id: "box",
       type: "core/container",
@@ -220,6 +223,7 @@ describe("a list the canvas reads as a visitor reads it", () => {
     };
     expect(drawnListsOf([outer, box]).map(found => found.id)).toEqual([
       "outer",
+      "when-empty",
       "boxed",
     ]);
   });

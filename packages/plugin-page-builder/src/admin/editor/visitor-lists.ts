@@ -101,6 +101,9 @@ export function useItemsJudgedRender<
   options: Omit<ItemHiddenOptions, "fieldShapes">
 ): T {
   const fieldShapes = render.bindings.fieldShapes;
+  // The site's zone, read with the shapes, so an item's condition comparing
+  // a day starts that day where the published page starts it.
+  const timeZone = render.bindings.timeZone;
   const itemHiddenAs = useItemHiddenAs({ ...options, fieldShapes });
   return useMemo(() => {
     if (!judged || render.context === undefined) return render;
@@ -109,8 +112,9 @@ export function useItemsJudgedRender<
       context: {
         ...render.context,
         ...(fieldShapes === undefined ? {} : { fieldShapes }),
+        ...(timeZone === undefined ? {} : { timeZone }),
       },
       itemHiddenAs,
     };
-  }, [render, judged, fieldShapes, itemHiddenAs]);
+  }, [render, judged, fieldShapes, timeZone, itemHiddenAs]);
 }

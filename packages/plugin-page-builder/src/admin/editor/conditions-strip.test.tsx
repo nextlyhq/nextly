@@ -87,6 +87,19 @@ describe("what the conditions did, in words", () => {
     expect(
       conditionsCountWords({ ...appliedHiding("a"), byEntry: true }, "page")
     ).toBe("1 block hidden for this page");
+    // A placed component's block left unchecked beside them: said only of
+    // the blocks checked.
+    expect(
+      conditionsCountWords(
+        {
+          ...appliedHiding(),
+          byEntry: true,
+          unjudged: true,
+          shown: new Set(["intro"]),
+        },
+        "page"
+      )
+    ).toBe("Every block checked shows for this page");
   });
 });
 

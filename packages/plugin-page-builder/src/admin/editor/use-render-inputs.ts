@@ -11,7 +11,6 @@
 import {
   allBlocks,
   BASE_BREAKPOINT,
-  conditionDemand,
   registryNestingSource,
   getBlock,
   paginatedList,
@@ -76,7 +75,10 @@ import {
 } from "../../host-policy";
 import { siteSheet, type SiteStyleData } from "../../site-style";
 import { readSiteStyleRecord } from "../../site-style-record";
-import { LIST_CONDITIONS, useCanvasBindings } from "../canvas-bindings-client";
+import {
+  listConditionsFor,
+  useCanvasBindings,
+} from "../canvas-bindings-client";
 import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
 import { useSiteStyle } from "../site-style-client";
 import { useStoredSiteStyle } from "../site-style-read";
@@ -1092,8 +1094,8 @@ export function useBoundCanvasRender(
   // A page holding conditioned blocks asks for its lists' public field
   // shapes too, which a list item's conditions are judged by while they are
   // applied, though nothing on the page binds.
-  const conditioned = useMemo(
-    () => conditionDemand(document.nodes).any,
+  const conditions = useMemo(
+    () => listConditionsFor(document.nodes),
     [document]
   );
   const bindings = useCanvasBindings(
@@ -1101,7 +1103,7 @@ export function useBoundCanvasRender(
     locale,
     component,
     canvasRender.context?.namedQueries,
-    conditioned ? LIST_CONDITIONS : undefined
+    conditions
   );
   const bound = useMemo(
     () => ({ ...canvasRender, bindings }),

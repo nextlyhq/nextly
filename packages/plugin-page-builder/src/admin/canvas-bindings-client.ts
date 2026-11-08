@@ -19,6 +19,7 @@
  */
 import {
   bindingDemand,
+  conditionDemand,
   isPlainRecord,
   type BindingDemand,
   type BlockDocument,
@@ -128,18 +129,64 @@ const KEPT = new Map<string, { at: number; read: Promise<PageBindings> }>();
 let keptFor: string | undefined;
 
 /**
- * What the canvas's conditions ask of its reads: nothing of the entry, but
- * the public field shapes of the lists it draws, which a block a list's item
- * decides is judged by while conditions are applied, though nothing binds.
+ * What a page's conditions ask of the canvas's reads, or nothing when it
+ * holds none: nothing of the entry, but the public field shapes of the lists
+ * it draws, which a block a list's item decides is judged by while
+ * conditions are applied, though nothing binds; and the site's time zone
+ * where any condition orders a value, which may compare days, so the canvas
+ * judges a day as the published page does.
  *
  * @experimental Settles with the editor's condition controls.
  */
-export const LIST_CONDITIONS: ConditionDemand = Object.freeze({
-  any: true,
-  entryFields: new Set<string>(),
-  ordersValues: false,
-  orderedFields: new Set<string>(),
-});
+export function listConditionsFor(
+  nodes: readonly unknown[]
+): ConditionDemand | undefined {
+  if (!conditionDemand(nodes).any) return undefined;
+  const ordersValues = ordersAnyValue(nodes);
+  return {
+    any: true,
+    entryFields: new Set<string>(),
+    ordersValues,
+    orderedFields: new Set<string>(),
+  };
+}
+
+/** The operators that order a value, so may compare days. */
+const ORDERING = new Set(["greater_than", "less_than"]);
+
+/** Whether any block's stored conditions order a value, of any scope. */
+function ordersAnyValue(nodes: readonly unknown[]): boolean {
+  const stack: unknown[] = [...nodes];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!isPlainRecord(node)) continue;
+    if (conditionsOf(node.visibility).some(op => ORDERING.has(op))) {
+      return true;
+    }
+    if (isPlainRecord(node.slots)) {
+      for (const children of Object.values(node.slots)) {
+        if (Array.isArray(children)) stack.push(...(children as unknown[]));
+      }
+    }
+  }
+  return false;
+}
+
+/** The operators a stored visibility's conditions use. */
+function conditionsOf(visibility: unknown): string[] {
+  if (!isPlainRecord(visibility) || !Array.isArray(visibility.conditions)) {
+    return [];
+  }
+  return (visibility.conditions as unknown[]).flatMap(group =>
+    Array.isArray(group)
+      ? (group as unknown[]).flatMap(condition =>
+          isPlainRecord(condition) && typeof condition.op === "string"
+            ? [condition.op]
+            : []
+        )
+      : []
+  );
+}
 
 /**
  * What the canvas asks for the page it draws, or nothing when it holds no

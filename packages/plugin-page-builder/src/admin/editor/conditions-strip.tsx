@@ -81,12 +81,14 @@ export function conditionsCountWords(
   if (hidden === 0 && applied.byEntry && applied.shown.size === 0) {
     return "Conditions checked for each entry in the list";
   }
-  if (hidden === 0 && applied.byEntry) {
-    return `Every conditioned block shows on this ${noun}`;
+  // Said only of the blocks checked while any went unchecked: one inside a
+  // placed component or a region of the Layout.
+  if (hidden === 0 && applied.unjudged) {
+    return `Every block checked shows for this ${noun}`;
   }
   if (hidden === 0) {
-    return applied.unjudged
-      ? `Every block checked shows for this ${noun}`
+    return applied.byEntry
+      ? `Every conditioned block shows on this ${noun}`
       : `Every conditioned block shows for this ${noun}`;
   }
   return `${String(hidden)} block${hidden === 1 ? "" : "s"} hidden for this ${noun}`;

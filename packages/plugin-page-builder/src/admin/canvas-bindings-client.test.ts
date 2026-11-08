@@ -32,7 +32,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 const {
   canvasBindingsFor,
   canvasBindingsRequest,
-  LIST_CONDITIONS,
+  listConditionsFor,
   useCanvasBindings,
 } = await import("./canvas-bindings-client");
 const { CanvasEntryProvider } = await import("./editor/canvas-entry");
@@ -125,48 +125,61 @@ describe("the canvas's binding sources", () => {
   });
 
   it("asks for a list's field shapes where only its entries' conditions read them, and nothing of the entry", () => {
-    // Nothing binds: the list's entry block has only conditions, which are
-    // judged by the list's public field shapes while conditions are applied.
-    const conditioned: BlockDocument = {
-      formatVersion: 1,
-      kind: "page",
-      nodes: [
-        {
-          id: "list",
-          type: "core/collection-loop",
-          version: 1,
-          props: { collection: "posts" },
-          slots: {
-            children: [
-              {
-                id: "t",
-                type: "core/text",
-                version: 1,
-                props: { text: "Members only" },
-              },
-            ],
+    // Nothing binds: the list's entry block has only conditions, judged by
+    // the list's public field shapes while conditions are applied.
+    const withEntries = (child: Record<string, unknown>): BlockDocument =>
+      ({
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "list",
+            type: "core/collection-loop",
+            version: 1,
+            props: { collection: "posts" },
+            slots: {
+              children: [
+                {
+                  id: "t",
+                  type: "core/text",
+                  version: 1,
+                  props: { text: "Members only" },
+                  ...child,
+                },
+              ],
+            },
           },
-        },
-      ],
-    } as BlockDocument;
-    // CONTROL: with no binding and no conditions, nothing is asked.
-    expect(
-      canvasBindingsRequest([conditioned], identity, undefined)
-    ).toBeUndefined();
-    const request = canvasBindingsRequest(
-      [conditioned],
-      identity,
-      undefined,
-      false,
-      undefined,
-      { conditions: LIST_CONDITIONS }
-    );
+        ],
+      }) as BlockDocument;
+    const plain = withEntries({});
+    const conditioned = withEntries({
+      visibility: {
+        conditions: [[{ field: "price", op: "greater_than", value: 10 }]],
+      },
+    });
+    const ask = (page: BlockDocument) => {
+      const conditions = listConditionsFor(page.nodes);
+      return canvasBindingsRequest(
+        [page],
+        identity,
+        undefined,
+        false,
+        undefined,
+        conditions === undefined ? {} : { conditions }
+      );
+    };
+    // CONTROL: the same page with no condition asks nothing.
+    expect(listConditionsFor(plain.nodes)).toBeUndefined();
+    expect(ask(plain)).toBeUndefined();
+    // The page's own condition is what asks: the list's shapes, nothing of
+    // the entry, and the site's zone, since it orders a value.
+    const request = ask(conditioned);
     expect(request?.lists).toEqual(["posts"]);
     expect(request?.demand.entry).toBeUndefined();
     expect(request?.conditions).toEqual({
       any: true,
       entryFields: [],
-      ordersValues: false,
+      ordersValues: true,
     });
   });
 

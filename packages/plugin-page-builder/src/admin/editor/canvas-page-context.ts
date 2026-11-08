@@ -28,6 +28,7 @@
 import {
   COLLECTION_LIST_TYPE,
   isPlainRecord,
+  LIST_ENTRY_SLOT,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -250,7 +251,8 @@ interface DrawnList {
 /**
  * The lists a page draws once each: every collection list but one inside
  * another list's entries, which is drawn once per entry and counts nothing
- * as one list.
+ * as one list. A list's other slots, its empty state among them, are drawn
+ * once, so the lists inside them count.
  */
 export function drawnListsOf(nodes: readonly BlockNode[]): DrawnList[] {
   const found: DrawnList[] = [];
@@ -258,11 +260,11 @@ export function drawnListsOf(nodes: readonly BlockNode[]): DrawnList[] {
   while (stack.length > 0) {
     const node = stack.pop();
     if (!isPlainRecord(node) || typeof node.id !== "string") continue;
-    if (node.type === COLLECTION_LIST_TYPE) {
-      found.push({ id: node.id, props: propsOf(node.props) });
-    } else {
-      stack.push(...childrenOf(node.slots).reverse());
-    }
+    const list = node.type === COLLECTION_LIST_TYPE;
+    if (list) found.push({ id: node.id, props: propsOf(node.props) });
+    stack.push(
+      ...childrenOf(node.slots, list ? LIST_ENTRY_SLOT : undefined).reverse()
+    );
   }
   return found;
 }
@@ -272,11 +274,11 @@ function propsOf(props: unknown): Readonly<Record<string, unknown>> {
   return isPlainRecord(props) ? props : {};
 }
 
-/** A stored block's children, slot by slot, in order. */
-function childrenOf(slots: unknown): unknown[] {
+/** A stored block's children, slot by slot, in order, but those of `skipped`. */
+function childrenOf(slots: unknown, skipped: string | undefined): unknown[] {
   if (!isPlainRecord(slots)) return [];
-  return Object.values(slots).flatMap(children =>
-    Array.isArray(children) ? (children as unknown[]) : []
+  return Object.entries(slots).flatMap(([slot, children]) =>
+    slot !== skipped && Array.isArray(children) ? (children as unknown[]) : []
   );
 }
 
