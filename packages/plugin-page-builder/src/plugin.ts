@@ -41,8 +41,8 @@ import { version as PLUGIN_VERSION } from "../package.json";
 
 import {
   backfillPageClaims,
-  publishedPages,
-  publishedPagesOn,
+  publishedPagesInTransaction,
+  type PagesInTransactionRead,
   type PagesReader,
 } from "./address-claims/backfill";
 import { committedClaims, type Tx } from "./address-claims/claim-store";
@@ -2955,6 +2955,16 @@ export const pageBuilder = (
           throw error;
         }
       };
+      // The Pages collection read on a write's transaction, for the walk a
+      // save makes over every published page while the start-up pass runs,
+      // whether a page's save or an entry's.
+      const readPagesOn: PagesInTransactionRead = (on, options, opts) =>
+        ctx.services.ownCollections.listEntriesInTransaction(
+          on,
+          pagesSlug,
+          options,
+          opts
+        );
       registerPageAddressClaims(ctx.hooks, {
         pages: pagesSlug,
         claims: claimsStore,
@@ -2964,11 +2974,10 @@ export const pageBuilder = (
           ? {}
           : { pathTemplate: opts.pagePreviewPath }),
         backfillDone: () => pageClaimsBackfilled,
-        publishedPages: async function* () {
-          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-          const nextly = (await getCachedNextly()) as unknown as PagesReader;
-          yield* publishedPages(nextly, pagesSlug);
-        },
+        // Hook-free and as the system, as the pages' start-up pass reads
+        // them, on the save's own transaction: a save holding the pool's
+        // last connection never waits for a second one.
+        publishedPages: tx => publishedPagesInTransaction(readPagesOn, tx),
       });
       pageClaimsBackfill = async () => {
         const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
@@ -3111,10 +3120,13 @@ export const pageBuilder = (
             );
           return pageHoldings(found.data);
         },
-        // On the write's own transaction (see `publishedPagesOn`).
+        // The walk a page's save makes while the start-up pass runs (see
+        // `publishedPagesInTransaction`), on the write's own transaction.
         publishedPagesOn: async function* (tx) {
-          const own = ctx.services.ownCollections;
-          for await (const batch of publishedPagesOn(own, pagesSlug, tx)) {
+          for await (const batch of publishedPagesInTransaction(
+            readPagesOn,
+            tx
+          )) {
             yield pageHoldings(batch);
           }
         },

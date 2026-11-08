@@ -174,8 +174,11 @@ async function claimsIn(
   tx: Tx,
   where: Record<string, unknown>,
   matches: (row: ClaimRow) => boolean,
-  /** `update` for a read that goes on to write the rows it read. */
-  lock: "share" | "update" = "share"
+  /**
+   * `update` for a read that goes on to write the rows it read; `none` for
+   * one that only finds which locks to take, before taking them.
+   */
+  lock: "share" | "update" | "none" = "share"
 ): Promise<ClaimRow[]> {
   const { gone, written } = pendingOf(tx);
   const found: ClaimRow[] = [];
@@ -204,6 +207,89 @@ async function claimsIn(
     }
   }
   return found;
+}
+
+/**
+ * Every document holding an address or waiting for one, among the claims
+ * `where` narrows to, that `keep` accepts, each once, as `tx` sees the store:
+ * read on the transaction's own connection, as every read inside a save is,
+ * so a save holding the pool's last connection never waits for a second.
+ * Read holding nothing by default: it only finds whom to release, and each
+ * is released under its own locks ({@link releaseClaims}), which a locking
+ * read here would precede. On MySQL such a read can answer from a snapshot
+ * older than the locks taken since, so whoever reads holders this way checks
+ * them afterwards with {@link refuseUnseenHolders}.
+ */
+export async function holdersIn(
+  claims: Claims,
+  tx: Tx,
+  where: Record<string, unknown>,
+  keep: (holder: Holder) => boolean,
+  lock: "none" | "share" = "none"
+): Promise<Holder[]> {
+  const rows = await claimsIn(
+    claims,
+    tx,
+    { kind: { in: ["address", "waiting"] }, ...where },
+    row =>
+      (row.kind === "address" || row.kind === "waiting") &&
+      row.holder !== null &&
+      keep(row.holder),
+    lock
+  );
+  const holders = new Map<string, Holder>();
+  for (const { holder } of rows) {
+    if (holder !== null) holders.set(holderName(holder), holder);
+  }
+  return [...holders.values()];
+}
+
+/** One text per holder, for telling holders apart. */
+function holderName(holder: Holder): string {
+  return `${holder.collection}\u0000${holder.id}`;
+}
+
+/**
+ * Refuse, as a conflict, a write that dealt with the holders
+ * {@link holdersIn} found holding nothing, when a read of the latest commit
+ * finds a holder among the same claims that it did not see, and so left as
+ * it was. `seen` is every holder the write dealt with: those the first read
+ * found, and any it went on to serve itself.
+ *
+ * On MySQL the first read can answer from a snapshot older than the lock the
+ * write took over these claims (a collection's, say), when the transaction
+ * had read something before taking it: a save that committed a claim in
+ * between is then missing from it. Reading under a share lock reads the
+ * latest commit instead. The read is made last, once the write holds every
+ * lock it took: made first, its locks on these rows and the gaps beside them
+ * would be held while the write waits for an address's lock, and a save
+ * holding that lock and writing a claim into one of those gaps would wait for
+ * this one, which the database would refuse as a deadlock. Releasing the
+ * holder found late would take its address's lock after this read, in that
+ * same order, so the write is refused instead, and the save may run again.
+ */
+export async function refuseUnseenHolders(
+  claims: Claims,
+  tx: Tx,
+  where: Record<string, unknown>,
+  keep: (holder: Holder) => boolean,
+  seen: Iterable<Holder>
+): Promise<void> {
+  const dealtWith = new Set([...seen].map(holderName));
+  const missed = (await holdersIn(claims, tx, where, keep, "share")).filter(
+    holder => !dealtWith.has(holderName(holder))
+  );
+  const [first] = missed;
+  if (first === undefined) return;
+  throw NextlyError.conflict({
+    message:
+      "Another save changed who holds or waits for this address just now. Try again.",
+    logContext: {
+      reason: "address-holders-read-raced",
+      holder: `${first.collection}/${first.id}`,
+      missed: missed.length,
+    },
+  });
 }
 
 /** The claims keyed by any of `keys` (canonical keys), as `tx` sees them. */
@@ -358,8 +444,10 @@ async function remove(claims: Claims, tx: Tx, row: ClaimRow): Promise<void> {
  * key's index for this one to end. An address's lock row is created by the
  * save that first claims it, so the waits and releases that contend for it
  * later only update it. (On MySQL two saves creating one lock row at once can
- * deadlock; the database then refuses one of them as a conflict to retry, and
- * nothing is claimed by it.)
+ * deadlock. The database then refuses one of the two: that save fails and
+ * rolls back, nothing claimed by it, and its caller may save again. The
+ * adapter does not run a deadlocked transaction again itself, so the store
+ * avoids deadlocks by taking its locks before the rows they guard.)
  *
  * SQLite runs one writer at a time, so a transaction there already has every
  * claim to itself, and takes no lock.
@@ -797,17 +885,40 @@ export async function releaseClaims(
   scope: ReleaseScope = {}
 ): Promise<void> {
   const locale = scope.address?.locale ?? scope.locale;
-  const held = await claimsIn(
-    claims,
-    tx,
-    {
-      holderCollection: { equals: holder.collection },
-      holderId: { equals: holder.id },
-      ...(locale === undefined ? {} : { locale: { equals: locale } }),
-    },
-    row => sameHolder(row.holder, holder) && inScope(row, scope)
+  const where = {
+    holderCollection: { equals: holder.collection },
+    holderId: { equals: holder.id },
+    ...(locale === undefined ? {} : { locale: { equals: locale } }),
+  };
+  const mine = (row: ClaimRow) =>
+    sameHolder(row.holder, holder) && inScope(row, scope);
+  // Read twice: once holding nothing, to find the locks to take, and again
+  // under them. A locking read first would hold the holder's rows, and on
+  // MySQL the gaps beside them in its index, while this save waits for an
+  // address's lock; a save holding that lock and writing a wait into one of
+  // those gaps would then wait for this one, and the database would refuse
+  // one of the two as a deadlock.
+  const locks = (await claimsIn(claims, tx, where, mine, "none")).flatMap(
+    locksOf
   );
-  await lockInOrder(claims, tx, held.flatMap(locksOf));
+  await lockInOrder(claims, tx, locks);
+  const held = await claimsIn(claims, tx, where, mine);
+  // A claim the first read did not see (on MySQL its snapshot can be older
+  // than the locking read) needs a lock this save does not hold. Taking it
+  // now, after the locking read, would wait in the order the first read was
+  // there to avoid, so the release is refused instead: nothing is changed,
+  // and the save may run again.
+  const taken = new Set(locks.map(at => claimKey("lock", at)));
+  if (held.flatMap(locksOf).some(at => !taken.has(claimKey("lock", at)))) {
+    throw NextlyError.conflict({
+      message:
+        "Another save changed who holds or waits for this address just now. Try again.",
+      logContext: {
+        reason: "address-claim-release-raced",
+        holder: `${holder.collection}/${holder.id}`,
+      },
+    });
+  }
   for (const row of held) {
     if (row.kind !== "lock") await remove(claims, tx, row);
   }

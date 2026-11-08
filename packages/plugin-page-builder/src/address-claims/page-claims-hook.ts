@@ -46,12 +46,14 @@ export interface PageClaimsDeps {
   /** Whether the start-up pass has claimed every existing page. */
   readonly backfillDone: () => boolean;
   /**
-   * Every published page, oldest first, a batch at a time, as committed:
-   * the pages a new list's later pages could fall on.
+   * Every published page, a batch at a time, as committed: the pages a new
+   * list's later pages could fall on. Read on the save's own transaction
+   * `tx`, so a save holding the pool's last connection never waits for a
+   * second one.
    */
-  readonly publishedPages: () => AsyncIterable<
-    readonly Readonly<Record<string, unknown>>[]
-  >;
+  readonly publishedPages: (
+    tx: Tx
+  ) => AsyncIterable<readonly Readonly<Record<string, unknown>>[]>;
 }
 
 /** The slice of the in-transaction write the hook reads. */
@@ -153,7 +155,8 @@ function savedClaims(
  * by the addresses the pages are served at, as they resolve, not by their
  * slugs: under a page path such as `/{slug}/{title}` a page's slug says
  * nothing about where it is served. Every published page is read, a batch
- * at a time, since any of them may be served there.
+ * at a time, since any of them may be served there, on the save's own
+ * transaction.
  */
 async function claimPagesIn(
   tx: Tx,
@@ -163,7 +166,7 @@ async function claimPagesIn(
   describe: DescribeHolder
 ): Promise<void> {
   const keys = new Set(spaces.map(space => claimKey("space", space)));
-  for await (const batch of deps.publishedPages()) {
+  for await (const batch of deps.publishedPages(tx)) {
     for (const row of batch) {
       const other = otherPage(row, holder, deps.pages);
       if (other === null) continue;
