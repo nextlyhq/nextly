@@ -771,6 +771,82 @@ describe("a routed page's bindings", () => {
     ]);
   });
 
+  describe("a link to the entry a to-one relation names", () => {
+    /** A page of one button linking to the author, else to `/authors`. */
+    const linkPage = (): BlockDocument =>
+      JSON.parse(
+        JSON.stringify({
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "page",
+          nodes: [
+            {
+              id: "by",
+              type: "core/button",
+              version: 1,
+              props: {
+                label: "The author",
+                href: "/authors",
+                entryCollection: "authors",
+              },
+              bindings: { entryId: { $bind: "author.id" } },
+            },
+          ],
+        })
+      ) as BlockDocument;
+
+    const config: PageConfig = {
+      collections: ["pages"],
+      field: "content",
+      blocks,
+      resolveEntryPath: async (collection, id) => `/${collection}/${id}`,
+    };
+
+    beforeEach(() => {
+      runtime.shapes.set("collection:pages", [
+        { name: "title", type: "text" },
+        { name: "author", type: "relationship", relationTo: "authors" },
+      ]);
+      // As declared: the authors list no `id`, which every entry carries.
+      runtime.shapes.set("collection:authors", [
+        { name: "name", type: "text" },
+      ]);
+    });
+
+    it("links to the author's page, its id read from the author as the public reads it", async () => {
+      const nextly = instance(linkPage());
+      const { html } = await renderedPage(createBlocksPage, config, nextly);
+      expect(html).toContain('href="/authors/a1"');
+      expect(publicReads(nextly)).toEqual([
+        expect.objectContaining({
+          collection: "pages",
+          select: { id: true, author: true },
+        }),
+        expect.objectContaining({
+          collection: "authors",
+          where: { and: [{ id: { equals: "a1" } }] },
+          select: { id: true },
+        }),
+      ]);
+    });
+
+    it("links to its own address where the public may not read the author", async () => {
+      const nextly = instance(linkPage());
+      const answer = nextly.find.getMockImplementation();
+      // The authors' read refused, as a collection the public may not read
+      // is; the post still holds the author's id, which never fills the link.
+      nextly.find.mockImplementation(async (args: Record<string, unknown>) => {
+        if (args.collection === "authors" && isPublicRead(args)) {
+          throw new Error("forbidden");
+        }
+        if (answer === undefined) throw new Error("no find");
+        return await answer(args);
+      });
+      const { html } = await renderedPage(createBlocksPage, config, nextly);
+      expect(html).toContain('href="/authors"');
+      expect(html).not.toContain("/authors/a1");
+    });
+  });
+
   it("judges what the public may see inside the cached reads, so a prerender can cache the page", async () => {
     runtime.shapes.set("collection:pages", [
       { name: "title", type: "text" },
