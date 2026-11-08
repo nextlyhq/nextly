@@ -198,14 +198,16 @@ describe("what the canvas's reads are asked for a page's conditions", () => {
 
   it("asks for the site's zone for a dated list a Layout region draws", () => {
     // CONTROL: a page and region with no condition ask nothing.
-    expect(canvasConditionsFor(plain, [{ document: plain }])).toBeUndefined();
     expect(
-      canvasConditionsFor(plain, [{ document: page([datedList]) }])
+      canvasConditionsFor(plain, [{ document: plain }], undefined)
+    ).toBeUndefined();
+    expect(
+      canvasConditionsFor(plain, [{ document: page([datedList]) }], undefined)
         ?.ordersValues
     ).toBe(true);
   });
 
-  it("asks nothing for a placed component's conditions, which the canvas draws lifted", () => {
+  it("asks for the zone for a dated condition inside a component the page places, which the canvas judges", () => {
     const placing = page([
       {
         id: "dated",
@@ -214,6 +216,53 @@ describe("what the canvas's reads are asked for a page's conditions", () => {
         props: { componentId: "dated" },
       },
     ]);
-    expect(canvasConditionsFor(placing, [{ document: plain }])).toBeUndefined();
+    const dated: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [datedList],
+    } as BlockDocument;
+    // CONTROL: without the component's definition, the page asks nothing.
+    expect(
+      canvasConditionsFor(placing, [{ document: plain }], undefined)
+    ).toBeUndefined();
+    expect(
+      canvasConditionsFor(
+        placing,
+        [{ document: plain }],
+        new Map([["dated", dated]])
+      )?.ordersValues
+    ).toBe(true);
+    // Read as the renderer reads the definition: a block it drops, one with
+    // no type, asks for nothing, whatever its stored conditions order.
+    const malformed = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        {
+          id: "no-type",
+          version: 1,
+          props: {},
+          visibility: (datedList.slots.children[0] as { visibility: unknown })
+            .visibility,
+        },
+      ],
+    } as unknown as BlockDocument;
+    expect(
+      canvasConditionsFor(
+        placing,
+        [{ document: plain }],
+        new Map([["dated", malformed]])
+      )?.ordersValues
+    ).not.toBe(true);
+    // Read under the canvas's own limits: a cap the page passes reads no
+    // component, as the canvas would compose none.
+    expect(
+      canvasConditionsFor(
+        placing,
+        [{ document: plain }],
+        new Map([["dated", dated]]),
+        { maxDepth: 64, maxNodes: 1, maxBytes: 1_000_000 }
+      )
+    ).toBeUndefined();
   });
 });

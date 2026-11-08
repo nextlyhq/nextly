@@ -14,6 +14,9 @@
  *    entry the block's conditions don't hold for draws the block's marker,
  *    the list says how many of the author's entries a visitor sees, and
  *    switching off brings the author's entries back.
+ * 4. On a page placing a component, a block of the component's own whose
+ *    conditions don't hold for the page is drawn as its marker, and counted,
+ *    as the published page leaves it out; its other blocks draw as before.
  *
  * Every page and entry is this run's own, its titles marked with the run, so
  * other files writing pages and blog posts alongside change nothing here.
@@ -33,6 +36,7 @@ import { storedPageNodes } from "./support/stored-page";
 import { test } from "./support/test";
 
 const PAGES = "/admin/api/collections/pages/entries";
+const COMPONENTS = "/admin/api/collections/components/entries";
 const ENTRIES = "/admin/api/collections/bound-entries/entries";
 
 /** The node ids this file's pages hold. */
@@ -282,5 +286,78 @@ test.describe("a block's visibility conditions in the editor", () => {
       .poll(() => listedTitles(page), { timeout: 30_000 })
       .toEqual([`${mark} Alder`, `${mark} Birch`, `${mark} Cedar`]);
     await expect(list).not.toHaveAttribute("data-nx-list-visitors", /./);
+  });
+
+  test("applies a page's conditions inside a component it places", async ({
+    page,
+  }) => {
+    await gotoAdmin(page, "/");
+    const api = page.request;
+    const mark = `V${Date.now().toString(36)}`;
+    const componentId = await created(api, COMPONENTS, {
+      title: `Promo ${mark}`,
+      slug: `conditions-promo-${mark.toLowerCase()}`,
+      status: "published",
+      content: {
+        formatVersion: 1,
+        kind: "component",
+        nodes: [
+          {
+            id: "everyone",
+            type: "core/text",
+            version: 1,
+            props: { text: "News from the journal." },
+          },
+          {
+            id: "members",
+            type: "core/text",
+            version: 1,
+            name: "Members offer",
+            props: { text: "Members get the archive." },
+            visibility: { conditions: FOR_MEMBERS },
+          },
+        ],
+      },
+    });
+    // Published, and not titled with Members: visitors don't see the offer.
+    const id = await created(api, PAGES, {
+      title: `Join the journal ${mark}`,
+      slug: `conditions-component-${mark.toLowerCase()}`,
+      status: "published",
+      content: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "00000000-0000-4000-8000-0000002c03c1",
+            type: "nextly/component-instance",
+            version: 1,
+            props: { componentId },
+          },
+        ],
+      },
+    });
+    await openBuilder(page, id);
+    const root = await canvasRoot(page);
+    // CONTROL: switched off, the component draws both its blocks.
+    await expect(root.getByText("Members get the archive.")).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(root.getByText("News from the journal.")).toBeVisible();
+
+    await applyConditions(page).click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "1 block hidden for this" })
+    ).toBeVisible({ timeout: 30_000 });
+    // Its marker, naming it and why, where the offer was drawn.
+    await expect(root.locator(".nx-condition-hidden")).toContainText(
+      /Members offer · hidden for this .+: Title/
+    );
+    await expect(root.getByText("Members get the archive.")).toHaveCount(0);
+    await expect(root.getByText("News from the journal.")).toBeVisible();
+
+    // Switched off, the component draws both again.
+    await applyConditions(page).click();
+    await expect(root.getByText("Members get the archive.")).toBeVisible();
   });
 });

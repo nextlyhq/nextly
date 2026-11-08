@@ -62,9 +62,11 @@ export function useConditionedPage(
     ...limits,
     ...(definitions === undefined ? {} : { definitions }),
   });
+  // The placed components' own blocks too, so a page whose only conditions
+  // are inside a component offers the switch that judges them.
   const held = useMemo(
-    () => conditionedBlocksIn(composed, limits),
-    [composed, limits]
+    () => conditionedBlocksIn(composed, limits, definitions),
+    [composed, limits, definitions]
   );
   return { entry, composed, held };
 }

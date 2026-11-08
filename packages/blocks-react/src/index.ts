@@ -293,6 +293,12 @@ export type {
  * from the evidence, which is why it exists rather than a documented instruction to pass a flag.
  */
 export { pruneHiddenNodes } from "./visibility";
+/**
+ * @experimental How an editor judges a page's conditions for an entry, the
+ * route's way, drawing its own node in place of a block they hide, and one
+ * block with its conditions lifted, as an editor draws one that holds.
+ */
+export { liftedNode, type EntryJudgement } from "./visibility";
 export {
   pageBindingRun,
   prepareDocumentForRead,

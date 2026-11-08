@@ -22,6 +22,7 @@ import {
   conditionDemand,
   conditionOp,
   isPlainRecord,
+  placementGatesOf,
   type BindingDemand,
   type BlockDocument,
   type ConditionDemand,
@@ -178,11 +179,16 @@ function ordersAnyValue(nodes: readonly unknown[]): boolean {
  * reads them, so a stored alias (`gt`, `lt`) is the operator it stands for.
  */
 function conditionsOf(visibility: unknown): string[] {
-  if (!isPlainRecord(visibility) || !Array.isArray(visibility.conditions)) {
-    return [];
-  }
-  return (visibility.conditions as unknown[]).flatMap(group =>
-    Array.isArray(group) ? (group as unknown[]).flatMap(canonicalOp) : []
+  if (!isPlainRecord(visibility)) return [];
+  // The block's own conditions and the gates of the placements it was
+  // expanded from (`within`), each judged against the same entry.
+  const gates = [visibility, ...placementGatesOf(visibility)];
+  return gates.flatMap(gate =>
+    isPlainRecord(gate) && Array.isArray(gate.conditions)
+      ? (gate.conditions as unknown[]).flatMap(group =>
+          Array.isArray(group) ? (group as unknown[]).flatMap(canonicalOp) : []
+        )
+      : []
   );
 }
 

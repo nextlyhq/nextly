@@ -1600,23 +1600,26 @@ function EditorBody<TFieldValues extends FieldValues>({
   // as they leave it, and the regions of its Layout, whose lists read as a
   // visitor too, each as the renderer prepares it, so a list inside a placed
   // component is found by the id it is drawn with.
-  const appliedPage = conditions.applied?.document;
+  // The page with its components judged for the entry, as the canvas draws
+  // it; the regions of the Layout as they are drawn, unjudged.
+  const appliedNow = conditions.applied;
   const regions = panels.canvasRegions;
   const visitorDrawn = useMemo(
     () =>
-      appliedPage === undefined
+      appliedNow === undefined
         ? undefined
         : [
             ...drawnNodesOf(
-              appliedPage,
+              appliedNow.document,
               canvasRender,
-              canvasRender.definitions
+              canvasRender.definitions,
+              appliedNow.entryJudgement
             ),
             ...(regions ?? []).flatMap(region =>
               drawnNodesOf(region.document, canvasRender, region.definitions)
             ),
           ],
-    [appliedPage, regions, canvasRender]
+    [appliedNow, regions, canvasRender]
   );
   useFollowApplied(listsAsVisitor, visitorDrawn);
   const shownRender = useItemsJudgedRender(
