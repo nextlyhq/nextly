@@ -825,13 +825,22 @@ export async function releaseClaims(
   );
   await lockInOrder(claims, tx, locks);
   const held = await claimsIn(claims, tx, where, mine);
-  // A claim the holder took between the two reads: its locks as well.
+  // A claim the first read did not see (on MySQL its snapshot can be older
+  // than the locking read) needs a lock this save does not hold. Taking it
+  // now, after the locking read, would wait in the order the first read was
+  // there to avoid, so the release is refused instead: nothing is changed,
+  // and the save may run again.
   const taken = new Set(locks.map(at => claimKey("lock", at)));
-  await lockInOrder(
-    claims,
-    tx,
-    held.flatMap(locksOf).filter(at => !taken.has(claimKey("lock", at)))
-  );
+  if (held.flatMap(locksOf).some(at => !taken.has(claimKey("lock", at)))) {
+    throw NextlyError.conflict({
+      message:
+        "Another save changed who holds or waits for this address just now. Try again.",
+      logContext: {
+        reason: "address-claim-release-raced",
+        holder: `${holder.collection}/${holder.id}`,
+      },
+    });
+  }
   for (const row of held) {
     if (row.kind !== "lock") await remove(claims, tx, row);
   }
