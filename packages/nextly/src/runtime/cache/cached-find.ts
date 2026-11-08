@@ -87,8 +87,8 @@ export interface CachedFindOptions {
  * reads it afresh. So a read that comes to be refused, when its entry is read
  * again, replaces the answer it gave while it was allowed. The refusal thrown
  * again is a `NextlyError` made without reading the clock, so a prerender
- * under Cache Components can answer it; its `timestamp` is taken when it is
- * first read.
+ * under Cache Components can answer it; its `timestamp` is the refusal's own,
+ * kept in the entry when the refusal was made.
  *
  * @example
  * // Public entry detail — cached and busted when any post changes. Tag with the
