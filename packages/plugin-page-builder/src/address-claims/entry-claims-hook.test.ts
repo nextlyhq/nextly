@@ -598,11 +598,22 @@ function designHarness(options: {
   const entryReads: string[][] = [];
   /** The transaction each read of every published page was made on. */
   const pageReads: unknown[] = [];
+  /** How many times any page's addresses were read, by whatever read them. */
+  let addressReads = 0;
   const unclaimed = Object.entries(options.unclaimedPages ?? {}).map(
     ([id, slug]) => {
       const at = servedAddress("en", `/${slug}`);
       if (at === null) throw new Error(`no address at ${slug}`);
-      return { id, slug, addresses: [at], spaces: [] };
+      const addresses = [at];
+      return {
+        id,
+        slug,
+        spaces: [],
+        get addresses() {
+          addressReads += 1;
+          return addresses;
+        },
+      };
     }
   );
   const { claims, held } = memoryClaims();
@@ -786,6 +797,7 @@ function designHarness(options: {
     held,
     entryReads,
     pageReads,
+    addressReads: () => addressReads,
     refusal,
     /** Make the collection one that may, or may no longer, have a template. */
     setEligible: (eligible: boolean) => {
@@ -1213,6 +1225,67 @@ describe("an entry drawn with a design that splits a list into pages", () => {
         "address /blog/other posts:other",
         "space /blog/hello posts:hello",
         "space /blog/other posts:other",
+      ]);
+    });
+
+    it("goes over each published page once for a template's whole walk, however many entries it settles", async () => {
+      const pages = 20;
+      const h = designHarness({
+        declared: true,
+        templatePublished: false,
+        templatePaged: true,
+        unclaimedPages: Object.fromEntries(
+          Array.from({ length: pages }, (_, i) => [
+            `p${i}`,
+            `elsewhere-${i}/page/2`,
+          ])
+        ),
+      });
+      const entries = ["a", "b", "c", "d", "e"];
+      for (const slug of entries) await h.save(slug);
+      const before = h.addressReads();
+
+      await h.publishTemplate();
+
+      // Each page's addresses are gone over once, when the pages are read
+      // for the walk, and never again for each entry settled: an entry
+      // looks up only the pages standing in its own list's space.
+      expect(h.addressReads() - before).toBe(pages);
+      expect(h.held()).toEqual([
+        ...entries.map(slug => `address /blog/${slug} posts:${slug}`),
+        ...entries.map(slug => `space /blog/${slug} posts:${slug}`),
+      ]);
+    });
+
+    it("still claims, for each entry, only the pages standing in its own list's space", async () => {
+      const h = designHarness({
+        declared: true,
+        templatePublished: false,
+        templatePaged: true,
+        unclaimedPages: {
+          p2: "blog/hello/page/2",
+          p3: "blog/hello/page/3",
+          q2: "blog/other/page/2",
+          r2: "elsewhere/page/2",
+        },
+      });
+      await h.save("hello");
+      await h.save("other");
+      await h.save("third");
+
+      await h.publishTemplate();
+
+      expect(h.held()).toEqual([
+        "address /blog/hello posts:hello",
+        "address /blog/hello/page/2 pages:p2",
+        "address /blog/hello/page/3 pages:p3",
+        "address /blog/other posts:other",
+        "address /blog/other/page/2 pages:q2",
+        "address /blog/third posts:third",
+        "space /blog/third posts:third",
+        "waiting /blog/hello posts:hello",
+        "waiting /blog/hello posts:hello",
+        "waiting /blog/other posts:other",
       ]);
     });
   });

@@ -62,12 +62,7 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { drawingDesign } from "../templates/entry-designs";
 import { addressSegments } from "../templates/template-addresses";
 
-import {
-  addressesInSpaces,
-  claimKey,
-  spaceHolding,
-  type ServedAddress,
-} from "./claim-key";
+import { claimKey, spaceKeyHolding, type ServedAddress } from "./claim-key";
 import {
   claimAddress,
   claimOrWait,
@@ -657,27 +652,50 @@ function noAddressRefusal(
   });
 }
 
+/** A published page's address that is a later page of some list. */
+interface PageInSpace {
+  /** The page's id. */
+  readonly id: string;
+  readonly address: ServedAddress;
+}
+
 /**
  * The published pages that may stand among an entry's list's later pages,
  * read on `tx` at most once per write, however many entries it settles:
- * those served at a later page of some list, the only ones a list's space
- * can hold.
+ * each address of theirs that is a later page of some list, the only ones a
+ * list's space can hold, by the key of that list's space, so each entry
+ * looks up its own lists' spaces rather than going over every page.
  */
-type PublishedPages = () => Promise<readonly PageHolding[]>;
+type PublishedPages = () => Promise<
+  ReadonlyMap<string, readonly PageInSpace[]>
+>;
 
 /** {@link PublishedPages}, read through `deps` on `tx` when first asked. */
 function publishedPagesRead(deps: EntryClaimsDeps, tx: Tx): PublishedPages {
   return once(async () => {
-    const found: PageHolding[] = [];
+    const bySpace = new Map<string, PageInSpace[]>();
     for await (const batch of deps.publishedPagesOn(tx)) {
-      for (const page of batch) {
-        if (page.addresses.some(address => spaceHolding(address) !== null)) {
-          found.push(page);
-        }
-      }
+      for (const page of batch) indexBySpace(bySpace, page);
     }
-    return found;
+    return bySpace;
   });
+}
+
+/**
+ * Add each of `page`'s addresses that is a later page of some list to
+ * `bySpace`, under the key of that list's space.
+ */
+function indexBySpace(
+  bySpace: Map<string, PageInSpace[]>,
+  page: PageHolding
+): void {
+  for (const address of page.addresses) {
+    const space = spaceKeyHolding(address);
+    if (space === null) continue;
+    const inSpace = bySpace.get(space) ?? [];
+    inSpace.push({ id: page.id, address });
+    bySpace.set(space, inSpace);
+  }
 }
 
 /**
@@ -708,7 +726,7 @@ async function claimPagesAt(
 
 /**
  * Claim, for the page each belongs to, every published page's address
- * among the later pages of `spaces`, as `addressesInSpaces` places them,
+ * among the later pages of `spaces`, as `spaceKeyHolding` places them,
  * waiting where another document holds it, as the start-up pass would have
  * claimed it: the entry's list then waits for the page, or its save is
  * refused naming it, as where the page had been claimed already.
@@ -720,10 +738,10 @@ async function claimPagesIn(
   pages: PublishedPages
 ): Promise<void> {
   if (spaces.length === 0) return;
-  const keys = new Set(spaces.map(list => claimKey("space", list)));
-  for (const page of await pages()) {
-    const holder: Holder = { collection: deps.pages, id: page.id };
-    for (const address of addressesInSpaces(page.addresses, keys)) {
+  const bySpace = await pages();
+  for (const key of new Set(spaces.map(list => claimKey("space", list)))) {
+    for (const { id, address } of bySpace.get(key) ?? []) {
+      const holder: Holder = { collection: deps.pages, id };
       await claimOrWait(deps.claims, tx, { address, holder });
     }
   }

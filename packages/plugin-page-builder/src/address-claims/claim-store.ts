@@ -691,6 +691,9 @@ export async function claimSpace(
  * `list` itself (another document is served there) waits for the later
  * pages behind the same claims, so the hand-over that serves it at the
  * address pages its list, and until then the later pages are no one's.
+ * A holder not served at `list` that holds its later pages already (stored
+ * before this rule, while it waited for the address) gives them up here,
+ * handing them on to whoever waits among them, and then waits as any other.
  */
 export async function claimSpaceOrWait(
   claims: Claims,
@@ -698,6 +701,15 @@ export async function claimSpaceOrWait(
   claim: { readonly list: ServedAddress; readonly holder: Holder }
 ): Promise<"claimed" | "waiting"> {
   const atList = await listAddressBlockers(claims, tx, claim);
+  if (atList !== "held") {
+    // Under the list's lock, taken just now and the only one giving up its
+    // space needs, so the release adds none; serving a document that waited
+    // among the later pages takes that page's locks, as every hand-over does.
+    await releaseClaims(claims, tx, claim.holder, {
+      address: claim.list,
+      kind: "space",
+    });
+  }
   // Not served at the list's address, and nothing there to wait on: every
   // caller claims or waits for the address first, so this takes nothing
   // rather than pages a list no one is served at.

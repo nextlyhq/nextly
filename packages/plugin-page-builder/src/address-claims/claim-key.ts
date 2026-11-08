@@ -214,17 +214,27 @@ export function spaceHolding(address: ServedAddress): ServedAddress | null {
 }
 
 /**
+ * The space key of the list whose later pages hold `address`, as
+ * {@link spaceHolding} places it, or null where it is no list's later page:
+ * the one answer to which list's space a document is published inside,
+ * which a page's save asks of the pages in a space, and an entry's of an
+ * index of every published page by the space each stands in.
+ */
+export function spaceKeyHolding(address: ServedAddress): string | null {
+  const space = spaceHolding(address);
+  return space === null ? null : claimKey("space", space);
+}
+
+/**
  * The addresses among `addresses` that are later pages of one of the lists
- * whose space keys are `spaces`, as {@link spaceHolding} places them: the
- * one answer to whether a document is published inside a list's space,
- * which a page's save and an entry's ask of the pages already there.
+ * whose space keys are `spaces`, as {@link spaceKeyHolding} places them.
  */
 export function addressesInSpaces(
   addresses: readonly ServedAddress[],
   spaces: ReadonlySet<string>
 ): ServedAddress[] {
   return addresses.filter(address => {
-    const space = spaceHolding(address);
-    return space !== null && spaces.has(claimKey("space", space));
+    const space = spaceKeyHolding(address);
+    return space !== null && spaces.has(space);
   });
 }

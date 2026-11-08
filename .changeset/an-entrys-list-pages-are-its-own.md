@@ -37,5 +37,7 @@ among those pages is refused, naming it; publishing a paged template or own desi
 turning on Split into pages in a published one, leaves such an entry waiting for them,
 its list shown on one page with no links to later pages, until the document frees the
 address. An entry left waiting for its own address waits for its later pages too, and
-is given both together. Turning pagination off, or unpublishing or removing the paged
-design, frees them.
+is given both together. A paged page that held its later pages while it waited for its
+address gives them up when the site next starts, so a document waiting among them is
+served there, and the page waits for both. Turning pagination off, or unpublishing or
+removing the paged design, frees them.

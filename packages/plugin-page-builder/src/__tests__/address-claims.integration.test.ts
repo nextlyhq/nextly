@@ -32,6 +32,7 @@ import { defineCollection, text, type CollectionConfig } from "nextly/config";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { backfillPageClaims } from "../address-claims/backfill";
 import { servedAddress, type ServedAddress } from "../address-claims/claim-key";
 import {
   claimAddress,
@@ -392,6 +393,89 @@ describe.each(getConfiguredTestDialects())(
       expect(await waitForSpace(claims, "/news", page("list"))).toBe("waiting");
       expect(await stored(claims, "space")).toEqual([]);
       expect(await stored(claims, "waiting")).toEqual([]);
+    });
+
+    /** A published page at `/news` holding one list split into pages. */
+    const PAGED_LIST_PAGE = {
+      id: "list",
+      slug: "news",
+      status: "published",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      content: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "list",
+            type: "core/collection-loop",
+            version: 1,
+            props: { collection: "posts", limit: 10, paginate: true },
+            slots: { children: [], empty: [] },
+          },
+        ],
+      },
+    };
+
+    /**
+     * The start-up pass over the pages, the one page {@link PAGED_LIST_PAGE}
+     * published, against the store: as the site runs it, with the page read
+     * from here rather than a pages collection.
+     */
+    const pagesPass = (claims: Claims) =>
+      backfillPageClaims({
+        pages: "pages",
+        claims,
+        locales: ["en"],
+        nextly: { find: async () => ({ items: [PAGED_LIST_PAGE] }) },
+        readPage: async (_tx, id) => (id === "list" ? PAGED_LIST_PAGE : null),
+        withTransaction: work => saving(claims, work),
+        warn: (message, context) => {
+          throw new Error(`${message} ${JSON.stringify(context)}`);
+        },
+      });
+
+    it("gives up the later pages a list kept while it waited for its address, as the start-up pass meets it, and waits for both", async () => {
+      const claims = claimsOf(await boot());
+      // As a store from before a list's later pages went only with its own
+      // address: `/news` is another document's, the page holds `/news`'s
+      // later pages while it waits for `/news`, and a document waits for
+      // `/news/page/2` behind them.
+      await claim(claims, "/news", post("e1"));
+      await paginate(claims, "/news", page("list"));
+      await saving(claims, tx =>
+        claimOrWait(claims, tx, { address: at("/news"), holder: page("list") })
+      );
+      await saving(claims, tx =>
+        claimOrWait(claims, tx, {
+          address: at("/news/page/2"),
+          holder: post("e2"),
+        })
+      );
+      expect(await stored(claims, "space")).toEqual([["/news", "list"]]);
+
+      expect(await pagesPass(claims)).toBe(true);
+
+      // Its later pages are given up, and the document waiting among them is
+      // served there; the page waits for its address and its later pages.
+      expect(await stored(claims, "space")).toEqual([]);
+      expect(await stored(claims, "address")).toEqual([
+        ["/news", "e1"],
+        ["/news/page/2", "e2"],
+      ]);
+      expect(await stored(claims, "waiting")).toEqual([
+        ["/news", "list"],
+        ["/news", "list"],
+      ]);
+
+      // Its address released, the page is served there, and waits for its
+      // later pages behind the document now among them.
+      await release(claims, post("e1"));
+      expect(await stored(claims, "address")).toEqual([
+        ["/news", "list"],
+        ["/news/page/2", "e2"],
+      ]);
+      expect(await stored(claims, "space")).toEqual([]);
+      expect(await stored(claims, "waiting")).toEqual([["/news", "list"]]);
     });
 
     it("drops a list's wait for its later pages once it stops paginating", async () => {
