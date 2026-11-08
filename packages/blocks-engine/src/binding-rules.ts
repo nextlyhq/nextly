@@ -545,8 +545,10 @@ export function fieldFitsProp(
 }
 
 /**
- * Fields every entry carries that a schema need not list. A binding to one
- * is judged by the value it reads, as a binding with no schema is.
+ * Fields every entry carries that a schema need not list: the source's own,
+ * and a related entry's across the one relation a path may follow, so
+ * `author.id` names the entry a link points at. A binding to one is judged by
+ * the value it reads, as a binding with no schema is.
  */
 const SYSTEM_FIELDS: ReadonlySet<string> = new Set([
   "id",
@@ -588,18 +590,31 @@ function shapelessRest(remaining: number): PathWalk {
  * carries is judged by its value, any other is missing. A timestamp is one
  * only where the shapes do not list timestamps: where they do, a source
  * without them has none.
+ *
+ * A related entry carries them too, read as the public reads that entry, so
+ * one that a visitor may not read gives nothing and the binding falls back.
+ * A group is not an entry and carries none. Nothing is walked past one: it
+ * holds a single value.
  */
 function unlistedField(
   name: string,
-  index: number,
+  at: { readonly index: number; readonly relatedEntry: boolean },
   segments: readonly string[],
   schema: BindingSchemaSource
 ): PathWalk {
   const carried =
     name === "id" ||
     (SYSTEM_FIELDS.has(name) && schema.listsTimestamps !== true);
-  if (index === 0 && carried) {
+  if (at.index === 0 && carried) {
     return shapelessRest(segments.length - MAX_SEGMENTS_WITHOUT_SCHEMA + 1);
+  }
+  if (at.relatedEntry && carried) {
+    return at.index === segments.length - 1
+      ? { ok: true }
+      : walkFailure(
+          "binding-field-missing",
+          `"${name}" holds a single value with no fields of its own.`
+        );
   }
   return walkFailure(
     "binding-field-missing",
@@ -621,6 +636,9 @@ function walkPath(
 ): PathWalk {
   let fields: readonly BindingFieldShape[] | undefined = root;
   let hops = 0;
+  // Whether `fields` are a related entry's, reached across a relation, rather
+  // than the source's own or a group's.
+  let relatedEntry = false;
   for (let index = 0; index < segments.length; index += 1) {
     const name = segments[index] ?? "";
     const last = index === segments.length - 1;
@@ -629,11 +647,12 @@ function walkPath(
       candidate => candidate.name === name
     );
     if (field === undefined) {
-      return unlistedField(name, index, segments, schema);
+      return unlistedField(name, { index, relatedEntry }, segments, schema);
     }
     if (last) return { ok: true, field };
     const step = stepInto(field, hops, schema);
     if (!step.ok) return step;
+    relatedEntry = step.hops > hops;
     fields = step.fields;
     hops = step.hops;
   }
