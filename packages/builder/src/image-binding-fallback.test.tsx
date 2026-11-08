@@ -179,6 +179,25 @@ describe("a bound image's Fallback", () => {
 });
 
 describe("a fallback chosen from the media library", () => {
+  it("cuts a name with an emoji before its extension by whole characters", async () => {
+    // The emoji sits where a cut by UTF-16 units would split its two halves.
+    const name = "holiday😀de.jpg";
+    const readMedia = vi.fn<(id: string) => Promise<MediaSummary | null>>(
+      async () => ({ name, thumbnail: "/t/holiday.jpg" })
+    );
+    mountRow({ readMedia }, "m-8");
+    const row = await screen.findByRole("group", {
+      name: `Fallback: ${name}`,
+    });
+    const head = row.querySelector(".nx-middle-cut__head")?.textContent;
+    const tail = row.querySelector(".nx-middle-cut__tail")?.textContent;
+    // The extension and the three characters before it, the emoji whole
+    // among them; a cut by code units would start the end mid-emoji.
+    expect(tail).toBe("😀de.jpg");
+    expect(head).toBe("holiday");
+    expect(`${head ?? ""}${tail ?? ""}`).toBe(name);
+  });
+
   it("is named by the file readMedia reads, never by its id", async () => {
     const readMedia = vi.fn<(id: string) => Promise<MediaSummary | null>>(
       async () => ({ name: "spring-banner.jpg", thumbnail: "/t/spring.jpg" })

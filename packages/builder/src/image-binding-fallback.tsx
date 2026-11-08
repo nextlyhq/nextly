@@ -507,17 +507,23 @@ const KEPT_BEFORE_EXTENSION = 3;
 const LONGEST_EXTENSION = 6;
 
 /**
- * Where a file name's kept end starts: its extension and the few letters
- * before it, or its last few letters where it has no extension; `undefined`
- * for a name too short to cut, whose start would be all but gone.
+ * A file name split into the start that may be cut and the end kept whole:
+ * its extension and the few characters before it, or its last few where it
+ * has no extension; `undefined` for a name too short to cut, whose start
+ * would be all but gone. Counted in code points, never UTF-16 units, so an
+ * emoji or another astral character is never split in two.
  */
-function keptEndAt(name: string): number | undefined {
-  const dot = name.lastIndexOf(".");
+function splitForCut(
+  name: string
+): { readonly head: string; readonly tail: string } | undefined {
+  const chars = Array.from(name);
+  const dot = chars.lastIndexOf(".");
   const at =
-    dot > 0 && name.length - dot <= LONGEST_EXTENSION
+    dot > 0 && chars.length - dot <= LONGEST_EXTENSION
       ? Math.max(0, dot - KEPT_BEFORE_EXTENSION)
-      : name.length - LONGEST_EXTENSION;
-  return at > KEPT_BEFORE_EXTENSION ? at : undefined;
+      : chars.length - LONGEST_EXTENSION;
+  if (at <= KEPT_BEFORE_EXTENSION) return undefined;
+  return { head: chars.slice(0, at).join(""), tail: chars.slice(at).join("") };
 }
 
 /**
@@ -534,14 +540,12 @@ function MiddleCut({
   text: string;
   className: string;
 }): React.JSX.Element {
-  const at = keptEndAt(text);
+  const split = splitForCut(text);
   return (
     <span className={`${className} nx-middle-cut`} aria-hidden="true">
-      <span className="nx-middle-cut__head">
-        {at === undefined ? text : text.slice(0, at)}
-      </span>
-      {at === undefined ? null : (
-        <span className="nx-middle-cut__tail">{text.slice(at)}</span>
+      <span className="nx-middle-cut__head">{split?.head ?? text}</span>
+      {split === undefined ? null : (
+        <span className="nx-middle-cut__tail">{split.tail}</span>
       )}
     </span>
   );

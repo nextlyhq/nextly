@@ -11593,7 +11593,8 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   display: flex;
   flex: 1;
   align-items: center;
-  gap: 0.5rem;
+  /* Tight, so the name keeps the width the library button gave up outside. */
+  gap: 0.375rem;
   min-inline-size: 0;
   block-size: var(--nx-control-height);
   padding-inline: 0.375rem 0.25rem;
@@ -11606,7 +11607,7 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-image-fallback__media-thumb {
   flex: none;
-  inline-size: 1.75rem;
+  inline-size: 1.5rem;
   block-size: 1.25rem;
   border: 1px solid var(--nx-border);
   border-radius: var(--radius-sm);
@@ -11640,11 +11641,17 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   flex: 1;
 }
 
-/* The library button inside the chosen file's box, at its end. */
+/*
+ * The library button inside the chosen file's box, at its end, against
+ * Remove with no gap between them: the pair take no more of the row than
+ * Remove and the button outside the box did, less the space between them,
+ * which goes to the name.
+ */
 .nx-image-fallback__media > .nx-image-fallback__library {
   flex: none;
   inline-size: 1.25rem;
   block-size: 1.25rem;
+  margin-inline-start: -0.375rem;
 }
 
 /* A file the library no longer has: said in the muted voice of a note. */
