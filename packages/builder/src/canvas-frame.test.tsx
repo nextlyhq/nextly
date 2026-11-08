@@ -441,6 +441,33 @@ describe("the canvas frame", () => {
     const chrome = container.querySelector('[data-testid="chrome"]');
     expect(chrome?.closest("[data-nx-canvas-layer]")).not.toBeNull();
   });
+
+  it("holds its pinned chrome at the viewport, outside the box the page's scroll moves", () => {
+    const { container } = render(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        source={TEST_SOURCE}
+        overlay={<div data-testid="marks" />}
+        pinned={<div data-testid="tags" />}
+      >
+        <Page />
+      </CanvasFrame>
+    );
+    loadPage(frameIn(container));
+    const tags = container.querySelector('[data-testid="tags"]');
+    const marks = container.querySelector('[data-testid="marks"]');
+    // In the same layer as the overlay, so it takes the layer's colours...
+    expect(tags?.closest("[data-nx-canvas-layer]")).not.toBeNull();
+    // ...but not in the content box, which is moved with the page's scroll.
+    // The control: the overlay is in that box.
+    expect(tags?.closest(".nx-canvas-layer__content")).toBeNull();
+    expect(marks?.closest(".nx-canvas-layer__content")).not.toBeNull();
+    // Inset by the layer's bleed past the viewport, so its edges are the
+    // viewport's.
+    const pinned = tags?.closest<HTMLElement>(".nx-canvas-layer__pinned");
+    expect(pinned?.style.inset).toBe("4px");
+  });
 });
 
 describe("the editor's own page source", () => {

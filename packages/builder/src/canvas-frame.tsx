@@ -247,6 +247,15 @@ export interface CanvasFrameProps {
   dir?: "ltr" | "rtl" | undefined;
   /** The editor's chrome, drawn over the frame in the editor's document. */
   overlay?: React.ReactNode;
+  /**
+   * Chrome held at the frame's viewport rather than on the page: drawn in
+   * the same layer as `overlay` but outside the box the page's scroll moves,
+   * so it stays at the viewport's edges while a long page scrolls under it.
+   * For what says how the whole canvas is drawn, such as its preview tags.
+   *
+   * @experimental Settles with the canvas's preview tags.
+   */
+  pinned?: React.ReactNode;
   /** The canvas, rendered inside the frame. */
   children?: React.ReactNode;
   /** Where the frame's page comes from. The editor's blank page by default. */
@@ -294,13 +303,15 @@ function FramedCanvas({
   zoom = FIT_ZOOM,
   onScale,
   title,
-  overlay,
   children,
   source = SRCDOC_FRAME_SOURCE,
   onSourceFallback,
   className,
-  ...markers
+  ...rest
 }: CanvasFrameProps): React.JSX.Element {
+  // The chrome drawn over the frame, apart from the markers the page's own
+  // document is given.
+  const { overlay, pinned, ...markers } = rest;
   const stage = React.useRef<HTMLDivElement | null>(null);
   const layer = React.useRef<HTMLDivElement | null>(null);
   const layerContent = React.useRef<HTMLDivElement | null>(null);
@@ -346,23 +357,61 @@ function FramedCanvas({
             ...frameColorScheme(markers.theme),
           }}
         />
-        <div
-          ref={layer}
-          className="nx-canvas-layer"
-          {...{ [CANVAS_LAYER_ATTRIBUTE]: "" }}
-        >
-          <SiteChromeCues
-            frame={frame}
-            page={page}
-            elements={siteChrome}
-            scale={scale}
-          />
-          <div ref={layerContent} className="nx-canvas-layer__content">
-            {overlay}
-          </div>
-        </div>
+        <ChromeLayer
+          layer={layer}
+          content={layerContent}
+          cues={
+            <SiteChromeCues
+              frame={frame}
+              page={page}
+              elements={siteChrome}
+              scale={scale}
+            />
+          }
+          overlay={overlay}
+          pinned={pinned}
+        />
       </div>
       <FramePage mountPoint={mountPoint}>{children}</FramePage>
+    </div>
+  );
+}
+
+/**
+ * The layer the editor's chrome is drawn in over the frame: the site's chrome
+ * cues, the content box the page's scroll moves (`overlay`), and the chrome
+ * held at the viewport (`pinned`). Placed by `useLayerPlacement`.
+ */
+function ChromeLayer({
+  layer,
+  content,
+  cues,
+  overlay,
+  pinned,
+}: {
+  layer: React.RefObject<HTMLDivElement | null>;
+  content: React.RefObject<HTMLDivElement | null>;
+  cues: React.ReactNode;
+  overlay: React.ReactNode;
+  pinned: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <div
+      ref={layer}
+      className="nx-canvas-layer"
+      {...{ [CANVAS_LAYER_ATTRIBUTE]: "" }}
+    >
+      {cues}
+      <div ref={content} className="nx-canvas-layer__content">
+        {overlay}
+      </div>
+      {/* Over the viewport itself: the layer runs CHROME_BLEED past it on
+          every side, so this is inset by as much. Never moved with the page's
+          scroll, unlike the content box above. Empty, and taking no presses,
+          while nothing is pinned. */}
+      <div className="nx-canvas-layer__pinned" style={{ inset: CHROME_BLEED }}>
+        {pinned}
+      </div>
     </div>
   );
 }
