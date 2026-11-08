@@ -72,8 +72,19 @@ export const BUTTON_VARIANT_MAP = {
  * Note: 'primary' is a semantic alias for 'default' variant for better code readability
  * @experimental
  */
+// The keyboard focus ring: 2px of the ring token, 2px out from the button
+// across a gap of the page's own background. Without the gap the ring sat
+// flush on the fill, and on a fill the ring token matches (the black primary
+// in light mode, the white one in dark) it could not be seen at all. With it,
+// the ring is judged against the page on both sides, where the ring token
+// holds its contrast, whatever the variant's fill. The gap is the page's
+// `background`, not `--nx-focus-ring-offset`, which stays white in dark mode
+// and would merge with the white ring there.
+const BUTTON_FOCUS_RING =
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
+
 const buttonVariants: VariantsFn<typeof BUTTON_VARIANT_MAP> = cva(
-  "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium cursor-pointer transition-all duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-0 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] [&_svg]:text-current",
+  `inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium cursor-pointer transition-all duration-150 ${BUTTON_FOCUS_RING} disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] [&_svg]:text-current`,
   {
     variants: BUTTON_VARIANT_MAP,
     defaultVariants: {
