@@ -39,6 +39,7 @@ import { consoleLogger } from "../../../shared/types";
 import { FieldGroupSchemaService } from "../../field-groups/services/field-group-schema-service";
 import { resolveRegistryNameFromCatalog } from "../../field-groups/storage/resolve-storage-names";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import { hasRetiredSizesColumn } from "../../media/retired-image-sizes-store";
 import { getActiveExtensionSchema } from "../extension/build-extension-schema";
 import {
   refusingNewDanglingReferences,
@@ -58,6 +59,7 @@ import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
+import { withoutCopyOnlyRebuilds, type LiveTable } from "./copy-only-rebuilds";
 import {
   canEmitWithoutDrizzleKit,
   emitDdl,
@@ -130,6 +132,7 @@ import type {
 import { builtByFor } from "./registered-collections";
 import { refuseNotNullOverNulls } from "./required-column-gate";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
+import { withRetainedSizesColumn } from "./retained-core-columns";
 import {
   sqliteRebuiltTables,
   untrackedConstraintCounts,
@@ -972,6 +975,12 @@ export class PushSchemaPipeline {
               ...approvedRebuilds,
             ])
           : new Map();
+      // Asked only where drizzle-kit may run: the fast path emits from this
+      // apply's own operations and never reads the media table. A catalogue
+      // read, which cannot abort the PostgreSQL transaction it may be in.
+      const retainedSizes = canEmitWithoutDrizzleKit(resolvedOps, dialect)
+        ? false
+        : await hasRetiredSizesColumn(db, dialect);
       const drizzleSchema = this.testHooks._buildDrizzleSchemaOverride
         ? this.testHooks._buildDrizzleSchemaOverride(patchedDesired, dialect)
         : this.buildDrizzleSchema(
@@ -986,7 +995,8 @@ export class PushSchemaPipeline {
                 rebuildLosses.get(tableName.toLowerCase())?.unique ?? [],
                 renames,
                 desiredUnique
-              )
+              ),
+            retainedSizes
           );
 
       // Scope drizzleSchema down to the table(s) actually touched by
@@ -1378,7 +1388,27 @@ export class PushSchemaPipeline {
               desiredUnique
             )
           );
-          emittedStatements = keptUniques.kept;
+          // A SQLite rebuild this apply never asked for that only copies a
+          // table onto itself (a column DEFAULT an earlier release did not
+          // write, say) is left out rather than refusing the whole apply.
+          // Every other unapproved rebuild stays for the destructive scan
+          // below, which still refuses it.
+          const copyOnly =
+            dialect === "sqlite"
+              ? withoutCopyOnlyRebuilds(
+                  keptUniques.kept,
+                  approvedRebuilds,
+                  table => liveTableForCopyRule(liveSnapshot, table)
+                )
+              : { kept: keptUniques.kept, skipped: [] };
+          for (const table of copyOnly.skipped) {
+            consoleLogger.warn(
+              `[Nextly schema] Left out drizzle-kit's rebuild of "${table}": ` +
+                `it copies every column and row onto the same columns and this ` +
+                `apply changes nothing on that table, so the table stays as it is.`
+            );
+          }
+          emittedStatements = copyOnly.kept;
           if (keptUniques.strippedCount > 0) {
             consoleLogger.debug(
               `[Nextly schema] Kept ${keptUniques.strippedCount} live unique ` +
@@ -1723,7 +1753,9 @@ export class PushSchemaPipeline {
      * The live single-column UNIQUEs a SQLite runtime table declares
      * (`uniqueColumnsToKeep`); none off SQLite's drizzle-kit route.
      */
-    uniqueColumnsFor: (tableName: string) => string[]
+    uniqueColumnsFor: (tableName: string) => string[],
+    /** Whether the live media table still has the retired `sizes` column. */
+    retainedSizes: boolean
   ): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     const foreignKeysOf = (tableName: string) =>
@@ -1759,6 +1791,9 @@ export class PushSchemaPipeline {
         out[sqlName] = value;
       }
     }
+    // The media table with the retired `sizes` column while the database
+    // still has it, so drizzle-kit plans no drop of a column Nextly keeps.
+    Object.assign(out, withRetainedSizesColumn(out, dialect, retainedSizes));
 
     // User-defined collections override system entries on conflict.
     for (const c of Object.values(desired.collections)) {
@@ -2009,6 +2044,27 @@ function sqliteSessionOf(db: unknown): SqliteForeignKeySession {
     run: async statement => {
       await client.run(sql.raw(statement));
     },
+  };
+}
+
+/**
+ * A table as the live snapshot this apply diffed against has it, for the
+ * copy-only rebuild rule, or `undefined` for one the snapshot does not hold.
+ */
+function liveTableForCopyRule(
+  live: NextlySchemaSnapshot,
+  table: string
+): LiveTable | undefined {
+  const found = live.tables.find(
+    candidate => candidate.name.toLowerCase() === table.toLowerCase()
+  );
+  if (found === undefined) return undefined;
+  return {
+    columns: found.columns.map(column => ({
+      name: column.name,
+      type: column.type,
+    })),
+    indexes: (found.indexes ?? []).map(index => index.name),
   };
 }
 
