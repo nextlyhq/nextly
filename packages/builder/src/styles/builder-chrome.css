@@ -10478,6 +10478,12 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   pointer-events: none;
 }
 
+/* Near the screen's left edge: from the badge's left edge, running right. */
+.nx-visitor-unreadable__badge[data-tip-start] .nx-visitor-unreadable__tip {
+  inset-inline-start: 0;
+  inset-inline-end: auto;
+}
+
 .nx-visitor-unreadable__badge:hover .nx-visitor-unreadable__tip,
 .nx-visitor-unreadable__button:focus ~ .nx-visitor-unreadable__tip {
   display: flex;
@@ -11498,6 +11504,19 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   margin: 0;
 }
 
+/*
+ * An image's Fallback: its name above it rather than beside it, so a file's
+ * picture, its name and the row's buttons have the whole width of the value.
+ */
+.nx-binding__fallback.nx-image-fallback {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.nx-image-fallback > .nx-inspector__error,
+.nx-image-fallback > .nx-inspector__note {
+  grid-column: 1;
+}
+
 /* An image's fallback: the address, its picture inside the field's start. */
 .nx-image-fallback__value {
   display: flex;
@@ -11595,12 +11614,26 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   background: var(--nx-muted);
 }
 
+/*
+ * The name cut in its middle: the start shrinks with an ellipsis, the end
+ * (the extension and a few letters before it) is never cut.
+ */
 .nx-image-fallback__media-name {
+  display: flex;
   flex: 1;
   min-inline-size: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.nx-image-fallback__media-head {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nx-image-fallback__media-tail {
+  flex: none;
 }
 
 /* A file the library no longer has: said in the muted voice of a note. */
@@ -11722,14 +11755,19 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   border-radius: var(--radius-sm);
   color: var(--nx-foreground);
   background: color-mix(in oklch, var(--nx-background) 85%, transparent);
-  font-size: 0.625rem;
+  /* The admin's smallest text: a tile's name is how it is told apart. */
+  font-size: 0.75rem;
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* The tile Enter picks: a firmer edge, so it is found by keyboard. */
+/*
+ * The tile the arrows moved to, which Enter picks, and one under the pointer:
+ * a firmer edge. None is drawn before either, so no tile reads as chosen.
+ */
 .nx-library-pick__tile[data-active],
+.nx-library-pick__tile:hover,
 .nx-library-pick__address[data-active] {
   border-color: var(--nx-foreground);
 }
@@ -11778,7 +11816,7 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 .nx-library-pick__address-text > small {
   overflow: hidden;
   color: var(--nx-muted-foreground);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

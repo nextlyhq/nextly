@@ -146,7 +146,7 @@ test.describe("binding an image and a date's format from the inspector", () => {
 
     await page.getByRole("button", { name: "Choose from library" }).click();
     const search = page.getByRole("combobox", {
-      name: "Find in the media library",
+      name: "Find in the media library, or paste an address",
     });
     await expect(search).toBeFocused();
     // Narrowed to this run's upload, so an image another spec uploaded at

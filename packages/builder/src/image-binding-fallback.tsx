@@ -76,7 +76,9 @@ const SHOWN_WHEN = "Shown when the bound field has no image.";
 
 /** What the library button, its tooltip and the search are called. */
 const CHOOSE_FROM_LIBRARY = "Choose from library";
-const FIND_IN_LIBRARY = "Find in the media library";
+// The search takes an image address as well, so it says so where the author
+// types: the picker has no other place to paste one.
+const FIND_IN_LIBRARY = "Find in the media library, or paste an address";
 
 /** How long the search waits after a keystroke before it asks the library. */
 const SEARCH_DELAY_MS = 200;
@@ -135,7 +137,10 @@ export function ImageBindingFallback({
   const Picker = services?.MediaPicker;
   // A pick of the value already stored writes nothing, so it adds no edit
   // to the history.
+  // A refusal said of a typed address goes with any pick: the row now holds
+  // the chosen file or address, which the refusal was not about.
   const choose = (value: string): void => {
+    setRefusal(false);
     if (value !== stored) onFallback(value);
   };
   const openDialog = (): void => {
@@ -441,7 +446,9 @@ function LibraryFallback({
   const summary = useMediaSummary(read, mediaId);
   const name =
     summary === null
-      ? "A file that is no longer in the library"
+      ? // A read that answers nothing may be a file removed or a read that
+        // failed for now: the row says neither, only that it can't be shown.
+        "A library image that can't be shown"
       : (summary?.name ?? summary?.alt ?? "Library image");
   const label = `Fallback: ${name}`;
   return (
@@ -469,7 +476,7 @@ function LibraryFallback({
           decoding="async"
         />
       )}
-      <span className="nx-image-fallback__media-name">{name}</span>
+      <MiddleCutName name={name} />
       <button
         type="button"
         className="nx-image-fallback__clear"
@@ -481,6 +488,30 @@ function LibraryFallback({
         <X aria-hidden="true" size={12} />
       </button>
     </div>
+  );
+}
+
+/** How much of a long file name's end stays whole: its extension and a bit. */
+const NAME_TAIL_LENGTH = 8;
+
+/**
+ * A file name cut in its middle where the row is narrow, its start and its
+ * end kept ("canvas-harb…tzvv.png"): files are told apart by both, and the
+ * end carries the extension. The start shrinks with an ellipsis; the end is
+ * never cut. The whole name is on the row's tooltip and in its name.
+ */
+function MiddleCutName({ name }: { name: string }): React.JSX.Element {
+  const cut = name.length > NAME_TAIL_LENGTH * 2;
+  const head = cut ? name.slice(0, -NAME_TAIL_LENGTH) : name;
+  return (
+    <span className="nx-image-fallback__media-name" aria-hidden="true">
+      <span className="nx-image-fallback__media-head">{head}</span>
+      {cut ? (
+        <span className="nx-image-fallback__media-tail">
+          {name.slice(-NAME_TAIL_LENGTH)}
+        </span>
+      ) : null}
+    </span>
   );
 }
 
@@ -654,6 +685,10 @@ function LibraryPicker({
   const input = React.useRef<HTMLInputElement>(null);
   const [query, setQuery] = React.useState("");
   const [active, setActive] = React.useState(0);
+  // Whether the arrows have moved the active option since the search last
+  // changed: its ring is drawn only then, so the first tile does not read as
+  // the chosen one before the author has moved to it.
+  const [keyed, setKeyed] = React.useState(false);
   // An image address in the search is offered as itself; the library is not
   // searched for one, since no file is named like an address.
   const address = addressIn(query);
@@ -669,6 +704,16 @@ function LibraryPicker({
     input.current?.focus();
   }, []);
 
+  // Focus stays in the search, so the browser scrolls nothing as the arrows
+  // move: the grid is scrolled to the option they moved to, or a row below
+  // the fold could be picked unseen.
+  React.useEffect(() => {
+    if (!keyed) return;
+    document
+      .getElementById(`${listId}-option-${at}`)
+      ?.scrollIntoView?.({ block: "nearest" });
+  }, [keyed, at, listId]);
+
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
     if (event.key === "Enter" && activeOption !== undefined) {
       event.preventDefault();
@@ -679,6 +724,7 @@ function LibraryPicker({
     if (next === undefined) return;
     event.preventDefault();
     setActive(next);
+    setKeyed(true);
   };
 
   return (
@@ -703,6 +749,7 @@ function LibraryPicker({
           onChange={event => {
             setQuery(event.target.value);
             setActive(0);
+            setKeyed(false);
           }}
           onKeyDown={onKeyDown}
         />
@@ -723,7 +770,9 @@ function LibraryPicker({
               id={optionId(index)}
               option={option}
               selected={option.value === current}
-              active={index === at}
+              // An address offered is the one option, which Enter takes
+              // whatever the arrows did; a tile is ringed once they move.
+              active={index === at && (keyed || option.kind === "address")}
               onActive={() => setActive(index)}
               onPick={() => onPick(option.value)}
             />
@@ -736,9 +785,7 @@ function LibraryPicker({
         </p>
       )}
       <div className="nx-library-pick__foot">
-        <p className="nx-library-pick__hint">
-          {`${shownWhen} Or paste an image address.`}
-        </p>
+        <p className="nx-library-pick__hint">{shownWhen}</p>
         {onBrowse === undefined ? null : (
           <button
             type="button"

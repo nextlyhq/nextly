@@ -115,7 +115,9 @@ function mountRow(
 async function openLibrary(): Promise<HTMLElement> {
   fireEvent.click(screen.getByRole("button", { name: "Choose from library" }));
   await screen.findByRole("option", { name: "spring-banner.jpg" });
-  return screen.getByRole("combobox", { name: "Find in the media library" });
+  return screen.getByRole("combobox", {
+    name: "Find in the media library, or paste an address",
+  });
 }
 
 describe("a bound image's Fallback", () => {
@@ -188,6 +190,10 @@ describe("a fallback chosen from the media library", () => {
     expect(readMedia).toHaveBeenCalledWith("m-7");
     expect(row.getAttribute("title")).toBe("Fallback: spring-banner.jpg");
     expect(row.querySelector("img")?.getAttribute("src")).toBe("/t/spring.jpg");
+    // A long name is cut in its middle, its end (the extension) kept whole.
+    expect(
+      row.querySelector(".nx-image-fallback__media-tail")?.textContent
+    ).toBe("nner.jpg");
     // The id is stored, not shown: not in the row's words, nor in a field.
     expect(document.body.textContent).not.toContain("m-7");
     expect(screen.queryByRole("textbox")).toBeNull();
@@ -197,7 +203,7 @@ describe("a fallback chosen from the media library", () => {
     expect(onFallback.mock.calls).toEqual([[""]]);
   });
 
-  it("says it is a library image while it is read, and when the library has lost it", async () => {
+  it("says it is a library image while it is read, and when it can't be read", async () => {
     let answer: (summary: MediaSummary | null) => void = () => {};
     const readMedia = vi.fn<(id: string) => Promise<MediaSummary | null>>(
       () =>
@@ -212,7 +218,9 @@ describe("a fallback chosen from the media library", () => {
     answer(null);
     expect(
       await screen.findByRole("group", {
-        name: "Fallback: A file that is no longer in the library",
+        // Neutral: a read that answers nothing may be a failed read, not a
+        // file removed, so the row doesn't call the file gone.
+        name: "Fallback: A library image that can't be shown",
       })
     ).toBeTruthy();
     expect(document.body.textContent).not.toContain("m-7");
@@ -243,11 +251,11 @@ describe("the Fallback's library picker", () => {
       "The course room",
     ]);
     expect(document.activeElement).toBe(search);
+    // Pasting an address is said in the search itself, so the hint is short.
     expect(
-      screen.getByText(
-        "Shown when a post has no cover image. Or paste an image address."
-      )
+      screen.getByText("Shown when a post has no cover image.")
     ).toBeTruthy();
+    expect(screen.queryByText(/Or paste an image address/)).toBeNull();
   });
 
   it("writes a picked tile's id through onFallback, and closes", async () => {
@@ -281,6 +289,48 @@ describe("the Fallback's library picker", () => {
     // The control: the active tile, and only it, is written; not the first,
     // nor the one the arrows passed through.
     expect(onFallback.mock.calls).toEqual([["m-4"]]);
+  });
+
+  it("rings no tile until the arrows move, then the one they moved to, scrolled into view", async () => {
+    const scrolled: string[] = [];
+    const spy = vi
+      .spyOn(window.Element.prototype, "scrollIntoView")
+      .mockImplementation(function (this: Element) {
+        scrolled.push(this.textContent ?? "");
+      });
+    try {
+      mountRow({ searchMedia: searchOf() });
+      const search = await openLibrary();
+      const ringed = (): string[] =>
+        Array.from(document.querySelectorAll("[data-active]")).map(
+          each => each.textContent ?? ""
+        );
+      // Before any move the first tile is Enter's, but not drawn as chosen.
+      expect(ringed()).toEqual([]);
+      expect(scrolled).toEqual([]);
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+      expect(ringed()).toEqual(["team.jpg"]);
+      // Focus stays in the search, so the grid is scrolled to the option.
+      expect(scrolled[scrolled.length - 1]).toBe("team.jpg");
+      // A new search starts unringed again.
+      fireEvent.change(search, { target: { value: "camp" } });
+      expect(ringed()).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("drops a refusal of a typed address once a file is picked", async () => {
+    const { onFallback } = mountRow({ searchMedia: searchOf() });
+    const field = screen.getByRole("textbox", { name: "Fallback" });
+    fireEvent.change(field, { target: { value: "not an address" } });
+    fireEvent.blur(field);
+    expect(screen.getByRole("alert")).toBeTruthy();
+    await openLibrary();
+    fireEvent.click(screen.getByRole("option", { name: "campus.jpg" }));
+    expect(onFallback.mock.calls).toEqual([["m-2"]]);
+    // The control is the refusal above: said before the pick, gone after.
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
 
   it("closes on Escape and hands focus back to the row's button", async () => {

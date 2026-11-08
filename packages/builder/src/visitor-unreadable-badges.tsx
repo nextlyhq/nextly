@@ -78,6 +78,22 @@ const BADGE_HEIGHT_PX = 22;
  * icon and padding, erring wide. Once drawn, its own width is used.
  */
 const BADGE_WIDTH_ESTIMATE_PX = 170;
+/**
+ * The tooltip's widest, as the stylesheet caps it (18rem). Right-aligned with
+ * the badge it runs this far left at most; a badge nearer the screen's left
+ * edge than this has its tooltip start at its own left edge instead, so the
+ * tooltip is never cut by the canvas's edge.
+ */
+const TIP_MAX_WIDTH_PX = 288;
+
+/**
+ * Whether a badge whose right edge is at `right` has its tooltip run right
+ * from its left edge: the screen, starting at `screenLeft`, has too little
+ * room left of `right` for the widest tooltip to run left from there.
+ */
+export function tipRunsFromStart(right: number, screenLeft: number): boolean {
+  return right - screenLeft < TIP_MAX_WIDTH_PX;
+}
 
 /** The badge's drawn width for `id`, or the estimate before it is drawn. */
 function badgeWidthOf(
@@ -115,6 +131,11 @@ interface BadgePlace {
    * Otherwise the badge sits on the outline's top edge, a tab of it.
    */
   readonly inside: boolean;
+  /**
+   * The tooltip runs right from the badge's left edge: too little room on
+   * screen to the badge's left for it to run left from the badge's right.
+   */
+  readonly tipFromStart: boolean;
 }
 
 export interface VisitorUnreadableBadgesProps {
@@ -267,16 +288,18 @@ export function VisitorUnreadableBadges({
         height: box.height + OUTLINE_OUTSET_PX * 2,
       };
       const inside = outline.y - onScreen.y < BADGE_HEIGHT_PX;
+      // In from the screen's right edge as far as the block runs past it,
+      // and never so far left that the badge, drawn leftwards from here,
+      // runs past the screen's left edge: a block scrolled partly off
+      // either side keeps its whole badge in view.
+      const right = Math.max(
+        Math.min(outline.x + outline.width, onScreen.x + onScreen.width),
+        onScreen.x + badgeWidthOf(element, space, id)
+      );
       next.set(id, {
         outline,
-        // In from the screen's right edge as far as the block runs past it,
-        // and never so far left that the badge, drawn leftwards from here,
-        // runs past the screen's left edge: a block scrolled partly off
-        // either side keeps its whole badge in view.
-        right: Math.max(
-          Math.min(outline.x + outline.width, onScreen.x + onScreen.width),
-          onScreen.x + badgeWidthOf(element, space, id)
-        ),
+        right,
+        tipFromStart: tipRunsFromStart(right, onScreen.x),
         // Sitting on the outline's top edge, its border shared with the
         // outline's, so the two read as one mark of this block.
         top: inside ? outline.y : outline.y - BADGE_HEIGHT_PX + 1,
@@ -339,6 +362,7 @@ export function VisitorUnreadableBadges({
               className="nx-visitor-unreadable__badge"
               data-badge-node={id}
               data-inside={place.inside ? "" : undefined}
+              data-tip-start={place.tipFromStart ? "" : undefined}
               data-dismissed={dismissed === id ? "" : undefined}
               style={{ left: place.right, top: place.top }}
               onMouseLeave={() => {

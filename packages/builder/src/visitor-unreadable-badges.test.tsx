@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MediaSummary } from "./content-controls";
 import {
   VisitorUnreadableLine,
+  tipRunsFromStart,
   visitorUnreadableSentence,
 } from "./visitor-unreadable-badges";
 import { VisitorUnreadableNote } from "./visitor-unreadable-context";
@@ -116,5 +117,18 @@ describe("a visitor-unreadable binding's fallback, in words", () => {
         "Visitors can't read “internalCover”. They see the fallback image “spring-banner.jpg”."
       )
     );
+  });
+});
+
+describe("the badge's tooltip, beside the screen's left edge", () => {
+  it("runs right from the badge where the widest tooltip would be cut on its left", () => {
+    // The badge's right edge 180px in from the screen's left: a tooltip up
+    // to 288px wide, right-aligned with it, would start off screen.
+    expect(tipRunsFromStart(228, 48)).toBe(true);
+  });
+
+  it("runs left from the badge's right edge where there is room", () => {
+    // The control: the same screen, a badge far enough in.
+    expect(tipRunsFromStart(48 + 400, 48)).toBe(false);
   });
 });
