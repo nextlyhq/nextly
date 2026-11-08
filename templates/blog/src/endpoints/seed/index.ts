@@ -312,7 +312,11 @@ export interface SeedData {
   // pattern). `slug`, `bio`, and `avatarUrl` are user-extension
   // scalar fields (see ../configs/codefirst.config.ts). `avatarUrl`
   // can be either a full URL or a filename; relative filenames get
-  // prefixed with `seedMedia.baseUrl` at seed time.
+  // prefixed with `seedMedia.baseUrl` at seed time. Either way the file is
+  // also uploaded into the media library as the author profile's avatar: a
+  // filename from the media folder (else `seedMedia.baseUrl`), a full URL
+  // fetched as it is. One that can't be loaded leaves the profile without an
+  // avatar and is reported in the seed's warnings.
   users: Array<{
     name: string;
     email: string;
@@ -418,17 +422,90 @@ function getMimeType(filename: string): string {
   return mimeTypes[ext] || "application/octet-stream";
 }
 
+/** Whether a seed's media value is an absolute http or https address. */
+const isAbsoluteAddress = (value: string): boolean =>
+  /^https?:\/\//i.test(value);
+
 /**
- * Try local disk first; fall back to seedMedia.baseUrl + filename if set.
- * Returns the buffer and its source, or an error descriptor if both paths fail.
+ * The file name an absolute address names, for the media record: the last
+ * segment of its path, or a neutral name when it ends in a slash.
+ */
+function fileNameOf(address: string): string {
+  try {
+    const last = new URL(address).pathname.split("/").pop() ?? "";
+    return decodeURIComponent(last) || "seed-media";
+  } catch {
+    return "seed-media";
+  }
+}
+
+type FetchedMedia =
+  | { buffer: Buffer; source: "remote"; contentType?: string }
+  | { error: "fetch-failed"; detail?: string };
+
+/**
+ * Fetch one file over the network, with a 10 second timeout per attempt: a
+ * 5xx answer is tried once more, a 4xx is final, and a network failure is
+ * tried once more. Never throws.
+ */
+async function fetchSeedMedia(url: string): Promise<FetchedMedia> {
+  const attempt = async (): Promise<Response> =>
+    fetch(url, { signal: AbortSignal.timeout(10_000) });
+  const read = async (res: Response): Promise<FetchedMedia> => {
+    const arrayBuffer = await res.arrayBuffer();
+    const contentType = res.headers.get("content-type") ?? undefined;
+    return {
+      buffer: Buffer.from(arrayBuffer),
+      source: "remote",
+      ...(contentType ? { contentType } : {}),
+    };
+  };
+
+  try {
+    let res = await attempt();
+    if (!res.ok) {
+      // Retry once on 5xx; 4xx is permanent
+      if (res.status >= 500 && res.status < 600) {
+        res = await attempt();
+      }
+      if (!res.ok) {
+        return { error: "fetch-failed", detail: `HTTP ${res.status}` };
+      }
+    }
+    return await read(res);
+  } catch {
+    // One network-level retry: the first failure's reason is not needed to try again.
+    try {
+      const res = await attempt();
+      if (!res.ok) {
+        return { error: "fetch-failed", detail: `HTTP ${res.status}` };
+      }
+      return await read(res);
+    } catch (err2) {
+      return {
+        error: "fetch-failed",
+        detail: err2 instanceof Error ? err2.message : String(err2),
+      };
+    }
+  }
+}
+
+/**
+ * Load one seed media file. An absolute http or https address, which custom
+ * seed data may give, is fetched as it is. A file name is read from local
+ * disk first, then fetched from seedMedia.baseUrl + filename if that is set.
+ * Returns the buffer and its source, or an error descriptor if every path
+ * fails.
  */
 async function resolveSeedMedia(
   filename: string,
   seedMedia?: SeedMediaConfig
 ): Promise<
-  | { buffer: Buffer; source: "local" | "remote" }
+  | { buffer: Buffer; source: "local" | "remote"; contentType?: string }
   | { error: "not-found" | "fetch-failed"; detail?: string }
 > {
+  if (isAbsoluteAddress(filename)) return fetchSeedMedia(filename);
+
   // Local disk first. Co-located with this file under
   // src/endpoints/seed/media.
   const localPath = path.join(
@@ -448,42 +525,11 @@ async function resolveSeedMedia(
     return { error: "not-found" };
   }
 
-  const url = seedMedia.baseUrl.endsWith("/")
-    ? seedMedia.baseUrl + filename
-    : `${seedMedia.baseUrl}/${filename}`;
-
-  const attempt = async (): Promise<Response> =>
-    fetch(url, { signal: AbortSignal.timeout(10_000) });
-
-  try {
-    let res = await attempt();
-    if (!res.ok) {
-      // Retry once on 5xx; 4xx is permanent
-      if (res.status >= 500 && res.status < 600) {
-        res = await attempt();
-      }
-      if (!res.ok) {
-        return { error: "fetch-failed", detail: `HTTP ${res.status}` };
-      }
-    }
-    const arrayBuffer = await res.arrayBuffer();
-    return { buffer: Buffer.from(arrayBuffer), source: "remote" };
-  } catch {
-    // One network-level retry: the first failure's reason is not needed to try again.
-    try {
-      const res = await attempt();
-      if (!res.ok) {
-        return { error: "fetch-failed", detail: `HTTP ${res.status}` };
-      }
-      const arrayBuffer = await res.arrayBuffer();
-      return { buffer: Buffer.from(arrayBuffer), source: "remote" };
-    } catch (err2) {
-      return {
-        error: "fetch-failed",
-        detail: err2 instanceof Error ? err2.message : String(err2),
-      };
-    }
-  }
+  return fetchSeedMedia(
+    seedMedia.baseUrl.endsWith("/")
+      ? seedMedia.baseUrl + filename
+      : `${seedMedia.baseUrl}/${filename}`
+  );
 }
 
 /**
@@ -502,12 +548,21 @@ async function uploadMediaFile(
     return { miss: filename, reason: resolved.error, detail: resolved.detail };
   }
 
+  // An absolute address names its file by its path; its type comes from the
+  // name's extension, else from what the server said it sent.
+  const name = isAbsoluteAddress(filename) ? fileNameOf(filename) : filename;
+  const byName = getMimeType(name);
+  const mimetype =
+    byName === "application/octet-stream" && resolved.contentType
+      ? resolved.contentType.split(";")[0].trim()
+      : byName;
+
   try {
     const media = await nextly.media.upload({
       file: {
         data: resolved.buffer,
-        name: filename,
-        mimetype: getMimeType(filename),
+        name,
+        mimetype,
         size: resolved.buffer.length,
       },
       altText,
@@ -534,22 +589,30 @@ async function uploadMediaFile(
  * This function only populates demo content (Phase C).
  */
 /**
- * Patch an existing post's categories and tags, sent with the version the
+ * Patch a post an earlier seed run created: its categories and tags, in case
+ * they were lost, and its byline when it has none, in case its author's
+ * profile could not be made then. A byline the post already has is kept, so
+ * a credit an editor changed since stays theirs. Sent with the version the
  * lookup read it at, so a change to the post made since refuses the patch
  * rather than being overwritten by it.
  */
-export async function patchPostTaxonomy(
+export async function patchSeededPost(
   nextly: Pick<Nextly, "update">,
   existing: Record<string, unknown>,
-  links: { categories: unknown[]; tags: unknown[] }
+  links: { categories: unknown[]; tags: unknown[]; byline?: string }
 ): Promise<void> {
   const rev = existing._rev;
+  const credited =
+    existing.byline !== undefined &&
+    existing.byline !== null &&
+    existing.byline !== "";
   await nextly.update({
     collection: "posts",
     id: String(existing.id),
     data: {
       categories: links.categories.length > 0 ? links.categories : undefined,
       tags: links.tags.length > 0 ? links.tags : undefined,
+      ...(links.byline && !credited ? { byline: links.byline } : {}),
       ...(typeof rev === "string" ? { _rev: rev } : {}),
     },
   });
@@ -660,15 +723,16 @@ export async function seed({
   };
 
   // Post cover images go through the media upload path, and so do the
-  // avatars the author profiles show. The users' own `avatarUrl` stays a
-  // text address (resolved below), which no page reads.
+  // avatars the author profiles show, a file name and an absolute address
+  // alike: the profile's avatar is a media record either way. The users' own
+  // `avatarUrl` stays a text address (resolved below), which no page reads.
   for (const post of seedData.posts) {
     if (post.featuredImage) {
       await uploadAndTrack(post.featuredImage, post.title);
     }
   }
   for (const user of seedData.users) {
-    if (user.avatarUrl && !/^https?:\/\//i.test(user.avatarUrl)) {
+    if (user.avatarUrl) {
       await uploadAndTrack(user.avatarUrl, user.name);
     }
   }
@@ -773,6 +837,14 @@ export async function seed({
       const avatarId = user.avatarUrl
         ? mediaIdByUpload.get(uploadKey(user.avatarUrl, user.name))
         : undefined;
+      // An avatar that could not be loaded leaves the profile without one
+      // (the pages draw the author's initial); the miss is also in the
+      // media warnings.
+      if (user.avatarUrl && !avatarId) {
+        console.log(
+          `  Warning: author "${user.slug}" is created without an avatar: ${user.avatarUrl} could not be loaded.`
+        );
+      }
       const createdAuthor = await nextly.create({
         collection: "authors",
         data: {
@@ -875,16 +947,19 @@ export async function seed({
 
       if (existing.meta.total > 0) {
         // Post already exists — patch its categories/tags in case they
-        // were lost during a prior seed run. Non-critical, so it is reported
-        // as a warning rather than stopping the seed, never dropped.
+        // were lost during a prior seed run, and its byline if that run could
+        // not make the author's profile, so a retry ends where a first clean
+        // run does. Non-critical, so it is reported as a warning rather than
+        // stopping the seed, never dropped.
         try {
-          await patchPostTaxonomy(nextly, existing.items[0], {
+          await patchSeededPost(nextly, existing.items[0], {
             categories: categoryIds,
             tags: tagIds,
+            ...(bylineId ? { byline: bylineId } : {}),
           });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          warnings.push(`post "${post.slug}" taxonomy: ${msg}`);
+          warnings.push(`post "${post.slug}" patch: ${msg}`);
         }
         continue;
       }

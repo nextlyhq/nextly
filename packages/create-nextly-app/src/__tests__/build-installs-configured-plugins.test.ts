@@ -126,9 +126,10 @@ describe("a scaffold's build installs the plugins its config registers", () => {
     expect(plugged).toContain("blog/configs/codefirst.config.ts");
   });
 
-  // The blog's visual config registers no plugin, and installing one it does
-  // not configure would fail the build.
-  it("installs nothing for a config that registers no plugin", async () => {
+  // The blog's visual config registers no plugin package (only one of its own,
+  // from its own source), and installing one it does not configure would fail
+  // the build.
+  it("installs nothing for a config that registers no plugin package", async () => {
     const text = await readFile(
       path.join(TEMPLATES, "blog/configs/visual.config.ts"),
       "utf8"

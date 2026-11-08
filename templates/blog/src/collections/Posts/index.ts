@@ -64,10 +64,15 @@ export const Posts = defineCollection({
     }),
     // The public author a reader is shown: a profile in `authors`. Separate
     // from `author`, the account that owns the post, which access reads.
+    // Who a post credits is set as its owner is: only a caller who may
+    // publish posts chooses or changes it, anyone else's value is dropped,
+    // and a new post is credited to its writer's own profile (the
+    // bylineFromCreator hook, which runs after the value is dropped).
     relationship({
       name: "byline",
       label: "Byline",
       relationTo: "authors",
+      access: { create: mayPublishPosts, update: mayPublishPosts },
       admin: { description: "The public author shown on the post." },
     }),
     relationship({
@@ -128,7 +133,9 @@ export const Posts = defineCollection({
     delete: ownPostsUnlessPublisher,
   },
   hooks: {
-    beforeValidate: [autoSlug, requireFeaturedAlt, bylineFromCreator],
-    beforeChange: [authorIsCreator, computeReadingTime],
+    beforeValidate: [autoSlug, requireFeaturedAlt],
+    // After the field rules: a value a writer may not set is dropped before
+    // these run, so the owner and the credit they fill are the writer's own.
+    beforeChange: [authorIsCreator, bylineFromCreator, computeReadingTime],
   },
 });

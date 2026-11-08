@@ -213,7 +213,8 @@ CREATE INDEX `idx_tags_slug` ON `dc_tags`(`slug`);
 
 -- Authors indexes
 CREATE INDEX `idx_authors_slug` ON `dc_authors`(`slug`);
-CREATE INDEX `idx_authors_account` ON `dc_authors`(`account`);
+-- One profile per account: a new post is credited to its writer's profile.
+CREATE UNIQUE INDEX `uq_authors_account` ON `dc_authors`(`account`);
 
 -- Junction table indexes (FK columns not covered by composite PK)
 CREATE INDEX `idx_posts_categories_category` ON `dc_posts_categories`(`category_id`);
@@ -273,7 +274,7 @@ DROP INDEX IF EXISTS `idx_posts_featured` ON `dc_posts`;
 DROP INDEX IF EXISTS `idx_posts_author` ON `dc_posts`;
 DROP INDEX IF EXISTS `idx_posts_byline` ON `dc_posts`;
 DROP INDEX IF EXISTS `idx_authors_slug` ON `dc_authors`;
-DROP INDEX IF EXISTS `idx_authors_account` ON `dc_authors`;
+DROP INDEX IF EXISTS `uq_authors_account` ON `dc_authors`;
 DROP INDEX IF EXISTS `uq_authors_slug` ON `dc_authors`;
 DROP INDEX IF EXISTS `idx_posts_categories_category` ON `dc_posts_categories`;
 DROP INDEX IF EXISTS `idx_posts_tags_tag` ON `dc_posts_tags`;

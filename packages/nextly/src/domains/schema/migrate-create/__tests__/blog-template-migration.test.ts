@@ -219,6 +219,32 @@ describe("the blog template's migration", () => {
     ).not.toEqual([]);
   });
 
+  // One author profile per account, so the profile a new post is credited to
+  // is never a choice between two: the SQL each dialect runs keys it, and the
+  // snapshot a visual blog registers its fields from says so.
+  it("keeps one author profile per account, in every dialect and the snapshot", () => {
+    for (const [dialect, file] of Object.entries(MIGRATION_FILES)) {
+      const sql = readFileSync(new URL(file, TEMPLATE), "utf8");
+      expect(uniqueKeys(sql), dialect).toContain("dc_authors(account)");
+    }
+    const snapshot = JSON.parse(
+      readFileSync(
+        new URL(
+          "migrations/meta/0001_000000_blog_schema.snapshot.json",
+          TEMPLATE
+        ),
+        "utf8"
+      )
+    ) as {
+      collections: {
+        slug: string;
+        fields: { name: string; unique?: boolean }[];
+      }[];
+    };
+    const authors = snapshot.collections.find(c => c.slug === "authors");
+    expect(authors?.fields.find(f => f.name === "account")?.unique).toBe(true);
+  });
+
   for (const dialect of Object.keys(MIGRATION_FILES) as SupportedDialect[]) {
     it(`creates every table and column nextly expects (${dialect})`, async () => {
       const sql = readFileSync(

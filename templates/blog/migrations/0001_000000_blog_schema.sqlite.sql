@@ -206,7 +206,8 @@ CREATE INDEX IF NOT EXISTS "idx_tags_slug" ON "dc_tags"("slug");
 
 -- Authors indexes
 CREATE INDEX IF NOT EXISTS "idx_authors_slug" ON "dc_authors"("slug");
-CREATE INDEX IF NOT EXISTS "idx_authors_account" ON "dc_authors"("account");
+-- One profile per account: a new post is credited to its writer's profile.
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_authors_account" ON "dc_authors"("account");
 
 -- Junction table indexes (FK columns not covered by composite PK)
 CREATE INDEX IF NOT EXISTS "idx_posts_categories_category" ON "dc_posts_categories"("category_id");

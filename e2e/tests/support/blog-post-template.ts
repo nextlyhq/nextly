@@ -443,11 +443,16 @@ export function blogPostTemplate(): Record<string, unknown> {
     { as: "div" },
     {
       name: "Body",
+      // The contents' column is as wide as what it holds, and the space
+      // beside it is the contents' own margin rather than the grid's gap: a
+      // post with no headings draws no contents, so the column and its space
+      // collapse to nothing and the article starts where the body does. The
+      // gap is set to none, over the box's own default between its children.
       styles: styled(
         {
           display: "grid",
-          gridTemplateColumns: "16rem minmax(0, 1fr)",
-          gap: "5rem",
+          gridTemplateColumns: "auto minmax(0, 1fr)",
+          gap: "0",
           maxWidth: "80rem",
           margin: { inlineStart: "auto", inlineEnd: "auto" },
           padding: {
@@ -458,10 +463,9 @@ export function blogPostTemplate(): Record<string, unknown> {
           },
         },
         {
-          tablet: { gridTemplateColumns: "minmax(0, 1fr)", gap: "3rem" },
+          tablet: { gridTemplateColumns: "minmax(0, 1fr)" },
           mobile: {
             gridTemplateColumns: "minmax(0, 1fr)",
-            gap: "2.5rem",
             padding: { blockStart: "4rem", blockEnd: "5rem" },
           },
         }
@@ -490,23 +494,41 @@ export function blogPostTemplate(): Record<string, unknown> {
                       // a hairline border, rounded corners and the page's
                       // background, its entries in the text's colour and a
                       // quieter one under the pointer. The H3s are set in by
-                      // the block's own nested list.
-                      styles: styled({
-                        border: {
-                          width: sides("1px"),
-                          style: "solid",
-                          color: TOKEN("color.border"),
+                      // the block's own nested list. Its width and the
+                      // space after it are its own, so they go when it does
+                      // (see the body above): 16rem beside the article with
+                      // 5rem before it, as the hand-written page's sidebar,
+                      // and above the article on narrower screens.
+                      styles: styled(
+                        {
+                          border: {
+                            width: sides("1px"),
+                            style: "solid",
+                            color: TOKEN("color.border"),
+                          },
+                          borderRadius: "8px",
+                          padding: sides("1.5rem"),
+                          backgroundColor: TOKEN("color.background"),
+                          color: TOKEN("color.text"),
+                          linkColor: TOKEN("color.text"),
+                          linkColorHover: TOKEN("color.muted"),
+                          fontSize: "0.875rem",
+                          fontWeight: 500,
+                          lineHeight: 1.6,
+                          width: "16rem",
+                          margin: { inlineEnd: "5rem" },
                         },
-                        borderRadius: "8px",
-                        padding: sides("1.5rem"),
-                        backgroundColor: TOKEN("color.background"),
-                        color: TOKEN("color.text"),
-                        linkColor: TOKEN("color.text"),
-                        linkColorHover: TOKEN("color.muted"),
-                        fontSize: "0.875rem",
-                        fontWeight: 500,
-                        lineHeight: 1.6,
-                      }),
+                        {
+                          tablet: {
+                            width: "auto",
+                            margin: { inlineEnd: "0", blockEnd: "3rem" },
+                          },
+                          mobile: {
+                            width: "auto",
+                            margin: { inlineEnd: "0", blockEnd: "2.5rem" },
+                          },
+                        }
+                      ),
                     }
                   ),
                 ],

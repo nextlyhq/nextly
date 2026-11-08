@@ -1,18 +1,23 @@
 /**
- * `beforeValidate` hook: a new post that names no byline is credited to the
+ * `beforeChange` hook: a new post that names no byline is credited to the
  * profile of the account that writes it.
  *
  * A post's `byline` is the public author a reader is shown, a profile in
  * `authors`; its `author` is the account that owns it. An account's profile
- * is the author whose `account` is that account, so a writer with a profile is
- * credited without picking themselves. A writer with none, a post that names
- * its byline, an update, and a write with no signed-in user (the seed, which
- * sets the byline it means) are left as they are.
+ * is the author whose `account` is that account (one at most, since
+ * `account` is unique), so a writer with a profile is credited without
+ * picking themselves. A writer with none, a post that names its byline, an
+ * update, and a write with no signed-in user (the seed, which sets the byline
+ * it means) are left as they are.
  *
- * Runs before validation, as the featured-image check does, so the read goes
- * through the Direct API outside the write itself. Where the hook context has
- * no Direct API (some CLI paths), the post is saved without a byline rather
- * than refused: an editor can still choose one.
+ * Runs after the field rules, as `authorIsCreator` does: only a caller who
+ * may publish posts may choose a byline, and the value anyone else sends is
+ * dropped before this hook runs, so their new post is credited to their own
+ * profile, never to one they named. In `beforeValidate` it would run before
+ * the rules, which would then drop the credit it gave them as well. The
+ * lookup goes through the Direct API, outside the write itself. Where the hook context has no Direct
+ * API (some CLI paths), the post is saved without a byline rather than
+ * refused: an editor can still choose one.
  */
 import type { HookHandler } from "nextly/config";
 

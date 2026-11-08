@@ -36,12 +36,15 @@ export const Authors = defineCollection({
     // An image in the media library, so it carries its own alt text and
     // sizes, and a template built with the page builder binds it as an image.
     upload({ name: "avatar", relationTo: "media" }),
+    // One profile per account, so the profile a new post is credited to is
+    // never a choice between two (see bylineFromCreator).
     relationship({
       name: "account",
       relationTo: "users",
+      unique: true,
       admin: {
         description:
-          "The account this profile belongs to. Posts that account writes are credited to this author.",
+          "The account this profile belongs to. Posts that account writes are credited to this author. An account has one profile at most.",
       },
     }),
   ],

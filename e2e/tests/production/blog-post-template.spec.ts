@@ -131,6 +131,64 @@ const pathOf = (address: string | null | undefined, base: string) =>
     ? address
     : new URL(address, base).pathname;
 
+/** The body's two columns, as {@link bodyColumns} reads them. */
+interface BodyColumns {
+  /** How wide the contents' column is drawn. */
+  contents: number;
+  /** How far past the start of the body's content the article begins. */
+  articleOffset: number;
+}
+
+/**
+ * The body's two columns at the page's width, read from the drawn article
+ * whose parent lays out a grid, the template's body, and the `<aside>` beside
+ * it, which a post with no contents may not draw at all.
+ *
+ * Only a drawn article counts, and the reading waits for one: a document can
+ * hold a hidden copy of a page (see `../support/visible`), and the page can
+ * hide its content for a moment while it re-renders, and a hidden box
+ * measures nothing at all, which would read as no column.
+ */
+async function bodyColumns(page: Page): Promise<BodyColumns> {
+  const read = () =>
+    page.evaluate((): BodyColumns | string => {
+      const articles = [...document.querySelectorAll("article")];
+      const drawn = articles.filter(
+        article =>
+          article.getClientRects().length > 0 &&
+          article.parentElement !== null &&
+          getComputedStyle(article.parentElement).display === "grid"
+      );
+      if (drawn.length !== 1) {
+        return `${drawn.length} drawn articles in a grid, of ${articles.length}`;
+      }
+      const [article] = drawn;
+      const body = article.parentElement as HTMLElement;
+      const aside = body.querySelector(":scope > aside");
+      const style = getComputedStyle(body);
+      const start =
+        body.getBoundingClientRect().left +
+        parseFloat(style.borderLeftWidth) +
+        parseFloat(style.paddingLeft);
+      return {
+        contents: aside ? aside.getBoundingClientRect().width : 0,
+        articleOffset: article.getBoundingClientRect().left - start,
+      };
+    });
+  let columns = "not read" as BodyColumns | string;
+  await expect
+    .poll(
+      async () => {
+        columns = await read();
+        return typeof columns === "string" ? columns : "drawn";
+      },
+      { timeout: 15_000 }
+    )
+    .toBe("drawn");
+  if (typeof columns === "string") throw new Error(`[e2e] ${columns}`);
+  return columns;
+}
+
 /** Open `path` as an anonymous visitor, once it is served with the template. */
 async function visit(
   browser: Browser,
@@ -284,6 +342,14 @@ test.describe("the blog post page, rebuilt with a template", () => {
       for (const { id, text } of toc) {
         await expect(page.locator(`[id="${id}"]`)).toHaveText(text);
       }
+    });
+
+    // The control for the plain post's check below: here the same reading
+    // finds the contents' 16rem and the 5rem after them before the article.
+    test("sets the contents in a column of their own, beside the article", async () => {
+      const { contents, articleOffset } = await bodyColumns(page);
+      expect(contents).toBeCloseTo(21 * 16, 0);
+      expect(articleOffset).toBeCloseTo(contents, 0);
     });
 
     test("draws the featured image from the post's media, with its alternative text", async () => {
@@ -445,6 +511,11 @@ test.describe("the blog post page, rebuilt with a template", () => {
             new RegExp(`class="[^"]*nx-b-core--${block}`)
           );
         }
+        // No blank column where the contents would be: it takes no width,
+        // and the article starts where the body's content does.
+        const { contents, articleOffset } = await bodyColumns(page);
+        expect(contents).toBe(0);
+        expect(Math.abs(articleOffset)).toBeLessThan(1);
         // One picture: the byline's, which is the fallback for an author
         // without an avatar. The hand-written page draws the name's first
         // letter there: an intentional difference.

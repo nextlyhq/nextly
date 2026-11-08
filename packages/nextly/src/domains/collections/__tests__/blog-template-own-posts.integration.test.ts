@@ -15,6 +15,12 @@
  * holding `update-posts` and `delete-posts` changes another author's post
  * under a rule that checks only the grant, and is refused it here.
  *
+ * The public credit follows the same line: a post's `byline` (a profile in
+ * the template's Authors) is chosen only by a caller who may publish posts,
+ * and a new post is credited to its writer's own profile. An account has one
+ * profile at most. A visual blog's Posts carries no code hooks, so the
+ * template's plugin registers the two that fill the owner and the credit.
+ *
  * @module domains/collections/__tests__/blog-template-own-posts.integration.test
  */
 
@@ -31,6 +37,7 @@ import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
 import type { CollectionConfig } from "../../../collections/config/define-collection";
+import type { PluginDefinition } from "../../../plugins/plugin-context";
 import {
   account,
   role,
@@ -69,6 +76,7 @@ async function templateCollection(
 }
 
 const POSTS = "posts";
+const AUTHORS = "authors";
 /** Every posts action the seed's editor holds. */
 const EDITOR_ACTIONS = [
   "create",
@@ -103,17 +111,67 @@ interface World {
   otherAuthor: string;
   /** Two posts by `author`, one by `otherAuthor`, one by `editor`. */
   posts: { own: string; ownToo: string; others: string; editors: string };
+  /** The author profiles of `author` and `otherAuthor`. */
+  profiles: { author: string; other: string };
 }
 
-async function boot(dialect: TestDialect): Promise<World> {
-  const [Posts, Categories, Tags] = await Promise.all([
+/**
+ * The template's plugin, loaded as its collections are: by a path built at
+ * run time.
+ */
+async function templatePlugin(): Promise<PluginDefinition> {
+  const module: Record<string, unknown> = await import(
+    fileURLToPath(new URL("src/collections/Posts/credit-plugin.ts", TEMPLATE))
+  );
+  const plugin = module.postsCreditPlugin;
+  if (typeof plugin !== "object" || plugin === null || !("init" in plugin)) {
+    throw new Error("the template's credit-plugin.ts exports no plugin");
+  }
+  return plugin as PluginDefinition;
+}
+
+/**
+ * Posts as a visual blog registers it: the same fields, with no hooks and
+ * no field rules, since the snapshot it comes from can hold no function.
+ */
+function asVisual(posts: CollectionConfig): CollectionConfig {
+  return {
+    ...posts,
+    hooks: undefined,
+    fields: posts.fields.map(field => {
+      const { access: _access, ...rest } = field as typeof field & {
+        access?: unknown;
+      };
+      return rest as typeof field;
+    }),
+  };
+}
+
+/**
+ * How the install registers Posts: as the code-first config does, or as a
+ * visual blog does, with or without the template's plugin.
+ */
+type Approach = "code-first" | "visual" | "visual without the plugin";
+
+async function boot(
+  dialect: TestDialect,
+  approach: Approach = "code-first"
+): Promise<World> {
+  const [Posts, Authors, Categories, Tags] = await Promise.all([
     templateCollection("src/collections/Posts/index.ts", "Posts"),
+    templateCollection("src/collections/Authors.ts", "Authors"),
     templateCollection("src/collections/Categories.ts", "Categories"),
     templateCollection("src/collections/Tags.ts", "Tags"),
   ]);
   const t = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
-    collections: [Posts, Categories, Tags],
+    collections: [
+      approach === "code-first" ? Posts : asVisual(Posts),
+      Authors,
+      Categories,
+      Tags,
+    ],
+    ...(approach === "visual" ? { plugins: [await templatePlugin()] } : {}),
   });
   current = t;
   await seedPermissions(t);
@@ -135,23 +193,43 @@ async function boot(dialect: TestDialect): Promise<World> {
   const otherAuthor = await account(t, "other@example.com", [authorRole]);
 
   const direct = t.nextly as unknown as Direct;
-  // Made as trusted server code, as the seed makes them, naming the author.
-  const post = async (title: string, by: string) =>
+  // Profiles made as trusted server code, as the seed makes them.
+  const profile = async (name: string, accountId: string) =>
+    String(
+      (
+        await direct.create({
+          collection: AUTHORS,
+          data: {
+            title: name,
+            name,
+            slug: name.toLowerCase(),
+            account: accountId,
+          },
+        })
+      ).item.id
+    );
+  const profiles = {
+    author: await profile("Author", author),
+    other: await profile("Other", otherAuthor),
+  };
+  // Made as trusted server code, as the seed makes them, naming the author
+  // and, for the author's own, their profile.
+  const post = async (title: string, by: string, byline?: string) =>
     String(
       (
         await direct.create({
           collection: POSTS,
-          data: { title, author: by },
+          data: { title, author: by, ...(byline ? { byline } : {}) },
         })
       ).item.id
     );
   const posts = {
-    own: await post("Mine", author),
+    own: await post("Mine", author, profiles.author),
     ownToo: await post("Mine too", author),
     others: await post("Theirs", otherAuthor),
     editors: await post("The editor's", editor),
   };
-  return { t, direct, editor, author, otherAuthor, posts };
+  return { t, direct, editor, author, otherAuthor, posts, profiles };
 }
 
 /** A checked call made as `id`. */
@@ -172,6 +250,10 @@ async function stored(
 /** Who a stored post names as its author. */
 const authorOf = async (t: TestNextly, id: string) =>
   (await stored(t, id))?.author;
+
+/** The profile a stored post credits, `null` for none. */
+const bylineOf = async (t: TestNextly, id: string) =>
+  (await stored(t, id))?.byline ?? null;
 
 /**
  * A REST update of post `id` as the signed-in `userId`, as the admin sends
@@ -354,6 +436,107 @@ describe.each(getConfiguredTestDialects())(
         ...as(editor),
       });
       expect(await authorOf(t, posts.own)).toBe(otherAuthor);
+    });
+
+    it("credit an author's new post to their own profile, even when they name another's", async () => {
+      const { t, direct, author, profiles } = await boot(dialect);
+      const unnamed = await direct.create({
+        collection: POSTS,
+        data: { title: "Credited to me" },
+        ...as(author),
+      });
+      expect(await bylineOf(t, String(unnamed.item.id))).toBe(profiles.author);
+
+      // The other profile is dropped, and the post is credited to theirs.
+      const named = await direct.create({
+        collection: POSTS,
+        data: { title: "Credited to another", byline: profiles.other },
+        ...as(author),
+      });
+      expect(await bylineOf(t, String(named.item.id))).toBe(profiles.author);
+    });
+
+    it("keep an author from moving their post's credit to another profile", async () => {
+      const { t, direct, author, posts, profiles } = await boot(dialect);
+      await direct.update({
+        collection: POSTS,
+        id: posts.own,
+        data: {
+          title: "Re-credited",
+          byline: profiles.other,
+          _overwrite: true,
+        },
+        ...as(author),
+      });
+      expect((await stored(t, posts.own))?.title).toBe("Re-credited");
+      expect(await bylineOf(t, posts.own)).toBe(profiles.author);
+    });
+
+    it("let an editor credit a post to any profile", async () => {
+      const { t, direct, editor, posts, profiles } = await boot(dialect);
+      const created = await direct.create({
+        collection: POSTS,
+        data: { title: "For another", byline: profiles.other },
+        ...as(editor),
+      });
+      expect(await bylineOf(t, String(created.item.id))).toBe(profiles.other);
+
+      await direct.update({
+        collection: POSTS,
+        id: posts.own,
+        data: { byline: profiles.other, _overwrite: true },
+        ...as(editor),
+      });
+      expect(await bylineOf(t, posts.own)).toBe(profiles.other);
+    });
+
+    it("refuse a second profile for an account that has one", async () => {
+      const { t, direct, author } = await boot(dialect);
+      await expect(
+        direct.create({
+          collection: AUTHORS,
+          data: {
+            title: "Author again",
+            name: "Author again",
+            slug: "author-again",
+            account: author,
+          },
+        })
+      ).rejects.toThrow();
+      const rows = await t.adapter.select<Record<string, unknown>>(
+        `dc_${AUTHORS}`,
+        {}
+      );
+      expect(rows.filter(row => row.account === author)).toHaveLength(1);
+    });
+
+    // A visual blog's Posts has no hooks of its own; the template's plugin
+    // registers them, so a new post there is owned and credited as on a
+    // code-first blog. Without the plugin the same post is neither, which is
+    // what shows the plugin, not the collection, filled them.
+    it("own and credit an author's new post on a visual blog, through the template's plugin", async () => {
+      const visual = await boot(dialect, "visual");
+      const created = await visual.direct.create({
+        collection: POSTS,
+        data: { title: "Written on a visual blog" },
+        ...as(visual.author),
+      });
+      const id = String(created.item.id);
+      expect(await authorOf(visual.t, id)).toBe(visual.author);
+      expect(await bylineOf(visual.t, id)).toBe(visual.profiles.author);
+      await visual.t.destroy();
+      current = undefined;
+
+      const bare = await boot(dialect, "visual without the plugin");
+      const plain = await bare.direct.create({
+        collection: POSTS,
+        data: { title: "Written with no plugin" },
+        ...as(bare.author),
+      });
+      expect(
+        (await authorOf(bare.t, String(plain.item.id))) ?? null
+      ).toBeNull();
+      expect(await bylineOf(bare.t, String(plain.item.id))).toBeNull();
     });
   }
 );

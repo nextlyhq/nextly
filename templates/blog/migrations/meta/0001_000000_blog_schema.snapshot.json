@@ -241,6 +241,7 @@
           "name": "account",
           "type": "relationship",
           "relationTo": "users",
+          "unique": true,
           "index": true,
           "columnType": "text",
           "columnTypeNote": "text to match users.id (core schema uses text PKs, not uuid)"
