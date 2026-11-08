@@ -36,6 +36,7 @@ import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import { markLookReach } from "./look-reach";
 import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
 import { PreviewedEntryProvider } from "./previewed-entry";
+import { VisitorUnreadableBadges } from "./visitor-unreadable-badges";
 
 /**
  * The selection ring and its halo are drawn for EVERY selected rendering, by
@@ -802,6 +803,255 @@ describe("selection marks", () => {
       "inside",
       "above",
     ]);
+  });
+
+  /*
+   * The tabs of conditioned blocks drawn at `boxes` (by id, in page order), on
+   * a screen 1000px wide and 500px tall: where each block's tabs sit, and how
+   * far in from its right edge.
+   */
+  const tabsOfBlocksAt = async (
+    boxes: Readonly<Record<string, DOMRect>>
+  ): Promise<{ at: (string | null)[]; inset: string[] }> => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        const id = this.getAttribute(NODE_ID_ATTRIBUTE);
+        return (
+          (id === null ? undefined : boxes[id]) ?? new DOMRect(0, 0, 1000, 2000)
+        );
+      }
+    );
+    const { container } = render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <Canvas
+          document={{
+            formatVersion: 1,
+            kind: "page",
+            nodes: Object.keys(boxes).map(id => ({
+              id,
+              type: "acme/leaf",
+              version: 1,
+              props: {},
+              visibility: {
+                conditions: [[{ field: "tier", op: "equals", value: "vip" }]],
+              },
+            })) as never,
+          }}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          overlay={<CanvasMarks />}
+        />
+      </div>
+    );
+    await act(async () => undefined);
+    const badges = () =>
+      Array.from(
+        container.querySelectorAll<HTMLElement>(
+          '.nx-canvas-mark[data-mark="at-rest"]'
+        )
+      );
+    await waitFor(() =>
+      expect(badges()).toHaveLength(Object.keys(boxes).length)
+    );
+    return {
+      at: badges().map(badge => badge.getAttribute("data-tab-at")),
+      inset: badges().map(badge =>
+        badge.style.getPropertyValue("--nx-tag-inset-side")
+      ),
+    };
+  };
+
+  it("keeps the tabs of two short blocks stacked one on another apart: the lower one's go on its bottom edge", async () => {
+    // Each block 12px tall, shorter than a 20px tab, the second right under
+    // the first, both as wide: above each block, the second's tabs would sit
+    // over the first's, running from the same right edge.
+    const short = await tabsOfBlocksAt({
+      upper: new DOMRect(0, 200, 1000, 12),
+      lower: new DOMRect(0, 212, 1000, 12),
+    });
+    expect(short.at).toEqual(["above", "below"]);
+    expect(short.inset).toEqual(["0px", "0px"]);
+  });
+
+  it("keeps the tabs of stacked blocks taller than a tab, and of short blocks side by side, on their top edges", async () => {
+    // CONTROLS: nothing overlaps, so each block's tabs go where they go alone.
+    // Stacked, 50px each: the lower one's tabs stand clear of the upper one's.
+    const tall = await tabsOfBlocksAt({
+      upper: new DOMRect(0, 200, 1000, 50),
+      lower: new DOMRect(0, 250, 1000, 50),
+    });
+    expect(tall.at).toEqual(["above", "above"]);
+    cleanup();
+    // As short as above, but side by side in a row: their tabs are apart
+    // across, so neither moves although each is shorter than a tab.
+    const row = await tabsOfBlocksAt({
+      left: new DOMRect(0, 200, 400, 12),
+      right: new DOMRect(600, 200, 400, 12),
+    });
+    expect(row.at).toEqual(["above", "above"]);
+    expect(row.inset).toEqual(["0px", "0px"]);
+  });
+
+  it("steps a block's tabs left past another's when every edge it may use is taken", async () => {
+    // Three blocks 8px tall, stacked: the first's tabs go above it and the
+    // second's below it, and for the third, above, below and inside its top
+    // all meet one of those. Its tabs keep the top edge and step left past
+    // the first block's, by their estimated width ("Conditional", 77px of
+    // words, 12px of padding and 16px for the icon: 105px) and the 2px gap.
+    const stack = await tabsOfBlocksAt({
+      first: new DOMRect(0, 200, 1000, 8),
+      second: new DOMRect(0, 208, 1000, 8),
+      third: new DOMRect(0, 216, 1000, 8),
+    });
+    expect(stack.at).toEqual(["above", "below", "above"]);
+    expect(stack.inset).toEqual(["0px", "0px", "107px"]);
+  });
+
+  /*
+   * The blocks drawn at `boxes` (by id, in page order) on a screen 1000px
+   * wide and 500px tall, with both layers that draw tabs on a block's edge:
+   * the `conditioned` blocks' at-rest tabs, and the "Visitors won't see this"
+   * badges of the `unreadable` ones, each 22px tall and drawn leftwards from
+   * near its block's right edge. Where each at-rest mark's tabs sit, and each
+   * badge's top.
+   */
+  const bothLayersAt = async (
+    boxes: Readonly<Record<string, DOMRect>>,
+    marks: { conditioned: readonly string[]; unreadable: readonly string[] }
+  ): Promise<{ tabsAt: (string | null)[]; badgeTops: string[] }> => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        if (this.classList.contains("nx-visitor-unreadable__badge")) {
+          return new DOMRect(0, 0, 150, 22);
+        }
+        const id = this.getAttribute(NODE_ID_ATTRIBUTE);
+        return (
+          (id === null ? undefined : boxes[id]) ?? new DOMRect(0, 0, 1000, 2000)
+        );
+      }
+    );
+    const marked = new Map(
+      marks.unreadable.map(id => [
+        id,
+        [{ prop: "text", path: "internalNote" }] as const,
+      ])
+    );
+    const { container } = render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <Canvas
+          document={{
+            formatVersion: 1,
+            kind: "page",
+            nodes: Object.keys(boxes).map(id => ({
+              id,
+              type: "acme/leaf",
+              version: 1,
+              props: {},
+              ...(marks.conditioned.includes(id)
+                ? {
+                    visibility: {
+                      conditions: [
+                        [{ field: "tier", op: "equals", value: "vip" }],
+                      ],
+                    },
+                  }
+                : {}),
+            })) as never,
+          }}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          overlay={
+            // As the host draws them: the marks, then the badges' layer.
+            <>
+              <CanvasMarks />
+              <VisitorUnreadableBadges marked={marked} />
+            </>
+          }
+        />
+      </div>
+    );
+    await act(async () => undefined);
+    const tabs = () =>
+      Array.from(
+        container.querySelectorAll('.nx-canvas-mark[data-mark="at-rest"]')
+      );
+    const badges = () =>
+      Array.from(
+        container.querySelectorAll<HTMLElement>(".nx-visitor-unreadable__badge")
+      );
+    await waitFor(() => {
+      expect(tabs()).toHaveLength(marks.conditioned.length);
+      expect(badges()).toHaveLength(marks.unreadable.length);
+    });
+    return {
+      tabsAt: tabs().map(tab => tab.getAttribute("data-tab-at")),
+      badgeTops: badges().map(badge => badge.style.top),
+    };
+  };
+
+  it("keeps the visitor badges of two short blocks stacked one on another apart: the lower one's goes on its bottom edge", async () => {
+    // Each block 12px tall, its outline 16px, shorter than a 22px badge, the
+    // second right under the first: above each outline, the second's badge
+    // (189px to 211px) would sit over the first's (177px to 199px). Below
+    // its outline (210px + 16px, less the 1px foot), it is clear.
+    const short = await bothLayersAt(
+      {
+        upper: new DOMRect(0, 200, 1000, 12),
+        lower: new DOMRect(0, 212, 1000, 12),
+      },
+      { conditioned: [], unreadable: ["upper", "lower"] }
+    );
+    expect(short.badgeTops).toEqual(["177px", "225px"]);
+  });
+
+  it("keeps a block's visitor badge off its own conditional tab: the badge goes on its bottom edge", async () => {
+    // One 50px block, both conditional and read by a field visitors can't
+    // read. Its tab above it runs 180px to 200px, from 895px to its right
+    // edge; the badge above its outline would run 177px to 199px, from about
+    // 150px left of the same edge.
+    // The tab is placed first, so the badge takes its outline's bottom edge:
+    // 198px + 54px, less the 1px foot.
+    const both = await bothLayersAt(
+      { both: new DOMRect(0, 200, 1000, 50) },
+      { conditioned: ["both"], unreadable: ["both"] }
+    );
+    expect(both.tabsAt).toEqual(["above"]);
+    expect(both.badgeTops).toEqual(["251px"]);
+  });
+
+  it("keeps a block's visitor badge, or its conditional tab, on its top edge when it carries only the one", async () => {
+    // CONTROLS: nothing else is drawn on the block, so each goes where it
+    // goes alone, on top.
+    const tab = await bothLayersAt(
+      { only: new DOMRect(0, 200, 1000, 50) },
+      { conditioned: ["only"], unreadable: [] }
+    );
+    expect(tab.tabsAt).toEqual(["above"]);
+    cleanup();
+    const badge = await bothLayersAt(
+      { only: new DOMRect(0, 200, 1000, 50) },
+      { conditioned: [], unreadable: ["only"] }
+    );
+    expect(badge.badgeTops).toEqual(["177px"]);
+  });
+
+  it("keeps a short block's visitor badge off the conditional tab of the block above it", async () => {
+    // The upper block's tab above it runs 180px to 200px; the lower block's
+    // badge above its outline would run 189px to 211px, over it, and takes
+    // its outline's bottom edge instead.
+    const stacked = await bothLayersAt(
+      {
+        upper: new DOMRect(0, 200, 1000, 12),
+        lower: new DOMRect(0, 212, 1000, 12),
+      },
+      { conditioned: ["upper"], unreadable: ["lower"] }
+    );
+    expect(stacked.tabsAt).toEqual(["above"]);
+    expect(stacked.badgeTops).toEqual(["225px"]);
   });
 
   it("draws a dashed reach mark on each block a look edit reaches, and clears it", async () => {
