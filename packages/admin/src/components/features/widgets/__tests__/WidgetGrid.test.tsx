@@ -837,6 +837,50 @@ describe("WidgetGrid — sizing", () => {
     expect(requested(other)).toBe(`${cardHeightPx(4)}px`);
   });
 
+  it("asks for each card's stored height where cards side by side span different rows, whatever their bodies report", async () => {
+    // 🔴 Fails where each cell fits alone: both ask for one list row's card, 166 px, which the
+    // grid spreads over three rows for one and four for the other, so the four-row card's rows
+    // can draw the three-row card past its stored 248 px, and the two end at different heights.
+    registerComponents({
+      "@acme/admin#One": fittingBody(LIST_ROW_HEIGHT_PX.default),
+      "@acme/admin#Two": fittingBody(LIST_ROW_HEIGHT_PX.default),
+    });
+    mockBranding = brandingWith([
+      fitted("three", 8, 3, "@acme/admin#One"),
+      fitted("four", 4, 4, "@acme/admin#Two"),
+    ]);
+    renderGrid();
+    const three = screen.getByTestId("widget-cell-three");
+    const four = screen.getByTestId("widget-cell-four");
+    await within(three).findByRole("button", { name: "Fill" });
+    await within(four).findByRole("button", { name: "Fill" });
+    // Both at their stored heights, which is how fixed rows draw them.
+    expect(requested(three)).toBe(`${cardHeightPx(3)}px`);
+    expect(requested(four)).toBe(`${cardHeightPx(4)}px`);
+    expect(three.style.gridRow).toBe("span 3 / span 3");
+    expect(four.style.gridRow).toBe("span 4 / span 4");
+  });
+
+  it("draws a loading content-sized card at its stored height, with its full skeleton, where its band of rows is uneven", async () => {
+    // 🔴 Fails where the loading state asks whatever its band: a three-row Needs your attention
+    // beside a four-row Upcoming releases would ask for one row's card, 166 px, in rows the
+    // grid cannot draw at it.
+    registerComponents({ "@acme/admin#A": () => <div>a</div> });
+    vi.mocked(protectedApi.post).mockImplementation(
+      () => new Promise(() => {})
+    );
+    mockBranding = brandingWith([
+      { ...sized("core/needs-attention", 8, 3), title: "Needs your attention" },
+      { ...sized("core/upcoming-releases", 4, 4), title: "Upcoming releases" },
+    ]);
+    renderGrid();
+    const attention = screen.getByTestId("widget-cell-core/needs-attention");
+    const releases = screen.getByTestId("widget-cell-core/upcoming-releases");
+    await within(attention).findByTestId("card-skeleton");
+    expect(requested(attention)).toBe(`${cardHeightPx(3)}px`);
+    expect(requested(releases)).toBe(`${cardHeightPx(4)}px`);
+  });
+
   it("lays its cards on twelve columns in rows as tall as their cards at rest, in order, with the gaps a card's predicted width counts", () => {
     // A card is first asked for at a size predicted with these gaps. A gap in rem would
     // follow the page's root font size and draw cards at another width than predicted.

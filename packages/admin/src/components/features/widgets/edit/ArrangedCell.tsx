@@ -14,6 +14,7 @@ import type { GridSize } from "nextly/config";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -131,6 +132,17 @@ export interface ArrangedCellProps {
    * this card's placement: what the grid counts the cards on show from. Absent, nothing is told.
    */
   reportHidden?: PlacementReport;
+  /**
+   * Whether the card may be drawn at its content's height at rest: its band of rows is even
+   * (`row-bands`). Absent or false, the cell asks for its stored height whatever its body reports,
+   * and its body is offered nowhere to report it.
+   */
+  fitsContent?: boolean;
+  /**
+   * Where the cell reports whether it is drawn across other rows than it stores (grown to show
+   * more, or collapsed to one line), which keeps the cards sharing its rows at their stored height.
+   */
+  reportOffStored?: PlacementReport;
   /** Registers the card's controls, so focus can be sent back to them. */
   refs: {
     menu: (element: HTMLElement | null) => void;
@@ -643,19 +655,27 @@ function useSettingsSheet(props: ArrangedCellProps, hasSettings: boolean) {
  *
  * `requestPx` is the height the cell asks of those rows at rest, where they take their cards'
  * heights (`requestedCardHeightPx`): the card holding the body height its content takes, as its
- * body reports it (`frame/fit`), at most the height its rows draw it at; that height for a body
- * that reports nothing, and for a card that grows or collapses, which its rows already size.
- * `undefined` in customise mode, whose rows are fixed.
+ * body reports it (`frame/fit`), at most the height its rows draw it at, where its band of rows
+ * lets it (`fitsContent`); that height for a body that reports nothing, for a card whose band
+ * does not let it, and for a card that grows or collapses, which its rows already size.
+ * `undefined` in customise mode, whose rows are fixed. `reportFit` is offered to the body only
+ * where its band lets it, so neither the body nor its loading state asks for a height the cell
+ * would not draw; and the grid is told when the card spans other rows than it stores
+ * (`useReportOffStored`).
  */
 function useBodyRows(
   storedRows: number,
-  isEditing: boolean
+  isEditing: boolean,
+  band: Pick<ArrangedCellProps, "fitsContent" | "reportOffStored"> & {
+    placementId: string;
+  }
 ): {
   rows: number;
   requestPx: number | undefined;
   collapse: CardCollapse;
   setContentHeight: (height: number | undefined) => void;
-  setFitHeight: (height: number | undefined) => void;
+  /** Where the body reports its content's height, offered only where the cell draws it. */
+  reportFit: ((height: number | undefined) => void) | undefined;
 } {
   const [contentHeight, setContentHeight] = useState<number | undefined>();
   const [fitHeight, setFitHeight] = useState<number | undefined>();
@@ -665,24 +685,45 @@ function useBodyRows(
     () => ({ collapsed, setCollapsed: setBodyCollapsed }),
     [collapsed]
   );
-  if (isEditing) {
-    return {
-      rows: storedRows,
-      requestPx: undefined,
-      collapse,
-      setContentHeight,
-      setFitHeight,
-    };
-  }
-  const rows = collapsedRows(grownRows(storedRows, contentHeight), collapsed);
-  const fitted = contentHeight === undefined && !collapsed;
+  const rows = isEditing
+    ? storedRows
+    : collapsedRows(grownRows(storedRows, contentHeight), collapsed);
+  useReportOffStored(
+    band.reportOffStored,
+    band.placementId,
+    !isEditing && rows !== storedRows
+  );
+  const fits = band.fitsContent === true && !isEditing;
+  const fitted = fits && contentHeight === undefined && !collapsed;
   return {
     rows,
-    requestPx: requestedCardHeightPx(rows, fitted ? fitHeight : undefined),
+    requestPx: isEditing
+      ? undefined
+      : requestedCardHeightPx(rows, fitted ? fitHeight : undefined),
     collapse,
     setContentHeight,
-    setFitHeight,
+    reportFit: fits ? setFitHeight : undefined,
   };
+}
+
+/**
+ * Tells the grid whether the card at `placementId` is drawn across other rows than it stores
+ * (`offStored`: grown to show more, or collapsed to one line), which keeps the cards sharing its
+ * rows at their stored height (`row-bands`). Told before the paint, as the rows it spans change,
+ * and withdrawn as the cell leaves.
+ */
+function useReportOffStored(
+  report: PlacementReport | undefined,
+  placementId: string,
+  offStored: boolean
+): void {
+  useLayoutEffect(() => {
+    report?.(placementId, offStored);
+  }, [report, placementId, offStored]);
+  useLayoutEffect(
+    () => () => report?.(placementId, false),
+    [report, placementId]
+  );
 }
 
 export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
@@ -712,8 +753,12 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
     () => drawnSize(row.size, row.widget.size),
     [row.size, row.widget.size]
   );
-  const { rows, requestPx, collapse, setContentHeight, setFitHeight } =
-    useBodyRows(size.h, isEditing);
+  const { rows, requestPx, collapse, setContentHeight, reportFit } =
+    useBodyRows(size.h, isEditing, {
+      fitsContent: props.fitsContent,
+      reportOffStored: props.reportOffStored,
+      placementId: row.placementId,
+    });
   // The card's report, bound to this placement. Only the card drawn in the cell is told it: the
   // settings sheet's preview of the same placement is drawn outside it and reports nothing.
   const { reportHidden } = props;
@@ -777,7 +822,9 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
       ) : null}
       <CardCollapseContext.Provider value={collapse}>
         <CardGrowContext.Provider value={setContentHeight}>
-          <CardFitContext.Provider value={setFitHeight}>
+          {/* Offered only where the card may stand at its content's height, so neither its body
+              nor its loading state asks for a height the cell would not draw. */}
+          <CardFitContext.Provider value={reportFit}>
             <CardHiddenReportContext.Provider value={reportCardHidden}>
               <CardBody
                 {...{ widget, placement, headerAction, data, isEditing }}
