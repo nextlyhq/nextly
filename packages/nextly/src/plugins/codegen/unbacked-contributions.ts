@@ -4,18 +4,19 @@
  * The generated map imports every component a plugin's
  * `contributes.admin.contributions` names, statically. A contribution naming a
  * module that is not there (a fixture that relies on its place's fallback, a
- * component not written yet, a package not installed) would make that import
- * fail and stop the app compiling, where the contribution left out of the map
- * only draws its place's fallback. So the generator, the CI check and the
- * development check all leave such a contribution out, from the one answer
- * here, and `generate:types` warns about each one by name.
+ * component not written yet, a workspace plugin not built yet) would make that
+ * import fail and stop the app compiling, where the contribution left out of
+ * the map only draws its place's fallback. So the generator, the CI check and
+ * the development check all leave such a contribution out, from the one
+ * answer here, and `generate:types` warns about each one by name.
  *
  * Judged as the app's TypeScript build would find the module: a relative path
  * from the map's own folder, where the map imports it as written; a
  * `compilerOptions.paths` alias of the app's `tsconfig.json`; and otherwise a
- * package in `node_modules`, held to its `exports`. Only a module proven
- * absent is left out. One this cannot judge, such as an alias a bundler alone
- * declares, stays in the map as before.
+ * package in `node_modules`, its `exports` followed to the file a server build
+ * loads. Only a module proven absent is left out. One this cannot judge, such
+ * as an alias a bundler alone declares or a package not installed where it is
+ * looked for, stays in the map as before.
  *
  * @module plugins/codegen/unbacked-contributions
  */
@@ -91,6 +92,13 @@ function moduleOf(path: string): string {
  * Whether `specifier` reaches a file from `place`. A relative or absolute
  * path is read from the map's folder; anything else through the app's
  * `paths`, then `node_modules`.
+ *
+ * `absent` only where it is proven: a relative path with no file, an
+ * installed package whose resolved target has no file, or a `paths` alias
+ * every target of which has no file (and no package of that name). A bare
+ * specifier that no tsconfig alias matches and no installed package answers
+ * is `unknown`, since an alias the app's bundler config alone declares looks
+ * exactly like it.
  */
 export function modulePresence(
   specifier: string,
@@ -102,10 +110,11 @@ export function modulePresence(
   // A `paths` alias that reaches a file settles it. One that matches and
   // reaches none falls through to `node_modules`, as TypeScript's own
   // resolution does.
-  for (const target of aliasTargets(specifier, place.cwd)) {
-    if (fileFor(target)) return "present";
-  }
-  return packagePresence(specifier, place.cwd);
+  const targets = aliasTargets(specifier, place.cwd);
+  if (targets.some(fileFor)) return "present";
+  const inPackage = packagePresence(specifier, place.cwd);
+  if (inPackage !== "not installed") return inPackage;
+  return targets.length > 0 ? "absent" : "unknown";
 }
 
 /** The extensions a module file may have, in the order a bundler tries them. */
@@ -340,13 +349,17 @@ function packageParts(
 /**
  * Whether a bare specifier reaches a package file from `cwd`: the package
  * found in a `node_modules` on the way up, then its `exports` (or, without
- * them, a file at the subpath). A package found nowhere is absent.
+ * them, a file at the subpath). `not installed` where no `node_modules` on
+ * the way up holds a package of that name, which proves nothing alone.
  */
-function packagePresence(specifier: string, cwd: string): ModulePresence {
+function packagePresence(
+  specifier: string,
+  cwd: string
+): ModulePresence | "not installed" {
   const parts = packageParts(specifier);
   if (parts === undefined) return "unknown";
   const packageDir = findPackageDir(parts.name, cwd);
-  if (packageDir === undefined) return "absent";
+  if (packageDir === undefined) return "not installed";
   const manifest = readJsonc(join(packageDir, "package.json"));
   if (manifest === undefined) return "unknown";
   return presenceInPackage(packageDir, manifest, parts.subpath);
@@ -359,10 +372,36 @@ function presenceInPackage(
   subpath: string
 ): ModulePresence {
   const exported = manifest.exports;
-  if (exported !== undefined && exported !== null) {
-    const key = subpath === "" ? "." : `./${subpath}`;
-    return exportsHold(exported, key) ? "present" : "absent";
-  }
+  return exported === undefined || exported === null
+    ? presenceWithoutExports(packageDir, manifest, subpath)
+    : presenceThroughExports(packageDir, exported, subpath);
+}
+
+/**
+ * A package with an `exports` map: the subpath followed to the file a server
+ * build loads, which must be there. A declared key alone proves nothing, since
+ * an unbuilt package declares targets it has not written yet.
+ */
+function presenceThroughExports(
+  packageDir: string,
+  exported: unknown,
+  subpath: string
+): ModulePresence {
+  const target = exportTarget(exported, subpath === "" ? "." : `./${subpath}`);
+  if (target === "absent" || target === "unknown") return target;
+  return isFile(join(packageDir, target.file)) ? "present" : "absent";
+}
+
+/**
+ * A package without `exports`: its `main` (or `index`) for the package
+ * itself, and the subpath as a file under it otherwise, as a bundler reads
+ * such a package.
+ */
+function presenceWithoutExports(
+  packageDir: string,
+  manifest: Record<string, unknown>,
+  subpath: string
+): ModulePresence {
   const main = typeof manifest.main === "string" ? manifest.main : "index";
   const file = join(packageDir, subpath === "" ? main : subpath);
   return fileFor(file) ? "present" : "absent";
@@ -381,18 +420,103 @@ function findPackageDir(name: string, cwd: string): string | undefined {
 }
 
 /**
- * Whether a package's `exports` names `key` (`.` or `./sub`), exactly or
- * through a `*` pattern, to something other than `null`. An `exports` that is
- * a string, an array or a conditions object names `.` alone.
+ * The conditions a server build of the app resolves an export with, as
+ * Node's own resolution does. `types` names a declaration, never the module
+ * the map's import loads, so it is not among them.
  */
-function exportsHold(exported: unknown, key: string): boolean {
-  if (!isRecord(exported)) return key === ".";
+const SERVER_CONDITIONS = new Set(["node", "import", "default"]);
+
+/** An export resolved to a file, relative to its package. */
+interface ExportFile {
+  readonly file: string;
+}
+
+/**
+ * The file a package's `exports` sends `key` (`.` or `./sub`) to, relative to
+ * the package: the exact key, else the `*` pattern with the longest prefix,
+ * as Node picks one. `absent` where the map names no such key or maps it to
+ * `null`, so it cannot be imported; `unknown` where the target is in a shape
+ * this does not follow.
+ */
+function exportTarget(
+  exported: unknown,
+  key: string
+): ExportFile | "absent" | "unknown" {
+  // A string, an array or a conditions object (`{ import, types }`) exports
+  // the package itself, and nothing else.
+  const itself = () => (key === "." ? conditionTarget(exported, "") : "absent");
+  if (!isRecord(exported)) return itself();
   const subpaths = Object.keys(exported).filter(each => each.startsWith("."));
-  // A conditions object (`{ import, types }`) rather than a subpath map.
-  if (subpaths.length === 0) return key === ".";
-  return subpaths.some(
-    each => exported[each] !== null && capture(each, key) !== undefined
+  if (subpaths.length === 0) return itself();
+  let best: { pattern: string; star: string; prefixLength: number } | undefined;
+  for (const pattern of subpaths) {
+    const found = capture(pattern, key);
+    if (found === undefined) continue;
+    // An exact key wins over every pattern.
+    if (!pattern.includes("*")) return conditionTarget(exported[pattern], "");
+    if (best === undefined || found.prefixLength > best.prefixLength) {
+      best = { pattern, ...found };
+    }
+  }
+  return best === undefined
+    ? "absent"
+    : conditionTarget(exported[best.pattern], best.star);
+}
+
+/**
+ * One export's target, followed through condition objects in their own key
+ * order and through a fallback array to the first entry that resolves, with
+ * the `*` the key captured put in its place.
+ */
+function conditionTarget(
+  target: unknown,
+  star: string
+): ExportFile | "absent" | "unknown" {
+  if (target === null) return "absent";
+  if (typeof target === "string") return pathTarget(target, star);
+  if (Array.isArray(target)) return fallbackTarget(target, star);
+  return isRecord(target) ? conditionsTarget(target, star) : "unknown";
+}
+
+/**
+ * A target written as a path: a file in the package only when it starts with
+ * `./`, as Node requires of an export target; anything else is not followed.
+ */
+function pathTarget(target: string, star: string): ExportFile | "unknown" {
+  return target.startsWith("./")
+    ? { file: target.split("*").join(star) }
+    : "unknown";
+}
+
+/**
+ * A fallback array: its first entry that resolves, in order, as Node tries
+ * them. `unknown` when none does.
+ */
+function fallbackTarget(
+  targets: readonly unknown[],
+  star: string
+): ExportFile | "absent" | "unknown" {
+  for (const each of targets) {
+    const resolved = conditionTarget(each, star);
+    if (resolved !== "unknown") return resolved;
+  }
+  return "unknown";
+}
+
+/**
+ * A conditions object: the first condition, in its own key order, that a
+ * server build resolves (`SERVER_CONDITIONS`). `unknown` when it offers none.
+ */
+function conditionsTarget(
+  conditions: Record<string, unknown>,
+  star: string
+): ExportFile | "absent" | "unknown" {
+  const chosen = Object.keys(conditions).find(each =>
+    SERVER_CONDITIONS.has(each)
   );
+  return chosen === undefined
+    ? "unknown"
+    : conditionTarget(conditions[chosen], star);
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
