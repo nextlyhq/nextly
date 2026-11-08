@@ -273,7 +273,7 @@ describe("the page with its conditions applied, as the canvas draws it", () => {
     ).toHaveLength(1);
   });
 
-  it("says a placed component's conditioned blocks go unjudged", () => {
+  it("judges a placed component's conditioned blocks for the entry, as the route does", () => {
     const placed = block("placed", {
       type: COMPONENT_INSTANCE_TYPE,
       props: { componentId: "promo" },
@@ -294,7 +294,34 @@ describe("the page with its conditions applied, as the canvas draws it", () => {
       nameOf,
       { definitions }
     );
-    expect(passing.unjudged).toBe(true);
+    // Judged, so nothing is left unjudged: shown, by the id it is drawn under.
+    expect(passing.unjudged).toBe(false);
+    expect(passing.hidden).toEqual([]);
+    expect(passing.shown.size).toBe(1);
+    expect(passing.shown.has("worksheet")).toBe(false);
+    const failing = appliedConditionsOf(
+      page(placed),
+      previewFor({ category: "News" }),
+      nameOf,
+      { definitions }
+    );
+    expect(failing.shown.size).toBe(0);
+    expect(failing.hidden).toHaveLength(1);
+    expect(failing.hidden[0]).toMatchObject({
+      reason: "hidden for this post: Category is not Guides",
+      unchecked: false,
+    });
+    // The canvas draws its marker in its place, keeping its placement.
+    const composed = {
+      ...worksheet,
+      id: failing.hidden[0]?.id ?? "",
+      instanceOf: "placed",
+    } as BlockNode;
+    expect(failing.entryJudgement.hiddenAs(composed)).toMatchObject({
+      id: composed.id,
+      type: CONDITION_HIDDEN_TYPE,
+      instanceOf: "placed",
+    });
     // A component with no conditioned block leaves nothing unjudged.
     const plain = appliedConditionsOf(
       page(placed),
@@ -331,7 +358,7 @@ describe("the page with its conditions applied, as the canvas draws it", () => {
     ]);
   });
 
-  it("says a component reached through another, or a Layout region, goes unjudged", () => {
+  it("judges a component reached through another, and leaves a Layout region's unjudged", () => {
     const inner = {
       formatVersion: DOCUMENT_FORMAT_VERSION,
       kind: "component",
@@ -356,17 +383,15 @@ describe("the page with its conditions applied, as the canvas draws it", () => {
       ["inner", inner],
     ]);
     // Reached as the resolver reaches it: the page places outer, which
-    // places inner, which holds the conditioned block.
-    expect(
-      appliedConditionsOf(
-        page(placed),
-        previewFor({ category: "Guides" }),
-        nameOf,
-        {
-          definitions,
-        }
-      ).unjudged
-    ).toBe(true);
+    // places inner, which holds the conditioned block, judged there.
+    const reached = appliedConditionsOf(
+      page(placed),
+      previewFor({ category: "News" }),
+      nameOf,
+      { definitions }
+    );
+    expect(reached.unjudged).toBe(false);
+    expect(reached.hidden).toHaveLength(1);
     // A region of the page's Layout placing a conditioned component.
     const region = {
       document: page(
@@ -432,6 +457,32 @@ describe("the page with its conditions applied, as the canvas draws it", () => {
     expect(judged("Asia/Tokyo").hidden.map(each => each.id)).toEqual([
       "worksheet",
     ]);
+  });
+});
+
+describe("the conditioned blocks a page holds with its components", () => {
+  it("counts a placed component's own conditioned blocks, in the scope they are drawn in", () => {
+    const placed = block("placed", {
+      type: COMPONENT_INSTANCE_TYPE,
+      props: { componentId: "promo" },
+    });
+    const definitions = new Map([
+      [
+        "promo",
+        {
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "component",
+          nodes: [worksheet],
+        } as BlockDocument,
+      ],
+    ]);
+    // CONTROL: the page alone holds no conditioned block.
+    expect(conditionedBlocksIn(page(placed)).any).toBe(false);
+    expect(conditionedBlocksIn(page(placed), undefined, definitions)).toEqual({
+      any: true,
+      readingEntry: true,
+      readingItems: false,
+    });
   });
 });
 

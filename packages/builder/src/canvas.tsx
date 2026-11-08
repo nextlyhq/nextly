@@ -2405,25 +2405,32 @@ function useCanvasEnvironment(
 }
 
 /**
- * What the canvas renders the page with: a placed component's definitions
- * with their conditions lifted, and, while conditions are applied, the blocks
- * with the hidden-block marker among them.
+ * What the canvas renders the page with. Conditions not applied, a placed
+ * component's definitions with their conditions lifted, so each conditioned
+ * block is drawn. Applied, the definitions as stored, their blocks judged
+ * for the previewed entry by the renderer as the page's route judges them
+ * (`entryJudged`), and the blocks with the hidden-block marker among them.
  */
 function drawnRenderOf(
   rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
   document: BlockDocument,
-  applied: boolean
+  applied: AppliedConditions | undefined
 ): Omit<PageRendererProps, "document" | "siteStyles"> | undefined {
-  const definitions =
-    rendered?.definitions === undefined
-      ? undefined
-      : revealedDefinitions(document, rendered.definitions, rendered.limits);
-  if (!applied) {
-    return definitions === undefined ? rendered : { ...rendered, definitions };
+  if (applied === undefined) {
+    return rendered?.definitions === undefined
+      ? rendered
+      : {
+          ...rendered,
+          definitions: revealedDefinitions(
+            document,
+            rendered.definitions,
+            rendered.limits
+          ),
+        };
   }
   return {
     ...rendered,
-    ...(definitions === undefined ? {} : { definitions }),
+    entryJudged: applied.entryJudgement,
     blocks: withConditionHiddenBlock(rendered?.blocks ?? registeredBlocks()),
   };
 }
@@ -2467,7 +2474,7 @@ function useDrawnPage({
   // as the page's are. While conditions are applied, the renderer also knows
   // the marker a hidden block is drawn as.
   const drawnRender = useMemo(
-    () => drawnRenderOf(rendered, document, applied !== undefined),
+    () => drawnRenderOf(rendered, document, applied),
     [rendered, document, applied]
   );
   const page = useMemo(

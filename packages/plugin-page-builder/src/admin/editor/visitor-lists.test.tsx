@@ -198,14 +198,16 @@ describe("what the canvas's reads are asked for a page's conditions", () => {
 
   it("asks for the site's zone for a dated list a Layout region draws", () => {
     // CONTROL: a page and region with no condition ask nothing.
-    expect(canvasConditionsFor(plain, [{ document: plain }])).toBeUndefined();
     expect(
-      canvasConditionsFor(plain, [{ document: page([datedList]) }])
+      canvasConditionsFor(plain, [{ document: plain }], undefined)
+    ).toBeUndefined();
+    expect(
+      canvasConditionsFor(plain, [{ document: page([datedList]) }], undefined)
         ?.ordersValues
     ).toBe(true);
   });
 
-  it("asks nothing for a placed component's conditions, which the canvas draws lifted", () => {
+  it("asks for the zone for a dated condition inside a component the page places, which the canvas judges", () => {
     const placing = page([
       {
         id: "dated",
@@ -214,6 +216,21 @@ describe("what the canvas's reads are asked for a page's conditions", () => {
         props: { componentId: "dated" },
       },
     ]);
-    expect(canvasConditionsFor(placing, [{ document: plain }])).toBeUndefined();
+    const dated: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [datedList],
+    } as BlockDocument;
+    // CONTROL: without the component's definition, the page asks nothing.
+    expect(
+      canvasConditionsFor(placing, [{ document: plain }], undefined)
+    ).toBeUndefined();
+    expect(
+      canvasConditionsFor(
+        placing,
+        [{ document: plain }],
+        new Map([["dated", dated]])
+      )?.ordersValues
+    ).toBe(true);
   });
 });

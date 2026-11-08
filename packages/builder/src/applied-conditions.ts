@@ -37,16 +37,20 @@ import {
   type BindingFieldShape,
   type DocumentLimits,
   type NodeVisibility,
+  type ResolvedBlockNode,
 } from "@nextlyhq/blocks-engine";
 import {
   liftedNode,
+  prepareDocumentAsDrawn,
+  registeredBlocks,
   sanitizeDocument,
+  type EntryJudgement,
   type HidingItem,
   type ItemHiddenAs,
 } from "@nextlyhq/blocks-react";
 
 import { storedGroups } from "./condition-checks";
-import { gatedAsStored } from "./condition-gate";
+import { asStoredDefinitions, gatedAsStored } from "./condition-gate";
 import {
   conditionDraftOf,
   conditionLine,
@@ -106,8 +110,8 @@ export interface AppliedConditions {
   /**
    * Whether the page holds a conditioned block left unjudged, so what is said
    * of the judged blocks is not said of all: one a list's item decides, where
-   * the lists do not draw what a visitor reads, or one inside a component the
-   * page places.
+   * the lists do not draw what a visitor reads, or one in a region of the
+   * page's Layout.
    */
   readonly unjudged: boolean;
   /**
@@ -116,6 +120,13 @@ export interface AppliedConditions {
    * one an entry hides is drawn as its marker in that entry.
    */
   readonly byEntry: boolean;
+  /**
+   * How the canvas's renderer judges the blocks of the components the page
+   * places, for the previewed entry, as the page's route judges them: each
+   * one they hide drawn as its marker, keeping the placement it belongs to.
+   * The page's own blocks are judged in `document` already.
+   */
+  readonly entryJudgement: EntryJudgement;
 }
 
 /** Where the page's own blocks read: the entry it is drawn for. */
@@ -159,15 +170,121 @@ export function appliedConditionsOf(
   // conditions are not applied; but one a list's item decides, where the
   // lists draw what a visitor reads, keeps its conditions for the renderer
   // to judge against each item.
+  const applied =
+    itemGated.size === 0
+      ? revealConditioned(marked)
+      : liftedExcept(marked, itemGated);
+  // The blocks of the components the page places, judged on the page as the
+  // canvas draws it, so a placement the page's own judgement already hid or
+  // showed is judged once.
+  const components = judgedComponentBlocks(applied, preview, nameOf, drawn);
   return {
-    document:
-      itemGated.size === 0
-        ? revealConditioned(marked)
-        : liftedExcept(marked, itemGated),
+    document: applied,
+    shown: new Set([...shown, ...components.shown]),
+    hidden: [...hidden, ...components.hidden],
+    unjudged: unjudged || drawsUnjudged(drawn),
+    byEntry: itemGated.size > 0 || components.byEntry,
+    entryJudgement: entryJudgementOf(preview, nameOf, components.hidden),
+  };
+}
+
+/** The blocks of the components a page places, judged for the entry. */
+interface JudgedComponents {
+  readonly shown: ReadonlySet<string>;
+  readonly hidden: readonly HiddenBlock[];
+  /** Whether a placed component's block is left for a list's item. */
+  readonly byEntry: boolean;
+}
+
+/**
+ * The blocks of the components `page` places, judged for the previewed
+ * entry by the renderer's own preparation (`prepareDocumentAsDrawn` with an
+ * entry judgement), each by the id it is drawn under: the very judgement the
+ * canvas's renderer makes, and the page's route makes.
+ */
+function judgedComponentBlocks(
+  page: BlockDocument,
+  preview: ConditionsPreview,
+  nameOf: (node: BlockNode) => string,
+  drawn: DrawnWith
+): JudgedComponents {
+  const shown = new Set<string>();
+  const hidden: HiddenBlock[] = [];
+  if (drawn.definitions === undefined || drawn.definitions.size === 0) {
+    return { shown, hidden, byEntry: false };
+  }
+  const prepared = prepareDocumentAsDrawn(page, {
+    resolver: registeredBlocks(),
+    definitions: drawn.definitions,
+    ...(drawn.limits === undefined ? {} : { limits: drawn.limits }),
+    entryJudged: {
+      ...gateOf(preview),
+      hiddenAs: node => {
+        hidden.push(hiddenBlockOf(node, preview, nameOf));
+        return undefined;
+      },
+      onJudged: (id, isShown) => {
+        if (isShown) shown.add(id);
+      },
+    },
+  });
+  return {
     shown,
     hidden,
-    unjudged: unjudged || drawsUnjudged(document, drawn),
-    byEntry: itemGated.size > 0,
+    // What is left gated is what a list's item decides.
+    byEntry:
+      prepared !== null &&
+      conditionedBlocksIn(prepared, drawn.limits).readingItems,
+  };
+}
+
+/** The route's gate for the previewed entry. */
+function gateOf(
+  preview: ConditionsPreview
+): Pick<EntryJudgement, "entry" | "dayStart"> {
+  return {
+    ...(preview.subject === undefined ? {} : { entry: preview.subject }),
+    ...(preview.dayStart === undefined ? {} : { dayStart: preview.dayStart }),
+  };
+}
+
+/** A block the entry hides, with what its marker says: its name and why. */
+function hiddenBlockOf(
+  node: BlockNode,
+  preview: ConditionsPreview,
+  nameOf: (node: BlockNode) => string
+): HiddenBlock {
+  // The whole node, as the renderer judged it, the gates of the placements
+  // it was expanded from among its conditions.
+  const verdict = evaluateConditions(node, inputOf(preview));
+  return {
+    id: node.id,
+    name: nameOf(node),
+    ...reasonOf(node, verdict, preview),
+  };
+}
+
+/**
+ * How the canvas's renderer judges the page's components for the entry:
+ * each block they hide drawn as its marker, worded as `hidden` words it, and
+ * keeping the placement it belongs to, so a press on it selects that.
+ */
+function entryJudgementOf(
+  preview: ConditionsPreview,
+  nameOf: (node: BlockNode) => string,
+  hidden: readonly HiddenBlock[]
+): EntryJudgement {
+  const byId = new Map(hidden.map(block => [block.id, block]));
+  return {
+    ...gateOf(preview),
+    hiddenAs: node => {
+      const block = byId.get(node.id) ?? hiddenBlockOf(node, preview, nameOf);
+      const placement = (node as ResolvedBlockNode).instanceOf;
+      const marker: ResolvedBlockNode = markerFor(block, node);
+      return placement === undefined
+        ? marker
+        : { ...marker, instanceOf: placement };
+    },
   };
 }
 
@@ -196,18 +313,14 @@ export interface DrawnWith {
 }
 
 /**
- * Whether the canvas draws a conditioned block this does not judge: one in a
- * component the page reaches, or anything conditioned in a region of its
- * Layout.
+ * Whether the canvas draws a conditioned block this does not judge: anything
+ * conditioned in a region of the page's Layout, its own or its components'.
  */
-function drawsUnjudged(document: BlockDocument, drawn: DrawnWith): boolean {
-  return (
-    reachesConditioned(document, drawn.definitions, drawn.limits) ||
-    (drawn.regions ?? []).some(
-      region =>
-        conditionedBlocksIn(region.document, drawn.limits).any ||
-        reachesConditioned(region.document, region.definitions, drawn.limits)
-    )
+function drawsUnjudged(drawn: DrawnWith): boolean {
+  return (drawn.regions ?? []).some(
+    region =>
+      conditionedBlocksIn(region.document, drawn.limits).any ||
+      reachesConditioned(region.document, region.definitions, drawn.limits)
   );
 }
 
@@ -444,13 +557,16 @@ function liftedExcept(
 
 /**
  * Which conditioned blocks a document holds: any at all, and any that reads
- * the entry it is drawn for, which is what applying conditions judges.
+ * the entry it is drawn for, which is what applying conditions judges. With
+ * `definitions`, the blocks of the components it places too, read as the
+ * resolver composes them, each in the scope it is drawn in.
  *
  * @experimental Settles with the editor's condition controls.
  */
 export function conditionedBlocksIn(
   document: BlockDocument,
-  limits?: DocumentLimits
+  limits?: DocumentLimits,
+  definitions?: DefinitionsById
 ): {
   readonly any: boolean;
   readonly readingEntry: boolean;
@@ -460,7 +576,15 @@ export function conditionedBlocksIn(
   let any = false;
   let readingEntry = false;
   let readingItems = false;
-  walkScoped(document, limits, (block, scope) => {
+  const read =
+    definitions === undefined || definitions.size === 0
+      ? document
+      : resolveComponentInstances(
+          document,
+          asStoredDefinitions(definitions, limits),
+          { conditioned: "carry", ...(limits === undefined ? {} : { limits }) }
+        ).document;
+  walkScoped(read, limits, (block, scope) => {
     if (gatedAsStored(block)) {
       any = true;
       readingEntry ||= scope.source === "entry";

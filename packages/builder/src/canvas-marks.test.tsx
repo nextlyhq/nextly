@@ -15,6 +15,7 @@ import { createElement, useEffect } from "react";
 
 import {
   clearBlocks,
+  COMPONENT_INSTANCE_TYPE,
   registerBlocks,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
@@ -426,6 +427,87 @@ describe("selection marks", () => {
     expect(marker?.textContent).toBe(
       "Gold offer · hidden for this post: tier is not gold"
     );
+  });
+
+  it("judges a placed component's blocks for the previewed entry: one badged shown, one drawn as its marker", async () => {
+    const promo: BlockDocument = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/leaf",
+          version: 1,
+          props: {},
+          visibility: {
+            conditions: [[{ field: "tier", op: "equals", value: "vip" }]],
+          },
+        },
+        {
+          id: "b",
+          type: "acme/leaf",
+          version: 1,
+          name: "Gold offer",
+          props: {},
+          visibility: {
+            conditions: [[{ field: "tier", op: "equals", value: "gold" }]],
+          },
+        },
+      ],
+    };
+    const definitions = new Map([["promo", promo]]);
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "template",
+      nodes: [
+        {
+          id: "placed",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "promo" },
+        },
+      ],
+    };
+    const fields = [{ name: "tier", type: "text" }] as const;
+    const applied = appliedConditionsOf(
+      document,
+      {
+        subject: {
+          fields: { declared: new Set(["tier"]), readable: fields },
+          values: { tier: "vip" },
+        },
+        noun: "post",
+        fields: conditionFieldsOfShapes(fields),
+      },
+      node => (typeof node.name === "string" ? node.name : node.id),
+      { definitions }
+    );
+    // CONTROL: judged, one shown and one hidden, by the ids they are drawn
+    // under.
+    expect(applied.shown.size).toBe(1);
+    expect(applied.hidden).toHaveLength(1);
+    const { container } = render(
+      <Canvas
+        document={document}
+        render={{ definitions }}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        conditionsApplied={applied}
+        overlay={<CanvasMarks shownLabel="Shown for this post" />}
+      />
+    );
+    await act(async () => undefined);
+    const marker = () => container.querySelector(".nx-condition-hidden");
+    await waitFor(() => expect(marker()).not.toBeNull());
+    expect(marker()?.getAttribute("data-nx-node")).toBe(applied.hidden[0]?.id);
+    expect(marker()?.textContent).toBe(
+      "Gold offer · hidden for this post: tier is not gold"
+    );
+    const shownBadges = Array.from(
+      container.querySelectorAll(
+        '.nx-canvas-mark[data-mark="at-rest"][data-condition="shown"]'
+      )
+    );
+    expect(shownBadges).toHaveLength(1);
   });
 
   it("draws one badge for a conditioned placement whose definition has several roots", async () => {
