@@ -20,6 +20,7 @@ import {
   BlockList,
   type BoundaryBindings,
   type BoundaryConditions,
+  type ItemHiddenAs,
 } from "./block-boundary";
 import {
   createStandaloneContext,
@@ -190,6 +191,17 @@ export interface PageRendererProps {
    * @experimental
    */
   prepared?: PreparedDocument;
+  /**
+   * What to draw in place of a block a list's item hides, for an editor
+   * showing where such blocks sit: the node it returns is drawn in the
+   * block's place, and nothing is drawn when it returns nothing.
+   *
+   * Absent, a block an item hides is not drawn, as on every published page.
+   * It is never called for a block the item shows, nor outside a list.
+   *
+   * @experimental
+   */
+  itemHiddenAs?: ItemHiddenAs;
 }
 
 /**
@@ -643,6 +655,7 @@ export function PageRenderer({
   bindings,
   onBindingIssues,
   prepared,
+  itemHiddenAs,
 }: PageRendererProps): ReactElement {
   const resolver = blocks ?? registeredBlocks();
   // Passed through untouched. The policy travels beside the context rather than
@@ -717,6 +730,9 @@ export function PageRenderer({
       styleContext,
       definitions,
       ...(bindingRun === undefined ? {} : { bindings: bindingRun }),
+      // An editor drawing a list item's hidden block keeps such blocks for
+      // the list to judge; a published page's route decides them itself.
+      ...(itemHiddenAs === undefined ? {} : { itemsDecided: true }),
     },
     prepared
   );
@@ -946,6 +962,7 @@ export function PageRenderer({
     // entry, drawn where any other conditioned block is not.
     held: heldConditionsOf(prepared),
     report,
+    ...(itemHiddenAs === undefined ? {} : { hiddenAs: itemHiddenAs }),
     ...(itemRules.size === 0
       ? {}
       : { itemRules, itemRulesServed: new Set<string>() }),

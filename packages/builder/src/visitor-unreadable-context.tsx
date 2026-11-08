@@ -15,7 +15,8 @@ import type { VisitorUnreadableBinding } from "@nextlyhq/blocks-engine";
 import { EyeOff } from "lucide-react";
 import { createContext, useContext, type ReactNode } from "react";
 
-import { visitorUnreadableSentence } from "./visitor-unreadable-badges";
+import type { ContentServices } from "./content-controls";
+import { VisitorUnreadableLine } from "./visitor-unreadable-badges";
 
 /** The answer before a host gives one: nothing marked. */
 const NONE: ReadonlyMap<string, readonly VisitorUnreadableBinding[]> =
@@ -53,15 +54,19 @@ export function useVisitorUnreadable(
 
 /**
  * The note under a prop whose bound value a visitor will not see: the field,
- * and what the published page shows instead. Nothing for a prop with none.
+ * and what the published page shows instead, a fallback from the library
+ * named by its file as the badge names it. Nothing for a prop with none.
  */
 export function VisitorUnreadableNote({
   bindings,
   props,
+  services,
 }: {
   readonly bindings: readonly VisitorUnreadableBinding[];
   /** The props the field above it draws. */
   readonly props: ReadonlySet<string>;
+  /** The host's services, whose media read names a library fallback's file. */
+  readonly services?: ContentServices | undefined;
 }): React.JSX.Element | null {
   const shown = bindings.filter(binding => props.has(binding.prop));
   if (shown.length === 0) return null;
@@ -70,7 +75,12 @@ export function VisitorUnreadableNote({
       <EyeOff size={14} aria-hidden="true" />
       <div className="nx-inspector__visitor-unreadable-lines">
         {shown.map(binding => (
-          <p key={binding.prop}>{visitorUnreadableSentence(binding)}</p>
+          <p key={binding.prop}>
+            <VisitorUnreadableLine
+              binding={binding}
+              readMedia={services?.readMedia}
+            />
+          </p>
         ))}
       </div>
     </div>

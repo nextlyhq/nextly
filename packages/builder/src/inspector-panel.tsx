@@ -1245,6 +1245,8 @@ function ContentSurface({
       <VisitorUnreadableNote
         bindings={unreadable}
         props={new Set(unreadable.map(binding => binding.prop))}
+        // A library fallback named by its file, as the image row names it.
+        services={services}
       />
       <CustomInspectorBoundary fallback={generated}>
         <CustomInspector
@@ -1574,6 +1576,8 @@ function ContentFields({
           <VisitorUnreadableNote
             bindings={unreadable}
             props={group === undefined ? new Set([prop.name]) : group.drawn}
+            // A library fallback named by its file, as the image row names it.
+            services={services}
           />
         );
         // Named as the block names it, so its icon is not drawn bare.

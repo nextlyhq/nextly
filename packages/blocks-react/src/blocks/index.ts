@@ -123,6 +123,7 @@ export type { CollectionLoopProps } from "./collection-loop";
 // read, so the count and the list cannot disagree.
 export {
   listEntryCount,
+  listShownCount,
   namedListBase,
   type ListEntryCount,
 } from "./list-read";

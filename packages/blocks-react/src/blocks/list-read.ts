@@ -797,6 +797,28 @@ export function namedListBase(props: unknown):
 }
 
 /**
+ * How many entries a list draws, from its own read through `data`, under
+ * `ctx`: any collection list, a related one among them, whose ids are read
+ * from `ctx`'s entry first, as the list itself reads them. Undefined for a
+ * list naming no collection, or whose read fails.
+ *
+ * @experimental
+ */
+export async function listShownCount(
+  props: unknown,
+  ctx: PageContext,
+  data: BlocksDataProvider
+): Promise<number | undefined> {
+  const collection = readListQuery(props).query.collection;
+  if (collection === undefined) return undefined;
+  const outcome = await readList(props, collection, ctx, {
+    find: async query => (await data.find(query)).items,
+    claim: () => true,
+  });
+  return outcome.failed ? undefined : outcome.items.length;
+}
+
+/**
  * How many entries a list's query matches, and how many of them it shows:
  * those after the skipped ones, up to its limit.
  *

@@ -83,6 +83,66 @@ export interface ConditionsPreviewReads
 /** The route's name in the log, beside the collection a refusal names. */
 const ROUTE = "conditions preview entry";
 
+/** What the open guard reads with: the collection's record, and the id read. */
+export type OpenGuardReads = Pick<
+  ConditionsPreviewReads,
+  "readCollection" | "mayOpen"
+>;
+
+/**
+ * Whether the caller may open a document in the editor, checked before
+ * anything is read as a visitor: its collection holds a top-level blocks
+ * field, and the caller reads the entry (by its id alone). The one forbidden
+ * answer otherwise, named for `route` in the log; the collection's record when
+ * it may be opened.
+ */
+export async function assertMayOpen(
+  document: ConditionsPreviewRequest,
+  reads: OpenGuardReads,
+  route: string
+): Promise<Record<string, unknown>> {
+  const { collection } = document;
+  const record = await reads.readCollection(collection);
+  if (
+    record === null ||
+    blocksFieldsOf({ fields: resolvedCollectionView(record).fields }).length ===
+      0
+  ) {
+    throw previewRefusal(route, collection);
+  }
+  let opened: boolean;
+  try {
+    opened = await reads.mayOpen(document);
+  } catch (error) {
+    if (missedOrRefused(error)) throw previewRefusal(route, collection);
+    throw error;
+  }
+  if (!opened) throw previewRefusal(route, collection);
+  return record;
+}
+
+/** The open guard's reads, bound to the caller of a route. */
+export function directOpenReads(
+  ctx: PluginRouteContext,
+  guard: () => TemplateGuardSetup
+): OpenGuardReads {
+  return {
+    readCollection: slug => guard().readCollection(slug),
+    // The id alone, as the caller: whether they may open the document is all
+    // this asks, so no row, draft or blocks document is loaded.
+    mayOpen: async request =>
+      (
+        await findAsCaller(ctx, {
+          collection: request.collection,
+          where: { id: { equals: request.id } },
+          select: { id: true },
+          limit: 1,
+          ...(request.locale === undefined ? {} : { locale: request.locale }),
+        })
+      ).items.length > 0,
+  };
+}
+
 /**
  * What a visitor reads of a page the caller may open in the editor, or the
  * one forbidden answer.
@@ -96,22 +156,7 @@ export async function readConditionsPreview(
   reads: ConditionsPreviewReads
 ): Promise<ConditionsPreviewResponse> {
   const { collection } = request;
-  const record = await reads.readCollection(collection);
-  if (
-    record === null ||
-    blocksFieldsOf({ fields: resolvedCollectionView(record).fields }).length ===
-      0
-  ) {
-    throw previewRefusal(ROUTE, collection);
-  }
-  let opened: boolean;
-  try {
-    opened = await reads.mayOpen(request);
-  } catch (error) {
-    if (missedOrRefused(error)) throw previewRefusal(ROUTE, collection);
-    throw error;
-  }
-  if (!opened) throw previewRefusal(ROUTE, collection);
+  const record = await assertMayOpen(request, reads, ROUTE);
   // Only now, with the page shown to be the caller's to open: read as a
   // visitor reads it.
   const { publicValues, fields } = await visitorView(
@@ -150,21 +195,7 @@ export function conditionsPreviewEntryRoute(setup: {
       const bound = directEntryReads(ctx, setup.guard);
       return respondDoc(
         await readConditionsPreview(body, {
-          readCollection: slug => bound.collections.readCollection(slug),
-          // The id alone, as the caller: whether they may open the page is
-          // all this asks, so no row, draft or blocks document is loaded.
-          mayOpen: async request =>
-            (
-              await findAsCaller(ctx, {
-                collection: request.collection,
-                where: { id: { equals: request.id } },
-                select: { id: true },
-                limit: 1,
-                ...(request.locale === undefined
-                  ? {}
-                  : { locale: request.locale }),
-              })
-            ).items.length > 0,
+          ...directOpenReads(ctx, setup.guard),
           publicEntry: (request, select) => bound.publicEntry(request, select),
           publicFields: (collection, locale) =>
             bound.publicFields(collection, locale),

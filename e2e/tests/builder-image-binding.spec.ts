@@ -5,10 +5,14 @@
  * 1. An image's Source row binds it to the `related-links` Single's upload
  *    field; the field is empty, so the address set as its Fallback is what
  *    the canvas draws.
- * 2. An image bound with an address as its fallback is unbound: visitors saw
+ * 2. The same image's Fallback is chosen from the media library: the picker
+ *    opens on the Fallback row, a search narrows it to this run's upload,
+ *    and the first image picked is shown in the row by its picture and file
+ *    name, never by its id.
+ * 3. An image bound with an address as its fallback is unbound: visitors saw
  *    that address, so it is kept in Image address, the image is left empty,
  *    the note says so, and the page holds it once saved and opened again.
- * 3. A heading bound to the page's own `createdAt`, seeded with a short date
+ * 4. A heading bound to the page's own `createdAt`, seeded with a short date
  *    format as the save requires (a date reaches text only through one), is
  *    given a long one from the Format menu, and the canvas reformats it.
  *
@@ -112,6 +116,59 @@ test.describe("binding an image and a date's format from the inspector", () => {
     await expect
       .poll(() => drawn.getAttribute("src"), { timeout: 30_000 })
       .toContain(new URL(media.url, page.url()).pathname);
+  });
+
+  test("chooses an image's fallback from the media library", async ({
+    page,
+  }) => {
+    await gotoAdmin(page, "/");
+    const mark = Date.now().toString(36);
+    const media = await uploadImage(page.request, mark);
+    const id = await seed(page.request, mark, {
+      id: IMAGE,
+      type: "core/image",
+      version: 1,
+      props: { alt: ALT },
+    });
+    await openAt(page, id, IMAGE);
+
+    await page.getByRole("button", { name: "Bind Image to a field" }).click();
+    await page
+      .getByRole("listbox", { name: "Fields for Image" })
+      .getByRole("group", { name: "Related links" })
+      .getByRole("option", { name: /^Logo/ })
+      .click();
+    await expect(
+      page.getByRole("button", {
+        name: /^Image: bound to Logo of Related links/,
+      })
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "Choose from library" }).click();
+    const search = page.getByRole("combobox", {
+      name: "Find in the media library, or paste an address",
+    });
+    await expect(search).toBeFocused();
+    // Narrowed to this run's upload, so an image another spec uploaded at
+    // the same moment is not the first one.
+    await search.fill(`canvas-${mark}`);
+    const first = page
+      .getByRole("listbox", { name: "Images in the media library" })
+      .getByRole("option")
+      .first();
+    const named = new RegExp(`^canvas-${mark}`);
+    await expect(first).toHaveAccessibleName(named, { timeout: 30_000 });
+    await first.click();
+
+    // Shown by its picture and its file name, in the address field's place.
+    const row = page.getByRole("group", { name: /^Fallback: canvas-/ });
+    await expect(row).toBeVisible();
+    await expect(row).toHaveAttribute("title", /^Fallback: canvas-/);
+    await expect(row.locator("img")).toHaveAttribute("src", /\S/);
+    await expect(row).not.toContainText(media.id);
+    await expect(page.getByRole("textbox", { name: /^Fallback/ })).toHaveCount(
+      0
+    );
   });
 
   test("unbinds from an image address into Image address, through a save", async ({
