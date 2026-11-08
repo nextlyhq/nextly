@@ -82,7 +82,10 @@ import {
   useState,
 } from "react";
 
-import type { AppliedConditions } from "./applied-conditions";
+import {
+  revealedForCanvas,
+  type AppliedConditions,
+} from "./applied-conditions";
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import { useCanvasFrame } from "./canvas-frame-context";
@@ -309,8 +312,13 @@ function nestedPlacementOf(node: BlockNode): string | undefined {
  * setting a placement rewrites, is lifted exactly when it is drawn. Only
  * those are walked, so a large component library costs nothing on a page
  * that places none of it.
+ *
+ * Exported so a surface that reads the page as the canvas draws it composes
+ * it from these same definitions.
+ *
+ * @experimental
  */
-function revealedDefinitions(
+export function revealedDefinitions(
   document: BlockDocument,
   definitions: DefinitionsById,
   limits: DocumentLimits | undefined
@@ -2448,7 +2456,13 @@ function useDrawnPage({
   // While conditions are applied, `document` is already the page as they
   // leave it (a hidden block as its marker), with the previewed entry's
   // blocks composed in, which are revealed as they are without conditions.
-  const drawable = useMemo(() => revealConditioned(document), [document]);
+  // A block a list's entry decides keeps its conditions while the entries
+  // are judged, for the renderer to judge against each one drawn.
+  const limits = rendered?.limits;
+  const drawable = useMemo(
+    () => revealedForCanvas(document, applied, limits),
+    [document, applied, limits]
+  );
   // A placed component's definition too: its conditioned blocks are drawn,
   // as the page's are. While conditions are applied, the renderer also knows
   // the marker a hidden block is drawn as.

@@ -12,7 +12,7 @@
  */
 import { readableTitleText } from "@nextlyhq/plugin-sdk";
 
-import { claimKey, spaceHolding, type ServedAddress } from "./claim-key";
+import { addressesInSpaces, claimKey, type ServedAddress } from "./claim-key";
 import {
   claimAddress,
   lockHolder,
@@ -198,11 +198,9 @@ function addressesIn(
   keys: ReadonlySet<string>,
   deps: PageClaimsDeps
 ): ServedAddress[] {
-  return pageClaims(row, deps.locales(), deps.pathTemplate).addresses.filter(
-    address => {
-      const space = spaceHolding(address);
-      return space !== null && keys.has(claimKey("space", space));
-    }
+  return addressesInSpaces(
+    pageClaims(row, deps.locales(), deps.pathTemplate).addresses,
+    keys
   );
 }
 

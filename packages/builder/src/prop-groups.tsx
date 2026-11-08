@@ -39,6 +39,19 @@ export interface BindableOptions {
    * before its address.
    */
   readonly clearsOnBind?: readonly string[];
+  /**
+   * A link's address and the two halves of the entry reference it follows
+   * first, where the bound prop is a link's destination: the picker also
+   * offers the entries a relation names, whose pick binds the entry's id,
+   * and a bound entry id is drawn in the address's place.
+   */
+  readonly entryLink?: {
+    readonly link: string;
+    readonly collection: string;
+    readonly id: string;
+    /** Whether both halves of the reference may be written where it sits. */
+    readonly writable: boolean;
+  };
 }
 
 /**
@@ -116,9 +129,10 @@ const linkGroups: PropGroupFinder = props => {
     {
       lead: group.link,
       drawn: group.drawn,
-      // Where it goes. Its target, rel and entry reference qualify that
-      // address, and an entry pick writes both halves of the reference at
-      // once, which a binding to one half would break.
+      // Where it goes. Its target and rel qualify that address. The entry
+      // reference is bound only from the address's own picker, to a related
+      // entry's id, which writes both halves at once (its id bound and its
+      // collection set), so it has no bind button of its own.
       bindable: new Set([group.link]),
       render: context => <LinkGroupField group={group} {...context} />,
     },

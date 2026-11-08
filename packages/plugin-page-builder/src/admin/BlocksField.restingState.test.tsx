@@ -76,6 +76,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     read => () =>
       read
   )(() => Promise.resolve(null)),
+  // The Fallback picker's library search, finding nothing: no case here
+  // opens it. One function for every call, as the admin's own hook keeps it.
+  useMediaSearcher: (
+    search => () =>
+      search
+  )(() => Promise.resolve([])),
   // Present because the mock REPLACES the module wholesale: an export the
   // subject imports and this omits is a missing-export error rather than an
   // unused stub.

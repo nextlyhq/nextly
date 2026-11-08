@@ -91,6 +91,15 @@ export interface MediaSummary {
   readonly alt?: string;
 }
 
+/**
+ * One image a library search found: its summary, and the id a pick stores.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export interface FoundMedia extends MediaSummary {
+  readonly id: string;
+}
+
 /** What the content controls hand the host's media picker. */
 export interface MediaPickerProps {
   open: boolean;
@@ -255,6 +264,19 @@ export interface ContentServices {
    */
   readonly listBindingFields?: () => Promise<readonly BindingFieldSource[]>;
   /**
+   * The page's language, as the canvas's render formats bound values in it,
+   * so the picker previews a date or a number as the page shows it. Resolved
+   * as a render resolves it (`bindingFormatEnv`): absent, English.
+   */
+  readonly bindingLocale?: string;
+  /**
+   * The site's time zone, as a published page shows its date-times in it,
+   * read when a binding picker opens: `undefined` for a site with none set.
+   * Until it is in, or where it is absent or fails, previews are in UTC, as
+   * a page rendered with no zone.
+   */
+  readonly readSiteTimeZone?: () => Promise<string | undefined>;
+  /**
    * An unbind's plan, made against the document the editor holds by the same
    * decision the page actions API takes: what to write in the binding's place
    * and why, or why it can't be kept. Absent, a bound prop offers no unbind.
@@ -289,6 +311,19 @@ export interface ContentServices {
    * stored file is shown by its picture and name rather than as "a file".
    */
   readonly readMedia?: (mediaId: string) => Promise<MediaSummary | null>;
+  /**
+   * The media library's images found by name, read with the signed-in
+   * author's own access: the newest first, a handful at a time, and the
+   * newest of all for an empty search. Rejects where the library cannot be
+   * read, and once `signal` aborts. Absent, an image binding's Fallback
+   * offers the host's `MediaPicker` dialog alone.
+   *
+   * @experimental Settles with the editor's binding controls.
+   */
+  readonly searchMedia?: (
+    search: string,
+    signal?: AbortSignal
+  ) => Promise<readonly FoundMedia[]>;
   /**
    * Where a rich-text field holds the passage it has open, so the host
    * finishes it before the document is stored.

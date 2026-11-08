@@ -28,11 +28,9 @@ export default nextlySitemap({
     ...nextlyTags("posts"),
     ...nextlyTags("categories"),
     ...nextlyTags("tags"),
-    ...nextlyTags("users"),
+    ...nextlyTags("authors"),
   ],
-  // A finite safety window on top of tag busting: the `users` collection does
-  // not emit write-side cache tags, so an added/renamed author would otherwise
-  // wait for an unrelated post/category/tag write; this also bounds how long a
+  // A finite safety window on top of tag busting: it bounds how long a
   // partial result (if a slug query hits a transient DB error and returns an
   // empty list) can stay cached.
   revalidate: 3600,

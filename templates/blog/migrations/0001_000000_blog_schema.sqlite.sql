@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS "dc_posts" (
   "excerpt" TEXT,
   "featured_image" TEXT,
   "author" TEXT,
+  "byline" TEXT,
   "categories" TEXT,
   "tags" TEXT,
   "published_at" INTEGER,
@@ -30,7 +31,9 @@ CREATE TABLE IF NOT EXISTS "dc_posts" (
   "word_count" INTEGER,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-  "created_by" TEXT
+  "created_by" TEXT,
+  -- A post whose author profile is deleted keeps no dangling credit.
+  CONSTRAINT "fk_posts_byline" FOREIGN KEY ("byline") REFERENCES "dc_authors"("id") ON DELETE SET NULL
 );
 
 -- Categories collection
@@ -60,6 +63,27 @@ CREATE TABLE IF NOT EXISTS "dc_tags" (
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "created_by" TEXT
+);
+
+-- Authors collection: the public profiles a post's byline credits. A post's
+-- "author" is the account that owns it; its "byline" is one of these.
+CREATE TABLE IF NOT EXISTS "dc_authors" (
+  "id" TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16)))),
+  "title" TEXT NOT NULL,
+  "name" TEXT NOT NULL,
+  "slug" TEXT NOT NULL UNIQUE,
+  "bio" TEXT,
+  "avatar" TEXT,
+  "account" TEXT,
+  "status" TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  "first_published_at" INTEGER,
+  "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+  "created_by" TEXT,
+  -- Inline, as SQLite adds a key only when its table is made (text keys:
+  -- media.id and users.id are text in the core schema).
+  CONSTRAINT "fk_authors_avatar" FOREIGN KEY ("avatar") REFERENCES "media"("id") ON DELETE SET NULL,
+  CONSTRAINT "fk_authors_account" FOREIGN KEY ("account") REFERENCES "users"("id") ON DELETE SET NULL
 );
 
 -- ============ USER EXTENSION TABLE ============
@@ -178,12 +202,18 @@ CREATE INDEX IF NOT EXISTS "idx_posts_status" ON "dc_posts"("status");
 CREATE INDEX IF NOT EXISTS "idx_posts_published" ON "dc_posts"("published_at" DESC);
 CREATE INDEX IF NOT EXISTS "idx_posts_featured" ON "dc_posts"("featured") WHERE "featured" = 1;
 CREATE INDEX IF NOT EXISTS "idx_posts_author" ON "dc_posts"("author");
+CREATE INDEX IF NOT EXISTS "idx_posts_byline" ON "dc_posts"("byline");
 
 -- Categories indexes
 CREATE INDEX IF NOT EXISTS "idx_categories_slug" ON "dc_categories"("slug");
 
 -- Tags indexes
 CREATE INDEX IF NOT EXISTS "idx_tags_slug" ON "dc_tags"("slug");
+
+-- Authors indexes
+CREATE INDEX IF NOT EXISTS "idx_authors_slug" ON "dc_authors"("slug");
+-- One profile per account: a new post is credited to its writer's profile.
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_authors_account" ON "dc_authors"("account");
 
 -- Junction table indexes (FK columns not covered by composite PK)
 CREATE INDEX IF NOT EXISTS "idx_posts_categories_category" ON "dc_posts_categories"("category_id");
@@ -238,5 +268,6 @@ DROP TABLE IF EXISTS "single_homepage";
 DROP TABLE IF EXISTS "single_navigation";
 DROP TABLE IF EXISTS "single_site_settings";
 DROP TABLE IF EXISTS "dc_tags";
+DROP TABLE IF EXISTS "dc_authors";
 DROP TABLE IF EXISTS "dc_categories";
 DROP TABLE IF EXISTS "dc_posts";

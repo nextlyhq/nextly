@@ -38,6 +38,7 @@ import {
   type ResolvedBlockNode,
   type NamedQuerySource,
 } from "@nextlyhq/blocks-engine";
+import type { HookContext } from "@nextlyhq/plugin-sdk";
 
 import { asDocument } from "../component-store-source";
 import {
@@ -365,16 +366,27 @@ export function registerBindingReportOnWrite(
     const store = deps.store();
     if (written === undefined || store === null) return;
     const document = reported(written.at, deps);
-    try {
-      if (!always && !(await mayHoldBlocks(written, deps))) return;
-      await store.markDirty(document);
-      deps.kick?.();
-    } catch (error) {
-      ctx.logger.error(
-        `[page-builder] a write to "${written.collection}" was not marked for the bindings report; it is judged again when the schema next changes.`,
-        { collection: written.collection, error }
-      );
-    }
+    const report = async (): Promise<void> => {
+      try {
+        if (!always && !(await mayHoldBlocks(written, deps))) return;
+        await store.markDirty(document);
+        deps.kick?.();
+      } catch (error) {
+        ctx.logger.error(
+          `[page-builder] a write to "${written.collection}" was not marked for the bindings report; it is judged again when the schema next changes.`,
+          { collection: written.collection, error }
+        );
+      }
+    };
+    // A write inside a caller's transaction runs its after-hooks before that
+    // transaction commits: the hook context's `afterCommit` holds the mark
+    // until the outermost one commits (and drops it on a rollback), so the
+    // declaration read and the mark take a pooled connection the save no
+    // longer holds, rather than one a save holding the pool's last
+    // connection would wait for until the pool's wait runs out. Outside a
+    // transaction it runs at once.
+    const { afterCommit } = context as Pick<HookContext, "afterCommit">;
+    await (afterCommit ? afterCommit(report) : report());
   };
   for (const phase of ["afterCreate", "afterUpdate"] as const) {
     ctx.hooks.on(phase, "*", context => mark(context, false));

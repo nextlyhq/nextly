@@ -117,6 +117,13 @@ export interface PrepareDocumentArgs {
    * the bound stage is the stage before it.
    */
   bindings?: BindingRun;
+  /**
+   * Keep the blocks a list's item decides, for each list to judge against
+   * the items it draws, holding back every other conditioned block, as an
+   * editor drawing a page with its conditions applied does. Absent, every
+   * conditioned block is held back until a route decides them.
+   */
+  itemsDecided?: boolean;
 }
 
 /**
@@ -388,8 +395,21 @@ export function prepareDocumentReadStages(
   document: BlockDocument,
   args: PrepareDocumentArgs
 ): DocumentReadStages | null {
-  const before = stagesBeforeBindings(document, args);
+  const before = stagesBeforeBindings(
+    document,
+    args,
+    args.itemsDecided === true ? itemsKept : undefined
+  );
   return before === null ? null : withBindings(before, args);
+}
+
+/**
+ * The gating an editor applies while a list's items are judged: no entry is
+ * known, so a block reading it is held back, and one a list's item decides is
+ * kept for the list.
+ */
+function itemsKept(migrated: BlockDocument): BlockDocument {
+  return gateByConditions(migrated, {}).document;
 }
 
 /** The stages up to and including address repair: none depends on bindings. */

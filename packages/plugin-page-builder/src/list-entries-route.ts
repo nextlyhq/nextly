@@ -70,7 +70,8 @@ import { respondList } from "nextly";
 import { z } from "nextly/zod";
 
 import { readBodyWith } from "./composition-route-kit";
-import { editorReaderAsCaller } from "./entry-reads";
+import { assertMayOpen, directOpenReads } from "./conditions-preview-route";
+import { editorReaderAsCaller, publicSourceReader } from "./entry-reads";
 import { readingAsUser } from "./library-route";
 import {
   LIST_ENTRIES_NAMED_MAX_PARAMS,
@@ -81,6 +82,7 @@ import {
   type ListEntriesRequest,
   type ListEntriesResponse,
 } from "./list-entries-contract";
+import type { TemplateGuardSetup } from "./templates/template-guard";
 
 /** A field name a list may name: no paths, operators or quoting. */
 const FIELD = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
@@ -130,12 +132,25 @@ const SORT = z
     { message: "The sort is not one a list stores." }
   );
 
+/** The document the editor has open, when a read asks as a visitor. */
+const VISITOR = z
+  .object({
+    collection: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[A-Za-z0-9_-]+$/),
+    id: z.string().min(1).max(200),
+  })
+  .strict();
+
 /**
  * The read, as the renderer sends it. Bounded as the reader bounds it, so a
  * body no list could build is refused here, before the caller is judged.
  */
 const ListEntriesBody = z
   .object({
+    visitor: VISITOR.optional(),
     query: z
       .object({
         collection: z.string().min(1),
@@ -171,6 +186,7 @@ const ListEntriesBody = z
  */
 const ListEntriesNamedBody = z
   .object({
+    visitor: VISITOR.optional(),
     named: z
       .object({
         name: z.string().refine(isNamedQueryName, {
@@ -416,14 +432,35 @@ async function canvasBaseReader(
   };
 }
 
+/**
+ * The base for a named run asked as a visitor: what an anonymous visitor
+ * reads, published entries and public fields only, through the public reader
+ * a published page's runs use, and the site's public settings.
+ */
+async function visitorBaseReader(
+  locale: string | undefined
+): Promise<ListBaseReader> {
+  const { readPublicSiteSettings } = await import("nextly/runtime");
+  const reader = await publicSourceReader(locale);
+  return {
+    find: query => reader.find(query),
+    count: query => reader.count(query),
+    findSingle: query => reader.findSingle(query),
+    siteSettings: async () => ({ ...(await readPublicSiteSettings()) }),
+  };
+}
+
 /** The reads a named run binds: the caller's permission, the registry, the reader. */
 function directNamedListEntriesReads(
   ctx: PluginRouteContext,
-  definitionOf: (name: string) => NamedQueryDefinition | undefined
+  definitionOf: (name: string) => NamedQueryDefinition | undefined,
+  /** Run over what a visitor reads, rather than what the caller reads. */
+  asVisitor: boolean
 ): NamedListEntriesReads {
   return {
     definitionOf,
-    baseReader: locale => canvasBaseReader(ctx, locale),
+    baseReader: locale =>
+      asVisitor ? visitorBaseReader(locale) : canvasBaseReader(ctx, locale),
     fieldsOf: async (collection, locale) => {
       const { bindingFieldShapes } = await import("nextly/runtime");
       return bindingFieldShapes(
@@ -460,15 +497,26 @@ function directNamedListEntriesReads(
   };
 }
 
-/** The read the route binds: the editor reader, as the caller. */
-function directListEntriesReads(ctx: PluginRouteContext): ListEntriesReads {
+/**
+ * The read the route binds: the editor reader as the caller; or, asked as a
+ * visitor, the public reader, which reads published entries and the fields a
+ * visitor may read, judged by the anonymous caller's rules.
+ */
+function directListEntriesReads(
+  ctx: PluginRouteContext,
+  asVisitor: boolean
+): ListEntriesReads {
   return {
-    // The shared editor reader as the caller, built per read in the read's
-    // own language.
+    // Built per read in the read's own language.
     find: async query =>
-      (await editorReaderAsCaller(ctx, query.locale)).find(query),
+      asVisitor
+        ? (await publicSourceReader(query.locale)).find(query)
+        : (await editorReaderAsCaller(ctx, query.locale)).find(query),
   };
 }
+
+/** The route's name in the log, beside the collection a refusal names. */
+const ROUTE = "list entries";
 
 /**
  * The route declaration. Authenticated (no `public: true`), with no
@@ -478,7 +526,9 @@ function directListEntriesReads(ctx: PluginRouteContext): ListEntriesReads {
  */
 export function listEntriesRoute(
   /** The registered named query of a name: this instance's own registry. */
-  definitionOf: (name: string) => NamedQueryDefinition | undefined
+  definitionOf: (name: string) => NamedQueryDefinition | undefined,
+  /** The collections' records, for the visitor read's open guard. */
+  guard: () => TemplateGuardSetup
 ): {
   method: "POST";
   path: string;
@@ -490,15 +540,30 @@ export function listEntriesRoute(
     path: LIST_ENTRIES_ROUTE_PATH,
     noStore: true,
     handler: async (req, ctx) => {
-      const body = await readBodyWith(req, ListEntriesAnyBody, "list entries");
+      const body = await readBodyWith(req, ListEntriesAnyBody, ROUTE);
+      const locale = "named" in body ? body.named.locale : body.query.locale;
+      // Asked as a visitor: first, before anything is read, whether the
+      // caller may open the document named, with 2a's one guard and its one
+      // forbidden answer.
+      const asVisitor = body.visitor !== undefined;
+      if (body.visitor !== undefined) {
+        await assertMayOpen(
+          { ...body.visitor, ...(locale === undefined ? {} : { locale }) },
+          directOpenReads(ctx, guard),
+          ROUTE
+        );
+      }
       if ("named" in body) {
         const answer = await readNamedListEntries(
           body,
-          directNamedListEntriesReads(ctx, definitionOf)
+          directNamedListEntriesReads(ctx, definitionOf, asVisitor)
         );
         return respondList([...answer.items], answer.meta);
       }
-      const answer = await readListEntries(body, directListEntriesReads(ctx));
+      const answer = await readListEntries(
+        body,
+        directListEntriesReads(ctx, asVisitor)
+      );
       return respondList([...answer.items], answer.meta);
     },
   };

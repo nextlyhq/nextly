@@ -45,7 +45,24 @@ import { createContentPage } from "@nextlyhq/blocks-react/next";
 import { pageBuilderContent } from "@nextlyhq/plugin-page-builder";
 import { previewDraftGate } from "nextly/runtime";
 
+import { withJournalLinks } from "../../../blog-fixture/links";
+import { withJournalMetadata } from "../../../blog-fixture/metadata";
 import { pagesRoute } from "../../../lib/pages-route";
+import { siteReader } from "../../../lib/site-content";
+
+/**
+ * Who holds each path, and the Posts template, from the page builder, through
+ * the process's own instance, which offers the plugin's services.
+ */
+const content = pageBuilderContent();
+
+/**
+ * The browser suite's blog fixture (`src/blog-fixture`), by the same switch
+ * that registers its collections: its author, category and tag links name the
+ * hand-written blog's routes, and its posts' metadata is the hand-written
+ * page's. Off, the route is exactly the page builder's.
+ */
+const blogFixture = process.env.NEXTLY_E2E_STYLE_FIXTURE === "1";
 
 /**
  * Access-enforced and per-request, which is the secure default.
@@ -64,11 +81,15 @@ import { pagesRoute } from "../../../lib/pages-route";
  * option you pass. `/site` serves the same pages that way (`../site`).
  */
 const { ContentPage, generateMetadata } = createContentPage({
-  // Who holds each path, and the Posts template, from the page builder,
-  // through the process's own instance, which offers the plugin's services.
-  ...pageBuilderContent(),
+  ...content,
+  ...(blogFixture
+    ? { entryPath: withJournalLinks(content.entryPath, siteReader) }
+    : {}),
   pages: {
     ...pagesRoute,
+    ...(blogFixture
+      ? { metadata: withJournalMetadata(pagesRoute.metadata) }
+      : {}),
     // Without this the route serves published pages only, so a preview link
     // verifies, redirects, and then answers 404 from a page that looks
     // entirely correct — indistinguishable, to the reviewer who opened it,

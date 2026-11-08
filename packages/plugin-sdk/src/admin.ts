@@ -778,6 +778,16 @@ export { useMediaItem } from "@nextlyhq/admin";
  * @experimental
  */
 export { useMediaResolver } from "@nextlyhq/admin";
+/**
+ * Search the media library's images by name from code outside a component's
+ * render, such as a picker that searches as the author types: the newest
+ * twelve images for an empty search. Read through the same list query as the
+ * library's own dialog, with the signed-in author's access. Rejects when the
+ * library cannot be read, and when the given signal aborts.
+ *
+ * @experimental
+ */
+export { useMediaSearcher } from "@nextlyhq/admin";
 
 /**
  * @experimental The media library as a dialog a plugin can open: browse,
