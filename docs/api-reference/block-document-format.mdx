@@ -196,7 +196,8 @@ its children. A binding to a source nobody read renders its fallback.
   it, so an entry a visitor may not read, or one not published, gives no link,
   and the block keeps its own `href`. The relation itself (`author`) does not
   fill `entryId`, and neither does a relation to many entries or to entries of
-  several collections.
+  several collections. The relation must start the path: one inside a group
+  (`meta.author.id`) is refused, since the page does not read it.
 - **Empty values.** Absent, `null`, `""`, an empty list and rich text with
   nothing in it render the fallback, or the prop's own value when there is no
   fallback. `false` and `0` are values.

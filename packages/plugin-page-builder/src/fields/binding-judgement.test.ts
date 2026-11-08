@@ -333,6 +333,15 @@ describe("a link to the entry a to-one relation names", () => {
     expect(await judge(link("l", "author.id"))).toEqual([]);
   });
 
+  it("refuses a related entry's id through a relation inside a group", async () => {
+    // The page reads a relation by the path's first field, so the editor's
+    // id inside `meta` would never be filled.
+    const issues = await judge(link("l", "meta.editor.id"));
+    expect(issues.map(issue => issue.code)).toEqual([
+      "binding-path-unsupported",
+    ]);
+  });
+
   it("still refuses the relation itself, and a field the related entry lacks", async () => {
     const issues = await judge(
       link("relation", "author"),

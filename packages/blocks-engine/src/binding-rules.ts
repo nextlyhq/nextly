@@ -649,14 +649,24 @@ function unlistedField(
 /**
  * A field every entry carries, named on the related entry a path's relation
  * leads to (`author.id`), read as the public reads that entry, so one a
- * visitor may not read gives nothing and the binding falls back. Nothing is
- * walked past it: it holds a single value.
+ * visitor may not read gives nothing and the binding falls back.
+ *
+ * Only through a relation that starts the path: the page reads a relation
+ * its bindings follow by the path's first field, so one inside a group
+ * (`meta.author.id`) is never read, and its id would never be filled.
+ * Nothing is walked past it: it holds a single value.
  */
 function relatedEntryField(
   name: string,
   index: number,
   segments: readonly string[]
 ): PathWalk {
+  if (index !== 1) {
+    return walkFailure(
+      "binding-path-unsupported",
+      `A related entry's "${name}" is read only through a relation at the start of the path, not one inside a group.`
+    );
+  }
   return index === segments.length - 1
     ? { ok: true }
     : walkFailure(

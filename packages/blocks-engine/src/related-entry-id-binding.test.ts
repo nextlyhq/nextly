@@ -26,7 +26,14 @@ const POSTS: readonly BindingFieldShape[] = [
   { name: "author", type: "relationship", relationTo: "authors" },
   { name: "tags", type: "relationship", relationTo: "tags", hasMany: true },
   { name: "ref", type: "relationship", relationTo: ["authors", "tags"] },
-  { name: "meta", type: "group", fields: [{ name: "note", type: "text" }] },
+  {
+    name: "meta",
+    type: "group",
+    fields: [
+      { name: "note", type: "text" },
+      { name: "editor", type: "relationship", relationTo: "authors" },
+    ],
+  },
 ];
 
 /** The authors' declared fields: none is called `id`, as in a real schema. */
@@ -69,6 +76,12 @@ describe("a link's entry bound to a to-one relation's id", () => {
     const checked = check("author.id");
     expect(checked.outcome).toBe("resolve");
     expect(checked.issues).toEqual([]);
+  });
+
+  it("refuses a related entry's id through a relation inside a group, which the page doesn't read", () => {
+    expect(codes("meta.editor.id")).toEqual(["binding-path-unsupported"]);
+    // The control: the same entry's id through a relation starting the path.
+    expect(codes("author.id")).toEqual([]);
   });
 
   it("refuses what names no single entry of one collection", () => {
