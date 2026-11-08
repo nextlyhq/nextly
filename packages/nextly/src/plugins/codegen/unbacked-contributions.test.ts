@@ -9,7 +9,9 @@
  * are never judged, so a judge guessing at a package's entry (installed but
  * unbuilt, or not installed where looked for) would drop a valid component;
  * an alias inherited through a package-based `extends` is followed, where a
- * judge reading only relative `extends` would miss it; the writer and the CI
+ * judge reading only relative `extends` would miss it, and so is a package's
+ * `tsconfig` field; a path written with its emitted extension is read from
+ * its source, where a judge reading it literally would drop it; the writer and the CI
  * check are both asked, so the two cannot disagree; and a widget naming a
  * missing module stays in the map, where its card's error state names it.
  */
@@ -170,6 +172,35 @@ describe("a module path, judged only where it is local", () => {
     expect(modulePresence("./local", place())).toBe("present");
     expect(modulePresence("./declared", place())).toBe("absent");
     expect(modulePresence("./elsewhere", place())).toBe("absent");
+  });
+
+  it("reads a path written with an emitted extension as TypeScript does, from its source", () => {
+    put("src/panel.ts", "export const Panel = () => null;");
+    put("src/types/panel.mts", "export {};");
+    expect(modulePresence("@/panel.js", place())).toBe("present");
+    expect(modulePresence("./panel.mjs", place())).toBe("present");
+    expect(modulePresence("./gone.js", place())).toBe("absent");
+  });
+
+  it("follows an extends naming a package alone through its tsconfig field", () => {
+    put("tsconfig.json", '{ "extends": "@acme/shared" }');
+    put(
+      "node_modules/@acme/shared/package.json",
+      JSON.stringify({ name: "@acme/shared", tsconfig: "config/base.json" })
+    );
+    // Four levels up from the package's `config` folder is the app.
+    put(
+      "node_modules/@acme/shared/config/base.json",
+      JSON.stringify({
+        compilerOptions: { paths: { "@/*": ["../../../../src/*"] } },
+      })
+    );
+    expect(modulePresence("@/plugins/kept/contribution", place())).toBe(
+      "present"
+    );
+    expect(modulePresence("@/plugins/gone/contribution", place())).toBe(
+      "absent"
+    );
   });
 
   it("follows an alias inherited through a package-based extends", () => {

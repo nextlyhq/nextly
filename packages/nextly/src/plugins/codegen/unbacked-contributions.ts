@@ -25,7 +25,7 @@
 
 import { readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 import type { PluginDefinition } from "../plugin-context";
 
@@ -118,22 +118,54 @@ export function modulePresence(
 }
 
 /** The extensions of a file that loads at run time, as the map's import does. */
-const RUNTIME_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs"];
+const RUNTIME_EXTENSIONS = [
+  ".tsx",
+  ".ts",
+  ".jsx",
+  ".js",
+  ".mts",
+  ".mjs",
+  ".cts",
+  ".cjs",
+];
+
+/**
+ * The source files TypeScript reads for a module written with an emitted
+ * extension: `./panel.js` is `panel.ts` or `panel.tsx` before it is built,
+ * and `./panel.mjs` is `panel.mts`. Without this a component named by the
+ * extension its build will have reads as missing, and is dropped.
+ */
+const EMITTED_SOURCES: ReadonlyMap<string, readonly string[]> = new Map([
+  [".js", [".ts", ".tsx", ".js", ".jsx"]],
+  [".jsx", [".tsx", ".jsx"]],
+  [".mjs", [".mts", ".mjs"]],
+  [".cjs", [".cts", ".cjs"]],
+]);
 
 /** A declaration file: types only, nothing that loads. */
 const DECLARATION_FILE = /\.d\.[cm]?ts$/;
 
 /**
- * Whether a runtime file is there for a module path: as written, with a
- * runtime extension, or as a folder's index. A declaration file (`.d.ts`,
- * `.d.mts`, `.d.cts`) alone does not count, since the map's import of it
- * would load nothing.
+ * Whether a runtime file is there for a module path: as written, as the
+ * source of an emitted extension, with a runtime extension, or as a folder's
+ * index. A declaration file (`.d.ts`, `.d.mts`, `.d.cts`) alone does not
+ * count, since the map's import of it would load nothing.
  */
 function runtimeFileFor(base: string): boolean {
   if (!DECLARATION_FILE.test(base) && isFile(base)) return true;
+  if (sourceFileFor(base)) return true;
   return RUNTIME_EXTENSIONS.some(
     ext => isFile(`${base}${ext}`) || isFile(join(base, `index${ext}`))
   );
+}
+
+/** Whether a module path written with an emitted extension has its source file. */
+function sourceFileFor(base: string): boolean {
+  const ext = extname(base);
+  const sources = EMITTED_SOURCES.get(ext);
+  if (sources === undefined) return false;
+  const stem = base.slice(0, -ext.length);
+  return sources.some(source => isFile(`${stem}${source}`));
 }
 
 function isFile(path: string): boolean {
@@ -295,9 +327,10 @@ function extendsOf(parsed: Record<string, unknown>): string[] {
 /**
  * The file an `extends` names, resolved as TypeScript does: a relative or
  * absolute path from the config's folder, with `.json` added where it has no
- * extension; a package spec through Node's resolver from that folder, as
- * written, with `.json`, or as the package's `tsconfig.json`. `undefined`
- * when none of those is a file.
+ * extension; a bare package name through the package's own `tsconfig` field;
+ * and a package spec through Node's resolver from that folder, as written,
+ * with `.json`, or as the package's `tsconfig.json`. `undefined` when none of
+ * those is a file.
  */
 function resolveExtends(spec: string, dir: string): string | undefined {
   if (spec.startsWith(".") || isAbsolute(spec)) {
@@ -305,6 +338,8 @@ function resolveExtends(spec: string, dir: string): string | undefined {
     return [target, `${target}.json`].find(isFile);
   }
   const require = createRequire(join(dir, "package.json"));
+  const named = packageTsconfigField(spec, require);
+  if (named !== undefined) return named;
   for (const candidate of [spec, `${spec}.json`, `${spec}/tsconfig.json`]) {
     try {
       return require.resolve(candidate);
@@ -313,6 +348,29 @@ function resolveExtends(spec: string, dir: string): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * The config a package names in its `package.json` `tsconfig` field, which
+ * TypeScript reads when an `extends` names the package alone. `undefined`
+ * for a spec with a subpath, a package that cannot be found or has no such
+ * field, or a field naming no file.
+ */
+function packageTsconfigField(
+  spec: string,
+  require: NodeJS.Require
+): string | undefined {
+  if (packageNameOf(spec) !== spec) return undefined;
+  let manifestFile: string;
+  try {
+    manifestFile = require.resolve(`${spec}/package.json`);
+  } catch {
+    return undefined;
+  }
+  const field = readJsonc(manifestFile)?.tsconfig;
+  if (typeof field !== "string") return undefined;
+  const target = resolve(dirname(manifestFile), field);
+  return isFile(target) ? target : undefined;
 }
 
 /** The `paths` one tsconfig declares itself, with its folder, or `undefined` for none. */
