@@ -10,7 +10,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { LIST_ROW_HEIGHT_PX } from "nextly/card-geometry";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
+import { CardFitContext } from "@admin/components/features/widgets/frame/fit";
 import { cardBodyHeightPx } from "@admin/components/features/widgets/frame/measures";
+import { CardHeightContext } from "@admin/components/features/widgets/frame/tier";
 import { HiddenWhileEmptyContext } from "@admin/components/features/widgets/hidden-while-empty";
 import { fireEvent, render, screen, within } from "@admin/__tests__/utils";
 
@@ -282,5 +284,40 @@ describe("NeedsAttention", () => {
   it("says nothing of arriving when it was drawn from the start", () => {
     draw([STOPPED, OVERDUE]);
     expect(screen.queryByText(/need your attention/)).toBeNull();
+  });
+
+  it("asks its cell to fit it to its items while they leave a row of its height empty, and not once they fill it", () => {
+    // What the card last asked of its cell, drawn four rows high: its stored body holds four rows.
+    const asked = (items: readonly object[]) => {
+      const report = vi.fn();
+      const { unmount } = render(
+        <CardFitContext.Provider value={report}>
+          <CardHeightContext.Provider value={4}>
+            {inFrame(
+              <NeedsAttention
+                widgetId="core/needs-attention"
+                placementId="attention"
+                settings={{}}
+                size={{ w: 8, h: 4, tier: "medium" }}
+                data={{ items }}
+                refreshing={false}
+                retry={() => undefined}
+              />,
+              "Needs your attention"
+            )}
+          </CardHeightContext.Provider>
+        </CardFitContext.Provider>
+      );
+      const last = report.mock.calls.at(-1)?.[0];
+      unmount();
+      // Withdrawn as the body leaves, so a card whose state replaces it takes its rows again.
+      expect(report.mock.calls.at(-1)?.[0]).toBeUndefined();
+      return last;
+    };
+    // One item: a height to fit to (jsdom measures it as 0), not "its own rows".
+    expect(asked([OVERDUE])).toEqual(expect.any(Number));
+    expect(asked([1, 2, 3].map(plugin))).toEqual(expect.any(Number));
+    // Four fill the body: the card keeps the height of the card beside it.
+    expect(asked([1, 2, 3, 4].map(plugin))).toBeUndefined();
   });
 });

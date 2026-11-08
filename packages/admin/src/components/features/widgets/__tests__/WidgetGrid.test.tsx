@@ -10,7 +10,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { useEffect, useState, type JSX, type ReactNode } from "react";
+import { useEffect, useRef, useState, type JSX, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
@@ -22,6 +22,7 @@ import {
 import type { AdminBranding } from "@admin/types/branding";
 
 import { useCardCollapsed } from "../frame/collapse";
+import { useCardFitsContent } from "../frame/fit";
 import { GRID_CLASS } from "../sizes";
 import { WidgetGrid } from "../WidgetGrid";
 
@@ -669,6 +670,82 @@ describe("WidgetGrid — sizing", () => {
     expect(card).not.toHaveAttribute("data-collapsed");
     expect(card).not.toHaveClass("py-[15px]");
     expect(within(cell).getByTestId("widget-card-footer")).toBeInTheDocument();
+  });
+
+  /**
+   * A body whose content is one list row high (jsdom lays nothing out, so the height is set on
+   * the element), that asks to be fitted to it until "Fill" is pressed.
+   */
+  function Fitting() {
+    const [fits, setFits] = useState(true);
+    const content = useRef<HTMLDivElement | null>(null);
+    const hold = (node: HTMLDivElement | null) => {
+      if (node !== null) {
+        Object.defineProperty(node, "offsetHeight", {
+          configurable: true,
+          value: 52,
+        });
+      }
+      content.current = node;
+    };
+    useCardFitsContent(content, fits, null);
+    return (
+      <div ref={hold}>
+        <button type="button" onClick={() => setFits(false)}>
+          Fill
+        </button>
+      </div>
+    );
+  }
+
+  /** A widget declared `w` by `h`, as small as two rows, drawn by the component the case registers. */
+  const fitted = (id: string, w: number, h: number) => ({
+    id,
+    title: id,
+    component: "@acme/admin#Fit",
+    size: { default: { w, h }, min: { w, h: 2 } },
+  });
+
+  it("draws a card fitted to its content beside another at the top of its own rows, the card beside it stretched", async () => {
+    registerComponents({
+      "@acme/admin#Fit": Fitting,
+      "@acme/admin#A": () => <div>a</div>,
+    });
+    // At 1,200 px each is drawn at its own w, so the two share their rows.
+    mockBranding = brandingWith([
+      fitted("fit", 8, 4),
+      { ...sized("beside", 4, 4), title: "beside" },
+    ]);
+    renderGrid();
+    const cell = screen.getByTestId("widget-cell-fit");
+    const beside = screen.getByTestId("widget-cell-beside");
+    await within(cell).findByRole("button", { name: "Fill" });
+    // Its rows stay, so no card moves; it stands at its content's height at their top.
+    expect(cell.style.gridRow).toBe("span 4 / span 4");
+    expect(cell).toHaveClass("self-start", "max-h-full");
+    // The card beside it keeps its rows and the row's full height.
+    expect(beside.style.gridRow).toBe("span 4 / span 4");
+    expect(beside).not.toHaveClass("self-start");
+
+    // The must-differ half: once its content fills the card, it is stretched down its rows again.
+    fireEvent.click(within(cell).getByRole("button", { name: "Fill" }));
+    expect(cell.style.gridRow).toBe("span 4 / span 4");
+    expect(cell).not.toHaveClass("self-start");
+  });
+
+  it("draws a card fitted to its content across the whole row in the fewest rows that hold it", async () => {
+    registerComponents({ "@acme/admin#Fit": Fitting });
+    mockBranding = brandingWith([fitted("fit", 12, 4)]);
+    renderGrid();
+    const cell = screen.getByTestId("widget-cell-fit");
+    await within(cell).findByRole("button", { name: "Fill" });
+    // One list row: two rows' body is too short for it, three hold it. No card shares its rows,
+    // so the cards below only move up.
+    expect(cell.style.gridRow).toBe("span 3 / span 3");
+    expect(cell).not.toHaveClass("self-start");
+
+    fireEvent.click(within(cell).getByRole("button", { name: "Fill" }));
+    expect(cell.style.gridRow).toBe("span 4 / span 4");
   });
 
   it("lays its cards on twelve columns in rows of 72 px, in order, with the gaps a card's predicted width counts", () => {
