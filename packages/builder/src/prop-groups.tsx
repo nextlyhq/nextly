@@ -49,6 +49,8 @@ export interface BindableOptions {
     readonly link: string;
     readonly collection: string;
     readonly id: string;
+    /** Whether both halves of the reference may be written where it sits. */
+    readonly writable: boolean;
   };
 }
 

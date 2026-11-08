@@ -852,6 +852,25 @@ describe("a routed page's bindings", () => {
       expect(html).toContain('href="/authors"');
       expect(html).not.toContain("/authors/a1");
     });
+
+    it("links to its own address where the author's entry has no page", async () => {
+      const nextly = instance(linkPage());
+      // The author is read, so the entry is named, but no path is found.
+      const resolved: string[] = [];
+      const { html } = await renderedPage(
+        createBlocksPage,
+        {
+          ...config,
+          resolveEntryPath: async (collection, id) => {
+            resolved.push(`${collection}:${id}`);
+            return null;
+          },
+        },
+        nextly
+      );
+      expect(resolved).toEqual(["authors:a1"]);
+      expect(html).toContain('href="/authors"');
+    });
   });
 
   it("follows a relation into the media library through the library, as the page's images are read", async () => {

@@ -45,20 +45,31 @@ export function bindOp(
   prop: string,
   binding: Binding,
   clear: readonly string[] = [],
-  /**
-   * Props set in the same edit: what the bound value needs beside it, such
-   * as the collection of the entry a link's bound id names.
-   */
-  set: Readonly<Record<string, unknown>> = {}
+  more: {
+    /**
+     * Props set in the same edit: what the bound value needs beside it,
+     * such as the collection of the entry a link's bound id names.
+     */
+    readonly set?: Readonly<Record<string, unknown>>;
+    /**
+     * Other props' bindings removed in the same edit: one the block would
+     * follow before this one, such as a link's address bound before the
+     * entry it now points at.
+     */
+    readonly unbind?: readonly string[];
+  } = {}
 ): BuilderOp | null {
   const node = findNode(document.nodes, id);
   if (node === undefined) return null;
-  const bindings = { ...bindingsOf(node), [prop]: binding };
+  const kept = Object.entries(bindingsOf(node)).filter(
+    ([name]) => name === prop || !(more.unbind ?? []).includes(name)
+  );
+  const bindings = { ...Object.fromEntries(kept), [prop]: binding };
   const props: Record<string, unknown> = isPlainRecord(node.props)
     ? { ...node.props }
     : {};
   const held = clear.filter(name => Object.hasOwn(props, name));
-  const setting = Object.entries(set);
+  const setting = Object.entries(more.set ?? {});
   if (held.length === 0 && setting.length === 0) {
     return { kind: "update", id, patch: { bindings } };
   }

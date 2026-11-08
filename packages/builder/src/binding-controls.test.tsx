@@ -678,11 +678,36 @@ describe("a link's address bound inside its group", () => {
 });
 
 describe("a link's entry bound to the entry a relation names", () => {
-  /** A button whose link may point at an entry, as `core/button` declares it. */
+  /** A call to action's props, as `core/button` declares its link. */
+  const CTA_PROPS = {
+    label: { label: "Label", role: "content", type: "text" },
+    href: { label: "Link", role: "content", type: "url" },
+    entryCollection: {
+      label: "Entry collection",
+      role: "content",
+      type: "text",
+    },
+    entryId: { label: "Entry", role: "content", type: "text" },
+  };
+
+  /**
+   * A button whose link may point at an entry, drawn by an editor that
+   * applies each edit and draws the result, as the editor does; `held` names
+   * props an area around it keeps, which are then declared without the
+   * content role.
+   */
   function mountButton(
     props: Record<string, unknown>,
-    bindings?: BlockNode["bindings"]
+    bindings?: BlockNode["bindings"],
+    held: readonly string[] = []
   ): EditorState {
+    const declared = Object.fromEntries(
+      Object.entries(CTA_PROPS).map(([name, schema]) => {
+        if (!held.includes(name)) return [name, schema];
+        const { role: _content, ...rest } = schema;
+        return [name, rest];
+      })
+    );
     registerBlocks(
       [
         {
@@ -691,38 +716,65 @@ describe("a link's entry bound to the entry a relation names", () => {
           description: "A call to action.",
           example: { props: {} },
           editor: { label: "Call to action" },
-          props: {
-            label: { label: "Label", role: "content", type: "text" },
-            href: { label: "Link", role: "content", type: "url" },
-            entryCollection: { label: "Entry collection", type: "text" },
-            entryId: { label: "Entry", type: "text" },
-          },
+          props: declared,
           defaultProps: {},
+          render: () => null,
+        },
+        {
+          name: "acme/area",
+          version: 1,
+          description: "An area whose blocks keep their design.",
+          example: { props: {} },
+          editor: { label: "Area" },
+          props: {},
+          slots: {
+            children: { lock: "contentOnly", defaultBlock: [{ type: "acme/cta" }] },
+          },
           render: () => null,
         },
       ] as never,
       { source: "binding-controls-entry-link-test" }
     );
+    const button = {
+      id: "b",
+      type: "acme/cta",
+      version: 1,
+      props,
+      ...(bindings === undefined ? {} : { bindings }),
+    } as BlockNode;
     const document = {
       formatVersion: 1,
       kind: "page",
-      nodes: [
-        {
-          id: "b",
-          type: "acme/cta",
-          version: 1,
-          props,
-          ...(bindings === undefined ? {} : { bindings }),
-        },
-      ],
+      nodes:
+        held.length === 0
+          ? [button]
+          : [
+              {
+                id: "area",
+                type: "acme/area",
+                version: 1,
+                props: {},
+                slots: { children: [button] },
+              } as BlockNode,
+            ],
     } as BlockDocument;
+    let current = document;
     const editor = {
       document,
       selectedId: "b",
       selection: { ids: ["b"], primary: "b" },
       applyAll: vi.fn(() => document),
       select: vi.fn(),
-      apply: vi.fn(() => document),
+      apply: vi.fn((op: BuilderOp) => {
+        current = applyOp(current, op).document;
+        view.rerender(
+          <InspectorPanel
+            editor={{ ...editor, document: current } as EditorState}
+            contentServices={services}
+          />
+        );
+        return current;
+      }),
       undo: vi.fn(),
       redo: vi.fn(),
       canUndo: false,
@@ -730,13 +782,27 @@ describe("a link's entry bound to the entry a relation names", () => {
       undoDepth: 0,
       composed: () => undefined,
     } as unknown as EditorState;
-    render(
-      <InspectorPanel
-        editor={editor}
-        contentServices={{ listBindingFields: async () => SOURCES }}
-      />
+    const services = { listBindingFields: async () => SOURCES };
+    const view = render(
+      <InspectorPanel editor={editor} contentServices={services} />
     );
     return editor;
+  }
+
+  /** The picker's option naming the author's entry, once the picker lists it. */
+  async function authorEntry(listbox: string): Promise<HTMLElement> {
+    const list = await screen.findByRole("listbox", { name: listbox });
+    const entry = within(list)
+      .getAllByRole("option")
+      .find(option => option.textContent === "Author › Link to this entry");
+    if (entry === undefined) throw new Error("The author's entry is not offered.");
+    return entry;
+  }
+
+  /** The one edit the editor was handed. */
+  function onlyEdit(editor: EditorState): BuilderOp | undefined {
+    expect(vi.mocked(editor.apply)).toHaveBeenCalledTimes(1);
+    return vi.mocked(editor.apply).mock.calls[0]?.[0];
   }
 
   it("offers the author's entry for the link, and not for the label", async () => {
@@ -744,15 +810,7 @@ describe("a link's entry bound to the entry a relation names", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Bind Link to a field" })
     );
-    const link = await screen.findByRole("listbox", {
-      name: "Fields for Link",
-    });
-    expect(
-      within(link)
-        .getAllByRole("option")
-        .map(option => option.textContent)
-    ).toContain("Author › Link to this entry");
-    fireEvent.keyDown(link, { key: "Escape" });
+    expect(await authorEntry("Fields for Link")).toBeTruthy();
     cleanup();
     clearBlocks();
     // The control: the label, a text prop the id would fit by type alone.
@@ -772,7 +830,7 @@ describe("a link's entry bound to the entry a relation names", () => {
     );
   });
 
-  it("binds the entry's id and sets its collection, emptying the address, in one edit", async () => {
+  it("binds the entry's id and sets its collection, keeping the stored address, in one edit", async () => {
     const editor = mountButton({
       label: "Read more",
       href: "/about",
@@ -781,23 +839,76 @@ describe("a link's entry bound to the entry a relation names", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Bind Link to a field" })
     );
-    const list = await screen.findByRole("listbox", {
-      name: "Fields for Link",
-    });
-    const entry = within(list)
-      .getAllByRole("option")
-      .find(option => option.textContent === "Author › Link to this entry");
-    if (entry === undefined) throw new Error("The author's entry is not offered.");
-    fireEvent.click(entry);
-    expect(vi.mocked(editor.apply)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(editor.apply).mock.calls[0]?.[0]).toEqual({
+    fireEvent.click(await authorEntry("Fields for Link"));
+    // The address stays, where the link goes when the entry is not read; the
+    // stored entry id, which the bound one replaces, goes.
+    expect(onlyEdit(editor)).toEqual({
       kind: "update",
       id: "b",
       patch: {
         bindings: { entryId: { $bind: "author.id" } },
-        props: { label: "Read more", entryCollection: "users" },
+        props: { label: "Read more", href: "/about", entryCollection: "users" },
       },
     });
+  });
+
+  it("changes a bound address to the entry: the address's binding and its fallback go, its stored value stays", async () => {
+    const editor = mountButton(
+      { label: "Read more", href: "/about" },
+      {
+        href: {
+          $bind: "siteUrl",
+          source: "site",
+          fallback: "https://example.test/",
+        },
+      }
+    );
+    const chip = await screen.findByRole("button", {
+      name: /^Link: bound to Site URL/,
+    });
+    fireEvent.keyDown(chip, { key: "Enter" });
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Change field…" })
+    );
+    fireEvent.click(await authorEntry("Fields for Link"));
+    expect(onlyEdit(editor)).toEqual({
+      kind: "update",
+      id: "b",
+      patch: {
+        bindings: { entryId: { $bind: "author.id" } },
+        props: { label: "Read more", href: "/about", entryCollection: "users" },
+      },
+    });
+  });
+
+  it("hands focus to the entry's chip after the pick", async () => {
+    mountButton({ label: "Read more" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Link to a field" })
+    );
+    fireEvent.click(await authorEntry("Fields for Link"));
+    const chip = await screen.findByRole("button", {
+      name: "Entry: bound to Author › Link to this entry of this post",
+    });
+    await waitFor(() => {
+      expect(window.document.activeElement).toBe(chip);
+    });
+  });
+
+  it("offers no entry where an area holds either half of the reference", async () => {
+    mountButton({ label: "Read more" }, undefined, ["entryCollection"]);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Link to a field" })
+    );
+    const list = await screen.findByRole("listbox", { name: "Fields for Link" });
+    const names = within(list)
+      .getAllByRole("option")
+      .map(option => option.textContent);
+    // The control: the link's own address fields are still offered.
+    expect(names).toContain("Site URL");
+    expect(names.some(name => name?.includes("Link to this entry"))).toBe(
+      false
+    );
   });
 
   it("draws the bound entry's chip in the link's place, with no fallback to type", async () => {
@@ -810,7 +921,9 @@ describe("a link's entry bound to the entry a relation names", () => {
         name: "Entry: bound to Author › Link to this entry of this post",
       })
     ).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Bind Link to a field" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Bind Link to a field" })
+    ).toBeNull();
     expect(screen.queryByLabelText("Fallback")).toBeNull();
   });
 });

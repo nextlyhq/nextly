@@ -1042,13 +1042,23 @@ function isLinkBound(
  */
 function bindOptions(
   group: LinkGroup,
-  destination: readonly string[]
+  destination: readonly string[],
+  writable: (name: string) => boolean
 ): BindableOptions {
+  const entry = group.entry;
   return {
     clearsOnBind: destination.filter(name => name !== group.link),
-    ...(group.entry === undefined
+    ...(entry === undefined
       ? {}
-      : { entryLink: { link: group.link, ...group.entry } }),
+      : {
+          entryLink: {
+            link: group.link,
+            ...entry,
+            // A related entry's pick writes both halves, so where either is
+            // held (an area that keeps the block's design) none is offered.
+            writable: writable(entry.collection) && writable(entry.id),
+          },
+        }),
   };
 }
 
@@ -1140,7 +1150,7 @@ export function LinkGroupField({
             />
           </div>
         </HeldByLock>,
-        bindOptions(group, destination)
+        bindOptions(group, destination, writable)
       )}
       {!linked || group.target === undefined ? null : (
         <HeldByLock reasonId={held(group.target)}>

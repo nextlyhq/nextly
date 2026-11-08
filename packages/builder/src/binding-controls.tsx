@@ -93,14 +93,28 @@ interface EntryLink {
   readonly link: string;
   readonly collection: string;
   readonly id: string;
+  /**
+   * Whether both halves of the reference may be written where the block
+   * sits: a related entry's pick writes both, so it is offered only then.
+   */
+  readonly writable: boolean;
+}
+
+/** The edit a pick makes, and the prop it binds, whose chip is drawn after. */
+interface PickEdit {
+  readonly op: BuilderOp | null;
+  readonly bound: string;
 }
 
 /**
  * The edit a pick makes. A related entry's id fills the link's entry: its
  * collection is set to the relation's in the same edit, since a pick writes
- * both halves of the reference at once, and the address and a stored entry
- * id are emptied, since the button follows the entry before the address.
- * Any other pick binds `prop`, emptying `clearsOnBind`.
+ * both halves of the reference at once, and a stored entry id is emptied.
+ * The address the link was bound to is unbound, since the entry replaces it,
+ * and its fallback is not carried over, being an address rather than an id;
+ * the address stored on the block is kept, so the link still goes there
+ * where the entry is not read. Any other pick binds `prop`, emptying
+ * `clearsOnBind`.
  */
 function pickOp(
   at: {
@@ -112,26 +126,28 @@ function pickOp(
   },
   picked: FieldOption,
   kept: Binding | undefined
-): BuilderOp | null {
+): PickEdit {
   const entry = at.entryLink;
   const collection = picked.field.linksTo;
   if (entry === undefined || collection === undefined) {
-    return bindOp(
+    const op = bindOp(
       at.document,
       at.nodeId,
       at.prop,
       bindingFor(picked, kept),
       at.clearsOnBind
     );
+    return { op, bound: at.prop };
   }
-  return bindOp(
+  const op = bindOp(
     at.document,
     at.nodeId,
     entry.id,
-    bindingFor(picked, kept),
-    [entry.link, entry.id],
-    { [entry.collection]: collection }
+    bindingFor(picked, at.prop === entry.id ? kept : undefined),
+    [entry.id],
+    { set: { [entry.collection]: collection }, unbind: [entry.link] }
   );
+  return { op, bound: entry.id };
 }
 
 /**
@@ -228,7 +244,7 @@ function fittingOptions(
 ): readonly FieldOption[] {
   const offered = (field: BindingFieldChoice): boolean =>
     field.linksTo !== undefined
-      ? entryLink !== undefined
+      ? entryLink?.writable === true
       : prop.name !== entryLink?.id && fits(field, prop);
   const options: FieldOption[] = [];
   sources.forEach((source, index) => {
@@ -623,8 +639,11 @@ function BindButton({
   const name = propLabel(prop.name, prop.schema);
   const trigger = React.useRef<HTMLButtonElement>(null);
   // The inspector's fields, taken from the button before a pick replaces it
-  // with the chip: the picker is drawn in a portal, outside them.
+  // with the chip: the picker is drawn in a portal, outside them. And the
+  // prop the pick bound, whose chip that is: a related entry binds the
+  // link's entry, not this prop.
   const pickedIn = React.useRef<Element | null>(null);
+  const boundProp = React.useRef(prop.name);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -653,7 +672,7 @@ function BindButton({
           requestAnimationFrame(() => {
             fields
               .querySelector<HTMLElement>(
-                `[data-binding-chip="${CSS.escape(`${nodeId}:${prop.name}`)}"]`
+                `[data-binding-chip="${CSS.escape(`${nodeId}:${boundProp.current}`)}"]`
               )
               ?.focus();
           });
@@ -668,11 +687,12 @@ function BindButton({
           onPick={picked => {
             pickedIn.current =
               trigger.current?.closest(".nx-inspector__fields") ?? null;
-            const op = pickOp(
+            const { op, bound } = pickOp(
               { document, nodeId, prop: prop.name, clearsOnBind, entryLink },
               picked,
               undefined
             );
+            boundProp.current = bound;
             setOpen(false);
             if (op === null || !onApply(op)) {
               pickedIn.current = null;
@@ -1417,7 +1437,7 @@ function BoundField({
               current={binding}
               entryLink={entryLink}
               onPick={picked => {
-                const op = pickOp(
+                const { op } = pickOp(
                   { document, nodeId, prop: prop.name, clearsOnBind, entryLink },
                   picked,
                   binding
