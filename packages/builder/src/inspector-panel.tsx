@@ -1515,11 +1515,13 @@ function ContentFields({
           binding={bindings?.[name]}
           document={document}
           services={services}
-          // A bind that empties other props may be made only where they may
-          // all be written, as the group's own pick is.
-          disabled={![name, ...clears].every(writable)}
+          disabled={!writable(name)}
           onApply={onApply}
           clearsOnBind={clears}
+          // The props a bind would empty that may not be written here: a
+          // bind or a change that would empty one is held, while the
+          // fallback and the unbind, which empty nothing, stay offered.
+          clearsLocked={clears.filter(each => !writable(each))}
         >
           {field}
         </BindableField>

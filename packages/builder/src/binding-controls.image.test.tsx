@@ -96,6 +96,9 @@ function register(): void {
 /** The document as the last edit left it. */
 let latest: BlockDocument | undefined;
 
+/** Every op applied, in order, so a test can say what one edit wrote. */
+let applied: BuilderOp[] = [];
+
 /** The panel over a document each applied op changes, as the editor's does. */
 function Live({
   initial,
@@ -107,6 +110,7 @@ function Live({
   const [document, setDocument] = React.useState(initial);
   latest = document;
   const apply = (op: BuilderOp): BlockDocument => {
+    applied.push(op);
     const next = applyOp(document, op).document;
     setDocument(next);
     return next;
@@ -131,9 +135,11 @@ function Live({
 function mount(
   bindings: BlockNode["bindings"],
   planUnbind?: ContentServices["planUnbind"],
-  sources: readonly BindingFieldSource[] = SOURCES
+  sources: readonly BindingFieldSource[] = SOURCES,
+  props: Record<string, unknown> = {}
 ): void {
   register();
+  applied = [];
   render(
     <Live
       initial={
@@ -145,7 +151,7 @@ function mount(
               id: "a",
               type: "acme/picture",
               version: 1,
-              props: {},
+              props,
               bindings,
             } as BlockNode,
           ],
@@ -322,5 +328,67 @@ describe("a bound image", () => {
         .getByRole("radio", { name: "Library" })
         .getAttribute("aria-checked")
     ).toBe("true");
+  });
+
+  it("does not say no file is chosen while the picture is bound", async () => {
+    // The page reads the bound field's file, and its library alt text with
+    // it: "no library file" would tell the author screen readers get none.
+    mount({ mediaId: { $bind: "cover" } });
+    expect(await screen.findByText(/comes from a bound field/)).toBeTruthy();
+    expect(screen.queryByText(/No library file is chosen/)).toBeNull();
+  });
+
+  it("says no file is chosen where the picture is neither bound nor picked", () => {
+    // The control: the same alt row, nothing behind the picture.
+    mount(undefined);
+    expect(screen.getByText(/No library file is chosen/)).toBeTruthy();
+    expect(screen.queryByText(/comes from a bound field/)).toBeNull();
+  });
+});
+
+describe("an image's address bound on the URL side", () => {
+  const WITH_URL: readonly BindingFieldSource[] = [
+    {
+      binding: { source: "entry" },
+      label: "Post",
+      fields: [{ name: "bannerUrl", type: "url", public: true }],
+    },
+  ];
+
+  /** Show the URL side and bind the address to the post's banner URL. */
+  async function bindAddress(): Promise<void> {
+    fireEvent.click(screen.getByRole("radio", { name: "URL" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Image address to a field" })
+    );
+    fireEvent.click(await screen.findByRole("option", { name: /^Banner url/ }));
+  }
+
+  it("empties a stored library file in the same edit", async () => {
+    // The block draws a library file before an address: left, the old file
+    // would stay published under a bound address.
+    mount(undefined, undefined, WITH_URL, { mediaId: "m-1" });
+    await bindAddress();
+    expect(applied).toEqual([
+      {
+        kind: "update",
+        id: "a",
+        patch: { bindings: { src: { $bind: "bannerUrl" } }, props: {} },
+      },
+    ]);
+    expect(storedProps()).toEqual({});
+  });
+
+  it("writes the binding alone where no library file is stored", async () => {
+    // The control: nothing to empty, so the props stay out of the edit.
+    mount(undefined, undefined, WITH_URL);
+    await bindAddress();
+    expect(applied).toEqual([
+      {
+        kind: "update",
+        id: "a",
+        patch: { bindings: { src: { $bind: "bannerUrl" } } },
+      },
+    ]);
   });
 });

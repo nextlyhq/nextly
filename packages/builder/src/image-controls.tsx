@@ -93,6 +93,27 @@ interface ImageGroupFieldProps {
 /** A field drawn as it is, where the inspector offers no binding controls. */
 const unwrapped: BindableWrapper = (_name, field) => field;
 
+/**
+ * Where the image's picture comes from, as the block reads it: a binding on
+ * its media prop first, then a stored library file, else none here (an
+ * address, or nothing). The one reading the source and alt controls share.
+ */
+type PictureSource =
+  | { readonly kind: "bound" }
+  | { readonly kind: "library"; readonly id: string }
+  | { readonly kind: "none" };
+
+function pictureSourceOf(
+  media: string | undefined,
+  values: Readonly<Record<string, unknown>>,
+  bound: ReadonlySet<string>
+): PictureSource {
+  if (media === undefined) return { kind: "none" };
+  if (bound.has(media)) return { kind: "bound" };
+  const id = storedString(values[media]);
+  return id === undefined ? { kind: "none" } : { kind: "library", id };
+}
+
 /** The names of the block's props that hold a binding. */
 function boundPropsOf(
   document: BlockDocument | undefined,
@@ -238,7 +259,11 @@ function AddressSide({
               prop={address}
               disabled={!writable(group.address)}
               onCommit={typed => write(addressChanges(group, typed, values))}
-            />
+            />,
+            // The block draws a library file before an address, so binding
+            // the address empties a stored file in the same edit, as typing
+            // one does (`addressChanges`).
+            { clearsOnBind: [group.media] }
           )}
       {storedMedia === undefined ? null : (
         <div className="nx-inspector__note-row">
@@ -328,7 +353,8 @@ export function ImageSourceField({
   const values = storedValues(props);
   const wrap = bindable ?? unwrapped;
   const bound = boundPropsOf(document, nodeId);
-  const imageBound = bound.has(group.media);
+  const imageBound =
+    pictureSourceOf(group.media, values, bound).kind === "bound";
   // The side shown, starting from what is stored. Choosing a side changes
   // only what is shown; the props change when a file is picked or an
   // address typed, so looking at the other side never loses a value.
@@ -447,14 +473,27 @@ function GrowingText({
 
 /** What From library says under the menu: the library's words, or why none. */
 function LibraryAltNote({
+  bound,
   mediaId,
   libraryAlt,
   read,
 }: {
+  /** Whether the picture comes from a binding, whose file is read on the page. */
+  bound: boolean;
   mediaId: string | undefined;
   libraryAlt: string | undefined;
   read: boolean;
 }): React.JSX.Element | null {
+  // A bound picture's file is the field's, read when the page is drawn, so
+  // no file is "not chosen": its library alt text applies.
+  if (bound) {
+    return (
+      <p className="nx-inspector__note">
+        The image comes from a bound field, so the library alt text of the file
+        it holds is used. Choose Custom to describe it here instead.
+      </p>
+    );
+  }
   if (mediaId === undefined) {
     return (
       <p className="nx-inspector__note">
@@ -572,6 +611,33 @@ function altLabel(
 }
 
 /**
+ * The library file the picture is picked from, read for its alt text: none
+ * for a bound picture, whose file the page reads, or for no file at all.
+ * `pending` while the read is still out.
+ */
+function useLibraryAlt(
+  services: ContentServices | undefined,
+  picture: PictureSource
+): {
+  readonly mediaId: string | undefined;
+  readonly summary: ReturnType<typeof useMediaSummary>;
+  readonly libraryAlt: string | undefined;
+  readonly libraryPending: boolean;
+} {
+  const mediaId = picture.kind === "library" ? picture.id : undefined;
+  const summary = useMediaSummary(services?.readMedia, mediaId ?? null);
+  return {
+    mediaId,
+    summary,
+    libraryAlt: storedString(summary?.alt),
+    libraryPending:
+      mediaId !== undefined &&
+      services?.readMedia !== undefined &&
+      summary === undefined,
+  };
+}
+
+/**
  * What a screen reader is given for an image: the library's alt text, the
  * page's own, or nothing because the image is decorative.
  */
@@ -583,13 +649,20 @@ export function ImageAltField({
   services,
   onCommitMany,
   bindable,
+  document,
+  nodeId,
 }: ImageGroupFieldProps & { group: ImageAltGroup }): React.JSX.Element {
   const id = React.useId();
   const values = storedValues(props);
-  const mediaId =
-    group.media === undefined ? undefined : storedString(values[group.media]);
-  const summary = useMediaSummary(services?.readMedia, mediaId ?? null);
-  const libraryAlt = storedString(summary?.alt);
+  const picture = pictureSourceOf(
+    group.media,
+    values,
+    boundPropsOf(document, nodeId)
+  );
+  const { mediaId, summary, libraryAlt, libraryPending } = useLibraryAlt(
+    services,
+    picture
+  );
   const mode = altModeOf(group, values);
   const own = storedAlt(group, values);
   const changesFor = (next: AltMode) =>
@@ -599,10 +672,6 @@ export function ImageAltField({
   // Custom starts from the library's words where the page stores none, so it
   // waits for them: chosen before they arrive, it would store an empty alt
   // and silence a description the image was being read with.
-  const libraryPending =
-    mediaId !== undefined &&
-    services?.readMedia !== undefined &&
-    summary === undefined;
   const waiting = (next: AltMode) =>
     next === "custom" && libraryPending && !isAuthoredText(values[group.alt]);
   const pickable = (next: AltMode) =>
@@ -633,6 +702,7 @@ export function ImageAltField({
               />
               {mode === "library" ? (
                 <LibraryAltNote
+                  bound={picture.kind === "bound"}
                   mediaId={mediaId}
                   libraryAlt={libraryAlt}
                   read={summary !== undefined}

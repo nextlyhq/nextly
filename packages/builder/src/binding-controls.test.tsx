@@ -627,6 +627,214 @@ describe("an image's alt text bound inside its group", () => {
   });
 });
 
+/** The inspector over one document, with the selected block and services given. */
+function mountDocument(
+  document: BlockDocument,
+  selected: string,
+  services: Partial<ContentServices> = {
+    listBindingFields: async () => SOURCES,
+  }
+): void {
+  render(
+    <InspectorPanel
+      editor={
+        {
+          document,
+          selectedId: selected,
+          selection: { ids: [selected], primary: selected },
+          applyAll: vi.fn(() => document),
+          select: vi.fn(),
+          apply: vi.fn(() => document),
+          undo: vi.fn(),
+          redo: vi.fn(),
+          canUndo: false,
+          canRedo: false,
+          undoDepth: 0,
+          composed: () => undefined,
+        } as unknown as EditorState
+      }
+      contentServices={services}
+    />
+  );
+}
+
+describe("a bound link's Fallback", () => {
+  /** A block with a link prop and a yes-or-no, each bound. */
+  function mountTeaser(): void {
+    registerBlocks(
+      [
+        {
+          name: "acme/teaser",
+          version: 1,
+          description: "A teaser.",
+          example: { props: {} },
+          editor: { label: "Teaser" },
+          props: {
+            more: { label: "More", role: "content", type: "link" },
+            shown: { label: "Shown", role: "content", type: "checkbox" },
+          },
+          defaultProps: {},
+          render: () => null,
+        },
+      ] as never,
+      { source: "binding-controls-link-fallback-test" }
+    );
+    mountDocument(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "t",
+            type: "acme/teaser",
+            version: 1,
+            props: {},
+            bindings: {
+              more: { $bind: "siteUrl", source: "site" },
+              shown: { $bind: "featured" },
+            },
+          } as BlockNode,
+        ],
+      } as BlockDocument,
+      "t"
+    );
+  }
+
+  it("is offered for a link, whose value is an address", async () => {
+    mountTeaser();
+    const chip = await screen.findByRole("button", {
+      name: /^More: bound to/,
+    });
+    const row = chip.closest(".nx-binding");
+    expect(row?.querySelector("input")).not.toBeNull();
+    expect(within(row as HTMLElement).getByLabelText("Fallback")).toBeTruthy();
+  });
+
+  it("is not offered for a yes-or-no, which text can't hold", async () => {
+    // The control: the same block, a prop that isn't text.
+    mountTeaser();
+    const chip = await screen.findByRole("button", {
+      name: /^Shown: bound to/,
+    });
+    const row = chip.closest(".nx-binding") as HTMLElement;
+    expect(within(row).queryByLabelText("Fallback")).toBeNull();
+  });
+});
+
+describe("an alt text bound in a contentOnly area", () => {
+  /** A figure inside an area where its content may change and its design may not. */
+  function mountInArea(figure: Partial<BlockNode>): void {
+    registerBlocks(
+      [
+        {
+          name: "acme/figure",
+          version: 1,
+          description: "A figure.",
+          example: { props: {} },
+          editor: { label: "Figure" },
+          props: {
+            alt: { label: "Alt text", role: "content", type: "text" },
+            // Not content, so the area holds it.
+            decorative: { label: "Decorative (no alt text)", type: "checkbox" },
+          },
+          defaultProps: {},
+          render: () => null,
+        },
+        {
+          name: "acme/area",
+          version: 1,
+          description: "An area whose blocks keep their design.",
+          example: { props: {} },
+          editor: { label: "Area" },
+          props: {},
+          slots: {
+            children: {
+              lock: "contentOnly",
+              defaultBlock: [{ type: "acme/figure" }],
+            },
+          },
+          render: () => null,
+        },
+      ] as never,
+      { source: "binding-controls-area-test" }
+    );
+    mountDocument(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "area",
+            type: "acme/area",
+            version: 1,
+            props: {},
+            slots: {
+              children: [
+                {
+                  id: "f",
+                  type: "acme/figure",
+                  version: 1,
+                  props: {},
+                  ...figure,
+                } as BlockNode,
+              ],
+            },
+          } as BlockNode,
+        ],
+      } as BlockDocument,
+      "f",
+      {
+        listBindingFields: async () => SOURCES,
+        planUnbind: async () => ({ refusal: "unused" }),
+      }
+    );
+  }
+
+  it("keeps a bound alt's fallback and unbind, and holds the change that would lift the mark", async () => {
+    mountInArea({
+      props: { decorative: true },
+      bindings: { alt: { $bind: "title" } },
+    });
+    const chip = await screen.findByRole("button", {
+      name: /^Alt text: bound to/,
+    });
+    expect(
+      (screen.getByLabelText("Fallback") as HTMLInputElement).disabled
+    ).toBe(false);
+    fireEvent.keyDown(chip, { key: "Enter" });
+    expect(
+      await screen.findByRole("menuitem", { name: "Unbind, keep the alt text" })
+    ).toBeTruthy();
+    // A change of field would lift the decorative mark, which the area holds.
+    expect(
+      screen.queryByRole("menuitem", { name: "Change field…" })
+    ).toBeNull();
+  });
+
+  it("holds a fresh bind that would lift the mark", () => {
+    mountInArea({ props: { decorative: true } });
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Bind Alt text to a field",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+  });
+
+  it("offers a fresh bind that would lift nothing", () => {
+    // The control: the same area, no mark to lift, so the bind is offered.
+    mountInArea({});
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Bind Alt text to a field",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(false);
+  });
+});
+
 describe("a bound prop's Open source", () => {
   /** The chip's menu, opened from the keyboard as a reader opens it. */
   async function openMenu(): Promise<void> {

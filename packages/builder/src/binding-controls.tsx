@@ -19,6 +19,7 @@ import {
   fieldFitsProp,
   findNode,
   getBlock,
+  isPlainRecord,
   sameJsonValue,
   type Binding,
   type BindingFieldShape,
@@ -109,6 +110,23 @@ function bindingFor(option: FieldOption, kept: Binding | undefined): Binding {
     ...(source.source === "entry" ? {} : { source: source.source }),
     ...carried,
   };
+}
+
+/**
+ * Whether a bind would empty a prop that may not be written: one of
+ * `locked` the block holds. A held bind is not offered; one that would empty
+ * nothing is, whatever the lock.
+ */
+function clearHeld(
+  document: BlockDocument,
+  nodeId: string,
+  locked: readonly string[] | undefined
+): boolean {
+  if (locked === undefined || locked.length === 0) return false;
+  const props = findNode(document.nodes, nodeId)?.props;
+  return (
+    isPlainRecord(props) && locked.some(name => Object.hasOwn(props, name))
+  );
 }
 
 /** The binding with `fallback` as its fallback; none when it is empty. */
@@ -411,6 +429,11 @@ export interface BindingControlProps {
    * prop, such as a button's entry reference over its address.
    */
   readonly clearsOnBind?: readonly string[] | undefined;
+  /**
+   * Those of `clearsOnBind` that may not be written where the block sits: a
+   * bind or a change of field that would empty one is held.
+   */
+  readonly clearsLocked?: readonly string[] | undefined;
   /** The prop's own control, drawn while it is not bound. */
   readonly children: React.ReactNode;
 }
@@ -454,6 +477,7 @@ function BindButton({
   disabled,
   onApply,
   clearsOnBind,
+  clearsLocked,
   onBound,
   onRefused,
 }: BindingControlProps & {
@@ -475,7 +499,7 @@ function BindButton({
           className="nx-binding-row__bind"
           aria-label={`Bind ${name} to a field`}
           title={`Bind ${name} to a field`}
-          disabled={disabled}
+          disabled={disabled || clearHeld(document, nodeId, clearsLocked)}
           data-open={open ? "" : undefined}
         >
           <Database aria-hidden="true" size={14} />
@@ -535,6 +559,20 @@ const TEXT_PROP_TYPES: ReadonlySet<string> = new Set([
   "textarea",
   "url",
 ]);
+
+/**
+ * The bindable kinds whose value is plain text: text, and a link or an
+ * address (`url` and `link` props both bind as "link").
+ */
+const TEXT_KINDS: ReadonlySet<string> = new Set(["text", "link"]);
+
+/** Whether a prop's fallback is written as text: by its type or its kind. */
+function takesTextFallback(prop: EditableProp): boolean {
+  return (
+    TEXT_PROP_TYPES.has(prop.schema.type) ||
+    TEXT_KINDS.has(bindablePropKind(prop.schema) ?? "")
+  );
+}
 
 /** Said under a field where the editor refused the binding's edit. */
 const EDIT_REFUSED = "The page refused this edit, so nothing changed.";
@@ -796,7 +834,7 @@ function BoundValueRows({
           describedBy={labelId}
           onFallback={next => onRebind(withFallback(binding, next))}
         />
-      ) : TEXT_PROP_TYPES.has(prop.schema.type) ? (
+      ) : takesTextFallback(prop) ? (
         // A text input writes text: offered for a prop whose value is text
         // alone, so a number's, a choice's or a passage's fallback is never
         // rewritten.
@@ -1125,6 +1163,7 @@ function BoundField({
   disabled,
   onApply,
   clearsOnBind,
+  clearsLocked,
   onUnbound,
 }: Omit<BindingControlProps, "binding" | "children"> & {
   binding: Binding;
@@ -1183,7 +1222,10 @@ function BoundField({
             source: names.source,
             disabled,
           }}
-          canChange={services?.listBindingFields !== undefined}
+          canChange={
+            services?.listBindingFields !== undefined &&
+            !clearHeld(document, nodeId, clearsLocked)
+          }
           canUnbind={services?.planUnbind !== undefined}
           propName={name}
           source={
