@@ -36,6 +36,16 @@ const draws = vi.hoisted(
   () => [] as { signal: AbortSignal | undefined; ended: string }[]
 );
 
+/**
+ * The requests made to the bindings route, each held until its signal
+ * aborts, and how many were outstanding at most at once.
+ */
+const routeAsks = vi.hoisted(() => ({
+  made: [] as { signal: AbortSignal | undefined }[],
+  outstanding: 0,
+  most: 0,
+}));
+
 vi.mock("react-dom/server", () => ({
   renderToReadableStream: (
     _element: unknown,
@@ -70,6 +80,21 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     documentId: "p1",
   }),
   useCurrentUserId: () => "u1",
+  writePluginRoute: ({ signal }: { signal?: AbortSignal }) => {
+    routeAsks.made.push({ signal });
+    routeAsks.outstanding += 1;
+    routeAsks.most = Math.max(routeAsks.most, routeAsks.outstanding);
+    return new Promise((_resolve, reject) => {
+      signal?.addEventListener(
+        "abort",
+        () => {
+          routeAsks.outstanding -= 1;
+          reject(signal.reason);
+        },
+        { once: true }
+      );
+    });
+  },
 }));
 
 import { PageReadMeter } from "./page-read-meter";
@@ -119,6 +144,9 @@ beforeEach(() => {
   vi.useFakeTimers();
   countWithStages.mockReset();
   draws.length = 0;
+  routeAsks.made.length = 0;
+  routeAsks.outstanding = 0;
+  routeAsks.most = 0;
 });
 
 afterEach(() => {
@@ -288,6 +316,8 @@ describe("a page changing all the while its counts are slow", () => {
     // Started at three seconds, the cap on the wait, it answers at eight.
     expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
     await changeFor(12_000);
+    // The count shown stays shown while the next ones are made.
+    expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
     expect(most).toBe(1);
     // One count, then one after each answer for the changes made meanwhile.
     expect(countWithStages.mock.calls.length).toBeLessThanOrEqual(6);
@@ -393,5 +423,108 @@ describe("a count given up on that answers after all", () => {
     expect(meter().getAttribute("aria-label")).toBe(
       "Couldn't count page reads. Retry"
     );
+  });
+});
+
+describe("the count's request to the bindings route", () => {
+  /** A page whose heading is bound to its title, so the route is asked. */
+  const bound = {
+    ...document,
+    nodes: [
+      {
+        id: "h",
+        type: "core/heading",
+        version: 1,
+        props: { text: "Own text" },
+        bindings: { text: { $bind: "title" } },
+      },
+    ],
+  };
+
+  /** What the count numbered `index` reads the page's bindings with. */
+  function readBindingsOf(
+    index: number
+  ): (
+    ask: { documents: readonly unknown[] },
+    allowance: number
+  ) => Promise<unknown> {
+    const call = countWithStages.mock.calls[index] as [
+      {
+        readBindings: (
+          ask: { documents: readonly unknown[] },
+          allowance: number
+        ) => Promise<unknown>;
+      },
+    ];
+    return call[0].readBindings;
+  }
+
+  it("is aborted by Retry, and only one is ever outstanding", async () => {
+    countWithStages.mockImplementation(
+      () => new Promise<PageReadReport>(() => undefined)
+    );
+    render(
+      <PageReadMeter
+        editor={editor}
+        drawnWith={drawnWith}
+        regions={NO_REGIONS}
+      />
+    );
+    await wait(600);
+    // The count's bindings read, its request held by the route.
+    const reading = readBindingsOf(0)({ documents: [bound] }, 500);
+    const ended = vi.fn();
+    reading.then(ended, ended);
+    await vi.waitFor(() => expect(routeAsks.made).toHaveLength(1));
+    await wait(20_000);
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Couldn't count page reads. Retry"
+    );
+    expect(routeAsks.made[0]?.signal?.aborted).toBe(false);
+    expect(ended).not.toHaveBeenCalled();
+    fireEvent.click(meter());
+    // Retry aborts the request in flight, and the read ends rejected.
+    expect(routeAsks.made[0]?.signal?.aborted).toBe(true);
+    await expect(reading).rejects.toThrow();
+    expect(routeAsks.outstanding).toBe(0);
+    await wait(0);
+    expect(countWithStages).toHaveBeenCalledTimes(2);
+    // The next count asks the route afresh, the aborted ask not kept.
+    readBindingsOf(1)({ documents: [bound] }, 500).catch(() => undefined);
+    await vi.waitFor(() => expect(routeAsks.made).toHaveLength(2));
+    expect(routeAsks.most).toBe(1);
+  });
+});
+
+describe("a count that fails after the page changed", () => {
+  it("reads as counting, not failed, while the count the change asked for is made", async () => {
+    countWithStages
+      .mockImplementationOnce(
+        () =>
+          new Promise<PageReadReport>((_resolve, reject) => {
+            setTimeout(() => reject(new Error("refused")), 1000);
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<PageReadReport>(resolve => {
+            setTimeout(() => resolve(counted), 1000);
+          })
+      );
+    const fresh = () => ({ ...drawnWith }) as CountedDrawing;
+    const view = render(
+      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+    );
+    await wait(800);
+    // Changed while the first count, begun at 600 ms, is being made.
+    view.rerender(
+      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+    );
+    // It fails at 1.6 s, and the count the change asked for begins.
+    await wait(800);
+    expect(countWithStages).toHaveBeenCalledTimes(2);
+    expect(meter().getAttribute("aria-label")).toBe("Counting page reads");
+    await wait(1000);
+    expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
   });
 });

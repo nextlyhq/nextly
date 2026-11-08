@@ -109,6 +109,12 @@ describe("a count that could not be made", () => {
     // Never "Counting": the count is not on its way.
     expect(meter.getAttribute("aria-busy")).toBeNull();
     expect(meter.textContent).toContain("Couldn't count reads");
+    // Marked with an alert, never a circling arrow or the meter's gauge,
+    // which read as a count still on its way.
+    const mark = meter.querySelector("svg");
+    expect(mark?.getAttribute("class")).toMatch(
+      /lucide-(circle-alert|alert-circle)/
+    );
     fireEvent.click(meter);
     expect(retry).toHaveBeenCalledTimes(1);
     // A press retries; it opens no panel, which would have nothing to say.

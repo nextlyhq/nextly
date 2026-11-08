@@ -104,14 +104,16 @@ export interface PageCountReads {
   /** Where the page's entry lives; a collection's, unless said. */
   readonly entrySource?: EntrySource;
   /**
-   * Ends the count when aborted: its draw stops, and it asks no further
-   * read of the bindings route (one already asked is answered, unread).
+   * Ends the count when aborted: its draw stops, its request to the
+   * bindings route is aborted, and it asks nothing further.
    */
   readonly signal?: AbortSignal;
   /** The page's bindings and conditions' fields, under `allowance` reads. */
   readonly readBindings?: (
     ask: BindingsAsk,
-    allowance: number
+    allowance: number,
+    /** The count's own `signal`, which aborts the read when it is asked. */
+    signal?: AbortSignal
   ) => Promise<CountedBindings | undefined>;
 }
 
@@ -132,15 +134,18 @@ function drawnBindings(
   };
 }
 
-/** A bindings read that is not asked once `signal` has been aborted. */
-function unlessAborted(
+/**
+ * A bindings read handed the count's `signal`, which aborts it, and not
+ * asked at all once the signal has been aborted.
+ */
+function withSignal(
   read: NonNullable<PageCountReads["readBindings"]>,
   signal: AbortSignal | undefined
-): NonNullable<PageCountReads["readBindings"]> {
-  if (signal === undefined) return read;
+): (ask: BindingsAsk, allowance: number) => ReturnType<typeof read> {
+  if (signal === undefined) return (ask, allowance) => read(ask, allowance);
   return async (ask, allowance) => {
     signal.throwIfAborted();
-    return await read(ask, allowance);
+    return await read(ask, allowance, signal);
   };
 }
 
@@ -172,7 +177,7 @@ export async function countPageReads(
     regions,
     entrySource,
     where,
-    readBindings: unlessAborted(
+    readBindings: withSignal(
       reads.readBindings ?? drawnBindings(drawnWith),
       reads.signal
     ),
@@ -192,7 +197,7 @@ function routeBindings(
   userId: string | null,
   drawnWith: CountedDrawing
 ): PageCountReads["readBindings"] {
-  return async (ask, allowance) => {
+  return async (ask, allowance, signal) => {
     const request = canvasBindingsRequest(
       ask.documents,
       identity,
@@ -205,7 +210,15 @@ function routeBindings(
       }
     );
     if (request === undefined || userId === null) return undefined;
-    const bindings = await canvasBindingsFor(request, userId);
+    // The count's own ask, aborted with it: the route's request is stopped,
+    // not left to answer nobody.
+    const bindings = await canvasBindingsFor(
+      request,
+      userId,
+      undefined,
+      false,
+      signal
+    );
     const reads = bindingReadsOf(bindings);
     return reads === undefined ? { bindings } : { bindings, reads };
   };
@@ -292,7 +305,8 @@ type MakeCount = (signal: AbortSignal) => Promise<PageReadReport>;
  *   the count given up on answer after all, its answer is told if the page
  *   has not changed since it began.
  * - **A failure is said.** A count that fails is told as one that could not
- *   be made; one asked for by a change made meanwhile is still made.
+ *   be made; one asked for by a change made meanwhile is still made, and the
+ *   meter reads as counting while it is.
  */
 class CountScheduler {
   private make: MakeCount | undefined;
@@ -308,10 +322,18 @@ class CountScheduler {
   private deadline: ReturnType<typeof setTimeout> | undefined;
   /** A count was given up on: nothing is counted until Retry. */
   private stopped = false;
+  /** The meter is showing a count that could not be made. */
+  private failing = false;
   private counts = 0;
   private disposed = false;
 
   constructor(private readonly tell: (shown: ShownCount) => void) {}
+
+  /** Tell the meter what to show, and remember whether it is a failure. */
+  private show(shown: ShownCount): void {
+    this.failing = shown.failed;
+    this.tell(shown);
+  }
 
   /** The page changed: `make` counts it as it is now. */
   changed(make: MakeCount): void {
@@ -333,7 +355,7 @@ class CountScheduler {
     this.controller?.abort();
     this.stopped = false;
     this.inFlight = 0;
-    this.tell(NOT_COUNTED);
+    this.show(NOT_COUNTED);
     this.awaitAnswer();
     this.wait(0);
   }
@@ -370,6 +392,10 @@ class CountScheduler {
     this.waitingSince = undefined;
     this.changedSince = false;
     if (make === undefined) return;
+    // A failure said is no longer the meter's to say once another count is
+    // under way: it reads as counting. A count shown stays shown, so the
+    // meter does not blink while it is counted again.
+    if (this.failing) this.show(NOT_COUNTED);
     this.counts += 1;
     const count = this.counts;
     this.inFlight = count;
@@ -387,13 +413,13 @@ class CountScheduler {
       // not changed since it began, and counting goes on as before.
       if (shown.failed || this.changedSince) return;
       this.stopped = false;
-      this.tell(shown);
+      this.show(shown);
       return;
     }
     if (this.inFlight !== count) return;
     this.inFlight = 0;
     this.answered();
-    this.tell(shown);
+    this.show(shown);
     this.next();
   }
 
@@ -405,7 +431,7 @@ class CountScheduler {
     clearTimeout(this.waitTimer);
     this.waitTimer = undefined;
     this.waitingSince = undefined;
-    this.tell(FAILED);
+    this.show(FAILED);
   }
 
   /** The one count the changes made meanwhile ask for, made now. */

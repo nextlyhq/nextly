@@ -28,7 +28,6 @@ import {
   Link,
   List,
   Repeat,
-  RotateCw,
   Component as ComponentMark,
   TriangleAlert,
 } from "lucide-react";
@@ -198,7 +197,9 @@ function ReadCountFailed({
       title={FAILED_NAME}
       onClick={retry}
     >
-      <RotateCw className="nx-read-meter__mark" aria-hidden={true} />
+      {/* An alert, not a circling arrow, which would read as still
+          counting. */}
+      <CircleAlert className="nx-read-meter__mark" aria-hidden={true} />
       <span className="nx-read-meter__count" aria-hidden="true">
         <span className="nx-read-meter__full">
           <span className="nx-read-meter__words">
