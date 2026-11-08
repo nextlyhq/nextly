@@ -1253,3 +1253,60 @@ describe("a list whose new source waits for an input", () => {
     expect(visiting.querySelector("[data-nx-list-still]")).toBeNull();
   });
 });
+
+describe("a list an editor draws as a visitor reads it", () => {
+  it("wears the editor's tag saying so, only where an author is looking", async () => {
+    const definition = eventsQuery(async ({ reader }) => ({
+      rows: (await reader.find({ collection: "events" })).items,
+    }));
+    const tags = new Map([
+      ["list", "Showing what visitors see: 1 of 2 entries"],
+    ]);
+    const looking = await drawn(
+      page(list(named())),
+      context({
+        namedQueries: host(definition, base({ events: EVENTS })),
+        diagnostics: true,
+        listsShowingVisitors: tags,
+      })
+    );
+    expect(
+      looking
+        .querySelector("[data-nx-list-visitors]")
+        ?.getAttribute("data-nx-list-visitors")
+    ).toBe("Showing what visitors see: 1 of 2 entries");
+    const visiting = await drawn(
+      page(list(named())),
+      context({
+        namedQueries: host(definition, base({ events: EVENTS })),
+        listsShowingVisitors: tags,
+      })
+    );
+    expect(visiting.querySelector("[data-nx-list-visitors]")).toBeNull();
+  });
+
+  it("tells an editor how many entries it drew, only where an author is looking", async () => {
+    const definition = eventsQuery(async ({ reader }) => ({
+      rows: (await reader.find({ collection: "events" })).items,
+    }));
+    const shown = vi.fn();
+    await drawn(
+      page(list(named())),
+      context({
+        namedQueries: host(definition, base({ events: EVENTS })),
+        diagnostics: true,
+        listShown: shown,
+      })
+    );
+    expect(shown).toHaveBeenCalledWith("list", 2);
+    shown.mockClear();
+    await drawn(
+      page(list(named())),
+      context({
+        namedQueries: host(definition, base({ events: EVENTS })),
+        listShown: shown,
+      })
+    );
+    expect(shown).not.toHaveBeenCalled();
+  });
+});

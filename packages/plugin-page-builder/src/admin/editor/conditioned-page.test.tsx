@@ -150,6 +150,7 @@ describe("the page the canvas draws while the strip names no entry yet", () => {
     expect(result.current.page.held).toEqual({
       any: true,
       readingEntry: true,
+      readingItems: false,
     });
   });
 
@@ -178,6 +179,7 @@ describe("the page the canvas draws while the strip names no entry yet", () => {
     expect(result.current.page.held).toEqual({
       any: false,
       readingEntry: false,
+      readingItems: false,
     });
   });
 });

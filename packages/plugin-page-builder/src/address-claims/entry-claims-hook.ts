@@ -56,8 +56,10 @@ import {
   claimOrWait,
   claimSpace,
   committedClaims,
+  holdersIn,
   lockCollection,
   reconcileHolder,
+  refuseUnseenHolders,
   releaseClaims,
   sharePending,
   type Claims,
@@ -706,13 +708,15 @@ async function settleDesignClaims(
  * entry, and a write holding the pool's last connection never waits for a
  * second. They are read held for share: an entry's save in flight holds its
  * row and waits for this write's lock, or its design's row, and the
- * database refuses one of the two as a deadlock, which the adapter runs
- * again, so the second reads what the first committed. A new own design's
- * entry row is already held for share by the template write's earlier
- * handler (`judgeTemplateInTransaction`) before the collection's lock is
- * taken here, so on that path the row comes first, as an entry's save
- * takes them; a race with the entry's save can still end in the deadlock
- * above, and is run again the same way.
+ * database refuses one of the two as a deadlock. That save fails and rolls
+ * back, nothing of it kept, and its caller may save again, then reading
+ * what the other committed: the adapter does not run a deadlocked
+ * transaction again itself. A new own design's entry row is already held
+ * for share by the template write's earlier handler
+ * (`judgeTemplateInTransaction`) before the collection's lock is taken
+ * here, so on that path the row comes first, as an entry's save takes
+ * them; a race with the entry's save can still end in the deadlock above,
+ * with the same outcome.
  */
 async function settleDesigned(
   deps: EntryClaimsDeps,
@@ -802,8 +806,10 @@ function rowsById(read: readonly Row[]): Map<string, Row> {
  * design published meanwhile is waited for and then read. The designs are
  * read on the template's write's own transaction, held for share: an own
  * design's write in flight holds its row and waits for the template's, and
- * the database refuses one of the two as a deadlock, which the adapter runs
- * again, so the second reads what the first committed.
+ * the database refuses one of the two as a deadlock. That save fails and
+ * rolls back, nothing of it kept, and its caller may save again, then
+ * reading what the other committed: the adapter does not run a deadlocked
+ * transaction again itself.
  */
 async function settleUnserved(
   deps: EntryClaimsDeps,
@@ -823,11 +829,11 @@ async function settleUnserved(
       templatePublished: false,
       ownDesignPublished: () => designs.has(id),
     });
-  const holders = await committedHolders(
-    deps.claims,
-    { holderCollection: { equals: collection } },
-    holder => holder.collection === collection
-  );
+  // Read on the template's write's own transaction, under the lock taken
+  // above: a write holding the pool's last connection never waits for a
+  // second one.
+  const { where, keep } = entriesClaims(collection);
+  const holders = await holdersIn(deps.claims, tx, where, keep);
   for (const holder of holders) {
     if ((await servedHere(holder.id)) === null) {
       await releaseClaims(deps.claims, tx, holder);
@@ -838,6 +844,29 @@ async function settleUnserved(
     if ((await servedHere(id)) !== null) served.push(id);
   }
   await settleDesigned(deps, tx, collection, address, served);
+  // Last, once every lock taken above is held: an entry whose claim the read
+  // of holders missed is refused rather than left holding an address its
+  // collection no longer serves. Those with a published own design were
+  // settled above, so they are dealt with too.
+  await refuseUnseenHolders(deps.claims, tx, where, keep, [
+    ...holders,
+    ...[...designs].map(id => ({ collection, id })),
+  ]);
+}
+
+/**
+ * The claims held or waited for by `collection`'s entries: `where` narrows a
+ * read to them, and `keep` decides, so the read of holders and the check
+ * made after it select the same claims.
+ */
+function entriesClaims(collection: string): {
+  where: Record<string, unknown>;
+  keep: (holder: Holder) => boolean;
+} {
+  return {
+    where: { holderCollection: { equals: collection } },
+    keep: holder => holder.collection === collection,
+  };
 }
 
 /**
@@ -918,9 +947,10 @@ function servingChanges(
  * is held waits for it; one with no address holds nothing. Takes the
  * collection's lock first. The entries are read on `tx`, held for share: an
  * entry's save in flight holds its row and waits for the template's row or
- * this write's lock, and the database refuses one of the two as a deadlock,
- * which the adapter runs again, so the second reads what the first
- * committed.
+ * this write's lock, and the database refuses one of the two as a deadlock:
+ * that save fails and rolls back, nothing of it kept, and its caller may save
+ * again, then reading what the other committed: the adapter does not run a
+ * deadlocked transaction again itself.
  */
 async function settleEntries(
   deps: EntryClaimsDeps,
@@ -1120,7 +1150,9 @@ async function releaseUnaddressed(
 
 /**
  * Every document holding an address or waiting for one, as committed, among
- * the claims `where` narrows to, that `keep` accepts: each once.
+ * the claims `where` narrows to, that `keep` accepts: each once. Read through
+ * the pool, so only outside a transaction (the start-up sweep); a write reads
+ * them on its own with `holdersIn`.
  */
 async function committedHolders(
   claims: Claims,
@@ -1160,12 +1192,15 @@ async function releaseCollection(
   collection: string
 ): Promise<void> {
   await lockCollection(deps.claims, tx, collection);
-  const holders = await committedHolders(
-    deps.claims,
-    { holderCollection: { equals: collection } },
-    holder => holder.collection === collection
-  );
+  // On `tx`, as every read inside a write is: a template's write holding the
+  // pool's last connection never waits for a second one.
+  const { where, keep } = entriesClaims(collection);
+  const holders = await holdersIn(deps.claims, tx, where, keep);
   for (const holder of holders) {
     await releaseClaims(deps.claims, tx, holder);
   }
+  // Last, once every lock the releases took is held: an entry whose claim
+  // the read of holders missed is refused rather than left holding an
+  // address in a collection with none.
+  await refuseUnseenHolders(deps.claims, tx, where, keep, holders);
 }

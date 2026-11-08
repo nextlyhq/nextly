@@ -24,6 +24,7 @@ import {
   type Binding,
   type BindingFieldShape,
   type BindingFormat,
+  type BindingRunInput,
   type BlockDocument,
   type BuilderOp,
 } from "@nextlyhq/blocks-engine";
@@ -213,7 +214,8 @@ function sourceName(source: BindingFieldSource): string {
 /**
  * The fields of `sources` that fit `prop`, one step into a relation or a
  * group, in the order the picker lists them. A relation or group whose own
- * value does not fit is not offered itself, only what is inside it.
+ * value does not fit is not offered itself, only what is inside it. A value
+ * shown formatted is formatted in `formatIn`, as the page's render formats it.
  *
  * A related entry's id (`linksTo`) is offered only for a link, whose entry it
  * fills; the link's entry id, bound, is changed only to another such id.
@@ -221,6 +223,7 @@ function sourceName(source: BindingFieldSource): string {
 function fittingOptions(
   sources: readonly BindingFieldSource[],
   prop: EditableProp,
+  formatIn: PreviewFormatIn,
   entryLink: EntryLink | undefined
 ): readonly FieldOption[] {
   const offered = (field: BindingFieldChoice): boolean =>
@@ -236,7 +239,8 @@ function fittingOptions(
         options.push(
           withFormatOnBind(
             option(source, group, field, field.name, label),
-            prop
+            prop,
+            formatIn
           )
         );
       }
@@ -252,7 +256,8 @@ function fittingOptions(
               choiceLabel(inner),
               label
             ),
-            prop
+            prop,
+            formatIn
           )
         );
       }
@@ -288,10 +293,15 @@ function formatOnBind(
   return defaultFormatFor(bindablePropKind(prop.schema), field);
 }
 
-/** An option with the format its pick writes, where it writes one. */
+/**
+ * An option with the format its pick writes, where it writes one, its value
+ * previewed in that format in `formatIn`: the page's language and the site's
+ * time zone.
+ */
 function withFormatOnBind(
   choice: FieldOption,
-  prop: EditableProp
+  prop: EditableProp,
+  formatIn: PreviewFormatIn
 ): FieldOption {
   const format = formatOnBind(choice.field, prop);
   if (format === undefined) return choice;
@@ -302,7 +312,8 @@ function withFormatOnBind(
     preview,
     format.format,
     bindablePropKind(prop.schema),
-    choice.field
+    choice.field,
+    formatIn
   );
   return {
     ...choice,
@@ -365,6 +376,51 @@ function OptionRow({ option }: { option: FieldOption }): React.JSX.Element {
   );
 }
 
+/** The language and time zone the picker previews a formatted value in. */
+type PreviewFormatIn = Pick<BindingRunInput, "locale" | "timeZone">;
+
+/**
+ * The language and zone the picker previews in: the page's language, and the
+ * site's zone, asked of the host when the picker opens rather than with the
+ * canvas, which reads it only for a page already formatting a date. Until
+ * the zone is in, and where the host has none or its read fails, the preview
+ * is in UTC, as a page rendered with no zone; it is drawn again once it is.
+ */
+function usePreviewFormatIn(
+  services: ContentServices | undefined
+): PreviewFormatIn {
+  const locale = services?.bindingLocale;
+  const readZone = services?.readSiteTimeZone;
+  const [read, setRead] = React.useState<{
+    readonly from: () => Promise<string | undefined>;
+    readonly zone: string | undefined;
+  }>();
+  React.useEffect(() => {
+    if (readZone === undefined) return;
+    let current = true;
+    readZone().then(
+      zone => {
+        if (current) setRead({ from: readZone, zone });
+      },
+      () => {
+        // No zone to show: the previews stay in UTC.
+      }
+    );
+    return () => {
+      current = false;
+    };
+  }, [readZone]);
+  // Only the zone this host's read gave, so another host's is never shown.
+  const timeZone = read?.from === readZone ? read?.zone : undefined;
+  return React.useMemo(
+    () => ({
+      ...(locale === undefined ? {} : { locale }),
+      ...(timeZone === undefined ? {} : { timeZone }),
+    }),
+    [locale, timeZone]
+  );
+}
+
 /** The fields a binding can read, as the host reads them; read once per open. */
 function useBindingSources(
   services: ContentServices | undefined,
@@ -412,6 +468,7 @@ function BindingPicker({
   onPick: (option: FieldOption) => void;
 }): React.JSX.Element {
   const sources = useBindingSources(services, true);
+  const formatIn = usePreviewFormatIn(services);
   const name = propLabel(prop.name, prop.schema);
   if (sources === "loading") {
     return <p className="nx-binding-picker__note">Reading the fields…</p>;
@@ -423,7 +480,8 @@ function BindingPicker({
       </p>
     );
   }
-  const options = fittingOptions(sources, prop, entryLink);
+  // Previewed in the page's language and the site's zone.
+  const options = fittingOptions(sources, prop, formatIn, entryLink);
   // A source with nothing to offer this prop is not listed: an empty group
   // only lengthens the list.
   const offering = new Set(options.map(option => option.group));

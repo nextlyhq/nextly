@@ -3,7 +3,10 @@
 /**
  * The canvas's data for its collection lists: each read the renderer's
  * `readList` makes, answered through the list entries route as the person
- * editing reads it, drafts included.
+ * editing reads it, drafts included; or, while a document's visibility
+ * conditions are applied, as a visitor reads it, published entries and public
+ * fields only, so each item's conditions are judged as the published page
+ * judges them.
  *
  * A data provider rather than a hook, because it is what a page context
  * carries: the canvas draws a list with the same renderer a published page
@@ -32,6 +35,7 @@ import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import {
   LIST_ENTRIES_ROUTE_PATH,
   type ListEntriesResponse,
+  type ListEntriesVisitor,
 } from "../list-entries-contract";
 
 /** How long an answer is kept, so drawing the page again reads nothing new. */
@@ -60,14 +64,17 @@ function refusalOf(error: unknown): ReadRefusal {
   });
 }
 
-/** One read, through the route. */
-async function readThrough(query: BlocksQuery): Promise<ListEntriesResponse> {
+/** One read, through the route, as a visitor reads it when one is named. */
+async function readThrough(
+  query: BlocksQuery,
+  visitor?: ListEntriesVisitor
+): Promise<ListEntriesResponse> {
   try {
     const body = await writePluginRoute<ListEntriesResponse>({
       plugin: PAGE_BUILDER_PLUGIN_NAME,
       path: LIST_ENTRIES_ROUTE_PATH,
       method: "POST",
-      body: { query },
+      body: visitor === undefined ? { query } : { query, visitor },
     });
     if (body === undefined || !Array.isArray(body.items)) {
       throw new Error("The list's entries could not be read.");
@@ -157,11 +164,32 @@ const READS = new Map<string, CanvasListReads>();
  */
 let readsFor: string | undefined;
 
-/** A fresh set of list reads in `locale`, keeping only its own answers. */
-function listReadsIn(locale: string | undefined): CanvasListReads {
+/**
+ * A fresh set of list reads in `locale`, keeping only its own answers, made
+ * as a visitor of `visitor`'s document reads when one is named.
+ */
+function listReadsIn(
+  locale: string | undefined,
+  visitor: ListEntriesVisitor | undefined
+): CanvasListReads {
   const terms: CanvasListTerms = locale === undefined ? {} : { locale };
-  const data = canvasListData();
+  const data =
+    visitor === undefined
+      ? canvasListData()
+      : canvasListData(query => readThrough(query, visitor));
   return { terms, data, count: canvasListCount(data, terms) };
+}
+
+/** Where a set of reads is kept: its language, and the visitor it reads as. */
+function readsKey(
+  locale: string | undefined,
+  visitor: ListEntriesVisitor | undefined
+): string {
+  return JSON.stringify([
+    locale ?? "",
+    visitor?.collection ?? null,
+    visitor?.id ?? null,
+  ]);
 }
 
 /**
@@ -173,23 +201,28 @@ function listReadsIn(locale: string | undefined): CanvasListReads {
  * person's reads are dropped before anything is answered: no row read for one
  * account is ever handed to another. A date filter still compares in UTC: the
  * canvas reads no site time zone.
+ *
+ * With `visitor`, the document being edited, the reads are a visitor's of
+ * that document's lists, kept apart from the person's own: the route answers
+ * them only for a document the person may open.
  */
 export function canvasListReadsIn(
   locale: string | undefined,
-  userId: string | null
+  userId: string | null,
+  visitor?: ListEntriesVisitor
 ): CanvasListReads {
   // The route answers whoever the session cookie names, so while the person
   // is not known by id, each ask gets reads of its own that nothing keeps:
   // a sign-in under way cannot be handed the previous account's rows.
-  if (userId === null) return listReadsIn(locale);
+  if (userId === null) return listReadsIn(locale, visitor);
   if (readsFor !== userId) {
     READS.clear();
     readsFor = userId;
   }
-  const key = locale ?? "";
+  const key = readsKey(locale, visitor);
   let reads = READS.get(key);
   if (reads === undefined) {
-    reads = listReadsIn(locale);
+    reads = listReadsIn(locale, visitor);
     READS.set(key, reads);
   }
   return reads;

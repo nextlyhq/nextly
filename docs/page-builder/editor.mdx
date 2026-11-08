@@ -489,9 +489,19 @@ published hides every conditioned block, and its line says so. A condition that 
 checked, for example on a field visitors can't see, hides its block from every visitor,
 and its line says so, with a warning sign.
 
-Blocks inside a list's entries and blocks inside a placed component aren't checked yet:
-they keep their **Conditional** badge while conditions are applied, and the strip's count
-leaves them out.
+A block inside a list's entries is checked against each entry the list draws, as the
+published page checks it. While the switch is on, the canvas's lists show what a visitor
+would see: published entries only, with only the fields visitors may read, not the drafts
+you can see. An entry that hides the block draws its line in the block's place, saying why
+for that entry: "Premium badge · hidden for this entry: Price isn't more than 10". A list that
+shows a visitor fewer entries than you see says so above its entries: "Showing what
+visitors see: 4 of 6 entries". Turn the switch off to see your own entries again, drafts
+included. The switch is offered when only a list's blocks have conditions, too; the
+strip's count is of the page's own blocks, and says "Conditions checked for each entry in
+the list" when a list's blocks are all there is to check.
+
+Blocks inside a placed component aren't checked yet: they keep their **Conditional** badge
+while conditions are applied, and the strip's count leaves them out.
 
 Blocks inside the entry's own content, drawn by **Entry content** (below), are checked
 with the template's: a hidden one is drawn as its line inside Entry content, and the
