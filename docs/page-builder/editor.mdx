@@ -422,7 +422,17 @@ media field or to a URL field holding an image address. The image address field,
 URL side, and the alt text each have a bind button of their own. A bound image's
 **Fallback** is an image address, shown with a small picture of it: one starting
 `https://` or `http://`, or a path on the site such as `/media/spring.jpg`. Anything else
-is held back with the reason. When an image is unbound and visitors saw it by its
+is held back with the reason.
+
+The fallback can also be an image from the media library. **Choose from library**, the
+button at the end of the Fallback row, opens the newest images with a search by name:
+use the arrow keys to move through them and Enter to pick, or click one. **Browse all…**
+opens the full media library, where you can also upload. An image address pasted into
+the search is offered as **Use this address**. A chosen image is shown by its picture
+and file name, with a button to remove it, and the canvas's "Visitors won't see this"
+badge names it the same way.
+
+When an image is unbound and visitors saw it by its
 address (the field held one, or they saw the fallback), the address is kept in
 **Image address** and the image is left empty, since an image chosen from the library
 holds a library file only. The note under the Source row says so.

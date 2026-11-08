@@ -8,7 +8,9 @@
  * falls back on the published page, so the author is told on the block itself:
  * the block is outlined in a faint amber dash, and a small "Visitors won't see
  * this" badge sits on that outline's top-right edge, a tab of it, with the
- * field and what a visitor sees instead in a tooltip. The outline is what makes
+ * field and what a visitor sees instead in a tooltip: a fallback chosen from
+ * the media library named by its file, with a small picture of it, as the
+ * host's `readMedia` reads it, never by its raw id. The outline is what makes
  * the badge plainly this block's: on blocks stacked tight, a badge alone above
  * a block reads as the mark of the one above it.
  *
@@ -32,7 +34,10 @@
  * @module visitor-unreadable-badges
  */
 
-import type { VisitorUnreadableBinding } from "@nextlyhq/blocks-engine";
+import {
+  imageValueOf,
+  type VisitorUnreadableBinding,
+} from "@nextlyhq/blocks-engine";
 import { EyeOff } from "lucide-react";
 import {
   Fragment,
@@ -47,6 +52,7 @@ import {
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
+import { useMediaSummary, type MediaSummary } from "./content-controls";
 import { watchCanvasFor, watchScreenBand } from "./canvas-geometry-watch";
 import type { Rect } from "./geometry";
 import {
@@ -118,12 +124,46 @@ export interface VisitorUnreadableBadgesProps {
   readonly onSelect?: (nodeId: string) => void;
   /** Hidden while the canvas is mid-drag, as the other controls over it are. */
   readonly hidden?: boolean;
+  /**
+   * A media item by its id, as the inspector reads one, so a fallback chosen
+   * from the library is named by its file. Absent, such a fallback is said
+   * to be a library image, without its name.
+   */
+  readonly readMedia?: (mediaId: string) => Promise<MediaSummary | null>;
 }
 
-/** A fallback as a reader sees it: text quoted, anything else named. */
-function fallbackWords(binding: VisitorUnreadableBinding): string {
+/**
+ * The media id an image binding's fallback names, when it is a file from the
+ * library rather than an address. Asked only of an image prop, by the
+ * engine's reading of an image value: the same text on a heading is text.
+ */
+function fallbackMediaId(
+  binding: VisitorUnreadableBinding
+): string | undefined {
+  if (binding.kind !== "image" || binding.fallback === undefined) {
+    return undefined;
+  }
+  const read = imageValueOf(binding.fallback.value);
+  return read?.holds === "media" ? read.value : undefined;
+}
+
+/**
+ * A fallback as a reader sees it: text quoted, a library file named by its
+ * file name (`fileName`, once read), anything else named.
+ */
+function fallbackWords(
+  binding: VisitorUnreadableBinding,
+  fileName: string | undefined
+): string {
   if (binding.fallback === undefined) {
     return "They see the block's own value instead.";
+  }
+  // A media id is no word a reader knows: the file it names, or that it is
+  // a file, while that is read or where it can't be.
+  if (fallbackMediaId(binding) !== undefined) {
+    return fileName === undefined
+      ? "They see a fallback image from the library."
+      : `They see the fallback image “${fileName}”.`;
   }
   const value = binding.fallback.value;
   return typeof value === "string" && value.trim() !== ""
@@ -131,11 +171,50 @@ function fallbackWords(binding: VisitorUnreadableBinding): string {
     : "They see the fallback instead.";
 }
 
-/** One sentence per binding: the field, and what a visitor sees instead. */
+/**
+ * One sentence per binding: the field, and what a visitor sees instead.
+ * Synchronous, so a library file's name is handed in once read
+ * (`fileName`); without it the file is said to be a library image.
+ */
 export function visitorUnreadableSentence(
-  binding: VisitorUnreadableBinding
+  binding: VisitorUnreadableBinding,
+  fileName?: string
 ): string {
-  return `Visitors can't read “${binding.path}”. ${fallbackWords(binding)}`;
+  return `Visitors can't read “${binding.path}”. ${fallbackWords(binding, fileName)}`;
+}
+
+/**
+ * One binding's sentence, its library fallback read by its id through
+ * `readMedia` and named by its file; with `pictured`, a small picture of
+ * that file before it, where the badge's tooltip has room for one.
+ */
+export function VisitorUnreadableLine({
+  binding,
+  readMedia,
+  pictured = false,
+}: {
+  readonly binding: VisitorUnreadableBinding;
+  readonly readMedia:
+    | ((mediaId: string) => Promise<MediaSummary | null>)
+    | undefined;
+  readonly pictured?: boolean;
+}): ReactElement {
+  const summary = useMediaSummary(readMedia, fallbackMediaId(binding) ?? null);
+  const sentence = visitorUnreadableSentence(binding, summary?.name);
+  const thumbnail = pictured ? summary?.thumbnail : undefined;
+  if (thumbnail === undefined) return <>{sentence}</>;
+  return (
+    <span className="nx-visitor-unreadable__pictured">
+      {/* Decorative: the sentence names the file. */}
+      <img
+        className="nx-visitor-unreadable__thumb"
+        src={thumbnail}
+        alt=""
+        decoding="async"
+      />
+      <span>{sentence}</span>
+    </span>
+  );
 }
 
 /**
@@ -148,6 +227,7 @@ export function VisitorUnreadableBadges({
   marked,
   onSelect,
   hidden = false,
+  readMedia,
 }: VisitorUnreadableBadgesProps): ReactElement | null {
   const layer = useRef<HTMLDivElement | null>(null);
   const [places, setPlaces] = useState<ReadonlyMap<string, BadgePlace>>(
@@ -294,7 +374,11 @@ export function VisitorUnreadableBadges({
                     key={binding.prop}
                     className="nx-visitor-unreadable__line"
                   >
-                    {visitorUnreadableSentence(binding)}
+                    <VisitorUnreadableLine
+                      binding={binding}
+                      readMedia={readMedia}
+                      pictured
+                    />
                   </span>
                 ))}
               </span>
