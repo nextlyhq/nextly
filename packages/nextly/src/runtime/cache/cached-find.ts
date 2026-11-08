@@ -85,7 +85,10 @@ export interface CachedFindOptions {
  * A read refused by access (`isReadRefusal`) is cached too, as the refusal, and
  * every read of the entry throws it again until a bust or the entry's lifetime
  * reads it afresh. So a read that comes to be refused, when its entry is read
- * again, replaces the answer it gave while it was allowed.
+ * again, replaces the answer it gave while it was allowed. The refusal thrown
+ * again is a `NextlyError` made without reading the clock, so a prerender
+ * under Cache Components can answer it; its `timestamp` is the refusal's own,
+ * kept in the entry when the refusal was made.
  *
  * @example
  * // Public entry detail — cached and busted when any post changes. Tag with the
@@ -191,7 +194,7 @@ export function applyCache<T>(
  * answer under the caller's parts alone. Kept apart, so neither release reads
  * the other's shape from a cache two releases share during a deployment.
  */
-const KEPT_KEY_PART = "nextly:kept-v1";
+const KEPT_KEY_PART = "nextly:kept-v2";
 
 /**
  * A read as either cache keeps it: its answer, or the refusal it met, in an envelope the reader's
@@ -201,17 +204,22 @@ const KEPT_KEY_PART = "nextly:kept-v1";
  */
 type Kept<T> =
   | { readonly kept: "answer"; readonly answer: T }
-  | {
-      readonly kept: "refusal";
-      readonly refusal: {
-        readonly code: string;
-        readonly statusCode: number;
-        readonly publicMessage: string;
-        readonly publicData?: PublicData;
-        readonly messageKey?: string;
-        readonly reason?: string;
-      };
-    };
+  | { readonly kept: "refusal"; readonly refusal: KeptRefusal };
+
+/**
+ * A refusal as an entry keeps it: plain values, its own time among them as
+ * text, taken when the refusal was made, inside the read the cache ran.
+ */
+interface KeptRefusal {
+  readonly code: string;
+  readonly statusCode: number;
+  readonly publicMessage: string;
+  readonly publicData?: PublicData;
+  readonly messageKey?: string;
+  readonly reason?: string;
+  /** When the refusal was made, as an ISO string. */
+  readonly at: string;
+}
 
 /**
  * `reader`, answering a refusal by access with the refusal as a value rather
@@ -244,6 +252,9 @@ function keepingRefusal<T>(reader: () => Promise<T>): () => Promise<Kept<T>> {
             ? {}
             : { messageKey: error.messageKey }),
           ...(typeof reason === "string" ? { reason } : {}),
+          // The refusal's own time, read inside the read the cache runs, so
+          // the error thrown again on every hit never has to read the clock.
+          at: error.timestamp.toISOString(),
         },
       };
     }
@@ -262,11 +273,61 @@ function keepingRefusal<T>(reader: () => Promise<T>): () => Promise<Kept<T>> {
 function answerOf<T>(value: Kept<T> | T): T {
   if (!isKept(value)) return value;
   if (value.kept === "answer") return value.answer;
-  const { reason, ...refusal } = value.refusal;
-  throw new NextlyError({
-    ...refusal,
-    logContext: { kept: true, ...(reason === undefined ? {} : { reason }) },
+  throw refusalOf(value.refusal);
+}
+
+/**
+ * The refusal an entry kept, as the `NextlyError` it was, made without reading
+ * the clock.
+ *
+ * It is thrown outside the cache, on every read of the entry. `NextlyError`'s
+ * constructor records when it was made (`timestamp`), and under Cache
+ * Components a prerender refuses the current time outside a cache scope, so a
+ * public route answering a kept refusal as not found failed its build. The
+ * error is therefore made as an instance of the class without running that
+ * constructor: `Error`'s own, with `NextlyError` as the new target, which
+ * gives the message and stack every error has and reads no clock. Every field
+ * the constructor sets is set here as it sets it, so a catch sees the same
+ * class (`instanceof`, `NextlyError.is`), code, status, messages and methods
+ * as before. Its `timestamp` is the refusal's own, kept in the entry when it
+ * was made, so inspecting the error (a log line, `JSON.stringify`, a spread)
+ * reads no clock either. Its stack is captured from here, so it shows where
+ * the refusal was thrown again, as a constructed error's would. Every other
+ * `NextlyError` keeps its constructor's.
+ */
+function refusalOf(refusal: KeptRefusal): NextlyError {
+  const { reason, ...kept } = refusal;
+  const error = Reflect.construct(
+    Error,
+    [kept.publicMessage],
+    NextlyError
+  ) as NextlyError;
+  Object.defineProperties(error, {
+    name: ownField("NextlyError"),
+    code: ownField(kept.code),
+    statusCode: ownField(kept.statusCode),
+    publicMessage: ownField(kept.publicMessage),
+    publicData: ownField(kept.publicData),
+    messageKey: ownField(kept.messageKey),
+    logMessage: ownField(undefined),
+    logContext: ownField({
+      kept: true,
+      ...(reason === undefined ? {} : { reason }),
+    }),
+    cause: ownField(undefined),
+    // A date made from a kept value reads no clock.
+    timestamp: ownField(new Date(refusal.at)),
   });
+  // `Error` with another new target trims the stack at a constructor frame
+  // that never ran, leaving no frames; captured again here, after `name` is
+  // set, it reads `NextlyError: <message>` and the frames that threw it.
+  Error.captureStackTrace?.(error, refusalOf);
+  return error;
+}
+
+/** A field as a class's constructor defines it on the instance. */
+function ownField(value: unknown): PropertyDescriptor {
+  return { value, writable: true, enumerable: true, configurable: true };
 }
 
 function isKept<T>(value: Kept<T> | T): value is Kept<T> {

@@ -214,3 +214,39 @@ describe("the canvas's notes in Entry content's place", () => {
     expect(noteOf(entry({}), unknown).tone).toBe("muted");
   });
 });
+
+describe("the limits a host composes an entry's content under", () => {
+  const three: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: ["One", "Two", "Three"].map((text, at) => ({
+      id: `t${String(at)}`,
+      type: "core/text",
+      version: 1,
+      props: { text },
+    })),
+  };
+
+  /** How many of the entry's blocks Entry content draws, under `limits`. */
+  function drawnUnder(
+    limits?: Parameters<typeof useComposedEntryContent>[2]
+  ): number {
+    const composed = renderHook(() =>
+      useComposedEntryContent(template, entry({ body: three }), limits)
+    ).result.current;
+    return composed.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT]?.length ?? 0;
+  }
+
+  it("takes a node cap as a number, as it always did", () => {
+    // A cap of 2 beside the template's one node: one of the entry's three.
+    expect(drawnUnder(2)).toBe(1);
+  });
+
+  it("takes the same cap in a limits object", () => {
+    expect(drawnUnder({ maxNodes: 2 })).toBe(1);
+  });
+
+  it("draws every block under no cap (the control)", () => {
+    expect(drawnUnder()).toBe(3);
+  });
+});

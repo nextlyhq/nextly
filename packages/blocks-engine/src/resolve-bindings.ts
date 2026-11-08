@@ -144,23 +144,43 @@ export interface BindingRun {
 export const DEFAULT_BINDING_LOCALE = "en";
 
 /**
+ * The language and time zone a render formats bound values in, from the
+ * page's language and the site's time zone as given: English for a language
+ * absent or unknown to the runtime, UTC for a zone absent or refused.
+ * `timeZoneValid` is false only for a zone given and refused.
+ *
+ * The one answer a render's pass and the editor's previews share, so a
+ * value previewed in the inspector reads as the published page shows it.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function bindingFormatEnv(
+  input: Pick<BindingRunInput, "locale" | "timeZone">
+): { readonly env: FormatEnv; readonly timeZoneValid: boolean } {
+  const zone = safeTimeZone(input.timeZone);
+  return {
+    env: {
+      locale: supportedLocale(input.locale) ?? DEFAULT_BINDING_LOCALE,
+      timeZone: zone.zone,
+    },
+    timeZoneValid: zone.valid,
+  };
+}
+
+/**
  * Start a render's binding pass.
  *
  * @experimental Settles with the editor's binding controls.
  */
 export function createBindingRun(input: BindingRunInput): BindingRun {
-  const zone = safeTimeZone(input.timeZone);
-  const env: FormatEnv = {
-    locale: supportedLocale(input.locale) ?? DEFAULT_BINDING_LOCALE,
-    timeZone: zone.zone,
-  };
+  const { env, timeZoneValid } = bindingFormatEnv(input);
   return {
     sources: input.sources,
     ...(input.entryRef === undefined ? {} : { entryRef: input.entryRef }),
     ...(input.schema === undefined ? {} : { schema: input.schema }),
     props: input.props,
     env,
-    timeZoneValid: zone.valid,
+    timeZoneValid,
     formatter: createBindingFormatter(env),
     ...(input.mediaCollection === undefined
       ? {}
@@ -180,8 +200,9 @@ export function createBindingRun(input: BindingRunInput): BindingRun {
  *   resolves or an image address drawn as it is. `from` says whether it is
  *   the source's value, the binding's fallback, or the prop's own value,
  *   shown when the binding gave nothing to draw. A source's value carries the
- *   fallback beside it, an image address, for a host that can't draw the
- *   value: a record it can't find, or a host outside the site's list.
+ *   fallback beside it, an image address or a media id, for a host that
+ *   can't draw the value: a record it can't find, or a host outside the
+ *   site's list.
  *
  * A prop showing its own value has no entry.
  *
@@ -397,8 +418,8 @@ function fallbackFill(fallback: { readonly value: unknown } | undefined): Fill {
 }
 
 /**
- * A binding's fallback as its fill. An image's is an image address, and says
- * so, so the renderer draws it as one.
+ * A binding's fallback as its fill. An image's says whether it holds an image
+ * address or a media id, so the renderer draws it as either.
  */
 function fallbackFillOf(
   kind: BindablePropKind | undefined,
@@ -414,13 +435,16 @@ function fallbackFillOf(
       };
 }
 
-/** An image binding's fallback, which is only ever an image address. */
+/**
+ * An image binding's fallback, read as the image prop's own value is: an
+ * image address drawn as it is, or a media library id the host resolves
+ * exactly as it resolves a picked one. The save check accepts the same two
+ * (`isValidPropValue`), by the same reading.
+ */
 function imageFallbackOf(
   fallback: { readonly value: unknown } | undefined
 ): ImageValue | undefined {
-  return fallback !== undefined && isImageAddress(fallback.value)
-    ? { holds: "address", value: fallback.value.trim() }
-    : undefined;
+  return fallback === undefined ? undefined : imageValueOf(fallback.value);
 }
 
 /**
@@ -646,7 +670,7 @@ function fillBinding(
     Object.hasOwn(at.props, at.prop) ? at.props[at.prop] : undefined
   );
   // A binding that cannot be read still shows its fallback, judged by the
-  // prop it fills, so an image's says it is an address.
+  // prop it fills, so an image's says whether it is an address or a media id.
   const fill =
     check.outcome === "fallback"
       ? fallbackFillOf(kind, check.fallback)

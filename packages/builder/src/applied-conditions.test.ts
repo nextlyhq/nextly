@@ -19,6 +19,8 @@ import { describe, expect, it } from "vitest";
 import {
   appliedConditionsOf,
   conditionedBlocksIn,
+  itemHiddenAsOf,
+  revealedForCanvas,
   type ConditionsPreview,
 } from "./applied-conditions";
 import { conditionFieldsOfShapes } from "./condition-model";
@@ -180,6 +182,36 @@ describe("the page with its conditions applied", () => {
     const drawn = applied.document.nodes[0]?.slots?.[LIST_ENTRY_SLOT]?.[0];
     expect(drawn).toMatchObject({ id: "featured", type: "core/text" });
     expect(drawn?.visibility).toBeUndefined();
+  });
+
+  it("keeps a list item's block's conditions for the renderer where the lists draw what a visitor reads", () => {
+    const featured = block("featured", {
+      visibility: { conditions: [[guides]], devices: { mobile: false } },
+    });
+    const intro = block("intro", { visibility: { conditions: [[guides]] } });
+    const list = block("list", {
+      type: COLLECTION_LIST_TYPE,
+      props: { collection: "posts" },
+      slots: { [LIST_ENTRY_SLOT]: [featured] },
+    });
+    const applied = appliedConditionsOf(
+      page(intro, list),
+      previewFor({ category: "Guides" }),
+      nameOf,
+      { itemsJudged: true }
+    );
+    // Judged for each item drawn, so nothing is left unjudged.
+    expect(applied.unjudged).toBe(false);
+    expect(applied.byEntry).toBe(true);
+    expect(applied.shown).toEqual(new Set(["intro"]));
+    // The page's own shown block is lifted, as before; the item's keeps its
+    // conditions, and its devices, for the renderer to judge per item.
+    expect(applied.document.nodes[0]?.visibility).toBeUndefined();
+    const drawn = applied.document.nodes[1]?.slots?.[LIST_ENTRY_SLOT]?.[0];
+    expect(drawn?.visibility).toEqual({
+      conditions: [[guides]],
+      devices: { mobile: false },
+    });
   });
 });
 
@@ -408,6 +440,7 @@ describe("the conditioned blocks a document holds", () => {
     expect(conditionedBlocksIn(page(worksheet))).toEqual({
       any: true,
       readingEntry: true,
+      readingItems: false,
     });
     const list = block("list", {
       type: COLLECTION_LIST_TYPE,
@@ -417,10 +450,142 @@ describe("the conditioned blocks a document holds", () => {
     expect(conditionedBlocksIn(page(list))).toEqual({
       any: true,
       readingEntry: false,
+      readingItems: true,
+    });
+    expect(conditionedBlocksIn(page(worksheet, list))).toEqual({
+      any: true,
+      readingEntry: true,
+      readingItems: true,
     });
     expect(conditionedBlocksIn(page(block("plain")))).toEqual({
       any: false,
       readingEntry: false,
+      readingItems: false,
+    });
+  });
+});
+
+describe("what the canvas draws where a list's item hides a block", () => {
+  const hiddenAs = itemHiddenAsOf({
+    fieldsOf: collection => (collection === "posts" ? FIELDS : undefined),
+    labelledOf: collection =>
+      collection === "posts"
+        ? conditionFieldsOfShapes(FIELDS).map(field =>
+            field.name === "category" ? { ...field, label: "Category" } : field
+          )
+        : undefined,
+    nameOf: () => "Guide badge",
+  });
+  const badge = block("badge", {
+    visibility: { conditions: [[guides]], devices: { mobile: false } },
+  });
+
+  it("is the block's marker, saying why this entry hides it, on the block's devices", () => {
+    const marker = hiddenAs(badge, {
+      values: { category: "News" },
+      collection: "posts",
+      fields: FIELDS,
+    });
+    expect(marker).toEqual({
+      id: "badge",
+      type: CONDITION_HIDDEN_TYPE,
+      version: 1,
+      props: {
+        name: "Guide badge",
+        reason: "hidden for this entry: Category is not Guides",
+        unchecked: false,
+      },
+      visibility: { devices: { mobile: false } },
+    });
+  });
+
+  it("says the block can't be checked for an item whose fields are not known", () => {
+    for (const collection of ["authors", undefined]) {
+      const marker = hiddenAs(badge, {
+        values: { category: "News" },
+        collection,
+        fields: undefined,
+      });
+      expect(marker?.props).toEqual({
+        name: "Guide badge",
+        reason: "can’t be checked, so visitors never see it",
+        unchecked: true,
+      });
+    }
+  });
+
+  it("draws nothing for an item its conditions hold for", () => {
+    expect(
+      hiddenAs(badge, {
+        values: { category: "Guides" },
+        collection: "posts",
+        fields: FIELDS,
+      })
+    ).toBeUndefined();
+  });
+
+  it("is drawn for a component's root a placement's carried gate hides", () => {
+    // A conditioned placement inside a list's entries: composition carries
+    // its gate onto the component's root, which has no conditions of its own.
+    const root = block("root", {
+      visibility: {
+        within: [{ conditions: [[guides]] }],
+      } as unknown as BlockNode["visibility"],
+    });
+    const marker = hiddenAs(root, {
+      values: { category: "News" },
+      collection: "posts",
+      fields: FIELDS,
+    });
+    expect(marker).toMatchObject({ id: "root", type: CONDITION_HIDDEN_TYPE });
+    expect(
+      hiddenAs(root, {
+        values: { category: "Guides" },
+        collection: "posts",
+        fields: FIELDS,
+      })
+    ).toBeUndefined();
+  });
+
+  it("judges a named query's row by the fields the renderer judged it by", () => {
+    // A row of a query with its own schema: no collection, its fields
+    // handed over by the renderer, which just judged it with them.
+    const marker = hiddenAs(badge, {
+      values: { category: "News" },
+      collection: undefined,
+      fields: FIELDS,
+    });
+    expect(marker?.props).toMatchObject({ unchecked: false });
+    expect(String(marker?.props.reason)).toMatch(/^hidden for this entry: /);
+  });
+});
+
+describe("the page as the canvas draws it", () => {
+  const featured = block("featured", {
+    visibility: { conditions: [[guides]] },
+  });
+  const intro = block("intro", { visibility: { conditions: [[guides]] } });
+  const list = block("list", {
+    type: COLLECTION_LIST_TYPE,
+    props: { collection: "posts" },
+    slots: { [LIST_ENTRY_SLOT]: [featured] },
+  });
+
+  it("lifts every block's conditions while a list's entries are not judged", () => {
+    for (const applied of [undefined, { byEntry: false }]) {
+      const drawn = revealedForCanvas(page(intro, list), applied);
+      expect(drawn.nodes[0]?.visibility).toBeUndefined();
+      expect(
+        drawn.nodes[1]?.slots?.[LIST_ENTRY_SLOT]?.[0]?.visibility
+      ).toBeUndefined();
+    }
+  });
+
+  it("keeps a list entry's block's conditions while the entries are judged", () => {
+    const drawn = revealedForCanvas(page(intro, list), { byEntry: true });
+    expect(drawn.nodes[0]?.visibility).toBeUndefined();
+    expect(drawn.nodes[1]?.slots?.[LIST_ENTRY_SLOT]?.[0]?.visibility).toEqual({
+      conditions: [[guides]],
     });
   });
 });

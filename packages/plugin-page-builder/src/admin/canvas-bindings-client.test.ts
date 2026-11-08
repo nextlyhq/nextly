@@ -29,8 +29,13 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   writePluginRoute,
 }));
 
-const { canvasBindingsFor, canvasBindingsRequest, useCanvasBindings } =
-  await import("./canvas-bindings-client");
+const {
+  canvasBindingsFor,
+  canvasBindingsRequest,
+  listConditionsFor,
+  siteTimeZoneFor,
+  useCanvasBindings,
+} = await import("./canvas-bindings-client");
 const { CanvasEntryProvider } = await import("./editor/canvas-entry");
 
 /** The retries the editor has asked for, which a wrapper hands the canvas. */
@@ -118,6 +123,79 @@ describe("the canvas's binding sources", () => {
     expect(canvasBindingsRequest([listed], identity, undefined)?.lists).toEqual(
       ["posts"]
     );
+  });
+
+  it("asks for a list's field shapes where only its entries' conditions read them, and nothing of the entry", () => {
+    // Nothing binds: the list's entry block has only conditions, judged by
+    // the list's public field shapes while conditions are applied.
+    const withEntries = (child: Record<string, unknown>): BlockDocument =>
+      ({
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "list",
+            type: "core/collection-loop",
+            version: 1,
+            props: { collection: "posts" },
+            slots: {
+              children: [
+                {
+                  id: "t",
+                  type: "core/text",
+                  version: 1,
+                  props: { text: "Members only" },
+                  ...child,
+                },
+              ],
+            },
+          },
+        ],
+      }) as BlockDocument;
+    const plain = withEntries({});
+    const conditioned = withEntries({
+      visibility: {
+        conditions: [[{ field: "price", op: "greater_than", value: 10 }]],
+      },
+    });
+    const ask = (page: BlockDocument) => {
+      const conditions = listConditionsFor(page.nodes);
+      return canvasBindingsRequest(
+        [page],
+        identity,
+        undefined,
+        false,
+        undefined,
+        conditions === undefined ? {} : { conditions }
+      );
+    };
+    // CONTROL: the same page with no condition asks nothing.
+    expect(listConditionsFor(plain.nodes)).toBeUndefined();
+    expect(ask(plain)).toBeUndefined();
+    // The page's own condition is what asks: the list's shapes, nothing of
+    // the entry, and the site's zone, since it orders a value.
+    const request = ask(conditioned);
+    expect(request?.lists).toEqual(["posts"]);
+    expect(request?.demand.entry).toBeUndefined();
+    expect(request?.conditions).toEqual({
+      any: true,
+      entryFields: [],
+      ordersValues: true,
+    });
+    // A stored alias orders a value too, read as the engine reads it.
+    const legacy = withEntries({
+      visibility: {
+        conditions: [[{ field: "publishedAt", op: "lt", value: "2026-03-02" }]],
+      },
+    });
+    expect(listConditionsFor(legacy.nodes)?.ordersValues).toBe(true);
+    // An equality orders nothing, so the zone is not asked for.
+    const equality = withEntries({
+      visibility: {
+        conditions: [[{ field: "title", op: "equals", value: "Alder" }]],
+      },
+    });
+    expect(listConditionsFor(equality.nodes)?.ordersValues).toBe(false);
   });
 
   it("names the collection a custom source's rows are entries of, given the site's queries", () => {
@@ -327,6 +405,71 @@ describe("the canvas's binding sources", () => {
       vi.useRealTimers();
       editing.identity = null;
     }
+  });
+});
+
+describe("the site's time zone, for the inspector's previews", () => {
+  /** The route's answer for a page that formats a date in a zone. */
+  const zoned = (timeZone?: string) => ({
+    entryRef: { collection: "posts" },
+    singles: [],
+    shapes: [],
+    ...(timeZone === undefined ? {} : { timeZone }),
+  });
+
+  it("is not asked by a canvas whose page formats no date, though it binds", () => {
+    // The control the inspector's own read exists for: a page binding only
+    // text asks the canvas's read for no zone, so the canvas has none.
+    const request = canvasBindingsRequest(
+      [page({ text: { $bind: "title" } })],
+      identity,
+      "en"
+    );
+    expect(request?.demand.formatsDates).toBe(false);
+  });
+
+  it("is asked as a page that formats a date and reads nothing else", async () => {
+    const ask = vi.fn(async () => zoned("Asia/Karachi"));
+    const zone = await siteTimeZoneFor({}, identity, "author-a", ask);
+    expect(zone).toBe("Asia/Karachi");
+    expect(ask).toHaveBeenCalledWith({
+      source: { kind: "collection", slug: "posts", id: "p1" },
+      demand: { singles: {}, site: false, formatsDates: true },
+      lists: [],
+    });
+  });
+
+  it("is read once per editor session and person", async () => {
+    const session = {};
+    const ask = vi.fn(async () => zoned("Asia/Karachi"));
+    await siteTimeZoneFor(session, identity, "author-a", ask);
+    await siteTimeZoneFor(session, identity, "author-a", ask);
+    expect(ask).toHaveBeenCalledTimes(1);
+    // Another person in the same editor, or another editor: read again.
+    await siteTimeZoneFor(session, identity, "author-b", ask);
+    await siteTimeZoneFor({}, identity, "author-b", ask);
+    expect(ask).toHaveBeenCalledTimes(3);
+  });
+
+  it("is none for a site with no zone set", async () => {
+    expect(
+      await siteTimeZoneFor({}, identity, "author-a", async () => zoned())
+    ).toBeUndefined();
+  });
+
+  it("is read again after a read that failed", async () => {
+    const session = {};
+    const ask = vi
+      .fn<() => Promise<ReturnType<typeof zoned>>>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(zoned("Asia/Karachi"));
+    await expect(
+      siteTimeZoneFor(session, identity, "author-a", ask)
+    ).rejects.toThrow("offline");
+    expect(await siteTimeZoneFor(session, identity, "author-a", ask)).toBe(
+      "Asia/Karachi"
+    );
+    expect(ask).toHaveBeenCalledTimes(2);
   });
 });
 

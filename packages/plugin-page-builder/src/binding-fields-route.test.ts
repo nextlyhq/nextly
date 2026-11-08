@@ -166,7 +166,62 @@ describe("the picker's fields", () => {
     const author = named(fieldsOf(await ask("p1"), "Post"), "author");
     expect(author?.fields).toEqual([
       { name: "name", type: "text", public: true, preview: "Ada Lovelace" },
+      // The entry itself, by its id, which a link's entry binds to.
+      {
+        name: "id",
+        type: "text",
+        label: "Link to this entry",
+        linksTo: "users",
+        public: true,
+      },
     ]);
+  });
+
+  it("offers a related entry as a link only as visitors reach it", async () => {
+    const base = reads();
+    const answer = await readBindingFields(
+      { source: { kind: "collection", slug: "posts", id: "p1" } },
+      {
+        ...base,
+        // A cover from the media library, which has no page to link to.
+        declared: async ref =>
+          "collection" in ref && ref.collection === "posts"
+            ? [
+                ...(DECLARED["collection:posts"] ?? []),
+                { name: "cover", type: "upload", relationTo: "media" },
+              ]
+            : "collection" in ref && ref.collection === "media"
+              ? [{ name: "altText", type: "text" }]
+              : base.declared(ref),
+        publicShapes: async ref =>
+          "collection" in ref && ref.collection === "media"
+            ? [{ name: "altText", type: "text" }]
+            : base.publicShapes(ref),
+        asEditor: async (ref, select) =>
+          rowKey(ref) === "posts:p1"
+            ? { ...AS_EDITOR["posts:p1"], cover: "m1" }
+            : rowKey(ref) === "media:m1"
+              ? { altText: "A harbour" }
+              : base.asEditor(ref, select),
+        // The author is not published yet.
+        published: async (ref, select) =>
+          rowKey(ref) === "users:u1" ? null : base.published(ref, select),
+      }
+    );
+    const post = fieldsOf(answer, "Post");
+    const link = (relation: string) =>
+      named(named(post, relation)?.fields ?? [], "id");
+    // Visitors don't see the unpublished author yet.
+    expect(link("author")).toMatchObject({
+      linksTo: "users",
+      public: true,
+      draft: true,
+    });
+    // Visitors can't follow the reviewer, so they can't follow its link.
+    expect(link("reviewer")).toMatchObject({ linksTo: "users", public: false });
+    // The cover's alt text is listed, and no link to the media record.
+    expect(named(named(post, "cover")?.fields ?? [], "altText")).toBeDefined();
+    expect(link("cover")).toBeUndefined();
   });
 
   it("lists the Singles and the site for a document with no entry of its own", async () => {

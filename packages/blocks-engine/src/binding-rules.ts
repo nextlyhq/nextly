@@ -260,6 +260,12 @@ export interface CheckedBinding {
   readonly propSchema?: PropSchema;
   /** The field the path ends at, when the source's schema was known. */
   readonly field?: BindingFieldShape;
+  /**
+   * The one relation the path crosses, when the source's schema was known,
+   * and the index of its segment: `author` at 0 in `author.id`, at 1 in
+   * `details.author.id`.
+   */
+  readonly relation?: CrossedRelation;
   readonly format: CheckedFormat | null;
   /** A stored format this release does not apply. */
   readonly unsupportedFormat?: BindingFormatType;
@@ -306,6 +312,13 @@ export interface BindingCheckInput {
   readonly props?: Readonly<Partial<Record<string, PropSchema>>>;
   readonly schema?: BindingSchemaSource;
   readonly refs?: BindingRefs;
+  /**
+   * `"address"` where an image binding's fallback may be an image address
+   * only, never a media library id: the document's social image, whose media
+   * a page's export and import do not carry. A block's image prop takes
+   * either, so it passes nothing.
+   */
+  readonly imageFallback?: "address";
 }
 
 /** A stored binding whose shape was read. */
@@ -448,10 +461,11 @@ export function isValidPropValue(
       return isReferenceValue(value);
     case "image":
       // Only bindings ask this of an image, and only of a fallback, which is
-      // an image address: never `javascript:` or `data:`, and not a media id,
-      // which a page's export, import and media index do not follow into a
-      // binding, so the picture would be lost on the way.
-      return isImageAddress(value);
+      // read as the image prop's own value is: an image address, or a media
+      // library id. Never `javascript:`, `data:` or another host's `//`
+      // address, which is neither. A page's export and import carry a
+      // fallback's media id as they carry the prop's.
+      return imageValueOf(value) !== undefined;
     default:
       // The sentinel that clears an override is not a value of any prop.
       if (isUnsetOverride(value)) return false;
@@ -545,8 +559,10 @@ export function fieldFitsProp(
 }
 
 /**
- * Fields every entry carries that a schema need not list. A binding to one
- * is judged by the value it reads, as a binding with no schema is.
+ * Fields every entry carries that a schema need not list: the source's own,
+ * and a related entry's across the one relation a path may follow, so
+ * `author.id` names the entry a link points at. A binding to one is judged by
+ * the value it reads, as a binding with no schema is.
  */
 const SYSTEM_FIELDS: ReadonlySet<string> = new Set([
   "id",
@@ -558,8 +574,24 @@ const SYSTEM_FIELDS: ReadonlySet<string> = new Set([
 const MAX_SEGMENTS_WITHOUT_SCHEMA = 2;
 
 /** What walking a path through a source's fields found. */
+/**
+ * The relation a path crosses, as its walk found it, and the index of the
+ * segment naming it.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export interface CrossedRelation {
+  readonly field: BindingFieldShape;
+  readonly segment: number;
+}
+
 type PathWalk =
-  | { readonly ok: true; readonly field?: BindingFieldShape }
+  | {
+      readonly ok: true;
+      readonly field?: BindingFieldShape;
+      /** The relation the walk crossed on the way, when it crossed one. */
+      readonly relation?: CrossedRelation;
+    }
   | {
       readonly ok: false;
       readonly code: BindingIssueCode;
@@ -588,23 +620,59 @@ function shapelessRest(remaining: number): PathWalk {
  * carries is judged by its value, any other is missing. A timestamp is one
  * only where the shapes do not list timestamps: where they do, a source
  * without them has none.
+ *
+ * A related entry carries them too (see {@link relatedEntryField}). A group
+ * is not an entry and carries none.
  */
 function unlistedField(
   name: string,
-  index: number,
+  at: { readonly index: number; readonly relation?: CrossedRelation },
   segments: readonly string[],
   schema: BindingSchemaSource
 ): PathWalk {
   const carried =
     name === "id" ||
     (SYSTEM_FIELDS.has(name) && schema.listsTimestamps !== true);
-  if (index === 0 && carried) {
+  if (at.index === 0 && carried) {
     return shapelessRest(segments.length - MAX_SEGMENTS_WITHOUT_SCHEMA + 1);
+  }
+  // The level right past the relation is the related entry's own.
+  if (carried && at.relation?.segment === at.index - 1) {
+    return relatedEntryField(name, at.index, segments);
   }
   return walkFailure(
     "binding-field-missing",
     `The source has no field "${name}" a visitor may read.`
   );
+}
+
+/**
+ * A field every entry carries, named on the related entry a path's relation
+ * leads to (`author.id`), read as the public reads that entry, so one a
+ * visitor may not read gives nothing and the binding falls back.
+ *
+ * Only through a relation that starts the path: the page reads a relation
+ * its bindings follow by the path's first field, so one inside a group
+ * (`meta.author.id`) is never read, and its id would never be filled.
+ * Nothing is walked past it: it holds a single value.
+ */
+function relatedEntryField(
+  name: string,
+  index: number,
+  segments: readonly string[]
+): PathWalk {
+  if (index !== 1) {
+    return walkFailure(
+      "binding-path-unsupported",
+      `A related entry's "${name}" is read only through a relation at the start of the path, not one inside a group.`
+    );
+  }
+  return index === segments.length - 1
+    ? { ok: true }
+    : walkFailure(
+        "binding-field-missing",
+        `"${name}" holds a single value with no fields of its own.`
+      );
 }
 
 /**
@@ -621,23 +689,32 @@ function walkPath(
 ): PathWalk {
   let fields: readonly BindingFieldShape[] | undefined = root;
   let hops = 0;
+  // The relation crossed so far, carried into what the walk answers, so a
+  // judgement of what the path reads through it asks the walk, never walks
+  // the path again.
+  let relation: CrossedRelation | undefined;
+  const crossed = (walk: PathWalk): PathWalk =>
+    walk.ok && relation !== undefined ? { ...walk, relation } : walk;
   for (let index = 0; index < segments.length; index += 1) {
     const name = segments[index] ?? "";
     const last = index === segments.length - 1;
-    if (fields === undefined) return shapelessRest(segments.length - index);
+    if (fields === undefined) {
+      return crossed(shapelessRest(segments.length - index));
+    }
     const field: BindingFieldShape | undefined = fields.find(
       candidate => candidate.name === name
     );
     if (field === undefined) {
-      return unlistedField(name, index, segments, schema);
+      return crossed(unlistedField(name, { index, relation }, segments, schema));
     }
-    if (last) return { ok: true, field };
+    if (last) return crossed({ ok: true, field });
     const step = stepInto(field, hops, schema);
     if (!step.ok) return step;
+    if (step.hops > hops) relation = { field, segment: index };
     fields = step.fields;
     hops = step.hops;
   }
-  return { ok: true };
+  return crossed({ ok: true });
 }
 
 /** One step of a path past a field: into a group, or across a relation. */
@@ -875,11 +952,41 @@ function malformed(input: BindingCheckInput): BindingCheck {
     fallback === undefined ||
     schema === undefined ||
     kind === undefined ||
-    !isValidPropValue(kind, schema, fallback)
+    !fallbackFits(input, kind, schema, fallback)
   ) {
     return { outcome: "fallback", issues };
   }
   return { outcome: "fallback", fallback: { value: fallback }, issues };
+}
+
+/**
+ * Whether a fallback is a value the prop can hold, as this binding's place
+ * reads an image's: an address or a media id, or an address only where the
+ * place says so. Narrowed from the one image reading (`imageValueOf`), so
+ * the two places can't disagree about what an address is.
+ */
+function fallbackFits(
+  input: BindingCheckInput,
+  kind: BindablePropKind,
+  schema: PropSchema,
+  value: unknown
+): boolean {
+  if (!isValidPropValue(kind, schema, value)) return false;
+  if (kind !== "image" || input.imageFallback !== "address") return true;
+  return imageValueOf(value)?.holds === "address";
+}
+
+/** Why a stored fallback was refused, in the words of its kind and place. */
+function fallbackRefusal(
+  input: BindingCheckInput,
+  kind: BindablePropKind
+): string {
+  if (kind !== "image") {
+    return `This binding's fallback is not a valid ${kind} value, so the prop's own value is shown instead.`;
+  }
+  return input.imageFallback === "address"
+    ? "This binding's fallback is not an image address (https://, http:// or a path on the site), so it is not used; the social image takes an address, not a media library image."
+    : "This image binding's fallback is neither an image address (https://, http:// or a path on the site) nor a media library image, so the prop's own value is shown instead.";
 }
 
 /** The prop check's answer for a binding that goes on to be read. */
@@ -896,7 +1003,7 @@ function checkedFallback(
   if (
     prop.kind === undefined ||
     prop.schema === undefined ||
-    isValidPropValue(prop.kind, prop.schema, stored.fallback)
+    fallbackFits(input, prop.kind, prop.schema, stored.fallback)
   ) {
     return { value: stored.fallback };
   }
@@ -905,9 +1012,7 @@ function checkedFallback(
       input,
       stored.path,
       "binding-fallback-invalid",
-      prop.kind === "image"
-        ? "This image binding's fallback is not an image address (https://, http:// or a path on the site), so the prop's own value is shown instead. A media id can't be a fallback."
-        : `This binding's fallback is not a valid ${prop.kind} value, so the prop's own value is shown instead.`
+      fallbackRefusal(input, prop.kind)
     )
   );
   return undefined;
@@ -918,10 +1023,11 @@ function checkedBinding(
   input: BindingCheckInput,
   stored: StoredBinding,
   prop: PropFit,
-  field: BindingFieldShape | undefined,
+  walked: Extract<PathWalk, { ok: true }>,
   format: Extract<FormatCheck, { ok: true }>,
   fallback: { readonly value: unknown } | undefined
 ): CheckedBinding {
+  const { field, relation } = walked;
   return {
     prop: input.prop,
     source: stored.source,
@@ -931,6 +1037,7 @@ function checkedBinding(
     ...(prop.kind === undefined ? {} : { kind: prop.kind }),
     ...(prop.schema === undefined ? {} : { propSchema: prop.schema }),
     ...(field === undefined ? {} : { field }),
+    ...(relation === undefined ? {} : { relation }),
     format: format.format,
     ...(format.unsupported === undefined
       ? {}
@@ -987,13 +1094,6 @@ export function checkBinding(input: BindingCheckInput): BindingCheck {
   return {
     outcome: "resolve",
     issues,
-    binding: checkedBinding(
-      input,
-      stored,
-      prop,
-      walked.field,
-      format,
-      fallback
-    ),
+    binding: checkedBinding(input, stored, prop, walked, format, fallback),
   };
 }

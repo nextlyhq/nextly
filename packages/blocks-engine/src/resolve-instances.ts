@@ -4021,12 +4021,54 @@ function placedContent(
  * same suffix lands on the same node on every render.
  */
 function claimDomId(run: ResolveRun, base: string): string {
-  if (!run.takenDomIds.has(base)) return heldDomId(run, base);
+  return heldDomId(run, freeDomId(base, run.takenDomIds));
+}
+
+/**
+ * `base`, or the first spelling of it (`base-2`, `base-3`, ...) `taken` does
+ * not hold. Deterministic, so the same claims made in the same order land on
+ * the same spellings on every render.
+ */
+function freeDomId(base: string, taken: ReadonlySet<string>): string {
+  if (!taken.has(base)) return base;
   // Terminates: the set is finite and the suffix strictly increases.
   for (let n = 2; ; n += 1) {
     const candidate = `${base}-${n}`;
-    if (!run.takenDomIds.has(candidate)) return heldDomId(run, candidate);
+    if (!taken.has(candidate)) return candidate;
   }
+}
+
+/**
+ * Take a minted DOM id outside a composition run: `base`, or the first
+ * spelling of it nothing in `taken` uses, recorded in `taken`. The claim a
+ * component's inlined nodes make (`claimDomId`), for another composition
+ * drawing content into a host page, such as an entry's blocks drawn inside
+ * its template, so neither ever renders an id the host already publishes.
+ */
+export function claimedDomId(base: string, taken: Set<string>): string {
+  const id = freeDomId(base, taken);
+  taken.add(id);
+  return id;
+}
+
+/**
+ * The node ids and DOM ids a host forest already holds, read at most
+ * `maxNodes` entries deep: what a composition drawing content into it mints
+ * against, read by the same walk the component resolver surveys a host by.
+ */
+export function hostIdsIn(
+  nodes: readonly unknown[],
+  maxNodes: number
+): {
+  readonly ids: Set<string>;
+  readonly domIds: Set<string>;
+  /** How many entries the walk read, at most `maxNodes`. */
+  readonly count: number;
+  /** Whether the forest holds more than `maxNodes` entries. */
+  readonly truncated: boolean;
+} {
+  const { ids, domIds, count, truncated } = surveyHost(nodes, maxNodes);
+  return { ids, domIds, count, truncated };
 }
 
 /** Take a DOM id, recording it so a refused expansion can give it back. */

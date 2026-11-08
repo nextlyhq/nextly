@@ -135,6 +135,35 @@ export async function editorReaderAsCaller(
 }
 
 /**
+ * The media library as the caller reads it, for a binding that follows a
+ * relation into it (an image's alt text from the entry's featured image).
+ *
+ * `media` is no collection the editor reader finds, so a relation into it is
+ * read here by id, through core's media read checked as the caller: the
+ * check the admin's own media read makes (`read-media`), so the canvas shows
+ * what the person may already open in the library and nothing more. A file
+ * they may not read throws, which the binding read takes as nothing read, so
+ * its binding shows its fallback.
+ */
+export async function mediaReaderAsCaller(
+  ctx: Pick<PluginRouteContext, "caller">
+): Promise<{
+  findByID(args: {
+    id: string;
+    disableErrors?: boolean;
+  }): Promise<Record<string, unknown> | null>;
+}> {
+  const nextly = requireNextly();
+  const caller = await readingAsUser(ctx);
+  return {
+    findByID: async args => {
+      const file = await nextly.media.findByID({ ...args, ...caller });
+      return file === null ? null : { ...file };
+    },
+  };
+}
+
+/**
  * The ids, with one of core's reserved workflow keys at the filter's top
  * level, where core reads them.
  *

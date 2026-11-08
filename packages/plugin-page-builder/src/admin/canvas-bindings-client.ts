@@ -19,6 +19,8 @@
  */
 import {
   bindingDemand,
+  conditionDemand,
+  conditionOp,
   isPlainRecord,
   type BindingDemand,
   type BlockDocument,
@@ -128,6 +130,69 @@ const KEPT = new Map<string, { at: number; read: Promise<PageBindings> }>();
 let keptFor: string | undefined;
 
 /**
+ * What a page's conditions ask of the canvas's reads, or nothing when it
+ * holds none: nothing of the entry, but the public field shapes of the lists
+ * it draws, which a block a list's item decides is judged by while
+ * conditions are applied, though nothing binds; and the site's time zone
+ * where any condition orders a value, which may compare days, so the canvas
+ * judges a day as the published page does.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export function listConditionsFor(
+  nodes: readonly unknown[]
+): ConditionDemand | undefined {
+  if (!conditionDemand(nodes).any) return undefined;
+  const ordersValues = ordersAnyValue(nodes);
+  return {
+    any: true,
+    entryFields: new Set<string>(),
+    ordersValues,
+    orderedFields: new Set<string>(),
+  };
+}
+
+/** The operators that order a value, so may compare days. */
+const ORDERING: ReadonlySet<string> = new Set(["greater_than", "less_than"]);
+
+/** Whether any block's stored conditions order a value, of any scope. */
+function ordersAnyValue(nodes: readonly unknown[]): boolean {
+  const stack: unknown[] = [...nodes];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!isPlainRecord(node)) continue;
+    if (conditionsOf(node.visibility).some(op => ORDERING.has(op))) {
+      return true;
+    }
+    if (isPlainRecord(node.slots)) {
+      for (const children of Object.values(node.slots)) {
+        if (Array.isArray(children)) stack.push(...(children as unknown[]));
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * The operators a stored visibility's conditions use, read as the engine
+ * reads them, so a stored alias (`gt`, `lt`) is the operator it stands for.
+ */
+function conditionsOf(visibility: unknown): string[] {
+  if (!isPlainRecord(visibility) || !Array.isArray(visibility.conditions)) {
+    return [];
+  }
+  return (visibility.conditions as unknown[]).flatMap(group =>
+    Array.isArray(group) ? (group as unknown[]).flatMap(canonicalOp) : []
+  );
+}
+
+/** One stored condition's operator as the engine reads it, if it reads one. */
+function canonicalOp(condition: unknown): string[] {
+  const op = isPlainRecord(condition) ? conditionOp(condition.op) : undefined;
+  return op === undefined ? [] : [op];
+}
+
+/**
  * What the canvas asks for the page it draws, or nothing when it holds no
  * binding or has no entry to read for.
  *
@@ -187,11 +252,7 @@ export function canvasBindingsRequest(
     conditions !== undefined;
   if (!(found.any || conditions !== undefined) || !asks) return undefined;
   return {
-    source: {
-      kind: identity.kind,
-      slug: identity.slug,
-      ...(identity.documentId === undefined ? {} : { id: identity.documentId }),
-    },
+    source: requestSourceOf(identity),
     demand: wire,
     lists,
     ...(locale === undefined ? {} : { locale }),
@@ -205,15 +266,74 @@ export function canvasBindingsRequest(
   };
 }
 
+/** The entry an ask is made for, as the route takes it. */
+function requestSourceOf(
+  identity: DocumentIdentity
+): CanvasBindingsRequest["source"] {
+  return {
+    kind: identity.kind,
+    slug: identity.slug,
+    ...(identity.documentId === undefined ? {} : { id: identity.documentId }),
+  };
+}
+
+/** The site's zone read so far, by editor session, for the person it was read as. */
+const ZONES = new WeakMap<
+  object,
+  { readonly userId: string; readonly read: Promise<string | undefined> }
+>();
+
+/**
+ * The site's time zone, as a published page shows its date-times in it, for
+ * the inspector's previews: read once per editor session (`session`, any
+ * object that lives as long as one editor) and person, and only when asked.
+ *
+ * Asked of the route as a page that formats a date and binds nothing else,
+ * so the route reads the zone by the published page's own rule
+ * (`readBindingSources`, which reads the site settings for it) and nothing
+ * more. A page that formats no date asks the canvas's read for no zone, so
+ * the inspector cannot take it from there. A failed read is not kept, so
+ * the next ask reads again; `undefined` is a site with no zone set.
+ */
+export function siteTimeZoneFor(
+  session: object,
+  identity: DocumentIdentity,
+  userId: string,
+  ask: (
+    request: CanvasBindingsRequest
+  ) => Promise<CanvasBindingsResponse> = askRoute
+): Promise<string | undefined> {
+  const kept = ZONES.get(session);
+  if (kept !== undefined && kept.userId === userId) return kept.read;
+  const request: CanvasBindingsRequest = {
+    source: requestSourceOf(identity),
+    demand: demandToWire({
+      any: true,
+      singles: new Map(),
+      site: false,
+      formatsDates: true,
+    }),
+    lists: [],
+  };
+  const read = ask(request).then(answer => bindingsFromWire(answer).timeZone);
+  ZONES.set(session, { userId, read });
+  read.catch(() => {
+    if (ZONES.get(session)?.read === read) ZONES.delete(session);
+  });
+  return read;
+}
+
 /** One ask of the route. */
 async function askRoute(
-  request: CanvasBindingsRequest
+  request: CanvasBindingsRequest,
+  signal?: AbortSignal
 ): Promise<CanvasBindingsResponse> {
   const body = await writePluginRoute<CanvasBindingsResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: CANVAS_BINDINGS_ROUTE_PATH,
     method: "POST",
     body: request,
+    ...(signal === undefined ? {} : { signal }),
   });
   if (body === undefined || !Array.isArray(body.singles)) {
     throw new Error("The canvas's binding sources could not be read.");
@@ -231,10 +351,20 @@ export function canvasBindingsFor(
   request: CanvasBindingsRequest,
   userId: string,
   ask: (
-    request: CanvasBindingsRequest
+    request: CanvasBindingsRequest,
+    signal?: AbortSignal
   ) => Promise<CanvasBindingsResponse> = askRoute,
-  fresh = false
+  fresh = false,
+  /**
+   * Aborts the ask this call makes. An aborted ask fails, and like any
+   * failed ask is not kept, so the next ask for the same sources is made
+   * afresh.
+   */
+  signal?: AbortSignal
 ): Promise<PageBindings> {
+  if (signal?.aborted === true) {
+    return Promise.reject(signal.reason as Error);
+  }
   if (keptFor !== userId) {
     KEPT.clear();
     keptFor = userId;
@@ -244,7 +374,7 @@ export function canvasBindingsFor(
   if (!fresh && kept !== undefined && Date.now() - kept.at < KEPT_FOR_MS) {
     return kept.read;
   }
-  const reading = ask(request).then(answer => {
+  const reading = ask(request, signal).then(answer => {
     const bindings = bindingsFromWire(answer);
     const reads = readsIn(answer);
     if (reads !== undefined) READS.set(bindings, reads);
@@ -305,7 +435,9 @@ export function useCanvasBindings(
   locale: string | undefined,
   component = false,
   /** The site's named queries, once the canvas has read them. */
-  namedQueries?: NamedQueryLookup
+  namedQueries?: NamedQueryLookup,
+  /** What the page's conditions ask of the reads, where it holds any. */
+  conditions?: ConditionDemand
 ): PageBindings {
   // The entry the canvas is drawn as: the document's own, or a template's
   // previewed entry of the collection it draws.
@@ -315,8 +447,15 @@ export function useCanvasBindings(
   const userId = useCurrentUserId();
   const request = useMemo(
     () =>
-      canvasBindingsRequest(drawn, identity, locale, component, namedQueries),
-    [drawn, identity, locale, component, namedQueries]
+      canvasBindingsRequest(
+        drawn,
+        identity,
+        locale,
+        component,
+        namedQueries,
+        conditions === undefined ? {} : { conditions }
+      ),
+    [drawn, identity, locale, component, namedQueries, conditions]
   );
   // The ask as text: a new document that asks the same reads nothing new.
   const key = request === undefined ? "" : JSON.stringify(request);

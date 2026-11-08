@@ -3,7 +3,8 @@
  * and one bound to a URL field draws the address only when it is an image
  * address the site may load: never `javascript:` or `data:`, never a host
  * outside the site's list, and never a broken element. A record the host
- * can't find shows the binding's fallback, then nothing.
+ * can't find shows the binding's fallback, an image address or a media
+ * library image, then nothing.
  *
  * Every fixture keeps the record's, the address's and the fallback's values
  * distinct, so an assertion can only pass on the one that should show.
@@ -263,6 +264,28 @@ describe("an image bound to a field", () => {
       })
     );
     expect(fallen.map(tag => attribute(tag, "src"))).toEqual(["/media/f.jpg"]);
+  });
+
+  it("draws a media-library fallback as a picked image is drawn, for an empty field and a record the host can't find", async () => {
+    for (const entry of [{ cover: null }, { cover: "deleted-record" }]) {
+      const tags = images(
+        await render(page(boundImage("cover", { fallback: "m1" })), entry)
+      );
+      // The record's address, alt text and size, never the typed address.
+      expect(tags).toHaveLength(1);
+      expect(attribute(tags[0], "src")).toBe("https://cdn.example/m1.jpg");
+      expect(attribute(tags[0], "alt")).toBe("Record alt");
+      expect(attribute(tags[0], "width")).toBe("800");
+    }
+  });
+
+  it("draws nothing for a media-library fallback the host can't find either, never the typed address", async () => {
+    const html = await render(
+      page(boundImage("cover", { fallback: "also-deleted" })),
+      { cover: "deleted-record" }
+    );
+    expect(images(html)).toEqual([]);
+    expect(html).not.toContain("own.jpg");
   });
 
   it("shows the image's own picked media when the binding gives nothing and has no fallback", async () => {

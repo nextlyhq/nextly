@@ -258,7 +258,14 @@ function instance(content: BlockDocument, extras: SiteExtras = {}) {
       if (runtime.site === null) throw new Error("no site settings");
       return runtime.site;
     }),
-    media: { findByID: vi.fn(async () => null) },
+    media: {
+      findByID: vi.fn(
+        async (_args: {
+          id: string;
+          disableErrors?: boolean;
+        }): Promise<Record<string, unknown> | null> => null
+      ),
+    },
   };
 }
 
@@ -769,6 +776,137 @@ describe("a routed page's bindings", () => {
         select: { id: true, name: true },
       }),
     ]);
+  });
+
+  describe("a link to the entry a to-one relation names", () => {
+    /** A page of one button linking to the author, else to `/authors`. */
+    const linkPage = (): BlockDocument =>
+      JSON.parse(
+        JSON.stringify({
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "page",
+          nodes: [
+            {
+              id: "by",
+              type: "core/button",
+              version: 1,
+              props: {
+                label: "The author",
+                href: "/authors",
+                entryCollection: "authors",
+              },
+              bindings: { entryId: { $bind: "author.id" } },
+            },
+          ],
+        })
+      ) as BlockDocument;
+
+    const config: PageConfig = {
+      collections: ["pages"],
+      field: "content",
+      blocks,
+      resolveEntryPath: async (collection, id) => `/${collection}/${id}`,
+    };
+
+    beforeEach(() => {
+      runtime.shapes.set("collection:pages", [
+        { name: "title", type: "text" },
+        { name: "author", type: "relationship", relationTo: "authors" },
+      ]);
+      // As declared: the authors list no `id`, which every entry carries.
+      runtime.shapes.set("collection:authors", [
+        { name: "name", type: "text" },
+      ]);
+    });
+
+    it("links to the author's page, its id read from the author as the public reads it", async () => {
+      const nextly = instance(linkPage());
+      const { html } = await renderedPage(createBlocksPage, config, nextly);
+      expect(html).toContain('href="/authors/a1"');
+      expect(publicReads(nextly)).toEqual([
+        expect.objectContaining({
+          collection: "pages",
+          select: { id: true, author: true },
+        }),
+        expect.objectContaining({
+          collection: "authors",
+          where: { and: [{ id: { equals: "a1" } }] },
+          select: { id: true },
+        }),
+      ]);
+    });
+
+    it("links to its own address where the public may not read the author", async () => {
+      const nextly = instance(linkPage());
+      const answer = nextly.find.getMockImplementation();
+      // The authors' read refused, as a collection the public may not read
+      // is; the post still holds the author's id, which never fills the link.
+      nextly.find.mockImplementation(async (args: Record<string, unknown>) => {
+        if (args.collection === "authors" && isPublicRead(args)) {
+          throw new Error("forbidden");
+        }
+        if (answer === undefined) throw new Error("no find");
+        return await answer(args);
+      });
+      const { html } = await renderedPage(createBlocksPage, config, nextly);
+      expect(html).toContain('href="/authors"');
+      expect(html).not.toContain("/authors/a1");
+    });
+
+    it("links to its own address where the author's entry has no page", async () => {
+      const nextly = instance(linkPage());
+      // The author is read, so the entry is named, but no path is found.
+      const resolved: string[] = [];
+      const { html } = await renderedPage(
+        createBlocksPage,
+        {
+          ...config,
+          resolveEntryPath: async (collection, id) => {
+            resolved.push(`${collection}:${id}`);
+            return null;
+          },
+        },
+        nextly
+      );
+      expect(resolved).toEqual(["authors:a1"]);
+      expect(html).toContain('href="/authors"');
+    });
+  });
+
+  it("follows a relation into the media library through the library, as the page's images are read", async () => {
+    runtime.shapes.set("collection:pages", [
+      { name: "title", type: "text" },
+      { name: "cover", type: "upload", relationTo: "media" },
+    ]);
+    const page = boundPage({ $bind: "cover.altText" });
+    const nextly = instance(page);
+    // The page's public row points at its cover, and `media` is no
+    // collection a list read finds: asking it for one fails, as it does on
+    // a real instance.
+    nextly.find.mockImplementation(async (args: Record<string, unknown>) => {
+      if (args.collection === "media") throw new Error("not a collection");
+      const rows = rowsFor(args, page, {});
+      const items = isPublicRead(args)
+        ? rows.map(row => ({ ...row, cover: "m1" }))
+        : rows;
+      return { items, meta: { total: 1 } };
+    });
+    nextly.media.findByID.mockImplementation(async ({ id }) =>
+      id === "m1"
+        ? { id: "m1", url: "/m1.jpg", altText: "A harbour at dawn" }
+        : null
+    );
+    const { html } = await renderedPage(
+      createBlocksPage,
+      { collections: ["pages"], field: "content", blocks },
+      nextly
+    );
+    expect(html).toContain("A harbour at dawn");
+    expect(html).not.toContain("Fallback");
+    expect(nextly.media.findByID).toHaveBeenCalledWith({
+      id: "m1",
+      disableErrors: true,
+    });
   });
 
   it("judges what the public may see inside the cached reads, so a prerender can cache the page", async () => {

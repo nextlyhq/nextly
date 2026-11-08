@@ -154,7 +154,7 @@ describe("applyCache — key forwarding and per-caller isolation", () => {
     // The caller's parts, in order, then the part naming the shape the entry
     // holds.
     expect(cache.calls[0]).toEqual({
-      keyParts: ["posts", "list", "user-a", "nextly:kept-v1"],
+      keyParts: ["posts", "list", "user-a", "nextly:kept-v2"],
       tags: ["nextly:posts"],
     });
   });
