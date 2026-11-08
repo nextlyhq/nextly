@@ -465,6 +465,8 @@ export async function renderCollectionLoop({
   // with no item: not the item of a list around this one.
   const claim = { ...readClaimOf(node), kind: "entries" } as const;
   if (paging?.claimed !== true && ctx.queries?.take(claim) === false) {
+    // Refused its read, it draws no entry, and says so as a list that drew.
+    reportShown(ctx, node.id, 0);
     return (
       <div
         className={className}

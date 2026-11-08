@@ -100,6 +100,14 @@ describe("what the conditions did, in words", () => {
         "page"
       )
     ).toBe("Every block checked shows for this page");
+    // Only list blocks checked, and a placed component's left unchecked:
+    // still said only of the blocks checked.
+    expect(
+      conditionsCountWords(
+        { ...appliedHiding(), byEntry: true, unjudged: true },
+        "page"
+      )
+    ).toBe("Every block checked shows for this page");
   });
 });
 

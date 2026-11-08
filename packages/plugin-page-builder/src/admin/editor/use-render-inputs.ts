@@ -50,6 +50,7 @@ import {
   previewWidth,
   selectionIsInspectable,
   useCanvasDrag,
+  expandedNodesOf,
   type CanvasDrag,
   type CanvasZoom,
   type PageClassBlocks,
@@ -1096,13 +1097,18 @@ export function useBoundCanvasRender(
   // applied, though nothing on the page binds.
   // The regions of its Layout too, whose lists read as a visitor while
   // conditions are applied, judged in the same site zone.
+  // Each with its components expanded, so an ordering condition inside a
+  // placed component's list asks for the site's zone too.
+  const { definitions, limits } = canvasRender;
   const conditions = useMemo(
     () =>
       listConditionsFor([
-        ...document.nodes,
-        ...regions.flatMap(region => region.document.nodes),
+        ...expandedNodesOf(document, definitions, limits),
+        ...regions.flatMap(region =>
+          expandedNodesOf(region.document, region.definitions, limits)
+        ),
       ]),
-    [document, regions]
+    [document, regions, definitions, limits]
   );
   const bindings = useCanvasBindings(
     trees,

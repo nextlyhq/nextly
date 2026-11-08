@@ -27,6 +27,7 @@ import {
   BreakpointSwitcher,
   BuilderShell,
   Canvas,
+  expandedNodesOf,
   useAppliedConditions,
   useConditionsUnchecked,
   CanvasFrame,
@@ -1580,18 +1581,22 @@ function EditorBody<TFieldValues extends FieldValues>({
   );
   // The blocks the canvas draws while the conditions are applied: the page,
   // composed, and the regions of its Layout, whose lists read as a visitor
-  // too.
+  // too, each with its components expanded as the renderer draws them, so a
+  // list inside a placed component is counted by the id it is drawn with.
   const applied = conditions.applied !== undefined;
   const regions = panels.canvasRegions;
+  const { definitions, limits } = canvasRender;
   const visitorDrawn = useMemo(
     () =>
       applied
         ? [
-            ...conditions.composed.nodes,
-            ...(regions ?? []).flatMap(region => region.document.nodes),
+            ...expandedNodesOf(conditions.composed, definitions, limits),
+            ...(regions ?? []).flatMap(region =>
+              expandedNodesOf(region.document, region.definitions, limits)
+            ),
           ]
         : undefined,
-    [applied, conditions.composed, regions]
+    [applied, conditions.composed, regions, definitions, limits]
   );
   useFollowApplied(listsAsVisitor, visitorDrawn);
   const shownRender = useItemsJudgedRender(

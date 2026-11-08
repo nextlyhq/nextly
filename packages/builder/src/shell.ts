@@ -437,6 +437,7 @@ export type {
  */
 export {
   conditionedBlocksIn,
+  expandedNodesOf,
   type AppliedConditions,
   type ConditionsPreview,
   type HiddenBlock,

@@ -46,7 +46,7 @@ import {
 } from "@nextlyhq/blocks-react";
 
 import { storedGroups } from "./condition-checks";
-import { gatedAsStored } from "./condition-gate";
+import { asStoredDefinitions, gatedAsStored } from "./condition-gate";
 import {
   conditionDraftOf,
   conditionLine,
@@ -169,6 +169,30 @@ export function appliedConditionsOf(
     unjudged: unjudged || drawsUnjudged(document, drawn),
     byEntry: itemGated.size > 0,
   };
+}
+
+/**
+ * The blocks a document draws with the components it places expanded, as
+ * the renderer composes them under these definitions and limits, each by
+ * the id the drawn tree gives it: what an editor reads of the whole page it
+ * draws, the lists and conditions inside its components among them. The
+ * document's own blocks where it places no component.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export function expandedNodesOf(
+  document: BlockDocument,
+  definitions: DefinitionsById | undefined,
+  limits?: DocumentLimits
+): readonly BlockNode[] {
+  if (definitions === undefined || definitions.size === 0) {
+    return document.nodes;
+  }
+  return resolveComponentInstances(
+    document,
+    asStoredDefinitions(definitions, limits),
+    { conditioned: "carry", ...(limits === undefined ? {} : { limits }) }
+  ).document.nodes;
 }
 
 /**
