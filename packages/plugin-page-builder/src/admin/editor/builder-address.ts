@@ -5,6 +5,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/builder-address
  */
+import type { Binding } from "@nextlyhq/blocks-engine";
 import type {
   DocumentIdentity,
   DocumentLocale,
@@ -172,6 +173,67 @@ export function entryCreatePath(collection: string): string {
  */
 export function entryEditPath(collection: string, id: string): string {
   return `/admin/collections/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`;
+}
+
+/** An edit screen's path, opened in `locale` where one is given. */
+function inLanguage(path: string, locale: string | undefined): string {
+  return locale === undefined || locale === ""
+    ? path
+    : `${path}?${new URLSearchParams({ locale }).toString()}`;
+}
+
+/**
+ * The admin's edit screen for the Single `slug`, as its own route table
+ * spells it (`/admin/singles/<slug>`).
+ */
+function singleEditPath(slug: string): string {
+  return `/admin/singles/${encodeURIComponent(slug)}`;
+}
+
+/**
+ * The admin's general settings, as its own route table spells it
+ * (`/admin/settings`): where the site settings a binding reads (its name,
+ * address, logo and time zone) are edited.
+ */
+const SITE_SETTINGS_PATH = "/admin/settings";
+
+/**
+ * Where the source a binding reads is edited: the entry's edit screen (the
+ * page's own, or the entry a template is previewed with), the Single's, or
+ * the site settings. `undefined` where there is no one screen: a list's item,
+ * and an entry not saved yet.
+ *
+ * An entry's and a Single's screens open in the language being edited, the
+ * one the picker previewed the field in, named as the admin's own entry
+ * links name it (`?locale=`); none for the default, which is what a screen
+ * opens without one. The site settings have one language.
+ *
+ * @param entry - the entry the editor's bindings read, as the picker lists it
+ * @param locale - the language being edited, `undefined` for the default
+ */
+export function bindingSourcePath(
+  binding: Binding,
+  entry: DocumentIdentity | null,
+  locale?: string
+): string | undefined {
+  switch (binding.source ?? "entry") {
+    case "entry":
+      if (entry === null) return undefined;
+      if (entry.kind === "single") {
+        return inLanguage(singleEditPath(entry.slug), locale);
+      }
+      return entry.documentId === undefined
+        ? undefined
+        : inLanguage(entryEditPath(entry.slug, entry.documentId), locale);
+    case "single":
+      return "sourceKey" in binding && typeof binding.sourceKey === "string"
+        ? inLanguage(singleEditPath(binding.sourceKey), locale)
+        : undefined;
+    case "site":
+      return SITE_SETTINGS_PATH;
+    default:
+      return undefined;
+  }
 }
 
 /**

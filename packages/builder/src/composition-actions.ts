@@ -210,6 +210,11 @@ export interface UnbindAnswer {
   readonly value?: unknown;
   /** The prop an image's address was kept in, where the bound prop could not hold it. */
   readonly into?: string;
+  /**
+   * Set where the binding read a field visitors can't read: its value was
+   * not copied in, and the fallback or the prop's own value was kept.
+   */
+  readonly unreadable?: true;
   /** Why, in words an author reads. */
   readonly reason: string;
 }

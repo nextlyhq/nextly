@@ -89,10 +89,14 @@ function chipOf(entry: PreviewedEntry, unavailable = false): PreviewChip {
 function previewOf(
   previewed: PreviewedEntry,
   latest: PreviewedEntry,
-  chip: PreviewChip | undefined = undefined
+  chip: PreviewChip | undefined = undefined,
+  /** The collection the reads are for, which their scope names. */
+  collection = "articles"
 ): TemplatePreview {
+  // Whose reads: the collection, language and person, as the hook spells it.
+  const scope = JSON.stringify([collection, null, "u1"]);
   return {
-    collection: "articles",
+    collection,
     fixed: false,
     labels: { singular: "Article", plural: "Articles" },
     blocksFields: [{ name: "body", label: "Body" }],
@@ -101,6 +105,7 @@ function previewOf(
     chip,
     previewed,
     latest,
+    scope,
     choose: vi.fn(),
     step: vi.fn(() => undefined),
     refresh: vi.fn(),
@@ -186,5 +191,72 @@ describe("conditions applied through a refresh of the same entry", () => {
     expect(result.current.applied?.hidden).toHaveLength(1);
     rerender({ preview: previewOf(LOADING, ARTICLE, chipOf(ARTICLE)) });
     expect(result.current.applied?.hidden).toHaveLength(1);
+  });
+});
+
+describe("a refresh whose entry read answers before the canvas's", () => {
+  // The same article, its Body revised in another tab: one plain block.
+  const REVISED: PreviewedEntry = {
+    ...ARTICLE,
+    editorValues: {
+      body: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "rev",
+            type: "core/text",
+            version: 1,
+            props: { text: "Revised paragraph" },
+          },
+        ],
+      },
+    },
+  };
+
+  /** What the Entry content block draws, by its blocks' words. */
+  function wordsIn(page: BlockDocument): unknown[] {
+    return (page.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT] ?? []).map(
+      node => node.props.text
+    );
+  }
+
+  it("keeps the Body and conditions as named until the strip names the refreshed entry", () => {
+    const { result, rerender } = drawnOver(NAMED);
+    // The entry's own read has answered with the revision; the canvas's
+    // read of it is still on its way, so the strip names no entry yet.
+    rerender({ preview: previewOf(LOADING, REVISED, chipOf(REVISED)) });
+    expect(wordsIn(result.current.page.composed)).toEqual([
+      "Members' worksheet",
+    ]);
+    expect(result.current.applied?.hidden).toHaveLength(1);
+    // Both reads back: the strip names the revision, and it is drawn.
+    rerender({
+      preview: previewOf(REVISED, REVISED, {
+        ...chipOf(REVISED),
+        loading: false,
+      }),
+    });
+    expect(wordsIn(result.current.page.composed)).toEqual([
+      "Revised paragraph",
+    ]);
+    expect(result.current.applied?.hidden).toEqual([]);
+  });
+});
+
+describe("a change of collection that names the same entry id", () => {
+  it("is a switch, not a refresh: the old entry's Body is not kept", () => {
+    const { result, rerender } = drawnOver(NAMED);
+    // Another collection's entry under the same id, read but not named yet.
+    rerender({
+      preview: previewOf(LOADING, ARTICLE, chipOf(ARTICLE), "pages"),
+    });
+    expect(result.current.page.composed).toBe(TEMPLATE);
+  });
+
+  it("keeps the Body through a refresh within the same collection (the control)", () => {
+    const { result, rerender } = drawnOver(NAMED);
+    rerender({ preview: previewOf(LOADING, ARTICLE, chipOf(ARTICLE)) });
+    expect(drawnIn(result.current.page.composed)).toBe(1);
   });
 });

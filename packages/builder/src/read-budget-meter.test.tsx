@@ -89,3 +89,63 @@ describe("a Layout region's unread block", () => {
     expect(screen.queryByRole("link")).toBeNull();
   });
 });
+
+describe("a count that could not be made", () => {
+  it("says so in the meter's place, its tooltip the same words, and retries when pressed", () => {
+    const retry = vi.fn();
+    render(
+      <ReadBudgetMeter
+        report={undefined}
+        editor={{ document: pageDocument, select: vi.fn() }}
+        failed={{ retry }}
+      />
+    );
+    const meter = screen.getByRole("button", {
+      name: "Couldn't count page reads. Retry",
+    });
+    expect(meter.getAttribute("title")).toBe(
+      "Couldn't count page reads. Retry"
+    );
+    // Never "Counting": the count is not on its way.
+    expect(meter.getAttribute("aria-busy")).toBeNull();
+    expect(meter.textContent).toContain("Couldn't count reads");
+    // Marked with an alert, never a circling arrow or the meter's gauge,
+    // which read as a count still on its way.
+    const mark = meter.querySelector("svg");
+    expect(mark?.getAttribute("class")).toMatch(
+      /lucide-(circle-alert|alert-circle)/
+    );
+    fireEvent.click(meter);
+    expect(retry).toHaveBeenCalledTimes(1);
+    // A press retries; it opens no panel, which would have nothing to say.
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("closes an open panel on failing, so a count after it does not open it again", () => {
+    const editor = { document: pageDocument, select: vi.fn() };
+    const { rerender } = render(
+      <ReadBudgetMeter report={over} editor={editor} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /reads/i }));
+    expect(screen.getByRole("dialog", { name: "Page reads" })).toBeTruthy();
+    rerender(
+      <ReadBudgetMeter
+        report={undefined}
+        editor={editor}
+        failed={{ retry: vi.fn() }}
+      />
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // Counting again after a Retry, then the count, or a late answer: the
+    // panel stays closed until it is pressed open.
+    rerender(<ReadBudgetMeter report={undefined} editor={editor} />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    rerender(<ReadBudgetMeter report={over} editor={editor} />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: /^Over the limit/ })
+        .getAttribute("aria-expanded")
+    ).toBe("false");
+  });
+});

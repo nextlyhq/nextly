@@ -19,12 +19,31 @@ import { renderToReadableStream } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The field shapes the public reads, and a reader that hides nothing: no
-// Nextly services are registered in this process to read a schema from.
-const runtime = vi.hoisted(() => ({ shapes: new Map<string, unknown>() }));
+// Nextly services are registered in this process to read a schema from. And
+// each cached read's key and tags, with whether the caller runs inside one,
+// read through the real cache helper.
+const runtime = vi.hoisted(() => ({
+  shapes: new Map<string, unknown>(),
+  cachedReads: [] as { keyParts: string[]; tags: string[] }[],
+  isCached: (): boolean => false,
+}));
 vi.mock("nextly/runtime", async importOriginal => {
   const actual = await importOriginal<typeof import("nextly/runtime")>();
+  const { AsyncLocalStorage } = await import("node:async_hooks");
+  const inCache = new AsyncLocalStorage<true>();
+  runtime.isCached = () => inCache.getStore() === true;
   return {
     ...actual,
+    cachedFind: (
+      read: () => Promise<unknown>,
+      options: Parameters<typeof actual.cachedFind>[1]
+    ) => {
+      runtime.cachedReads.push({
+        keyParts: [...options.keyParts],
+        tags: [...options.tags],
+      });
+      return actual.cachedFind(() => inCache.run(true, read), options);
+    },
     createPublicReader: (
       ...[source, binding]: Parameters<typeof actual.createPublicReader>
     ) =>
@@ -920,6 +939,46 @@ describe("a list's images, read ahead", () => {
     expect(nextly.media.findByID).not.toHaveBeenCalled();
     // The entries, the authors, the images and the links' four.
     expect(total).toBe(7);
+  });
+
+  it("reads a list's images ahead inside the route's cache, tagged as a media write expires them", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    runtime.shapes.set("collection:posts", [
+      { name: "title", type: "text" },
+      { name: "slug", type: "text" },
+      { name: "author", type: "relationship", relationTo: "authors" },
+      { name: "featuredImage", type: "upload", relationTo: "media" },
+    ]);
+    const nextly = site(3, listing(3, { boundImage: true }));
+    // Whether each batch read ran inside a cached read: under Cache
+    // Components a prerender refuses an uncached one that takes the time.
+    const inside: boolean[] = [];
+    const answer = nextly.media.findByIDs.getMockImplementation();
+    nextly.media.findByIDs.mockImplementation(async args => {
+      inside.push(runtime.isCached());
+      return (await answer?.(args)) ?? [];
+    });
+    runtime.cachedReads = [];
+
+    const { html } = await journal(nextly, { mediaLibrary: true });
+
+    expect(html).toContain("/media/3.jpg");
+    expect(inside).toEqual([true]);
+    const reads = runtime.cachedReads.filter(
+      read => read.keyParts[0] === "nextly-media-batch"
+    );
+    expect(reads).toHaveLength(1);
+    // The collection's tag first, so a long batch never drops it, then each
+    // image's own: the tags a media write expires (`revalidateMedia` in
+    // nextly).
+    const tags = reads[0]!.tags;
+    expect(tags[0]).toBe("nextly:media");
+    expect([...tags].sort()).toEqual([
+      "nextly:media",
+      "nextly:media:id:image-1",
+      "nextly:media:id:image-2",
+      "nextly:media:id:image-3",
+    ]);
   });
 
   it("keeps the first block's link its address when the cap covers exactly that link", async () => {

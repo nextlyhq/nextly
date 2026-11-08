@@ -41,7 +41,7 @@ import { version as PLUGIN_VERSION } from "../package.json";
 
 import {
   backfillPageClaims,
-  publishedPages,
+  publishedPagesInTransaction,
   type PagesReader,
 } from "./address-claims/backfill";
 import { committedClaims, type Tx } from "./address-claims/claim-store";
@@ -2969,11 +2969,20 @@ export const pageBuilder = (
           ? {}
           : { pathTemplate: opts.pagePreviewPath }),
         backfillDone: () => pageClaimsBackfilled,
-        publishedPages: async function* () {
-          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-          const nextly = (await getCachedNextly()) as unknown as PagesReader;
-          yield* publishedPages(nextly, pagesSlug);
-        },
+        // Hook-free and as the system, as the pages' start-up pass reads
+        // them, on the save's own transaction: a save holding the pool's
+        // last connection never waits for a second one.
+        publishedPages: tx =>
+          publishedPagesInTransaction(
+            (on, options, opts) =>
+              ctx.services.ownCollections.listEntriesInTransaction(
+                on,
+                pagesSlug,
+                options,
+                opts
+              ),
+            tx
+          ),
       });
       pageClaimsBackfill = async () => {
         const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
@@ -2985,6 +2994,23 @@ export const pageBuilder = (
             ? {}
             : { pathTemplate: opts.pagePreviewPath }),
           nextly: (await getCachedNextly()) as unknown as PagesReader,
+          // With no row lock: the pass holds the page's claims lock, which a
+          // save of the page takes before it commits, while a share lock
+          // here would wait for a save holding the row that is itself
+          // waiting for that claims lock.
+          readPage: async (tx, id) => {
+            try {
+              return await ctx.services.ownCollections.findEntryByIdInTransaction(
+                tx,
+                pagesSlug,
+                id,
+                { lock: "none" }
+              );
+            } catch (error) {
+              if (NextlyError.isNotFound(error)) return null;
+              throw error;
+            }
+          },
           withTransaction: work =>
             ctx.services.collections.withTransaction(work),
           warn: (message, meta) => ctx.logger.warn(message, meta),
@@ -3067,20 +3093,25 @@ export const pageBuilder = (
         // Asked inside a write's transaction, so read on it.
         lifecycle: async (collection, tx) =>
           (await collectionRecord(collection, tx))?.status === true,
-        pagesWithSlugs: async slugs => {
-          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-          const nextly = (await getCachedNextly()) as unknown as PagesReader;
-          const found = await nextly.find({
-            collection: pagesSlug,
-            where: {
-              status: { equals: "published" },
-              slug: { in: [...slugs] },
-            },
-            limit: slugs.length,
-            overrideAccess: true,
-            depth: 0,
-          });
-          return (found.items as Readonly<Record<string, unknown>>[]).flatMap(
+        // Hook-free and as the system, as the pages' start-up pass reads
+        // them, on the write's own transaction: a write holding the pool's
+        // last connection never waits for a second one. A page's slug is
+        // unique, so one read of as many rows as slugs asked finds them all.
+        pagesWithSlugs: async (slugs, tx) => {
+          const found =
+            await ctx.services.ownCollections.listEntriesInTransaction(
+              tx,
+              pagesSlug,
+              {
+                where: {
+                  status: { equals: "published" },
+                  slug: { in: [...slugs] },
+                },
+                pagination: { limit: slugs.length },
+                depth: 0,
+              }
+            );
+          return (found.data as Readonly<Record<string, unknown>>[]).flatMap(
             row =>
               typeof row.id === "string" || typeof row.id === "number"
                 ? [
@@ -3246,24 +3277,30 @@ export const pageBuilder = (
           storedAddressProblem(address, collection, {
             declared: declaredPaths,
           }),
-        publishedEntries: async (collection, page, size) => {
-          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-          const nextly = (await getCachedNextly()) as unknown as PagesReader;
-          const found = await nextly.find({
+        // The host's collection, read as the system, as `entriesWithIds`
+        // reads it, on the write's own transaction: a write holding the
+        // pool's last connection never waits for a second one.
+        publishedEntries: async (collection, page, size, tx, lifecycle) => {
+          const found = await ctx.services.collections.listEntriesInTransaction(
+            tx,
             collection,
-            // Published only, and a no-op on a collection without a
-            // Draft/Published lifecycle, whose entries are all live.
-            status: "published",
-            // `id` is unique and on every collection; `createdAt` is absent
-            // where timestamps are off, and ties would let a paged walk skip
-            // an entry at a batch's edge.
-            sort: "id",
-            limit: size,
-            page,
-            overrideAccess: true,
-            depth: 0,
-          });
-          return found.items as readonly Readonly<Record<string, unknown>>[];
+            {
+              // Published only where the collection has a Draft/Published
+              // lifecycle; without one every entry is live, whatever an
+              // ordinary field named `status` holds. The hook judges each
+              // row by the same test (`isPublished`).
+              ...(lifecycle
+                ? { where: { status: { equals: "published" } } }
+                : {}),
+              // `id` is unique and on every collection; `createdAt` is absent
+              // where timestamps are off, and ties would let a paged walk skip
+              // an entry at a batch's edge.
+              sort: { field: "id", direction: "asc" },
+              pagination: { limit: size, page },
+              depth: 0,
+            }
+          );
+          return found.data;
         },
       };
       // Whatever is declared in code: a collection created at runtime is

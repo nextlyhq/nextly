@@ -272,13 +272,15 @@ export function canvasBindingsRequest(
 
 /** One ask of the route. */
 async function askRoute(
-  request: CanvasBindingsRequest
+  request: CanvasBindingsRequest,
+  signal?: AbortSignal
 ): Promise<CanvasBindingsResponse> {
   const body = await writePluginRoute<CanvasBindingsResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: CANVAS_BINDINGS_ROUTE_PATH,
     method: "POST",
     body: request,
+    ...(signal === undefined ? {} : { signal }),
   });
   if (body === undefined || !Array.isArray(body.singles)) {
     throw new Error("The canvas's binding sources could not be read.");
@@ -296,10 +298,20 @@ export function canvasBindingsFor(
   request: CanvasBindingsRequest,
   userId: string,
   ask: (
-    request: CanvasBindingsRequest
+    request: CanvasBindingsRequest,
+    signal?: AbortSignal
   ) => Promise<CanvasBindingsResponse> = askRoute,
-  fresh = false
+  fresh = false,
+  /**
+   * Aborts the ask this call makes. An aborted ask fails, and like any
+   * failed ask is not kept, so the next ask for the same sources is made
+   * afresh.
+   */
+  signal?: AbortSignal
 ): Promise<PageBindings> {
+  if (signal?.aborted === true) {
+    return Promise.reject(signal.reason as Error);
+  }
   if (keptFor !== userId) {
     KEPT.clear();
     keptFor = userId;
@@ -309,7 +321,7 @@ export function canvasBindingsFor(
   if (!fresh && kept !== undefined && Date.now() - kept.at < KEPT_FOR_MS) {
     return kept.read;
   }
-  const reading = ask(request).then(answer => {
+  const reading = ask(request, signal).then(answer => {
     const bindings = bindingsFromWire(answer);
     const reads = readsIn(answer);
     if (reads !== undefined) READS.set(bindings, reads);

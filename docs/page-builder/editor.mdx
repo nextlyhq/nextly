@@ -387,6 +387,50 @@ up**, **Move down**, **Move in** or **Move out**.
   through the rows, <kbd>→</kbd> and <kbd>←</kbd> open and close a block, and
   <kbd>Home</kbd> and <kbd>End</kbd> go to the first and last row.
 
+## Binding a prop to a field
+
+A block's prop can show a field's value instead of its own: the entry's (a page's own,
+or the entry a template is previewed with), a Single's, or the site settings'. In the
+Content tab, a prop that a field can fill has a bind button beside it. Choose it for
+the fields that fit, grouped by where they come from, with each one's value as you read
+it. A field visitors can't read says **Not public**, and one whose value is only in a
+draft says **Draft**.
+
+Once bound, the prop shows a chip naming the field and where it comes from, with its
+**Fallback** under it: what visitors see when the field is empty or they can't read it.
+The chip's menu has:
+
+- **Change field** opens the fields again.
+- **Open source** opens the screen the field is edited on in a new tab: the entry's,
+  the Single's, or the site settings. It isn't offered for a list's item, which is a
+  different entry on every row.
+- **Unbind** keeps what visitors saw in the prop, and a note under it says what was
+  kept and why. A field visitors can't read keeps the fallback instead.
+
+**Format.** A date or a number shows as text only through a format, so a text prop bound
+to one has a **Format** under its fallback. The picker names the format a date or a number
+starts with, **Long date** or **Number**, and a pick writes it with the binding; change it
+there. Dates offer a long or short date, the weekday and date, the date and time, the
+time, or the month and year, and only those the field can show: a field holding a day
+offers no time, and one holding a time offers no date. Numbers offer a plain or whole
+number, a percent, a compact number (1.2K), or a currency, whose three-letter code you
+type beside it. A format written through the API that the page can't use is shown in
+red with the reason.
+
+**Images.** An image's bind button is on its **Source** row, and binds the picture to a
+media field or to a URL field holding an image address. The image address field, on the
+URL side, and the alt text each have a bind button of their own. A bound image's
+**Fallback** is an image address, shown with a small picture of it: one starting
+`https://` or `http://`, or a path on the site such as `/media/spring.jpg`. Anything else
+is held back with the reason. When an image is unbound and visitors saw it by its
+address (the field held one, or they saw the fallback), the address is kept in
+**Image address** and the image is left empty, since an image chosen from the library
+holds a library file only. The note under the Source row says so.
+
+Inside a link, an image or a list, the parts that qualify the main value (how a link
+opens, whether an image is decorative, a list's query) are set in their own controls and
+have no bind button.
+
 ## Editing a template
 
 A template draws every entry of the collection it names, so while you edit one the

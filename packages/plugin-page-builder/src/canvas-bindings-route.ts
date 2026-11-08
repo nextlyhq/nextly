@@ -43,7 +43,7 @@ import {
   type CanvasBindingsResponse,
 } from "./canvas-bindings-contract";
 import { readBodyWith } from "./composition-route-kit";
-import { editorReaderAsCaller } from "./entry-reads";
+import { editorReaderAsCaller, mediaReaderAsCaller } from "./entry-reads";
 
 /** A field name a binding may read: no paths, operators or quoting. */
 const NAME = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
@@ -190,6 +190,9 @@ function directCanvasBindingsReads(
       // entry a binding follows to are read by id, so a pending working
       // draft is what the canvas shows.
       const reader = await editorReaderAsCaller(ctx, locale);
+      // The media library as the caller reads it, so a binding into a media
+      // item (its alt text) shows on the canvas as it does on the page.
+      const media = await mediaReaderAsCaller(ctx);
       // A published page's own allowance, for one ask, counting what it
       // spends, so the editor's read meter adds what these reads cost as
       // they were made, as a named query's run reports its reads.
@@ -211,6 +214,7 @@ function directCanvasBindingsReads(
         page: request.source.slug,
         ...(locale === undefined ? {} : { locale }),
         reader,
+        media,
         budget,
         // The entry fields the page's conditions check, read with the
         // bindings', as the published page reads them.
