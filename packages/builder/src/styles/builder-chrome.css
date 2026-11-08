@@ -6160,8 +6160,9 @@ fieldset.nx-inspector__fields {
  * words are not selected by the drag. Touch is left to scroll and tap.
  *
  * Important because the admin gives every `[data-slot="label"]` a pointer
- * cursor with `!important`, which reads as "click me" here and outranks any
- * plain rule; this selector is the more specific of the two.
+ * cursor marked important, which reads as "click me" here and outranks any
+ * plain rule; this selector is the more specific of the two. Said in words,
+ * not as the flag, so the design lint counts the one real override here.
  */
 .nx-style-inspector .nx-inspector__field > label[data-scrub] {
   cursor: ew-resize !important;

@@ -33,7 +33,8 @@ const declarations: PublicReaderDeclarations = {
 };
 
 function source() {
-  const find = vi.fn(async () => ({
+  // Takes the query, so each call's query can be read back from `mock.calls`.
+  const find = vi.fn(async (_query: unknown) => ({
     items: [{ id: "1", title: "Draft post", internalNote: "for the team" }],
     meta: { total: 7 },
   }));
@@ -201,7 +202,8 @@ describe("the canvas's reader", () => {
   });
 
   it("reads a Single as the person, its working draft where they may edit it", async () => {
-    const findSingle = vi.fn(async () => ({
+    // Takes the read, so the call's arguments can be read back from `mock.calls`.
+    const findSingle = vi.fn(async (_read: unknown) => ({
       id: "s1",
       headline: "Spring sale (draft)",
       banner: "b",
