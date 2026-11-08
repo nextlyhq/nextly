@@ -702,8 +702,12 @@ export function readStagesFor(
   prepared: PreparedDocument | undefined
 ): DocumentReadStages | null {
   const record = prepared === undefined ? undefined : PREPARED.get(prepared);
+  // A route's preparation gates as the route does; a reading that judges
+  // the page itself, an editor's, never reuses one.
   const reusable =
     record !== undefined &&
+    args.entryJudged === undefined &&
+    args.itemsDecided !== true &&
     record.document === document &&
     record.resolver === args.resolver &&
     record.definitions === definitionsKey(args.definitions) &&

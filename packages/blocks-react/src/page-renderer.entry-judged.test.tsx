@@ -181,6 +181,30 @@ describe("an editor judging a page's conditions for an entry", () => {
     expect(html).toMatch(/Hidden: /);
   });
 
+  it("judges for the entry even when handed a route's preparation", async () => {
+    const prepared = prepareDocument(PAGE, {
+      resolver,
+      definitions: DEFINITIONS,
+    });
+    if (prepared === null) throw new Error("the page prepares");
+    const judge = judgement("gold");
+    const html = await renderToHtml(
+      <PageRenderer
+        document={PAGE}
+        blocks={resolver}
+        definitions={DEFINITIONS}
+        siteStyles={false}
+        prepared={prepared}
+        entryJudged={judge}
+      />
+    );
+    // The route's preparation held both component blocks back; the editor's
+    // judgement draws the one that holds and the other's marker.
+    expect(html).toContain("Tier note");
+    expect(html).toMatch(/Hidden: /);
+    expect(judge.judged.size).toBe(2);
+  });
+
   it("changes nothing where no editor asks: a component's conditioned blocks are held back as before", async () => {
     const html = await renderToHtml(
       <PageRenderer

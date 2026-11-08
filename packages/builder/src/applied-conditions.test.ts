@@ -524,6 +524,25 @@ describe("a conditioned placement inside a placed component", () => {
     ).toBe(true);
   });
 
+  it("words each hidden block from its own conditions, a repeated id among them", () => {
+    const applied = appliedConditionsOf(
+      placed,
+      previewFor({ category: "News", readingTime: 2 }),
+      nameOf,
+      { definitions }
+    );
+    const first = applied.entryJudgement.hiddenAs(
+      block("dup", { visibility: { conditions: [[guides]] } })
+    );
+    const second = applied.entryJudgement.hiddenAs(
+      block("dup", { visibility: { conditions: [[long]] } })
+    );
+    expect(first?.props.reason).toBe(
+      "hidden for this post: Category is not Guides"
+    );
+    expect(second?.props.reason).not.toBe(first?.props.reason);
+  });
+
   it("names the placement's condition that hides the block", () => {
     const applied = appliedConditionsOf(
       placed,

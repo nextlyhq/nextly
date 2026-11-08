@@ -189,7 +189,7 @@ export function appliedConditionsOf(
     hidden: [...hidden, ...components.hidden],
     unjudged: unjudged || drawsUnjudged(drawn),
     byEntry: itemGated.size > 0 || components.byEntry,
-    entryJudgement: entryJudgementOf(preview, nameOf, components.hidden),
+    entryJudgement: entryJudgementOf(preview, nameOf),
   };
 }
 
@@ -271,21 +271,23 @@ function hiddenBlockOf(
 
 /**
  * How the canvas's renderer judges the page's components for the entry:
- * each block they hide drawn as its marker, worded as `hidden` words it, and
- * keeping the placement it belongs to, so a press on it selects that.
+ * each block they hide drawn as its marker, worded from that very block as
+ * `hidden` words it, so a repeated id in a stored definition is worded by
+ * its own conditions, and keeping the placement it belongs to, so a press
+ * on it selects that.
  */
 function entryJudgementOf(
   preview: ConditionsPreview,
-  nameOf: (node: BlockNode) => string,
-  hidden: readonly HiddenBlock[]
+  nameOf: (node: BlockNode) => string
 ): EntryJudgement {
-  const byId = new Map(hidden.map(block => [block.id, block]));
   return {
     ...gateOf(preview),
     hiddenAs: node => {
-      const block = byId.get(node.id) ?? hiddenBlockOf(node, preview, nameOf);
+      const marker: ResolvedBlockNode = markerFor(
+        hiddenBlockOf(node, preview, nameOf),
+        node
+      );
       const placement = (node as ResolvedBlockNode).instanceOf;
-      const marker: ResolvedBlockNode = markerFor(block, node);
       return placement === undefined
         ? marker
         : { ...marker, instanceOf: placement };

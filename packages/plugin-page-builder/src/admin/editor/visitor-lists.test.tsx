@@ -232,6 +232,28 @@ describe("what the canvas's reads are asked for a page's conditions", () => {
         new Map([["dated", dated]])
       )?.ordersValues
     ).toBe(true);
+    // Read as the renderer reads the definition: a block it drops, one with
+    // no type, asks for nothing, whatever its stored conditions order.
+    const malformed = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        {
+          id: "no-type",
+          version: 1,
+          props: {},
+          visibility: (datedList.slots.children[0] as { visibility: unknown })
+            .visibility,
+        },
+      ],
+    } as unknown as BlockDocument;
+    expect(
+      canvasConditionsFor(
+        placing,
+        [{ document: plain }],
+        new Map([["dated", malformed]])
+      )?.ordersValues
+    ).not.toBe(true);
     // Read under the canvas's own limits: a cap the page passes reads no
     // component, as the canvas would compose none.
     expect(

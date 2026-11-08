@@ -101,29 +101,29 @@ export function canvasConditionsFor(
   return listConditionsFor([
     ...document.nodes,
     ...regions.flatMap(region => region.document.nodes),
-    ...reachedDefinitionNodes(document, definitions, limits),
+    ...composedNodesOf(document, definitions, limits),
   ]);
 }
 
 /**
- * The blocks of the component definitions a page reaches, as the resolver
- * reaches them: through each placement, the components they place, and
- * whichever a variant or an override selects.
+ * The blocks a page draws with the components it places composed in, as the
+ * resolver composes them under the canvas's own limits from the definitions
+ * as the renderer reads them (`repairingLookup`): a definition it refuses or
+ * repairs is read as it does, never as stored, and the tree is no larger
+ * than the canvas would draw. None where it places no component: its own
+ * blocks are read beside these.
  */
-function reachedDefinitionNodes(
+function composedNodesOf(
   document: BlockDocument,
   definitions: DefinitionsById | undefined,
   limits: DocumentLimits | undefined
-): BlockNode[] {
+): readonly BlockNode[] {
   if (definitions === undefined || definitions.size === 0) return [];
-  // Under the canvas's own limits and from the definitions as the renderer
-  // reads them, so a component reached past the default depth is read too.
-  const { referenced } = resolveComponentInstances(
+  return resolveComponentInstances(
     document,
     repairingLookup(definitions, limits ?? DEFAULT_LIMITS),
     { conditioned: "carry", ...(limits === undefined ? {} : { limits }) }
-  );
-  return referenced.flatMap(id => definitions.get(id)?.nodes ?? []);
+  ).document.nodes;
 }
 
 /** Whether the canvas's lists read as a visitor, and the switch's say in it. */
