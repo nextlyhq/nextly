@@ -66,6 +66,21 @@ function mount(
   bindings: BlockNode["bindings"],
   inList?: { collection: string; services: Partial<ContentServices> }
 ): EditorState {
+  return mountRebindable(bindings, inList).editor;
+}
+
+/**
+ * `mount`, with a way to draw the same panel again over the block bound as
+ * given: the chip's Change field, as the editor's next document shows it.
+ * The services stay the same object, so the fields are not read again.
+ */
+function mountRebindable(
+  bindings: BlockNode["bindings"],
+  inList?: { collection: string; services: Partial<ContentServices> }
+): {
+  editor: EditorState;
+  rebind: (next: BlockNode["bindings"]) => void;
+} {
   registerBlocks(
     [
       {
@@ -115,16 +130,26 @@ function mount(
     undoDepth: 0,
     composed: () => undefined,
   } as unknown as EditorState;
-  render(
-    <InspectorPanel
-      editor={editor}
-      contentServices={{
-        listBindingFields: async () => SOURCES,
-        ...inList?.services,
-      }}
-    />
+  const services: ContentServices = {
+    listBindingFields: async () => SOURCES,
+    ...inList?.services,
+  };
+  const view = render(
+    <InspectorPanel editor={editor} contentServices={services} />
   );
-  return editor;
+  const rebind = (next: BlockNode["bindings"]): void => {
+    const rebound = {
+      ...document,
+      nodes: [{ ...badge, bindings: next }],
+    } as BlockDocument;
+    view.rerender(
+      <InspectorPanel
+        editor={{ ...editor, document: rebound } as EditorState}
+        contentServices={services}
+      />
+    );
+  };
+  return { editor, rebind };
 }
 
 /** The Format menu, once the fields are read and the chip drawn. */
@@ -276,6 +301,19 @@ describe("a bound prop's Format", () => {
     expect(screen.getByRole("alert").textContent).toBe(
       "A currency format needs a three-letter ISO 4217 code, such as EUR."
     );
+    expect((await formatMenu()).textContent).toBe("Choose a format");
+    expect(screen.queryByRole("textbox", { name: "Code" })).toBeNull();
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("lets a currency waiting for its code go when the field changes", async () => {
+    // The pick was for the number it was bound to: bound to a date instead,
+    // the row starts afresh rather than asking a date for a currency code.
+    const { editor, rebind } = mountRebindable({ label: { $bind: "price" } });
+    fireEvent.click(await formatMenu());
+    fireEvent.click(screen.getByRole("option", { name: "Currency" }));
+    await screen.findByRole("textbox", { name: "Code" });
+    rebind({ label: { $bind: "publishedAt" } });
     expect((await formatMenu()).textContent).toBe("Choose a format");
     expect(screen.queryByRole("textbox", { name: "Code" })).toBeNull();
     expect(editor.apply).not.toHaveBeenCalled();

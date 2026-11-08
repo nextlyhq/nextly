@@ -859,6 +859,10 @@ function BoundValueRows({
       ) : null}
       {offersFormat(kind, field) ? (
         <BindingFormatField
+          // Keyed by what the binding reads, so a rebind to another field
+          // starts the row afresh: a currency picked but not yet given a code
+          // belongs to the field it was picked for, not to the next one.
+          key={`${binding.source ?? ""}:${binding.sourceKey ?? ""}:${binding.$bind}`}
           stored={binding.format}
           kind={kind}
           field={field}

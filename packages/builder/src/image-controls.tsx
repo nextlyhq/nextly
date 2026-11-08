@@ -484,13 +484,15 @@ function LibraryAltNote({
   libraryAlt: string | undefined;
   read: boolean;
 }): React.JSX.Element | null {
-  // A bound picture's file is the field's, read when the page is drawn, so
-  // no file is "not chosen": its library alt text applies.
+  // A bound picture is read when the page is drawn, so no file is "not
+  // chosen". The field may hold a library file, whose alt text applies, or an
+  // image address, which carries none: the note promises only the first.
   if (bound) {
     return (
       <p className="nx-inspector__note">
-        The image comes from a bound field, so the library alt text of the file
-        it holds is used. Choose Custom to describe it here instead.
+        The image comes from a bound field. A library file it holds is described
+        by its own alt text; an image address has none, so choose Custom to
+        describe it.
       </p>
     );
   }

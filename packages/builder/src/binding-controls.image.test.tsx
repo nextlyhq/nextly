@@ -334,8 +334,11 @@ describe("a bound image", () => {
     // The page reads the bound field's file, and its library alt text with
     // it: "no library file" would tell the author screen readers get none.
     mount({ mediaId: { $bind: "cover" } });
-    expect(await screen.findByText(/comes from a bound field/)).toBeTruthy();
+    const note = await screen.findByText(/comes from a bound field/);
     expect(screen.queryByText(/No library file is chosen/)).toBeNull();
+    // The field may hold an image address, which has no library alt text:
+    // the note says so rather than promising a description.
+    expect(note.textContent).toMatch(/an image address has none/);
   });
 
   it("says no file is chosen where the picture is neither bound nor picked", () => {
