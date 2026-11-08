@@ -177,6 +177,7 @@ import {
   type SiteStyleInputs,
 } from "./use-render-inputs";
 import {
+  drawnNodesOf,
   useFollowApplied,
   useItemsJudgedRender,
   useListsAsVisitor,
@@ -1593,20 +1594,27 @@ function EditorBody<TFieldValues extends FieldValues>({
       itemsJudged: listsAsVisitor.visitor !== undefined,
     }
   );
-  // The blocks the canvas draws while the conditions are applied: the page,
-  // composed, and the regions of its Layout, whose lists read as a visitor
-  // too.
-  const applied = conditions.applied !== undefined;
+  // The blocks the canvas draws while the conditions are applied: the page
+  // as they leave it, and the regions of its Layout, whose lists read as a
+  // visitor too, each as the renderer prepares it, so a list inside a placed
+  // component is found by the id it is drawn with.
+  const appliedPage = conditions.applied?.document;
   const regions = panels.canvasRegions;
   const visitorDrawn = useMemo(
     () =>
-      applied
-        ? [
-            ...conditions.composed.nodes,
-            ...(regions ?? []).flatMap(region => region.document.nodes),
-          ]
-        : undefined,
-    [applied, conditions.composed, regions]
+      appliedPage === undefined
+        ? undefined
+        : [
+            ...drawnNodesOf(
+              appliedPage,
+              canvasRender,
+              canvasRender.definitions
+            ),
+            ...(regions ?? []).flatMap(region =>
+              drawnNodesOf(region.document, canvasRender, region.definitions)
+            ),
+          ],
+    [appliedPage, regions, canvasRender]
   );
   useFollowApplied(listsAsVisitor, visitorDrawn);
   const shownRender = useItemsJudgedRender(
