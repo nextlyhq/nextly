@@ -911,6 +911,58 @@ describe("a link's entry bound to the entry a relation names", () => {
     );
   });
 
+  it("draws a link bound both ways as its entry, which the page follows first, and changes the entry", async () => {
+    // Both bound, as an import or the API may store it: the page follows the
+    // entry, so the panel shows and edits the entry.
+    const both = {
+      href: { $bind: "siteUrl", source: "site" as const },
+      entryId: { $bind: "author.id" },
+    };
+    const editor = mountButton(
+      { label: "Read more", href: "/about", entryCollection: "users" },
+      both
+    );
+    const chip = await screen.findByRole("button", {
+      name: "Entry: bound to Author › Link to this entry of this post",
+    });
+    expect(
+      screen.queryByRole("button", { name: /^Link: bound to/ })
+    ).toBeNull();
+    fireEvent.keyDown(chip, { key: "Enter" });
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Change field…" })
+    );
+    // Only entries are offered for the entry: the address's fields are not.
+    const list = await screen.findByRole("listbox", {
+      name: "Fields for Entry",
+    });
+    expect(
+      within(list)
+        .getAllByRole("option")
+        .map(option => option.textContent)
+    ).toEqual(["Author › Link to this entry"]);
+    fireEvent.click(within(list).getAllByRole("option")[0] as HTMLElement);
+    expect(onlyEdit(editor)).toEqual({
+      kind: "update",
+      id: "b",
+      patch: {
+        bindings: { entryId: { $bind: "author.id" } },
+        props: { label: "Read more", href: "/about", entryCollection: "users" },
+      },
+    });
+    cleanup();
+    clearBlocks();
+    // The control: with no collection the page follows the address, and so
+    // does the panel.
+    mountButton({ label: "Read more", href: "/about" }, both);
+    expect(
+      await screen.findByRole("button", { name: /^Link: bound to Site URL/ })
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /^Entry: bound to/ })
+    ).toBeNull();
+  });
+
   it("draws the bound entry's chip in the link's place, with no fallback to type", async () => {
     mountButton(
       { label: "Read more", entryCollection: "users" },

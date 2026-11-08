@@ -24,6 +24,7 @@
  */
 
 import {
+  authoredText,
   BASE_BREAKPOINT,
   breakpointContexts,
   findNode,
@@ -576,24 +577,37 @@ function surfaceFor(
 }
 
 /**
- * The inspector, inside the component's own view when the document is a
- * component: the scope holds the removal dialog and hands every control the
- * binding, so the panel below draws the same whichever document it edits.
- */
-/**
- * The prop whose binding a group's lead is drawn with: a link whose entry is
- * bound, and not its address, is drawn as its entry's chip in the address's
- * place.
+ * The prop whose binding a link group's lead is drawn with: the entry's,
+ * where the link follows its bound entry, else the address's.
+ *
+ * The same precedence the renderer reads a link by (`linkFor` in
+ * blocks-react's `blocks/props.ts`): an entry reference, both its halves
+ * given, before the address. So a block whose entry is bound and whose
+ * collection is set is drawn, and changed, as its entry, whether or not its
+ * address is bound too; with no collection the renderer follows the address,
+ * and so does the panel. A half counts as given stored or bound, as the
+ * render fills a bound one before reading the link.
  */
 function drawnBinding(
   lead: string,
   entry: BindableOptions["entryLink"],
-  bindings: Readonly<Record<string, unknown>> | undefined
+  bindings: Readonly<Record<string, unknown>> | undefined,
+  props: readonly EditableProp[]
 ): string {
-  if (entry === undefined || bindings?.[lead] !== undefined) return lead;
-  return bindings?.[entry.id] === undefined ? lead : entry.id;
+  if (entry === undefined || bindings?.[entry.id] === undefined) return lead;
+  const collection = props.find(prop => prop.name === entry.collection);
+  // Read as the renderer reads it (`text`, which is `authoredText`).
+  const given =
+    bindings[entry.collection] !== undefined ||
+    authoredText(collection?.value) !== "";
+  return given ? entry.id : lead;
 }
 
+/**
+ * The inspector, inside the component's own view when the document is a
+ * component: the scope holds the removal dialog and hands every control the
+ * binding, so the panel below draws the same whichever document it edits.
+ */
 export function InspectorPanel({
   componentFields,
   componentVariants,
@@ -1521,7 +1535,7 @@ function ContentFields({
   const bindableIn = (offered: ReadonlySet<string>): BindableWrapper =>
     function wrapBindable(lead, field, options) {
       const entry = options?.entryLink;
-      const name = drawnBinding(lead, entry, bindings);
+      const name = drawnBinding(lead, entry, bindings, inspection.props);
       const prop = inspection.props.find(each => each.name === name);
       // Offered by the group's lead: a bound entry id is drawn in its place.
       if (prop === undefined || !prop.offered || !offered.has(lead)) {
