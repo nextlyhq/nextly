@@ -699,6 +699,23 @@ describe("the hidden-block marker drawn in the canvas frame", () => {
     expect(declared(icon, "display")).toBe("inline-block");
     expect(declared(icon, "flex")).toBe("none");
   });
+
+  it("wears its look in the site's tokens, at no specificity, so a page marker's compiled defaults win", () => {
+    const look = ruleIn(
+      CANVAS_FRAME_SHEET,
+      `:where(.${CANVAS_ROOT_CLASS} .nx-condition-hidden)`
+    );
+    expect(declared(look, "border")).toBe(
+      "1px dashed var(--site-color-border-strong, color-mix(in srgb, currentColor 35%, transparent))"
+    );
+    expect(declared(look, "background-color")).toBe(
+      "var(--site-color-surface, color-mix(in srgb, currentColor 6%, transparent))"
+    );
+    expect(declared(look, "color")).toBe(
+      "var(--site-color-muted, color-mix(in srgb, currentColor 70%, transparent))"
+    );
+    expect(declared(look, "line-height")).toBe("1.35");
+  });
 });
 
 describe("a list drawn as a visitor reads it", () => {

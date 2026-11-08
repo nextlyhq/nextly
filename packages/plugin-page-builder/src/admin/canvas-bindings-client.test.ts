@@ -181,6 +181,20 @@ describe("the canvas's binding sources", () => {
       entryFields: [],
       ordersValues: true,
     });
+    // A stored alias orders a value too, read as the engine reads it.
+    const legacy = withEntries({
+      visibility: {
+        conditions: [[{ field: "publishedAt", op: "lt", value: "2026-03-02" }]],
+      },
+    });
+    expect(listConditionsFor(legacy.nodes)?.ordersValues).toBe(true);
+    // An equality orders nothing, so the zone is not asked for.
+    const equality = withEntries({
+      visibility: {
+        conditions: [[{ field: "title", op: "equals", value: "Alder" }]],
+      },
+    });
+    expect(listConditionsFor(equality.nodes)?.ordersValues).toBe(false);
   });
 
   it("names the collection a custom source's rows are entries of, given the site's queries", () => {

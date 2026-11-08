@@ -20,6 +20,7 @@
 import {
   bindingDemand,
   conditionDemand,
+  conditionOp,
   isPlainRecord,
   type BindingDemand,
   type BlockDocument,
@@ -152,7 +153,7 @@ export function listConditionsFor(
 }
 
 /** The operators that order a value, so may compare days. */
-const ORDERING = new Set(["greater_than", "less_than"]);
+const ORDERING: ReadonlySet<string> = new Set(["greater_than", "less_than"]);
 
 /** Whether any block's stored conditions order a value, of any scope. */
 function ordersAnyValue(nodes: readonly unknown[]): boolean {
@@ -172,20 +173,23 @@ function ordersAnyValue(nodes: readonly unknown[]): boolean {
   return false;
 }
 
-/** The operators a stored visibility's conditions use. */
+/**
+ * The operators a stored visibility's conditions use, read as the engine
+ * reads them, so a stored alias (`gt`, `lt`) is the operator it stands for.
+ */
 function conditionsOf(visibility: unknown): string[] {
   if (!isPlainRecord(visibility) || !Array.isArray(visibility.conditions)) {
     return [];
   }
   return (visibility.conditions as unknown[]).flatMap(group =>
-    Array.isArray(group)
-      ? (group as unknown[]).flatMap(condition =>
-          isPlainRecord(condition) && typeof condition.op === "string"
-            ? [condition.op]
-            : []
-        )
-      : []
+    Array.isArray(group) ? (group as unknown[]).flatMap(canonicalOp) : []
   );
+}
+
+/** One stored condition's operator as the engine reads it, if it reads one. */
+function canonicalOp(condition: unknown): string[] {
+  const op = isPlainRecord(condition) ? conditionOp(condition.op) : undefined;
+  return op === undefined ? [] : [op];
 }
 
 /**

@@ -24,6 +24,10 @@
  */
 
 import {
+  DEFAULT_TOKEN_PREFIX,
+  tokenCustomProperty,
+} from "@nextlyhq/blocks-engine";
+import {
   ENTRY_CONTENT_DRAWN_ATTRIBUTE,
   ENTRY_CONTENT_NOTE_ATTRIBUTE,
 } from "@nextlyhq/blocks-react";
@@ -32,6 +36,11 @@ import { EMPTY_CONTAINER_SELECTOR, EMPTY_TEXT_SELECTOR } from "./empty-slot";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
+
+/** A site token as the page's sheet names it, with what stands in without it. */
+function siteToken(name: string, fallback: string): string {
+  return `var(${tokenCustomProperty(name, DEFAULT_TOKEN_PREFIX)}, ${fallback})`;
+}
 
 /** A collection list drawing its empty state while that state holds nothing. */
 const EMPTY_LIST = `${EMPTY_CONTAINER_SELECTOR}[data-nx-list-shows]`;
@@ -264,6 +273,19 @@ ${ROOT} .nx-condition-hidden {
 ${ROOT} .nx-condition-hidden > svg {
   display: inline-block;
   flex: none;
+}
+
+/* The marker's look, in the site's own tokens, for a marker the page's sheet
+   holds no defaults for: one a list's entry draws, made as the page is
+   drawn. At no specificity, so a page marker's compiled defaults, the same
+   tokens, still win; each token stands in for itself in the page's own ink
+   where the site names its tokens otherwise. */
+:where(${ROOT} .nx-condition-hidden) {
+  border: 1px dashed ${siteToken("color.border-strong", "color-mix(in srgb, currentColor 35%, transparent)")};
+  border-radius: 2px;
+  background-color: ${siteToken("color.surface", "color-mix(in srgb, currentColor 6%, transparent)")};
+  color: ${siteToken("color.muted", "color-mix(in srgb, currentColor 70%, transparent)")};
+  line-height: 1.35;
 }
 
 [data-nx-list-diagnostic="sort-fallback"] {
