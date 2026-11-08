@@ -698,13 +698,15 @@ async function settleDesignClaims(
  * entry, and a write holding the pool's last connection never waits for a
  * second. They are read held for share: an entry's save in flight holds its
  * row and waits for this write's lock, or its design's row, and the
- * database refuses one of the two as a deadlock, which the adapter runs
- * again, so the second reads what the first committed. A new own design's
- * entry row is already held for share by the template write's earlier
- * handler (`judgeTemplateInTransaction`) before the collection's lock is
- * taken here, so on that path the row comes first, as an entry's save
- * takes them; a race with the entry's save can still end in the deadlock
- * above, and is run again the same way.
+ * database refuses one of the two as a deadlock. That save fails and rolls
+ * back, nothing of it kept, and its caller may save again, then reading
+ * what the other committed: the adapter does not run a deadlocked
+ * transaction again itself. A new own design's entry row is already held
+ * for share by the template write's earlier handler
+ * (`judgeTemplateInTransaction`) before the collection's lock is taken
+ * here, so on that path the row comes first, as an entry's save takes
+ * them; a race with the entry's save can still end in the deadlock above,
+ * with the same outcome.
  */
 async function settleDesigned(
   deps: EntryClaimsDeps,
@@ -794,8 +796,10 @@ function rowsById(read: readonly Row[]): Map<string, Row> {
  * design published meanwhile is waited for and then read. The designs are
  * read on the template's write's own transaction, held for share: an own
  * design's write in flight holds its row and waits for the template's, and
- * the database refuses one of the two as a deadlock, which the adapter runs
- * again, so the second reads what the first committed.
+ * the database refuses one of the two as a deadlock. That save fails and
+ * rolls back, nothing of it kept, and its caller may save again, then
+ * reading what the other committed: the adapter does not run a deadlocked
+ * transaction again itself.
  */
 async function settleUnserved(
   deps: EntryClaimsDeps,

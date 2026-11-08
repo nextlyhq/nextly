@@ -395,10 +395,10 @@ async function remove(claims: Claims, tx: Tx, row: ClaimRow): Promise<void> {
  * key's index for this one to end. An address's lock row is created by the
  * save that first claims it, so the waits and releases that contend for it
  * later only update it. (On MySQL two saves creating one lock row at once can
- * deadlock. The database then rolls one of them back, and that save fails
- * with the deadlock, nothing claimed by it: a plugin's transaction is not run
- * again on a deadlock, so the store avoids them by taking its locks before
- * the rows they guard, rather than relying on a retry.)
+ * deadlock. The database then refuses one of the two: that save fails and
+ * rolls back, nothing claimed by it, and its caller may save again. The
+ * adapter does not run a deadlocked transaction again itself, so the store
+ * avoids deadlocks by taking its locks before the rows they guard.)
  *
  * SQLite runs one writer at a time, so a transaction there already has every
  * claim to itself, and takes no lock.
