@@ -686,4 +686,56 @@ describe("the hidden-block marker drawn in the canvas frame", () => {
     expect(declared(body, "gap")).toBe("0.6em");
     expect(declared(body, "padding")).toBe("0.45em 0.75em");
   });
+
+  it("is one row, its icon centred before its words, wherever it is drawn", () => {
+    // A list entry's marker is made as the page is drawn, so the page's
+    // sheet holds none of its defaults: the frame's sheet lays it out.
+    expect(declared(body, "display")).toBe("flex");
+    expect(declared(body, "align-items")).toBe("center");
+    const icon = ruleIn(
+      CANVAS_FRAME_SHEET,
+      `.${CANVAS_ROOT_CLASS} .nx-condition-hidden > svg`
+    );
+    expect(declared(icon, "display")).toBe("inline-block");
+    expect(declared(icon, "flex")).toBe("none");
+  });
+
+  it("wears its look in the site's tokens, at no specificity, so a page marker's compiled defaults win", () => {
+    const look = ruleIn(
+      CANVAS_FRAME_SHEET,
+      `:where(.${CANVAS_ROOT_CLASS} .nx-condition-hidden)`
+    );
+    expect(declared(look, "border")).toBe(
+      "1px dashed var(--site-color-border-strong, color-mix(in srgb, currentColor 35%, transparent))"
+    );
+    expect(declared(look, "background-color")).toBe(
+      "var(--site-color-surface, color-mix(in srgb, currentColor 6%, transparent))"
+    );
+    expect(declared(look, "color")).toBe(
+      "var(--site-color-muted, color-mix(in srgb, currentColor 70%, transparent))"
+    );
+    expect(declared(look, "line-height")).toBe("1.35");
+  });
+});
+
+describe("a list drawn as a visitor reads it", () => {
+  const VISITORS = "[data-nx-list-visitors]:not([data-nx-list-still])::before";
+
+  it("wears its tag quietly, in the list's flow, at the admin's size", () => {
+    const tag = ruleIn(CANVAS_FRAME_SHEET, `.${CANVAS_ROOT_CLASS} ${VISITORS}`);
+    expect(declared(tag, "content")).toBe("attr(data-nx-list-visitors)");
+    expect(declared(tag, "color")).toBe(
+      "var(--nx-builder-text-muted, GrayText)"
+    );
+    expect(declared(tag, "zoom")).toBe("calc(1 / var(--nx-canvas-zoom, 1))");
+  });
+
+  it("sits inside an empty area's dashed edge, clear of it", () => {
+    const over = ruleIn(
+      CANVAS_FRAME_SHEET,
+      `${EMPTY_CONTAINER_SELECTOR}[data-nx-list-shows]${VISITORS}`
+    );
+    expect(declared(over, "inset-block-start")).toBe("0.25rem");
+    expect(declared(over, "inset-inline-start")).toBe("0.25rem");
+  });
 });

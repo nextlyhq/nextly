@@ -75,12 +75,15 @@ import {
 } from "../../host-policy";
 import { siteSheet, type SiteStyleData } from "../../site-style";
 import { readSiteStyleRecord } from "../../site-style-record";
-import { useCanvasBindings } from "../canvas-bindings-client";
+import {
+  listConditionsFor,
+  useCanvasBindings,
+} from "../canvas-bindings-client";
 import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
 import { useSiteStyle } from "../site-style-client";
 import { useStoredSiteStyle } from "../site-style-read";
 
-import { useCanvasPageContext } from "./canvas-page-context";
+import { useCanvasPageContext, type VisitorLists } from "./canvas-page-context";
 import { useSharedStyleVerb, type SharedStyleVerb } from "./shared-style-verb";
 import { useSiteCanvas, type SiteCanvas } from "./site-canvas";
 import {
@@ -295,6 +298,7 @@ function useCanvasRender({
   editor,
   locale,
   initialDocument,
+  asVisitor,
 }: Pick<
   EditorMount,
   | "clientConfig"
@@ -304,7 +308,10 @@ function useCanvasRender({
   | "locale"
   | "initialDocument"
 > &
-  Pick<SiteStyleInputs, "canvasSiteStyle" | "stylePolicy">): CanvasRender {
+  Pick<SiteStyleInputs, "canvasSiteStyle" | "stylePolicy"> & {
+    /** The document the lists are read as a visitor of, while they are. */
+    readonly asVisitor?: VisitorLists;
+  }): CanvasRender {
   /*
    * What the canvas hands `PageRenderer` beyond the document and the sheet.
    *
@@ -372,12 +379,15 @@ function useCanvasRender({
   // The list the page splits into pages draws its links on the canvas, as
   // on its first published page, so an author sees and styles them.
   const pagedList = paginatedList(editor.document.nodes)?.id;
+  // While the conditions are applied, the lists read as a visitor of the
+  // document, and those a visitor sees fewer entries of say so.
   const canvasContext = useCanvasPageContext(
     editor.listsShowingEmpty,
     locale,
     initialDocument,
     pagedList,
-    editor.listsStillShowing
+    editor.listsStillShowing,
+    asVisitor
   );
   const pageInputs = useMemo(
     () =>
@@ -879,9 +889,15 @@ function useStyleReadings({
  */
 export function useCanvasInputs(
   mount: EditorMount,
-  style: SiteStyleInputs
+  style: SiteStyleInputs,
+  /** The document the lists are read as a visitor of, while they are. */
+  asVisitor?: VisitorLists
 ): CanvasInputs {
-  const render = useCanvasRender({ ...mount, ...style });
+  const render = useCanvasRender({
+    ...mount,
+    ...style,
+    ...(asVisitor === undefined ? {} : { asVisitor }),
+  });
   const viewport = useCanvasViewport({ ...render, ...style });
   const styleState = useStyleState(mount.editor);
   const wiring = useCanvasWiring(mount);
@@ -1075,11 +1091,25 @@ export function useBoundCanvasRender(
   );
   // A custom source's row collection is asked for with the page's own, so
   // its item bindings draw with that collection's field shapes.
+  // A page holding conditioned blocks asks for its lists' public field
+  // shapes too, which a list item's conditions are judged by while they are
+  // applied, though nothing on the page binds.
+  // The regions of its Layout too, whose lists read as a visitor while
+  // conditions are applied, judged in the same site zone.
+  const conditions = useMemo(
+    () =>
+      listConditionsFor([
+        ...document.nodes,
+        ...regions.flatMap(region => region.document.nodes),
+      ]),
+    [document, regions]
+  );
   const bindings = useCanvasBindings(
     trees,
     locale,
     component,
-    canvasRender.context?.namedQueries
+    canvasRender.context?.namedQueries,
+    conditions
   );
   const bound = useMemo(
     () => ({ ...canvasRender, bindings }),

@@ -25,9 +25,10 @@ import { readNamedList } from "@nextlyhq/blocks-react/blocks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const readPluginRoute = vi.hoisted(() => vi.fn());
+const writePluginRoute = vi.hoisted(() => vi.fn());
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   readPluginRoute,
-  writePluginRoute: vi.fn(),
+  writePluginRoute,
 }));
 
 import type {
@@ -37,9 +38,11 @@ import type {
 
 import {
   canvasNamedHost,
+  canvasNamedQueriesIn,
   canvasNamedRuns,
   listCustomSources,
   namedListCount,
+  namedListShown,
   type CanvasCustomSource,
 } from "./named-queries-client";
 
@@ -384,5 +387,65 @@ describe("namedListCount", () => {
     expect(
       await namedListCount({ collection: "posts" }, counted, undefined)
     ).toBeUndefined();
+  });
+});
+
+describe("namedListShown", () => {
+  it("counts the rows a run draws, whether or not the query counts its matches", async () => {
+    const props = {
+      namedQuery: { name: "events.upcoming", params: { city: "lahore" } },
+      limit: 6,
+    };
+    const uncounted = canvasNamedHost(
+      SOURCES,
+      () =>
+        Promise.resolve(
+          answer({ counted: false, reads: 1 }, [{ id: "e1" }, { id: "e2" }])
+        ),
+      undefined
+    );
+    expect(await namedListShown(props, uncounted, undefined)).toBe(2);
+    expect(
+      await namedListShown({ collection: "posts" }, uncounted, undefined)
+    ).toBeUndefined();
+  });
+});
+
+describe("the canvas's named queries as a visitor runs them", () => {
+  it("runs each as a visitor of the document named, apart from the person's own runs", async () => {
+    readPluginRoute.mockResolvedValue({
+      items: [{ declaration: upcoming, readsHidden: SOURCES[0]?.readsHidden }],
+      meta: {},
+    });
+    writePluginRoute.mockReset();
+    writePluginRoute.mockResolvedValue(answer({ counted: true, reads: 1 }));
+    const visitor = { collection: "pages", id: "p1" };
+    const own = canvasNamedQueriesIn("en", "author-v");
+    const asVisitor = canvasNamedQueriesIn("en", "author-v", visitor);
+    expect(asVisitor).not.toBe(own);
+    expect(canvasNamedQueriesIn("en", "author-v", { ...visitor })).toBe(
+      asVisitor
+    );
+    for (const queries of [asVisitor, own]) {
+      const host = await queries.host();
+      await readNamedList(
+        { name: "events.upcoming", params: { city: "lahore" } },
+        { limit: 6, offset: 0 },
+        {
+          ...createStandaloneContext({ queries: createQueryBudget() }),
+          namedQueries: host,
+        },
+        "list"
+      );
+    }
+    const bodies = writePluginRoute.mock.calls.map(
+      ([request]) => (request as { body: Record<string, unknown> }).body
+    );
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toMatchObject({
+      visitor,
+      named: { name: "events.upcoming" },
+    });
+    expect(bodies[1]).not.toHaveProperty("visitor");
   });
 });

@@ -19,6 +19,8 @@
  */
 import {
   bindingDemand,
+  conditionDemand,
+  conditionOp,
   isPlainRecord,
   type BindingDemand,
   type BlockDocument,
@@ -126,6 +128,69 @@ const KEPT = new Map<string, { at: number; read: Promise<PageBindings> }>();
  * an identity two people could share.
  */
 let keptFor: string | undefined;
+
+/**
+ * What a page's conditions ask of the canvas's reads, or nothing when it
+ * holds none: nothing of the entry, but the public field shapes of the lists
+ * it draws, which a block a list's item decides is judged by while
+ * conditions are applied, though nothing binds; and the site's time zone
+ * where any condition orders a value, which may compare days, so the canvas
+ * judges a day as the published page does.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export function listConditionsFor(
+  nodes: readonly unknown[]
+): ConditionDemand | undefined {
+  if (!conditionDemand(nodes).any) return undefined;
+  const ordersValues = ordersAnyValue(nodes);
+  return {
+    any: true,
+    entryFields: new Set<string>(),
+    ordersValues,
+    orderedFields: new Set<string>(),
+  };
+}
+
+/** The operators that order a value, so may compare days. */
+const ORDERING: ReadonlySet<string> = new Set(["greater_than", "less_than"]);
+
+/** Whether any block's stored conditions order a value, of any scope. */
+function ordersAnyValue(nodes: readonly unknown[]): boolean {
+  const stack: unknown[] = [...nodes];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!isPlainRecord(node)) continue;
+    if (conditionsOf(node.visibility).some(op => ORDERING.has(op))) {
+      return true;
+    }
+    if (isPlainRecord(node.slots)) {
+      for (const children of Object.values(node.slots)) {
+        if (Array.isArray(children)) stack.push(...(children as unknown[]));
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * The operators a stored visibility's conditions use, read as the engine
+ * reads them, so a stored alias (`gt`, `lt`) is the operator it stands for.
+ */
+function conditionsOf(visibility: unknown): string[] {
+  if (!isPlainRecord(visibility) || !Array.isArray(visibility.conditions)) {
+    return [];
+  }
+  return (visibility.conditions as unknown[]).flatMap(group =>
+    Array.isArray(group) ? (group as unknown[]).flatMap(canonicalOp) : []
+  );
+}
+
+/** One stored condition's operator as the engine reads it, if it reads one. */
+function canonicalOp(condition: unknown): string[] {
+  const op = isPlainRecord(condition) ? conditionOp(condition.op) : undefined;
+  return op === undefined ? [] : [op];
+}
 
 /**
  * What the canvas asks for the page it draws, or nothing when it holds no
@@ -370,7 +435,9 @@ export function useCanvasBindings(
   locale: string | undefined,
   component = false,
   /** The site's named queries, once the canvas has read them. */
-  namedQueries?: NamedQueryLookup
+  namedQueries?: NamedQueryLookup,
+  /** What the page's conditions ask of the reads, where it holds any. */
+  conditions?: ConditionDemand
 ): PageBindings {
   // The entry the canvas is drawn as: the document's own, or a template's
   // previewed entry of the collection it draws.
@@ -380,8 +447,15 @@ export function useCanvasBindings(
   const userId = useCurrentUserId();
   const request = useMemo(
     () =>
-      canvasBindingsRequest(drawn, identity, locale, component, namedQueries),
-    [drawn, identity, locale, component, namedQueries]
+      canvasBindingsRequest(
+        drawn,
+        identity,
+        locale,
+        component,
+        namedQueries,
+        conditions === undefined ? {} : { conditions }
+      ),
+    [drawn, identity, locale, component, namedQueries, conditions]
   );
   // The ask as text: a new document that asks the same reads nothing new.
   const key = request === undefined ? "" : JSON.stringify(request);

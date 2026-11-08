@@ -273,7 +273,7 @@ type ItemContext = Pick<
  * collection's, or, for a named query's row with a schema of its own, the
  * fields its query declares, as the row's bindings are checked against.
  */
-function itemFields(
+export function itemFields(
   context: ItemContext
 ): readonly BindingFieldShape[] | undefined {
   const source = context.itemSource;

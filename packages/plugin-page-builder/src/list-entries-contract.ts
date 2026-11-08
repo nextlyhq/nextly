@@ -43,7 +43,22 @@ export interface ListEntriesFilter {
 }
 
 /** What the canvas asks: one read of a list, as the renderer builds it. */
+/**
+ * The document the editor has open, named when the canvas asks for a list as
+ * a visitor reads it (while its visibility conditions are applied): the read
+ * is answered only for a document the caller may open, and then only with
+ * published entries and the fields a visitor may read.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export interface ListEntriesVisitor {
+  readonly collection: string;
+  readonly id: string;
+}
+
 export interface ListEntriesRequest {
+  /** Read as a visitor reads it, for the document named. */
+  readonly visitor?: ListEntriesVisitor;
   readonly query: {
     readonly collection: string;
     readonly filters?: readonly ListEntriesFilter[];
@@ -72,6 +87,8 @@ export const LIST_ENTRIES_NAMED_MAX_PARAMS = 12;
  * id, for the log line a failed run is told under.
  */
 export interface ListEntriesNamedRequest {
+  /** Run over what a visitor reads, for the document named. */
+  readonly visitor?: ListEntriesVisitor;
   readonly named: {
     readonly name: string;
     readonly params?: Readonly<Record<string, string | number | boolean>>;
