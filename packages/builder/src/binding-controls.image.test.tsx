@@ -351,8 +351,11 @@ describe("a bound image", () => {
         fields: [{ name: "bannerUrl", type: "url", public: true }],
       },
     ]);
-    const note = await screen.findByText(/comes from a bound image address/);
-    expect(note.textContent).toMatch(/no alt text, so screen readers get none/);
+    const note = await screen.findByText(/comes from an address/);
+    // It says what to do, not only what is lost.
+    expect(note.textContent).toMatch(
+      /carries no alt text\. Choose Custom to describe it for screen readers\./
+    );
     expect(screen.queryByText(/its own alt text is used/)).toBeNull();
   });
 
@@ -366,7 +369,7 @@ describe("a bound image", () => {
     const note = await screen.findByText(/comes from a bound field\./);
     expect(note.textContent).toMatch(/an image address has none/);
     expect(screen.queryByText(/comes from a bound library file/)).toBeNull();
-    expect(screen.queryByText(/comes from a bound image address/)).toBeNull();
+    expect(screen.queryByText(/comes from an address/)).toBeNull();
   });
 
   it("says no file is chosen where the picture is neither bound nor picked", () => {

@@ -568,8 +568,8 @@ function BoundPictureAltNote({
   if (kind === "url" || kind === "text") {
     return (
       <p className="nx-inspector__note" data-bound-picture="address">
-        The image comes from a bound image address, which has no alt text, so
-        screen readers get none. Choose Custom to describe it.
+        This image comes from an address, which carries no alt text. Choose
+        Custom to describe it for screen readers.
       </p>
     );
   }
