@@ -468,6 +468,36 @@ function usePreviewFormatIn(
   );
 }
 
+/** The host's read of the fields a binding can read. */
+type ListBindingFields = () => Promise<readonly BindingFieldSource[]>;
+
+/**
+ * The read in flight, per host function, shared only while it runs, as the
+ * list controls share theirs (`collection-loop-controls`): the controls drawn
+ * together for one block (a bound image's chip and its alt note) make one
+ * read and see one answer, so they can't disagree. Dropped once it settles:
+ * an answer is one signed-in author's, read with their access.
+ */
+const sourcesInFlight = new WeakMap<
+  ListBindingFields,
+  Promise<readonly BindingFieldSource[]>
+>();
+
+/** The host's binding sources, one read shared by every control asking at once. */
+function readBindingSources(
+  list: ListBindingFields
+): Promise<readonly BindingFieldSource[]> {
+  const held = sourcesInFlight.get(list);
+  if (held !== undefined) return held;
+  const answer = list();
+  sourcesInFlight.set(list, answer);
+  const settle = (): void => {
+    if (sourcesInFlight.get(list) === answer) sourcesInFlight.delete(list);
+  };
+  answer.then(settle, settle);
+  return answer;
+}
+
 /** The fields a binding can read, as the host reads them; read once per open. */
 function useBindingSources(
   services: ContentServices | undefined,
@@ -481,7 +511,7 @@ function useBindingSources(
     if (!wanted || list === undefined) return;
     let current = true;
     setSources("loading");
-    list().then(
+    readBindingSources(list).then(
       read => {
         if (current) setSources(read);
       },
@@ -959,6 +989,46 @@ function boundField(binding: Binding, from: BoundFrom): NamedField | undefined {
   const top = from.fields?.find(field => field.name === first);
   if (inner === undefined) return top;
   return top?.fields?.find(field => field.name === inner);
+}
+
+/**
+ * Where a bound prop reads, as the chip names it: the host's sources read
+ * once, or the list's collection for an item, then `boundFrom`. The one way
+ * the editor finds a binding's source, for the chip and for any control that
+ * asks what the bound field is.
+ */
+function useBoundFrom(
+  binding: Binding,
+  document: BlockDocument,
+  nodeId: string,
+  services: ContentServices | undefined
+): {
+  /** Where the binding reads, named, with its fields once they are read. */
+  readonly from: BoundFrom;
+  /** The host's sources as read, for what else is worded from them. */
+  readonly sources: ReturnType<typeof useBindingSources>;
+  /** The list's item source, for an item binding. */
+  readonly item: ItemSource | undefined;
+} {
+  const sources = useBindingSources(services, true);
+  const item = useItemSource(binding, document, nodeId, services);
+  return { from: boundFrom(binding, sources, item), sources, item };
+}
+
+/**
+ * The field a bound prop reads, as its source lists it: `undefined` while the
+ * sources are read, and for a field they don't list. Derived from the same
+ * source the chip names, so a control reading the field's type and the chip
+ * naming it cannot disagree.
+ */
+export function useBoundFieldOf(
+  binding: Binding,
+  document: BlockDocument,
+  nodeId: string,
+  services: ContentServices | undefined
+): Omit<BindingFieldShape, "fields"> | undefined {
+  const { from } = useBoundFrom(binding, document, nodeId, services);
+  return boundField(binding, from);
 }
 
 /** What the block names a prop, for a note naming another prop than the bound one. */
@@ -1441,9 +1511,12 @@ function BoundField({
 }): React.JSX.Element {
   const labelId = React.useId();
   const [refusal, setRefusal] = React.useState<string | null>(null);
-  const sources = useBindingSources(services, true);
-  const item = useItemSource(binding, document, nodeId, services);
-  const from = boundFrom(binding, sources, item);
+  const { from, sources, item } = useBoundFrom(
+    binding,
+    document,
+    nodeId,
+    services
+  );
   const name = propLabel(prop.name, prop.schema);
   const names = boundNames(binding, from, { prop: prop.name, entryLink });
   // Where "Open source" leads: the host's answer, absent where it has none.
