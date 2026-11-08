@@ -25,6 +25,7 @@ import { answered } from "../utils/prompt-cancelled";
 
 import {
   droppedHooksNote,
+  droppedPreviewNote,
   promotedCollection,
 } from "./db-sync-promote-collection";
 import {
@@ -91,6 +92,7 @@ export async function promoteCollection(
   const note = [
     ...(address === null ? [] : templateAddressNote(slug, address)),
     ...droppedHooksNote(confirmed.hooks),
+    ...droppedPreviewNote(confirmed.admin),
   ];
   const preview = [code, ...note.map(line => `// ${line}`)].join("\n");
 
