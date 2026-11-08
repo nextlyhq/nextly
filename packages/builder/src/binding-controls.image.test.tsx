@@ -330,22 +330,50 @@ describe("a bound image", () => {
     ).toBe("true");
   });
 
-  it("does not say no file is chosen while the picture is bound", async () => {
+  it("says a picture bound to an upload field is described by its file's alt text", async () => {
     // The page reads the bound field's file, and its library alt text with
     // it: "no library file" would tell the author screen readers get none.
     mount({ mediaId: { $bind: "cover" } });
-    const note = await screen.findByText(/comes from a bound field/);
+    const note = await screen.findByText(/comes from a bound library file/);
+    expect(note.textContent).toMatch(/its own alt text is used/);
     expect(screen.queryByText(/No library file is chosen/)).toBeNull();
-    // The field may hold an image address, which has no library alt text:
-    // the note says so rather than promising a description.
+    // Known to be a file, by the field's type: no hedging about addresses.
+    expect(note.textContent).not.toMatch(/address/);
+  });
+
+  it("says a picture bound to a URL field has no alt text, by the field's type", async () => {
+    // The same prop bound to an address: the page draws it with no library
+    // alt text, so the note must not promise one.
+    mount({ mediaId: { $bind: "bannerUrl" } }, undefined, [
+      {
+        binding: { source: "entry" },
+        label: "Post",
+        fields: [{ name: "bannerUrl", type: "url", public: true }],
+      },
+    ]);
+    const note = await screen.findByText(/comes from a bound image address/);
+    expect(note.textContent).toMatch(/no alt text, so screen readers get none/);
+    expect(screen.queryByText(/its own alt text is used/)).toBeNull();
+  });
+
+  it("promises neither while the bound field is one its source doesn't list", async () => {
+    // The control for the two above: the field's type unknown, the note
+    // says both cases rather than guessing one.
+    mount({ mediaId: { $bind: "gone" } });
+    // Once the sources are read (the chip names the post), not while they
+    // are, when the note is neutral anyway.
+    await screen.findByText(/Post/);
+    const note = await screen.findByText(/comes from a bound field\./);
     expect(note.textContent).toMatch(/an image address has none/);
+    expect(screen.queryByText(/comes from a bound library file/)).toBeNull();
+    expect(screen.queryByText(/comes from a bound image address/)).toBeNull();
   });
 
   it("says no file is chosen where the picture is neither bound nor picked", () => {
     // The control: the same alt row, nothing behind the picture.
     mount(undefined);
     expect(screen.getByText(/No library file is chosen/)).toBeTruthy();
-    expect(screen.queryByText(/comes from a bound field/)).toBeNull();
+    expect(screen.queryByText(/comes from a bound/)).toBeNull();
   });
 });
 

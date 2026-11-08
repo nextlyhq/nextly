@@ -923,6 +923,46 @@ function boundField(binding: Binding, from: BoundFrom): NamedField | undefined {
   return top?.fields?.find(field => field.name === inner);
 }
 
+/**
+ * Where a bound prop reads, as the chip names it: the host's sources read
+ * once, or the list's collection for an item, then `boundFrom`. The one way
+ * the editor finds a binding's source, for the chip and for any control that
+ * asks what the bound field is.
+ */
+function useBoundFrom(
+  binding: Binding,
+  document: BlockDocument,
+  nodeId: string,
+  services: ContentServices | undefined
+): {
+  /** Where the binding reads, named, with its fields once they are read. */
+  readonly from: BoundFrom;
+  /** The host's sources as read, for what else is worded from them. */
+  readonly sources: ReturnType<typeof useBindingSources>;
+  /** The list's item source, for an item binding. */
+  readonly item: ItemSource | undefined;
+} {
+  const sources = useBindingSources(services, true);
+  const item = useItemSource(binding, document, nodeId, services);
+  return { from: boundFrom(binding, sources, item), sources, item };
+}
+
+/**
+ * The field a bound prop reads, as its source lists it: `undefined` while the
+ * sources are read, and for a field they don't list. Derived from the same
+ * source the chip names, so a control reading the field's type and the chip
+ * naming it cannot disagree.
+ */
+export function useBoundFieldOf(
+  binding: Binding,
+  document: BlockDocument,
+  nodeId: string,
+  services: ContentServices | undefined
+): Omit<BindingFieldShape, "fields"> | undefined {
+  const { from } = useBoundFrom(binding, document, nodeId, services);
+  return boundField(binding, from);
+}
+
 /** What the block names a prop, for a note naming another prop than the bound one. */
 function blockPropLabel(
   document: BlockDocument,
@@ -1403,9 +1443,12 @@ function BoundField({
 }): React.JSX.Element {
   const labelId = React.useId();
   const [refusal, setRefusal] = React.useState<string | null>(null);
-  const sources = useBindingSources(services, true);
-  const item = useItemSource(binding, document, nodeId, services);
-  const from = boundFrom(binding, sources, item);
+  const { from, sources, item } = useBoundFrom(
+    binding,
+    document,
+    nodeId,
+    services
+  );
   const name = propLabel(prop.name, prop.schema);
   const names = boundNames(binding, from);
   // Where "Open source" leads: the host's answer, absent where it has none.
@@ -1475,7 +1518,13 @@ function BoundField({
               entryLink={entryLink}
               onPick={picked => {
                 const { op } = pickOp(
-                  { document, nodeId, prop: prop.name, clearsOnBind, entryLink },
+                  {
+                    document,
+                    nodeId,
+                    prop: prop.name,
+                    clearsOnBind,
+                    entryLink,
+                  },
                   picked,
                   binding
                 );

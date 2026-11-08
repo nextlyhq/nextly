@@ -26,8 +26,10 @@
  */
 
 import {
+  bindingKindOf,
   findNode,
   isAuthoredText,
+  type Binding,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -49,6 +51,7 @@ import {
   useMediaSummary,
   type ContentServices,
 } from "./content-controls";
+import { useBoundFieldOf } from "./binding-controls";
 import { HeldByLock } from "./held-by-lock";
 import {
   addressChanges,
@@ -471,6 +474,37 @@ function GrowingText({
   );
 }
 
+/** A picture bound to a field, as the alt note reads which field it is. */
+interface BoundPicture {
+  readonly binding: Binding;
+  readonly document: BlockDocument;
+  readonly nodeId: string;
+  readonly services: ContentServices | undefined;
+}
+
+/**
+ * A bound picture's binding and where it sits, for the alt note to read the
+ * field's kind: `undefined` for a picture not bound, or where the block's
+ * document or node is not in hand.
+ */
+function boundPictureOf(
+  picture: PictureSource,
+  at: {
+    readonly document: BlockDocument | undefined;
+    readonly nodeId: string | undefined;
+    readonly services: ContentServices | undefined;
+  },
+  media: string | undefined
+): BoundPicture | undefined {
+  const { document, nodeId, services } = at;
+  if (picture.kind !== "bound" || media === undefined) return undefined;
+  if (document === undefined || nodeId === undefined) return undefined;
+  const binding = findNode(document.nodes, nodeId)?.bindings?.[media];
+  return binding === undefined
+    ? undefined
+    : { binding, document, nodeId, services };
+}
+
 /** What From library says under the menu: the library's words, or why none. */
 function LibraryAltNote({
   bound,
@@ -478,24 +512,15 @@ function LibraryAltNote({
   libraryAlt,
   read,
 }: {
-  /** Whether the picture comes from a binding, whose file is read on the page. */
-  bound: boolean;
+  /** The picture's binding, whose field is read on the page; none if unbound. */
+  bound: BoundPicture | undefined;
   mediaId: string | undefined;
   libraryAlt: string | undefined;
   read: boolean;
 }): React.JSX.Element | null {
   // A bound picture is read when the page is drawn, so no file is "not
-  // chosen". The field may hold a library file, whose alt text applies, or an
-  // image address, which carries none: the note promises only the first.
-  if (bound) {
-    return (
-      <p className="nx-inspector__note">
-        The image comes from a bound field. A library file it holds is described
-        by its own alt text; an image address has none, so choose Custom to
-        describe it.
-      </p>
-    );
-  }
+  // chosen": what applies is the bound field's, said by its kind.
+  if (bound !== undefined) return <BoundPictureAltNote {...bound} />;
   if (mediaId === undefined) {
     return (
       <p className="nx-inspector__note">
@@ -514,6 +539,46 @@ function LibraryAltNote({
   }
   return (
     <p className="nx-inspector__note nx-inspector__library-alt">{libraryAlt}</p>
+  );
+}
+
+/**
+ * The note for a bound picture, by the kind of field it reads, as the engine
+ * types it (`bindingKindOf`): a library file is described by its own alt
+ * text, which the page reads with it; an image address has none, so screen
+ * readers get none. Until the field is known (the sources still read, or a
+ * field they don't list), the note says both, promising neither.
+ */
+function BoundPictureAltNote({
+  binding,
+  document,
+  nodeId,
+  services,
+}: BoundPicture): React.JSX.Element {
+  const field = useBoundFieldOf(binding, document, nodeId, services);
+  const kind = field === undefined ? undefined : bindingKindOf(field);
+  if (kind === "media") {
+    return (
+      <p className="nx-inspector__note" data-bound-picture="media">
+        The image comes from a bound library file, so its own alt text is used.
+        Choose Custom to describe it here instead.
+      </p>
+    );
+  }
+  if (kind === "url" || kind === "text") {
+    return (
+      <p className="nx-inspector__note" data-bound-picture="address">
+        The image comes from a bound image address, which has no alt text, so
+        screen readers get none. Choose Custom to describe it.
+      </p>
+    );
+  }
+  return (
+    <p className="nx-inspector__note">
+      The image comes from a bound field. A library file it holds is described
+      by its own alt text; an image address has none, so choose Custom to
+      describe it.
+    </p>
   );
 }
 
@@ -665,6 +730,12 @@ export function ImageAltField({
     services,
     picture
   );
+  // What the alt note reads of a bound picture's field; none if unbound.
+  const boundPicture = boundPictureOf(
+    picture,
+    { document, nodeId, services },
+    group.media
+  );
   const mode = altModeOf(group, values);
   const own = storedAlt(group, values);
   const changesFor = (next: AltMode) =>
@@ -704,7 +775,7 @@ export function ImageAltField({
               />
               {mode === "library" ? (
                 <LibraryAltNote
-                  bound={picture.kind === "bound"}
+                  bound={boundPicture}
                   mediaId={mediaId}
                   libraryAlt={libraryAlt}
                   read={summary !== undefined}
