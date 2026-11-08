@@ -507,16 +507,27 @@ const KEPT_BEFORE_EXTENSION = 3;
 const LONGEST_EXTENSION = 6;
 
 /**
+ * A text's graphemes, as the platform segments them; by code point where it
+ * has no segmenter, which at least never splits a character in two.
+ */
+function graphemesOf(text: string): string[] {
+  if (typeof Intl.Segmenter !== "function") return Array.from(text);
+  const segments = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  return Array.from(segments.segment(text), part => part.segment);
+}
+
+/**
  * A file name split into the start that may be cut and the end kept whole:
  * its extension and the few characters before it, or its last few where it
  * has no extension; `undefined` for a name too short to cut, whose start
- * would be all but gone. Counted in code points, never UTF-16 units, so an
- * emoji or another astral character is never split in two.
+ * would be all but gone. Counted in graphemes, the characters a reader sees,
+ * so neither an emoji nor a sequence joined into one (a family emoji, a
+ * letter with its accent) is split across the ellipsis.
  */
 function splitForCut(
   name: string
 ): { readonly head: string; readonly tail: string } | undefined {
-  const chars = Array.from(name);
+  const chars = graphemesOf(name);
   const dot = chars.lastIndexOf(".");
   const at =
     dot > 0 && chars.length - dot <= LONGEST_EXTENSION

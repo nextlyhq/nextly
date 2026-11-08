@@ -198,6 +198,25 @@ describe("a fallback chosen from the media library", () => {
     expect(`${head ?? ""}${tail ?? ""}`).toBe(name);
   });
 
+  it("cuts a name by whole graphemes, a joined emoji kept as one", async () => {
+    // A family emoji is one character a reader sees, made of five code
+    // points joined; a cut by code points would leave its parts either side.
+    const name = "holiday👨‍👩‍👧de.jpg";
+    const readMedia = vi.fn<(id: string) => Promise<MediaSummary | null>>(
+      async () => ({ name, thumbnail: "/t/holiday.jpg" })
+    );
+    mountRow({ readMedia }, "m-8");
+    const row = await screen.findByRole("group", {
+      name: `Fallback: ${name}`,
+    });
+    expect(row.querySelector(".nx-middle-cut__tail")?.textContent).toBe(
+      "👨‍👩‍👧de.jpg"
+    );
+    expect(row.querySelector(".nx-middle-cut__head")?.textContent).toBe(
+      "holiday"
+    );
+  });
+
   it("is named by the file readMedia reads, never by its id", async () => {
     const readMedia = vi.fn<(id: string) => Promise<MediaSummary | null>>(
       async () => ({ name: "spring-banner.jpg", thumbnail: "/t/spring.jpg" })
