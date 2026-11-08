@@ -529,6 +529,7 @@ describe("what the strip says, following the canvas's own read", () => {
         publicValues: null,
         fields: [],
       },
+      scope: JSON.stringify(["posts", null, "u1"]),
       choose: vi.fn(),
       step: vi.fn(),
       refresh: vi.fn(),

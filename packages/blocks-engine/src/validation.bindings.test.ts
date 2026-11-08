@@ -116,7 +116,7 @@ describe("validating bindings against the sources' schema", () => {
     expect(bindingCodes(shapeOnly)).toEqual([[], [], []]);
   });
 
-  it("refuses an image bound to plain text, and an image fallback that is not an image address", () => {
+  it("refuses an image bound to plain text, and an image fallback that is neither an image address nor a media id", () => {
     const imageFields: BindingSchemaSource = {
       fieldsOf: ref =>
         "collection" in ref && ref.collection === "posts"
@@ -147,10 +147,11 @@ describe("validating bindings against the sources' schema", () => {
         imageBoundTo("script", "cover", "javascript:alert(1)"),
         imageBoundTo("data", "photoUrl", "data:image/png;base64,AAAA"),
         imageBoundTo("other-host", "cover", "//elsewhere.example/a.png"),
-        // A media id is not one yet: a page's export and import would not
-        // carry the media a binding's fallback names.
+        // Neither a string address nor a string id: a number is no fallback.
+        imageBoundTo("number", "cover", 42),
+        // CONTROLS: an image address and a media library id are image
+        // fallbacks, as they are the image prop's own values.
         imageBoundTo("media-id", "cover", "media-1"),
-        // CONTROLS: an image address is an image fallback.
         imageBoundTo("address", "photoUrl", "https://cdn.example/a.png"),
         imageBoundTo("site-path", "cover", "/media/a.png"),
       ],
@@ -178,7 +179,18 @@ describe("validating bindings against the sources' schema", () => {
       ["binding-fallback-invalid"],
       [],
       [],
+      [],
     ]);
+    // The refusal names both kinds of fallback an image takes.
+    const refused = issues.find(
+      issue =>
+        issue.path.startsWith("/nodes/1/") &&
+        issue.code === "binding-fallback-invalid"
+    );
+    expect(refused?.message).toContain(
+      "neither an image address (https://, http:// or a path on the site) nor a media library image"
+    );
+    expect(refused?.message).not.toContain("can't be a fallback");
   });
 
   it("reports every binding code under the validator's own table", () => {

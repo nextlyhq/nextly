@@ -85,7 +85,11 @@ function mount(
         description: "A badge.",
         example: { props: {} },
         editor: { label: "Badge" },
-        props: { label: { label: "Text", role: "content", type: "text" } },
+        props: {
+          label: { label: "Text", role: "content", type: "text" },
+          // A second prop, which an edit made during an unbind's plan changes.
+          tone: { label: "Tone", role: "content", type: "text" },
+        },
         defaultProps: {},
         render: () => null,
       },
@@ -976,12 +980,32 @@ describe("an unbind that can't be applied as planned", () => {
   });
 
   it("offers no field change where the host lists no fields", async () => {
-    mount({ label: { $bind: "title" } }, { listBindingFields: undefined });
+    // Unbind is planned by the host; no field list to change to.
+    mount(
+      { label: { $bind: "title" } },
+      {
+        listBindingFields: undefined,
+        planUnbind: vi.fn(async () => ({ refusal: "Not now." })),
+      }
+    );
     const chip = await screen.findByRole("button", { name: /^Text: bound to/ });
     fireEvent.keyDown(chip, { key: "Enter" });
-    await screen.findByRole("menu");
+    await screen.findByRole("menuitem", { name: "Unbind, keep the text" });
     expect(
       screen.queryByRole("menuitem", { name: "Change field…" })
+    ).toBeNull();
+  });
+
+  it("draws the chip as a label, with no menu, where it offers nothing", () => {
+    mount(
+      { label: { $bind: "title" } },
+      { listBindingFields: undefined, planUnbind: undefined }
+    );
+    expect(
+      screen.getByRole("group", { name: /^Text: bound to Title/ })
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /^Text: bound to/ })
     ).toBeNull();
   });
 });
@@ -1059,6 +1083,8 @@ describe("every bindable prop", () => {
       },
       body: { label: "Body", role: "content", type: "richText" },
       glyph: { label: "Glyph", role: "content", type: "icon" },
+      // No field can fill a colour: the control, drawn with no bind button.
+      tint: { label: "Tint", role: "content", type: "color" },
     } as const;
     registerBlocks(
       [
@@ -1118,11 +1144,12 @@ describe("every bindable prop", () => {
         schema => bindablePropKind(schema as never) !== undefined
       ).length
     ).toBeGreaterThan(3);
+    expect(bindablePropKind(props.tint as never)).toBeUndefined();
+    // Its row is drawn, so the missing button is the binding rule's doing.
+    expect(screen.getByText("Not editable here (color).")).toBeTruthy();
     expect(
-      Object.values(props).some(
-        schema => bindablePropKind(schema as never) === undefined
-      )
-    ).toBe(true);
+      screen.queryByRole("button", { name: "Bind Tint to a field" })
+    ).toBeNull();
   });
 
   it("offers the bind button inside a group for each prop the group binds, and none for what qualifies it", () => {

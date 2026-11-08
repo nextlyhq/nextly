@@ -70,6 +70,68 @@ export type UnbindPlan =
 type DeclaredProps = Readonly<Partial<Record<string, PropSchema>>> | undefined;
 
 /**
+ * The plan when visitors can't read the bound field: its fallback kept where
+ * the prop keeps such a value, or the block's own value where it has none.
+ * Apart from {@link unbindPlan} so each of the two readings stays one
+ * decision.
+ */
+function unreadablePlan(
+  prop: string,
+  path: string,
+  fallback: { readonly value: unknown } | undefined,
+  declared: DeclaredProps
+): UnbindPlan {
+  const unread = `Visitors can't read “${path}”, so its value wasn't copied in.`;
+  if (fallback === undefined) {
+    // A private image shows the block's own image, as any image bound to
+    // nothing does.
+    if (isMediaProp(declared, prop)) return ownImagePlan(prop, declared);
+    return {
+      kept: { set: {} },
+      answer: {
+        kept: "own",
+        reason: `${unread} The block keeps its own value.`,
+      },
+    };
+  }
+  // An image's fallback is a media id or an address. A media id stays in
+  // the media prop, the typed address the bound image never drew emptied;
+  // an address, which the media prop can't hold, goes where the image's
+  // own address is kept, as any address does.
+  if (isMediaProp(declared, prop)) {
+    const image = imageValueOf(fallback.value);
+    if (image?.holds === "media") {
+      return {
+        kept: {
+          set: { [prop]: image.value },
+          ...typedAddressEmptied(prop, declared),
+        },
+        answer: {
+          kept: "fallback",
+          value: image.value,
+          reason: `${unread} The fallback is kept.`,
+        },
+      };
+    }
+    return addressPlan(
+      prop,
+      fallback.value,
+      "fallback",
+      declared,
+      `${unread} The fallback is kept in the image's address.`
+    );
+  }
+  return {
+    kept: { set: { [prop]: fallback.value } },
+    answer: {
+      kept: "fallback",
+      value: fallback.value,
+      reason: `${unread} The fallback is kept.`,
+    },
+  };
+}
+
+/**
  * The plan for unbinding `prop`, from what a visitor sees of it. Pure: the
  * reading is {@link visitorViewOf}'s.
  */
@@ -80,7 +142,9 @@ export function unbindPlan(
   declared: DeclaredProps
 ): UnbindPlan {
   if (view.unreadable !== undefined) {
-    return asUnreadable(unreadablePlan(prop, path, view.unreadable, declared));
+    return asUnreadable(
+      unreadablePlan(prop, path, view.unreadable.fallback, declared)
+    );
   }
   const bound = view.bound;
 
@@ -110,51 +174,6 @@ export function unbindPlan(
         kept === "fallback"
           ? "Visitors see the fallback here, so it's kept."
           : "The prop keeps what visitors saw.",
-    },
-  };
-}
-
-/**
- * The plan where the binding reads a field visitors can't read: its value is
- * never copied in; the binding's fallback is kept, or the prop's own value.
- */
-function unreadablePlan(
-  prop: string,
-  path: string,
-  unreadable: NonNullable<VisitorView["unreadable"]>,
-  declared: DeclaredProps
-): UnbindPlan {
-  const fallback = unreadable.fallback;
-  const unread = `Visitors can't read “${path}”, so its value wasn't copied in.`;
-  if (fallback === undefined) {
-    // A private image shows the block's own image, as any image bound to
-    // nothing does.
-    if (isMediaProp(declared, prop)) return ownImagePlan(prop, declared);
-    return {
-      kept: { set: {} },
-      answer: {
-        kept: "own",
-        reason: `${unread} The block keeps its own value.`,
-      },
-    };
-  }
-  // An image's fallback is an address, which the media prop can't hold: it
-  // goes where the image's own address is kept, as any address does.
-  if (isMediaProp(declared, prop)) {
-    return addressPlan(
-      prop,
-      fallback.value,
-      "fallback",
-      declared,
-      `${unread} The fallback is kept in the image's address.`
-    );
-  }
-  return {
-    kept: { set: { [prop]: fallback.value } },
-    answer: {
-      kept: "fallback",
-      value: fallback.value,
-      reason: `${unread} The fallback is kept.`,
     },
   };
 }

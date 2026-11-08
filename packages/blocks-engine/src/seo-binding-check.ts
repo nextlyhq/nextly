@@ -5,7 +5,8 @@
  *
  * A text segment is checked as a text prop's binding is. A social image is
  * checked as an image binds: to a media field, or to a URL field, the one text
- * field that says its value is an address.
+ * field that says its value is an address. Its fallback is an image address
+ * only, not the media library id a block's image may fall back to.
  *
  * @module seo-binding-check
  */
@@ -47,6 +48,10 @@ export function checkSeoBinding(input: SeoBindingCheckInput): BindingCheck {
       props: { [SEO_PROP]: { type } },
       ...(input.schema === undefined ? {} : { schema: input.schema }),
       ...(input.refs === undefined ? {} : { refs: input.refs }),
+      // The social image's fallback is an address only: a page's export
+      // and import carry no media from a document's own metadata, so a
+      // media id there would be lost on the way. It asks nothing of text.
+      imageFallback: "address",
     });
   if (input.place === "text") return check("text");
 
