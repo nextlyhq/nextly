@@ -39,7 +39,7 @@ import {
   type ResolvedIcon,
   type ResolvedMedia,
 } from "@nextlyhq/blocks-react";
-import type { ListEntryCount } from "@nextlyhq/blocks-react/blocks";
+import { listShownCount } from "@nextlyhq/blocks-react/blocks";
 import { useCurrentUserId, useMediaResolver } from "@nextlyhq/plugin-sdk/admin";
 import { useEffect, useMemo, useState } from "react";
 
@@ -174,7 +174,10 @@ export function useCanvasPageContext(
   // until they are read, a list whose source is one draws its template, as
   // with no host.
   const namedQueries = useCanvasNamedHost(locale, userId, visitor);
-  const visitorNotes = useVisitorListNotes(asVisitor, locale, userId);
+  const visitorNotes = useVisitorListNotes(asVisitor, locale, userId, {
+    entryCollection,
+    entryId,
+  });
   const base = useMemo(
     () =>
       createStandaloneContext({
@@ -283,29 +286,49 @@ function childrenOf(slots: unknown): unknown[] {
  * 6 entries". Nothing where either count is not known, or nothing shrank.
  */
 export function visitorListWords(
-  own: ListEntryCount | undefined,
-  seen: ListEntryCount | undefined
+  own: number | undefined,
+  seen: number | undefined
 ): string | undefined {
-  if (own === undefined || seen === undefined || seen.shown >= own.shown) {
+  if (own === undefined || seen === undefined || seen >= own) {
     return undefined;
   }
-  const noun = own.shown === 1 ? "entry" : "entries";
-  return `Showing what visitors see: ${String(seen.shown)} of ${String(own.shown)} ${noun}`;
+  const noun = own === 1 ? "entry" : "entries";
+  return `Showing what visitors see: ${String(seen)} of ${String(own)} ${noun}`;
 }
 
-/** A list's count, as the person editing reads it or as a visitor does. */
-function countAs(
+/** The entry the canvas draws, which a related list reads its ids from. */
+interface CanvasEntry {
+  readonly entryCollection: string | undefined;
+  readonly entryId: string | undefined;
+}
+
+/**
+ * How many rows a list draws, as the person editing reads it or as a visitor
+ * does: from the same reads the canvas draws it with, for every source kind,
+ * a related list and a custom source saying no total among them.
+ */
+function shownAs(
   props: Readonly<Record<string, unknown>>,
   locale: string | undefined,
   userId: string | null,
-  visitor: ListEntriesVisitor | undefined
-): Promise<ListEntryCount | undefined> {
-  const count =
-    props.namedQuery === undefined || props.namedQuery === null
-      ? canvasListReadsIn(locale, userId, visitor).count(props)
-      : canvasNamedQueriesIn(locale, userId, visitor).count(props);
+  visitor: ListEntriesVisitor | undefined,
+  { entryCollection, entryId }: CanvasEntry
+): Promise<number | undefined> {
+  if (props.namedQuery !== undefined && props.namedQuery !== null) {
+    return canvasNamedQueriesIn(locale, userId, visitor)
+      .shown(props)
+      .catch(() => undefined);
+  }
+  const reads = canvasListReadsIn(locale, userId, visitor);
+  const ctx = createStandaloneContext({
+    ...reads.terms,
+    data: reads.data,
+    ...(entryCollection === undefined || entryId === undefined
+      ? {}
+      : { entry: { id: entryId }, entryCollection }),
+  });
   // A count that can't be taken says nothing, as the inspector's does.
-  return count.catch(() => undefined);
+  return listShownCount(props, ctx, reads.data).catch(() => undefined);
 }
 
 /**
@@ -317,7 +340,8 @@ function countAs(
 function useVisitorListNotes(
   asVisitor: VisitorLists | undefined,
   locale: string | undefined,
-  userId: string | null
+  userId: string | null,
+  { entryCollection, entryId }: CanvasEntry
 ): ReadonlyMap<string, string> | undefined {
   const lists = useMemo(
     () =>
@@ -328,7 +352,15 @@ function useVisitorListNotes(
   );
   const collection = asVisitor?.visitor.collection;
   const id = asVisitor?.visitor.id;
-  const key = JSON.stringify([lists, locale ?? "", userId, collection, id]);
+  const key = JSON.stringify([
+    lists,
+    locale ?? "",
+    userId,
+    collection,
+    id,
+    entryCollection ?? null,
+    entryId ?? null,
+  ]);
   const [found, setFound] = useState<{
     readonly key: string;
     readonly notes: ReadonlyMap<string, string>;
@@ -339,11 +371,12 @@ function useVisitorListNotes(
     if (drawn.length === 0) return;
     let live = true;
     const visitor = { collection, id };
+    const entry = { entryCollection, entryId };
     void Promise.all(
       drawn.map(async list => {
         const [own, seen] = await Promise.all([
-          countAs(list.props, locale, userId, undefined),
-          countAs(list.props, locale, userId, visitor),
+          shownAs(list.props, locale, userId, undefined, entry),
+          shownAs(list.props, locale, userId, visitor, entry),
         ]);
         return [list.id, visitorListWords(own, seen)] as const;
       })
@@ -358,7 +391,7 @@ function useVisitorListNotes(
     return () => {
       live = false;
     };
-  }, [key, lists, locale, userId, collection, id]);
+  }, [key, lists, locale, userId, collection, id, entryCollection, entryId]);
   return found?.key === key && found.notes.size > 0 ? found.notes : undefined;
 }
 

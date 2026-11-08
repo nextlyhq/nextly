@@ -11,6 +11,7 @@
  *
  * @module visitor-lists
  */
+import type { BlockNode } from "@nextlyhq/blocks-engine";
 import type { PageBindings } from "@nextlyhq/blocks-react";
 import {
   useItemHiddenAs,
@@ -22,12 +23,23 @@ import { useEffect, useMemo, useState } from "react";
 import type { ListEntriesVisitor } from "../../list-entries-contract";
 import type { PageRenderInputs } from "../page-render-inputs";
 
+import type { VisitorLists } from "./canvas-page-context";
+
 /** Whether the canvas's lists read as a visitor, and the switch's say in it. */
 export interface ListsAsVisitor {
   /** The document the lists are read as a visitor of; absent otherwise. */
   readonly visitor: ListEntriesVisitor | undefined;
-  /** Told whether the conditions are applied, once the switch decides. */
-  readonly follow: (applied: boolean) => void;
+  /**
+   * That document, with the blocks the canvas draws while its conditions
+   * are applied, a template's previewed entry's composed in, whose lists a
+   * visitor may see fewer entries of; absent otherwise.
+   */
+  readonly lists: VisitorLists | undefined;
+  /**
+   * Told the blocks the canvas draws while the conditions are applied, once
+   * the switch decides, and nothing while they are not.
+   */
+  readonly follow: (drawn: readonly BlockNode[] | undefined) => void;
 }
 
 /**
@@ -37,11 +49,12 @@ export interface ListsAsVisitor {
  * saved, nor a Single, which the route answers for no visitor.
  */
 export function useListsAsVisitor(): ListsAsVisitor {
-  const [applied, follow] = useState(false);
+  const [drawn, follow] = useState<readonly BlockNode[] | undefined>();
   const document = useDocumentIdentity();
   const collection =
     document?.kind === "collection" ? document.slug : undefined;
   const id = document?.kind === "collection" ? document.documentId : undefined;
+  const applied = drawn !== undefined;
   const visitor = useMemo(
     () =>
       applied && collection !== undefined && id !== undefined
@@ -49,21 +62,29 @@ export function useListsAsVisitor(): ListsAsVisitor {
         : undefined,
     [applied, collection, id]
   );
-  return { visitor, follow };
+  const lists = useMemo(
+    () =>
+      visitor === undefined || drawn === undefined
+        ? undefined
+        : { visitor, nodes: drawn },
+    [visitor, drawn]
+  );
+  return { visitor, lists, follow };
 }
 
 /**
- * Tell `lists` whether the conditions are applied, after each render that
- * changes it, so the next draw reads the lists as the switch now says.
+ * Tell `lists` the blocks the canvas draws while the conditions are applied,
+ * or nothing while they are not, after each render that changes them, so the
+ * next draw reads the lists as the switch now says.
  */
 export function useFollowApplied(
   lists: ListsAsVisitor,
-  applied: boolean
+  drawn: readonly BlockNode[] | undefined
 ): void {
   const { follow } = lists;
   useEffect(() => {
-    follow(applied);
-  }, [follow, applied]);
+    follow(drawn);
+  }, [follow, drawn]);
 }
 
 /**

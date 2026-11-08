@@ -310,8 +310,10 @@ export function itemHiddenAsOf(sources: ItemMarkerSources): ItemHiddenAs {
 }
 
 /**
- * The list item as a visitor reads it: its values, and the fields a visitor
- * may read of its collection's entries, none where those are not known.
+ * The list item as a visitor reads it: its values, and the fields its
+ * conditions were judged by as the renderer handed them, a named query's own
+ * row schema among them; where it handed none, the fields a visitor may read
+ * of its collection's entries, and none where those are not known either.
  */
 function itemPreviewOf(
   sources: ItemMarkerSources,
@@ -325,7 +327,7 @@ function itemPreviewOf(
           readable: sources.fieldsOf(collection),
           labelled: sources.labelledOf?.(collection),
         };
-  const readable = known.readable ?? [];
+  const readable = item.fields ?? known.readable ?? [];
   return {
     subject: {
       fields: {

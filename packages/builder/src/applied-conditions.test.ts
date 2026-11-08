@@ -484,6 +484,7 @@ describe("what the canvas draws where a list's item hides a block", () => {
     const marker = hiddenAs(badge, {
       values: { category: "News" },
       collection: "posts",
+      fields: FIELDS,
     });
     expect(marker).toEqual({
       id: "badge",
@@ -503,6 +504,7 @@ describe("what the canvas draws where a list's item hides a block", () => {
       const marker = hiddenAs(badge, {
         values: { category: "News" },
         collection,
+        fields: undefined,
       });
       expect(marker?.props).toEqual({
         name: "Guide badge",
@@ -514,8 +516,24 @@ describe("what the canvas draws where a list's item hides a block", () => {
 
   it("draws nothing for an item its conditions hold for", () => {
     expect(
-      hiddenAs(badge, { values: { category: "Guides" }, collection: "posts" })
+      hiddenAs(badge, {
+        values: { category: "Guides" },
+        collection: "posts",
+        fields: FIELDS,
+      })
     ).toBeUndefined();
+  });
+
+  it("judges a named query's row by the fields the renderer judged it by", () => {
+    // A row of a query with its own schema: no collection, its fields
+    // handed over by the renderer, which just judged it with them.
+    const marker = hiddenAs(badge, {
+      values: { category: "News" },
+      collection: undefined,
+      fields: FIELDS,
+    });
+    expect(marker?.props).toMatchObject({ unchecked: false });
+    expect(String(marker?.props.reason)).toMatch(/^hidden for this entry: /);
   });
 });
 

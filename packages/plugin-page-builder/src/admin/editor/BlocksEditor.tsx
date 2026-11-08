@@ -1396,7 +1396,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   // Whether the canvas's lists read as a visitor: held above the canvas's
   // inputs, which read them, and set by the conditions switch below.
   const listsAsVisitor = useListsAsVisitor();
-  const canvas = useCanvasInputs(mount, style, listsAsVisitor.visitor);
+  const canvas = useCanvasInputs(mount, style, listsAsVisitor.lists);
   const panels = useEditorPanels(mount, name, {
     control,
     canvasRoot: canvas.canvasElement,
@@ -1531,7 +1531,10 @@ function EditorBody<TFieldValues extends FieldValues>({
       itemsJudged: listsAsVisitor.visitor !== undefined,
     }
   );
-  useFollowApplied(listsAsVisitor, conditions.applied !== undefined);
+  useFollowApplied(
+    listsAsVisitor,
+    conditions.applied === undefined ? undefined : conditions.composed.nodes
+  );
   const shownRender = useItemsJudgedRender(
     canvasRender,
     listsAsVisitor.visitor !== undefined && conditions.applied !== undefined,

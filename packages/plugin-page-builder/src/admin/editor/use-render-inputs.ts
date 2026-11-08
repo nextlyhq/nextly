@@ -11,6 +11,7 @@
 import {
   allBlocks,
   BASE_BREAKPOINT,
+  conditionDemand,
   registryNestingSource,
   getBlock,
   paginatedList,
@@ -73,15 +74,14 @@ import {
   readRemotePatterns,
   type HostFetchPolicy,
 } from "../../host-policy";
-import type { ListEntriesVisitor } from "../../list-entries-contract";
 import { siteSheet, type SiteStyleData } from "../../site-style";
 import { readSiteStyleRecord } from "../../site-style-record";
-import { useCanvasBindings } from "../canvas-bindings-client";
+import { LIST_CONDITIONS, useCanvasBindings } from "../canvas-bindings-client";
 import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
 import { useSiteStyle } from "../site-style-client";
 import { useStoredSiteStyle } from "../site-style-read";
 
-import { useCanvasPageContext } from "./canvas-page-context";
+import { useCanvasPageContext, type VisitorLists } from "./canvas-page-context";
 import { useSharedStyleVerb, type SharedStyleVerb } from "./shared-style-verb";
 import { useSiteCanvas, type SiteCanvas } from "./site-canvas";
 import {
@@ -296,7 +296,7 @@ function useCanvasRender({
   editor,
   locale,
   initialDocument,
-  visitor,
+  asVisitor,
 }: Pick<
   EditorMount,
   | "clientConfig"
@@ -308,7 +308,7 @@ function useCanvasRender({
 > &
   Pick<SiteStyleInputs, "canvasSiteStyle" | "stylePolicy"> & {
     /** The document the lists are read as a visitor of, while they are. */
-    readonly visitor?: ListEntriesVisitor;
+    readonly asVisitor?: VisitorLists;
   }): CanvasRender {
   /*
    * What the canvas hands `PageRenderer` beyond the document and the sheet.
@@ -379,11 +379,6 @@ function useCanvasRender({
   const pagedList = paginatedList(editor.document.nodes)?.id;
   // While the conditions are applied, the lists read as a visitor of the
   // document, and those a visitor sees fewer entries of say so.
-  const nodes = editor.document.nodes;
-  const asVisitor = useMemo(
-    () => (visitor === undefined ? undefined : { visitor, nodes }),
-    [visitor, nodes]
-  );
   const canvasContext = useCanvasPageContext(
     editor.listsShowingEmpty,
     locale,
@@ -894,12 +889,12 @@ export function useCanvasInputs(
   mount: EditorMount,
   style: SiteStyleInputs,
   /** The document the lists are read as a visitor of, while they are. */
-  visitor?: ListEntriesVisitor
+  asVisitor?: VisitorLists
 ): CanvasInputs {
   const render = useCanvasRender({
     ...mount,
     ...style,
-    ...(visitor === undefined ? {} : { visitor }),
+    ...(asVisitor === undefined ? {} : { asVisitor }),
   });
   const viewport = useCanvasViewport({ ...render, ...style });
   const styleState = useStyleState(mount.editor);
@@ -1094,11 +1089,19 @@ export function useBoundCanvasRender(
   );
   // A custom source's row collection is asked for with the page's own, so
   // its item bindings draw with that collection's field shapes.
+  // A page holding conditioned blocks asks for its lists' public field
+  // shapes too, which a list item's conditions are judged by while they are
+  // applied, though nothing on the page binds.
+  const conditioned = useMemo(
+    () => conditionDemand(document.nodes).any,
+    [document]
+  );
   const bindings = useCanvasBindings(
     trees,
     locale,
     component,
-    canvasRender.context?.namedQueries
+    canvasRender.context?.namedQueries,
+    conditioned ? LIST_CONDITIONS : undefined
   );
   const bound = useMemo(
     () => ({ ...canvasRender, bindings }),

@@ -225,18 +225,14 @@ describe("a list the canvas reads as a visitor reads it", () => {
   });
 
   it("says so only where a visitor sees fewer entries", () => {
-    expect(
-      visitorListWords({ matching: 6, shown: 6 }, { matching: 4, shown: 4 })
-    ).toBe("Showing what visitors see: 4 of 6 entries");
-    expect(
-      visitorListWords({ matching: 1, shown: 1 }, { matching: 0, shown: 0 })
-    ).toBe("Showing what visitors see: 0 of 1 entry");
-    expect(
-      visitorListWords({ matching: 4, shown: 4 }, { matching: 4, shown: 4 })
-    ).toBeUndefined();
-    expect(
-      visitorListWords(undefined, { matching: 4, shown: 4 })
-    ).toBeUndefined();
+    expect(visitorListWords(6, 4)).toBe(
+      "Showing what visitors see: 4 of 6 entries"
+    );
+    expect(visitorListWords(1, 0)).toBe(
+      "Showing what visitors see: 0 of 1 entry"
+    );
+    expect(visitorListWords(4, 4)).toBeUndefined();
+    expect(visitorListWords(undefined, 4)).toBeUndefined();
   });
 
   it("wears the words on the canvas, counted from the person's reads and a visitor's", async () => {

@@ -357,6 +357,34 @@ export async function namedListCount(
   host: NamedQueryHost,
   locale: string | undefined
 ): Promise<ListEntryCount | undefined> {
+  const outcome = await namedListRun(props, host, locale);
+  return outcome?.total === undefined
+    ? undefined
+    : { matching: outcome.total, shown: outcome.items.length };
+}
+
+/**
+ * How many rows a named list draws, from the canvas's own run: what a
+ * visitor-read list's tag compares, known whether or not the query says how
+ * many rows match. Undefined for a list whose source can't be run as stored.
+ */
+export async function namedListShown(
+  props: Readonly<Record<string, unknown>>,
+  host: NamedQueryHost,
+  locale: string | undefined
+): Promise<number | undefined> {
+  const outcome = await namedListRun(props, host, locale);
+  return outcome === undefined || outcome.failed
+    ? undefined
+    : outcome.items.length;
+}
+
+/** A named list's run as the canvas makes it, for a count of it. */
+async function namedListRun(
+  props: Readonly<Record<string, unknown>>,
+  host: NamedQueryHost,
+  locale: string | undefined
+): Promise<Awaited<ReturnType<typeof readNamedList>> | undefined> {
   const base = namedListBase(props);
   if (base === undefined || "blocking" in base) return undefined;
   const ctx = createStandaloneContext({
@@ -364,15 +392,12 @@ export async function namedListCount(
     queries: createQueryBudget(),
     ...(locale === undefined ? {} : { locale }),
   });
-  const outcome = await readNamedList(
+  return await readNamedList(
     base.named,
     { limit: base.limit, offset: base.offset },
     { ...ctx, namedQueries: host },
     "count"
   );
-  return outcome.total === undefined
-    ? undefined
-    : { matching: outcome.total, shown: outcome.items.length };
 }
 
 /** The canvas's custom sources in one language, read once and shared. */
@@ -385,6 +410,10 @@ export interface CanvasNamedQueries {
   readonly count: (
     props: Readonly<Record<string, unknown>>
   ) => Promise<ListEntryCount | undefined>;
+  /** How many rows a named list draws, from the canvas's own runs. */
+  readonly shown: (
+    props: Readonly<Record<string, unknown>>
+  ) => Promise<number | undefined>;
 }
 
 /** One set per language, shared by the canvas and the inspector. */
@@ -455,6 +484,7 @@ export function canvasNamedQueriesIn(
     sources,
     host,
     count: async props => namedListCount(props, await host(), locale),
+    shown: async props => namedListShown(props, await host(), locale),
   };
   BY_LANGUAGE.set(key, made);
   return made;

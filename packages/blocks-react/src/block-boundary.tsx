@@ -2,6 +2,7 @@ import {
   blockPartClassName,
   blockTypeClassName,
   renderedDomId,
+  type BindingFieldShape,
   type BindingRun,
   type BlockNode,
   type BoundValues,
@@ -39,7 +40,7 @@ import {
 } from "./renderable";
 import type { BlockResolver } from "./resolver";
 import { styleTextForInjection } from "./styles";
-import { conditionAllows } from "./visibility";
+import { conditionAllows, itemFields } from "./visibility";
 // Imported as well as re-exported below: this module both PUBLISHES the names,
 // which consumers outside the package address elements by, and uses them.
 
@@ -140,14 +141,17 @@ export type ItemHiddenAs = (
 ) => BlockNode | undefined;
 
 /**
- * The list item that hides a block: its values, and the collection its
- * entries come from, absent for a named query's row.
+ * The list item that hides a block: its values, the collection its entries
+ * come from (absent for a named query's row), and the fields its conditions
+ * were judged by, as the public reads them (absent where none are known, so
+ * they failed closed).
  *
  * @experimental
  */
 export interface HidingItem {
   readonly values: Readonly<Record<string, unknown>>;
   readonly collection: string | undefined;
+  readonly fields: readonly BindingFieldShape[] | undefined;
 }
 
 interface DrawnNode {
@@ -179,6 +183,10 @@ function drawnNodes(
           values: item,
           collection:
             context.itemSource === "" ? undefined : context.itemSource,
+          // The very fields the item's conditions were just judged by, a
+          // named query's own row schema among them, so what is drawn in
+          // the block's place says what that judgement found.
+          fields: itemFields(context),
         };
   return nodes.flatMap((node): DrawnNode[] => {
     if (conditionAllows(node, context, decided)) return [{ node, shown: true }];

@@ -42,6 +42,7 @@ import {
   canvasNamedRuns,
   listCustomSources,
   namedListCount,
+  namedListShown,
   type CanvasCustomSource,
 } from "./named-queries-client";
 
@@ -385,6 +386,27 @@ describe("namedListCount", () => {
     expect(await namedListCount(props, uncounted, undefined)).toBeUndefined();
     expect(
       await namedListCount({ collection: "posts" }, counted, undefined)
+    ).toBeUndefined();
+  });
+});
+
+describe("namedListShown", () => {
+  it("counts the rows a run draws, whether or not the query counts its matches", async () => {
+    const props = {
+      namedQuery: { name: "events.upcoming", params: { city: "lahore" } },
+      limit: 6,
+    };
+    const uncounted = canvasNamedHost(
+      SOURCES,
+      () =>
+        Promise.resolve(
+          answer({ counted: false, reads: 1 }, [{ id: "e1" }, { id: "e2" }])
+        ),
+      undefined
+    );
+    expect(await namedListShown(props, uncounted, undefined)).toBe(2);
+    expect(
+      await namedListShown({ collection: "posts" }, uncounted, undefined)
     ).toBeUndefined();
   });
 });

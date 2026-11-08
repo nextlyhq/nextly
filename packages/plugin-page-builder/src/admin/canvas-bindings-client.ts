@@ -128,6 +128,20 @@ const KEPT = new Map<string, { at: number; read: Promise<PageBindings> }>();
 let keptFor: string | undefined;
 
 /**
+ * What the canvas's conditions ask of its reads: nothing of the entry, but
+ * the public field shapes of the lists it draws, which a block a list's item
+ * decides is judged by while conditions are applied, though nothing binds.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export const LIST_CONDITIONS: ConditionDemand = Object.freeze({
+  any: true,
+  entryFields: new Set<string>(),
+  ordersValues: false,
+  orderedFields: new Set<string>(),
+});
+
+/**
  * What the canvas asks for the page it draws, or nothing when it holds no
  * binding or has no entry to read for.
  *
@@ -305,7 +319,9 @@ export function useCanvasBindings(
   locale: string | undefined,
   component = false,
   /** The site's named queries, once the canvas has read them. */
-  namedQueries?: NamedQueryLookup
+  namedQueries?: NamedQueryLookup,
+  /** What the page's conditions ask of the reads, where it holds any. */
+  conditions?: ConditionDemand
 ): PageBindings {
   // The entry the canvas is drawn as: the document's own, or a template's
   // previewed entry of the collection it draws.
@@ -315,8 +331,15 @@ export function useCanvasBindings(
   const userId = useCurrentUserId();
   const request = useMemo(
     () =>
-      canvasBindingsRequest(drawn, identity, locale, component, namedQueries),
-    [drawn, identity, locale, component, namedQueries]
+      canvasBindingsRequest(
+        drawn,
+        identity,
+        locale,
+        component,
+        namedQueries,
+        conditions === undefined ? {} : { conditions }
+      ),
+    [drawn, identity, locale, component, namedQueries, conditions]
   );
   // The ask as text: a new document that asks the same reads nothing new.
   const key = request === undefined ? "" : JSON.stringify(request);

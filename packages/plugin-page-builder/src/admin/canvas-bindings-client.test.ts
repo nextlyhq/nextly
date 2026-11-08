@@ -29,8 +29,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   writePluginRoute,
 }));
 
-const { canvasBindingsFor, canvasBindingsRequest, useCanvasBindings } =
-  await import("./canvas-bindings-client");
+const {
+  canvasBindingsFor,
+  canvasBindingsRequest,
+  LIST_CONDITIONS,
+  useCanvasBindings,
+} = await import("./canvas-bindings-client");
 const { CanvasEntryProvider } = await import("./editor/canvas-entry");
 
 /** The retries the editor has asked for, which a wrapper hands the canvas. */
@@ -118,6 +122,52 @@ describe("the canvas's binding sources", () => {
     expect(canvasBindingsRequest([listed], identity, undefined)?.lists).toEqual(
       ["posts"]
     );
+  });
+
+  it("asks for a list's field shapes where only its entries' conditions read them, and nothing of the entry", () => {
+    // Nothing binds: the list's entry block has only conditions, which are
+    // judged by the list's public field shapes while conditions are applied.
+    const conditioned: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "list",
+          type: "core/collection-loop",
+          version: 1,
+          props: { collection: "posts" },
+          slots: {
+            children: [
+              {
+                id: "t",
+                type: "core/text",
+                version: 1,
+                props: { text: "Members only" },
+              },
+            ],
+          },
+        },
+      ],
+    } as BlockDocument;
+    // CONTROL: with no binding and no conditions, nothing is asked.
+    expect(
+      canvasBindingsRequest([conditioned], identity, undefined)
+    ).toBeUndefined();
+    const request = canvasBindingsRequest(
+      [conditioned],
+      identity,
+      undefined,
+      false,
+      undefined,
+      { conditions: LIST_CONDITIONS }
+    );
+    expect(request?.lists).toEqual(["posts"]);
+    expect(request?.demand.entry).toBeUndefined();
+    expect(request?.conditions).toEqual({
+      any: true,
+      entryFields: [],
+      ordersValues: false,
+    });
   });
 
   it("names the collection a custom source's rows are entries of, given the site's queries", () => {
