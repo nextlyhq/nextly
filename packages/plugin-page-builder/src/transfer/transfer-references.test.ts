@@ -1,5 +1,7 @@
 import {
   COMPONENT_INSTANCE_TYPE,
+  hasBlock,
+  registerBlocks,
   type BlockDocument,
   type ComponentDocument,
 } from "@nextlyhq/blocks-engine";
@@ -11,6 +13,7 @@ import {
   fallbackMediaIdOf,
   imageExposureIds,
   mediaIdOf,
+  registryMediaProps,
 } from "./transfer-references";
 
 const mediaProps = (type: string): readonly string[] =>
@@ -272,5 +275,37 @@ describe("mediaIdOf", () => {
     expect(mediaIdOf("")).toBeUndefined();
     expect(mediaIdOf({ id: "m" })).toBeUndefined();
     expect(mediaIdOf(Number.NaN)).toBeUndefined();
+  });
+});
+
+describe("registryMediaProps", () => {
+  const CARD = "test/transfer-card";
+
+  it("lists a block's media and upload props alike, and no other", () => {
+    // An `upload` prop holds a media id as a `media` prop does, so its value
+    // and its binding's fallback must be carried by a transfer too.
+    if (!hasBlock(CARD)) {
+      registerBlocks(
+        [
+          {
+            name: CARD,
+            version: 1,
+            description: "A card with two images and a caption.",
+            example: { props: {} },
+            render: () => null,
+            props: {
+              photo: { type: "media" },
+              cover: { type: "upload" },
+              caption: { type: "text", role: "content" },
+            },
+            defaultProps: { caption: "" },
+          },
+        ] as never,
+        { source: "test" } as never
+      );
+    }
+
+    expect([...registryMediaProps(CARD)].sort()).toEqual(["cover", "photo"]);
+    expect(registryMediaProps("test/not-registered")).toEqual([]);
   });
 });

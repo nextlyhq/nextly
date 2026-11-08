@@ -15,6 +15,7 @@
  * @module transfer/transfer-references
  */
 import {
+  bindablePropKind,
   getBlock,
   imageValueOf,
   isComponentInstance,
@@ -62,13 +63,18 @@ export interface ReferenceLookups {
   readonly imageExposures?: (componentId: string) => ReadonlySet<string>;
 }
 
-/** The props a registered block declares as media. */
+/**
+ * The props a registered block declares as an image: a `media` prop or an
+ * `upload` one, by the same classification the binding rules give a prop
+ * (`bindablePropKind`), so every prop whose value, or binding fallback, may
+ * hold a media id is the one whose id a transfer carries.
+ */
 export function registryMediaProps(type: string): readonly string[] {
   const props = getBlock(type)?.props;
   if (props === undefined) return [];
   const media: string[] = [];
   for (const [name, schema] of Object.entries(props)) {
-    if (schema?.type === "media") media.push(name);
+    if (bindablePropKind(schema) === "image") media.push(name);
   }
   return media;
 }
