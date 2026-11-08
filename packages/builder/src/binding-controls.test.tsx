@@ -379,12 +379,32 @@ describe("an unbind that can't be applied as planned", () => {
   });
 
   it("offers no field change where the host lists no fields", async () => {
-    mount({ label: { $bind: "title" } }, { listBindingFields: undefined });
+    // Unbind is planned by the host; no field list to change to.
+    mount(
+      { label: { $bind: "title" } },
+      {
+        listBindingFields: undefined,
+        planUnbind: vi.fn(async () => ({ refusal: "Not now." })),
+      }
+    );
     const chip = await screen.findByRole("button", { name: /^Text: bound to/ });
     fireEvent.keyDown(chip, { key: "Enter" });
-    await screen.findByRole("menu");
+    await screen.findByRole("menuitem", { name: "Unbind, keep the text" });
     expect(
       screen.queryByRole("menuitem", { name: "Change field…" })
+    ).toBeNull();
+  });
+
+  it("draws the chip as a label, with no menu, where it offers nothing", () => {
+    mount(
+      { label: { $bind: "title" } },
+      { listBindingFields: undefined, planUnbind: undefined }
+    );
+    expect(
+      screen.getByRole("group", { name: /^Text: bound to Title/ })
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /^Text: bound to/ })
     ).toBeNull();
   });
 });
