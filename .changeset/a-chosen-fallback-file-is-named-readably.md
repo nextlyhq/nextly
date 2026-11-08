@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A library image chosen as an image binding's Fallback is named readably: the library button sits inside the chosen file's box, and a long file name is cut in its middle with its extension kept, in the row and on the picker's tiles. The picker's search reads "Find an image, or paste an address".
+A library image chosen as an image binding's Fallback is named readably: the library button sits inside the chosen file's box, and a long file name in that row is cut in its middle with its extension kept. On the picker's tiles a name keeps its start and is cut at its end. The picker's search reads "Find an image, or paste an address".
