@@ -13,7 +13,11 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { NextlyError } from "nextly/errors";
-import type { BindingSourceRef } from "nextly/runtime";
+import {
+  listPageNumber,
+  listPageOf,
+  type BindingSourceRef,
+} from "nextly/runtime";
 import { createElement, type ReactElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -707,5 +711,171 @@ describe("an entry's own design", () => {
     expect(runtime.keys.map(key => key[0])).not.toContain(
       "nextly-content-design"
     );
+  });
+});
+
+describe("an entry's list split into pages", () => {
+  /** A template of the entry's title over a list of posts, one a page. */
+  const PAGED_TEMPLATE = JSON.parse(
+    JSON.stringify({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "template",
+      nodes: [
+        {
+          id: "h",
+          type: "core/heading",
+          version: 1,
+          props: { text: "Own", level: "h1" },
+          bindings: { text: { $bind: "title", fallback: "No title" } },
+        },
+        {
+          id: "list",
+          type: "core/collection-loop",
+          version: 1,
+          props: { collection: "posts", limit: 1, paginate: true },
+          slots: { children: [], empty: [] },
+        },
+      ],
+    })
+  ) as BlockDocument;
+
+  /** post-1's list's later pages, held as one space, as the store gives them. */
+  const SPACE: ContentAddressHolder = {
+    collection: "posts",
+    id: "post-1",
+    kind: "space",
+  };
+
+  /**
+   * The route over a store that gives post-1 its address, and its list's
+   * later pages to `laterPages` (post-1 itself by default), and a Direct API
+   * whose list of posts matches three, so the list has three pages.
+   *
+   * The store answers as the real one does: a later page is one the route
+   * reads as a page number from 2, so `page/1`, `page/02` and `page/two` are
+   * held by no one; and a document published at `page/2` (the default
+   * blocks none) holds that address alone, the space's other pages then
+   * held by no one, since the entry waits for its space.
+   */
+  function pagedConfig(
+    design: BlockDocument = PAGED_TEMPLATE,
+    blocking?: ContentAddressHolder
+  ) {
+    const options = config({
+      resolveAddress: async (_locale, path) => {
+        if (path === "/blog/hello") return HELD["/blog/hello"];
+        const later = listPageOf(path.slice(1));
+        const page = later === null ? null : listPageNumber(later.segment);
+        if (later?.base !== "blog/hello" || page === null || page < 2) {
+          return null;
+        }
+        if (blocking === undefined) return SPACE;
+        return page === 2 ? blocking : null;
+      },
+      templates: {
+        collection: "templates",
+        read: async collection =>
+          collection === "posts" ? { id: "t1", document: design } : null,
+      },
+    });
+    const nextly = options.pages.nextly as unknown as ReturnType<
+      typeof instance
+    >;
+    const read = nextly.find.getMockImplementation();
+    nextly.find.mockImplementation(async (args: Record<string, unknown>) => {
+      const byId = JSON.stringify(args.where ?? {}).includes('"id"');
+      if (args.collection === "posts" && isPublicRead(args) && !byId) {
+        const items = ["a", "b", "c"].map(id => ({ id, title: `Post ${id}` }));
+        return { items, meta: { total: items.length, hasNext: true } };
+      }
+      return await read!(args);
+    });
+    return options;
+  }
+
+  it.each([
+    ["an access-enforced route", createContentPage],
+    ["a public route", createPublicContentPage],
+  ] as const)(
+    "serves a later page of the list on an entry's page, drawn with the design serving it (%s)",
+    async (_name, factory) => {
+      const route = factory(pagedConfig());
+      const html = await served(route, ["blog", "hello", "page", "2"]);
+      expect(html).toContain("Hello world");
+      // The list's links name the entry's own address and its later pages.
+      expect(html).toContain('href="/blog/hello/page/3"');
+      expect(html).toContain('href="/blog/hello"');
+      // Its metadata is the entry's, where a path no one serves has none.
+      expect(
+        await route.generateMetadata({
+          params: { slug: ["blog", "hello", "page", "2"] },
+        })
+      ).toHaveProperty("title");
+    }
+  );
+
+  it("links the entry's own page to its list's later pages", async () => {
+    const html = await served(createContentPage(pagedConfig()), [
+      "blog",
+      "hello",
+    ]);
+    expect(html).toContain('href="/blog/hello/page/2"');
+  });
+
+  it("redirects the list's first page under a second spelling to the entry's own address", async () => {
+    const route = createContentPage(pagedConfig());
+    await expect(
+      route.ContentPage({ params: { slug: ["blog", "hello", "page", "1"] } })
+    ).rejects.toMatchObject({
+      digest: expect.stringContaining(";/blog/hello;308;"),
+    });
+  });
+
+  it.each([
+    ["a page past the list's last", ["blog", "hello", "page", "4"]],
+    ["a page number written another way", ["blog", "hello", "page", "02"]],
+    ["no page number at all", ["blog", "hello", "page", "two"]],
+  ])("answers not found for %s", async (_why, slug) => {
+    const route = createContentPage(pagedConfig());
+    await expect(route.ContentPage({ params: { slug } })).rejects.toMatchObject(
+      NOT_FOUND
+    );
+  });
+
+  describe("while a page is published among its later pages", () => {
+    const BLOCKING: ContentAddressHolder = {
+      collection: "pages",
+      id: "p2",
+      kind: "address",
+    };
+
+    it("draws the entry's list unpaged, linking to none of its later pages", async () => {
+      const html = await served(
+        createContentPage(pagedConfig(PAGED_TEMPLATE, BLOCKING)),
+        ["blog", "hello"]
+      );
+      expect(html).toContain("Hello world");
+      expect(html).not.toContain("/blog/hello/page/");
+    });
+
+    it.each([
+      ["a later page the space would hold", ["blog", "hello", "page", "3"]],
+      [
+        "the first page under a second spelling",
+        ["blog", "hello", "page", "1"],
+      ],
+    ])("answers not found for %s", async (_why, slug) => {
+      const route = createContentPage(pagedConfig(PAGED_TEMPLATE, BLOCKING));
+      await expect(
+        route.ContentPage({ params: { slug } })
+      ).rejects.toMatchObject(NOT_FOUND);
+    });
+  });
+
+  it("answers not found for a later page where the design serving the entry splits no list", async () => {
+    const route = createContentPage(pagedConfig(TEMPLATE));
+    await expect(
+      route.ContentPage({ params: { slug: ["blog", "hello", "page", "2"] } })
+    ).rejects.toMatchObject(NOT_FOUND);
   });
 });
