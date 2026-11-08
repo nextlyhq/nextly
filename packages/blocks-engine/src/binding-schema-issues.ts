@@ -182,50 +182,82 @@ function relatedEntryCollection(
 }
 
 /**
+ * The collection a link's entry id must be looked up in, where the link is
+ * judged at all: its entry id passed its own check, the block declares a
+ * Linked collection, that collection is stored as a value (one bound too is
+ * read per page and cannot be judged here), and the id is a related entry's.
+ */
+function judgedEntryLinkTarget(
+  link: EntryLink,
+  judgement: BindingSchemaJudgement,
+  item: BindingSchemaRef | undefined
+): string | undefined {
+  const { bindings, bound, check } = link;
+  if (check.outcome !== "resolve") return undefined;
+  const declared =
+    bound.props === undefined || ENTRY_LINK.collection in bound.props;
+  if (!declared || ownEntry(bindings, ENTRY_LINK.collection) !== undefined) {
+    return undefined;
+  }
+  return relatedEntryCollection(check.binding, judgement, item);
+}
+
+/** The Linked collection a block stores, as stored. */
+function storedEntryCollection(
+  node: Readonly<Record<string, unknown>>
+): unknown {
+  const props = node.props;
+  return isPlainRecord(props)
+    ? ownEntry(props, ENTRY_LINK.collection)
+    : undefined;
+}
+
+/** What a mismatch tells the author: what is set, and what to set. */
+function mismatchMessage(
+  stored: unknown,
+  relation: string,
+  target: string
+): string {
+  const set = `Set Linked collection to "${target}".`;
+  return typeof stored === "string" && stored !== ""
+    ? `Linked collection is "${stored}", but "${relation}" points at entries of "${target}". ${set}`
+    : `Linked collection is not set, and "${relation}" points at entries of "${target}". ${set}`;
+}
+
+/** A bound entry id, with the block it is on and that block's bindings. */
+interface EntryLink {
+  readonly node: Readonly<Record<string, unknown>>;
+  readonly bindings: Readonly<Record<string, unknown>>;
+  readonly bound: BoundProp;
+  readonly check: BindingCheck;
+}
+
+/**
  * A link whose entry id is bound to a related entry's id, refused where its
  * stored Linked collection is not the collection that relation points at:
  * the link would look the entry up in the wrong collection and draw no link,
- * silently. Judged only when the binding itself passed its check, and only
- * against a Linked collection stored as a value: one bound too is read per
- * page and cannot be judged here.
+ * silently.
  */
 function entryLinkFindings(
-  link: {
-    readonly node: Readonly<Record<string, unknown>>;
-    readonly bindings: Readonly<Record<string, unknown>>;
-    readonly bound: BoundProp;
-    readonly check: BindingCheck;
-  },
+  link: EntryLink,
   path: string,
   judgement: BindingSchemaJudgement,
   item: BindingSchemaRef | undefined
 ): BindingFinding[] {
-  const { node, bindings, bound, check } = link;
-  if (check.outcome !== "resolve") return [];
-  if (bound.props !== undefined && !(ENTRY_LINK.collection in bound.props)) {
-    return [];
-  }
-  if (ownEntry(bindings, ENTRY_LINK.collection) !== undefined) return [];
-  const target = relatedEntryCollection(check.binding, judgement, item);
-  if (target === undefined) return [];
-  const props = node.props;
-  const stored = isPlainRecord(props)
-    ? ownEntry(props, ENTRY_LINK.collection)
-    : undefined;
+  const target = judgedEntryLinkTarget(link, judgement, item);
+  if (target === undefined || link.check.outcome !== "resolve") return [];
+  const stored = storedEntryCollection(link.node);
   if (stored === target) return [];
-  const relation = check.binding.segments[0] ?? "";
+  const relation = link.check.binding.segments[0] ?? "";
   return [
     {
       path,
-      nodeId: bound.id,
+      nodeId: link.bound.id,
       code: "binding-entry-collection-mismatch",
-      message:
-        typeof stored === "string" && stored !== ""
-          ? `Linked collection is "${stored}", but "${relation}" points at entries of "${target}". Set Linked collection to "${target}".`
-          : `Linked collection is not set, and "${relation}" points at entries of "${target}". Set Linked collection to "${target}".`,
+      message: mismatchMessage(stored, relation, target),
       // The binding and the collection it is judged with: a stored mismatch
       // stays held only while neither changes.
-      identity: `${bound.prop}\u0000${bindingIdentity(bound.binding)}\u0000${canonicalText(stored)}`,
+      identity: `${link.bound.prop}\u0000${bindingIdentity(link.bound.binding)}\u0000${canonicalText(stored)}`,
     },
   ];
 }
