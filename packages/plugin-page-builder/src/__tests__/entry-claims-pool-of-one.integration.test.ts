@@ -20,6 +20,11 @@
  *   the pool then let it through. A page published before the store held
  *   its claim is found at the entry's address and claimed for, so the
  *   in-transaction read answers the rows the claims are judged by.
+ * - Until then, too, a paginated page's save walks every published page for
+ *   those in its list's later pages, inside its transaction. One published
+ *   before the store held its claim is found there and named in the
+ *   refusal, and a list with none in its way claims its address and its
+ *   later pages, both promptly.
  *
  * The pool of one is the one `createAdapter` builds for `pool.max = 1`, as
  * the core suite on in-transaction reads shows waiting for a connection
@@ -163,6 +168,48 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+/** A page document holding one collection list split into pages. */
+const PAGINATED = {
+  formatVersion: 1,
+  kind: "page",
+  nodes: [
+    {
+      id: "list",
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "pages", limit: 10, paginate: true },
+      slots: { children: [], empty: [] },
+    },
+  ],
+};
+
+/** Save a published page at `slug` holding a paginated list. */
+function savePaginatedPage(
+  t: TestNextly,
+  title: string,
+  slug: string
+): Promise<unknown> {
+  return t.nextly.create({
+    collection: "pages",
+    data: { title, slug, content: PAGINATED, status: "published" },
+    overrideAccess: true,
+  });
+}
+
+/**
+ * Delete every row of the address store, leaving the site's documents as a
+ * site from before the store holds them.
+ */
+async function forgetClaims(t: TestNextly): Promise<void> {
+  for (const row of await claimRows(t)) {
+    await t.nextly.delete({
+      collection: ADDRESS_CLAIMS_SLUG,
+      id: String(row.id),
+      overrideAccess: true,
+    });
+  }
+}
+
 /**
  * Holds the pages' start-up pass at the first read of its walk (every
  * published page, by no slug or id), until let go, so the site's pages are
@@ -236,13 +283,7 @@ describe.skipIf(!POSTGRES_URL)(
       const taken = idOf(await savePost(current, "taken"));
       const page = idOf(await savePage(current, "Taken", "blog/taken"));
       await publishPostsTemplate(current);
-      for (const row of await claimRows(current)) {
-        await current.nextly.delete({
-          collection: ADDRESS_CLAIMS_SLUG,
-          id: String(row.id),
-          overrideAccess: true,
-        });
-      }
+      await forgetClaims(current);
       expect(await claimRows(current)).toEqual([]);
       await current.destroy();
       current = undefined;
@@ -282,13 +323,7 @@ describe.skipIf(!POSTGRES_URL)(
       );
       // The page as a site from before the store has it: published, and
       // holding no claim.
-      for (const row of await claimRows(t)) {
-        await t.nextly.delete({
-          collection: ADDRESS_CLAIMS_SLUG,
-          id: String(row.id),
-          overrideAccess: true,
-        });
-      }
+      await forgetClaims(t);
       expect(await held(t)).toEqual([]);
 
       // The template's publish walks the published entries, and claims the
@@ -307,6 +342,57 @@ describe.skipIf(!POSTGRES_URL)(
         `address /blog/late ${POSTS}:${late}`,
         `address /blog/taken pages:${page}`,
         `waiting /blog/taken ${POSTS}:${taken}`,
+      ]);
+    }, 90_000);
+
+    it("saves a paginated page before every page is claimed, promptly", async () => {
+      database = await siteDatabase();
+      const hold = pagesWalkHold();
+      letGo = hold.release;
+      current = await createTestNextly({
+        adapter: await adapterOn(database, "one"),
+        plugins: [blogPageBuilder(), hold.plugin],
+        collections: [postsCollection()],
+      });
+      const t = current;
+      // The pages' pass is held: until it finishes, a paginated page's save
+      // walks the published pages for those in its list's way itself.
+      await withTimeout(hold.atWalk, POOL_WAIT_MS * 4);
+
+      // A page the walk passes: outside every list's later pages.
+      await withTimeout(savePage(t, "About", "about"), PROMPT_MS);
+      const second = idOf(
+        await withTimeout(savePage(t, "Second", "news/page/2"), PROMPT_MS)
+      );
+      // Both as a site from before the store has them: published, and
+      // holding no claim.
+      await forgetClaims(t);
+      expect(await held(t)).toEqual([]);
+
+      // A list over /news finds the page among its later pages, which holds
+      // no claim, only by walking the published pages, and is refused
+      // naming it; the refusal rolls the save back whole.
+      const refused = await withTimeout(
+        savePaginatedPage(t, "News", "news").then(
+          () => undefined,
+          (error: unknown) => error
+        ),
+        PROMPT_MS
+      );
+      expect(NextlyError.isConflict(refused)).toBe(true);
+      expect((refused as NextlyError).publicMessage).toContain(
+        `the page "Second" (${second})`
+      );
+      expect(await held(t)).toEqual([]);
+
+      // A list with no page in its way claims its address and its later
+      // pages, and claims nothing for the pages it walked past.
+      const events = idOf(
+        await withTimeout(savePaginatedPage(t, "Events", "events"), PROMPT_MS)
+      );
+      expect(await held(t)).toEqual([
+        `address /events pages:${events}`,
+        `space /events pages:${events}`,
       ]);
     }, 90_000);
   }
