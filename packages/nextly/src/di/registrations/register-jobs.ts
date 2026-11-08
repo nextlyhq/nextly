@@ -30,6 +30,7 @@ import {
 } from "../../domains/email/queued-send";
 import { scopedSender } from "../../domains/email/send-claims";
 import type { EmailService } from "../../domains/email/services/email-service";
+import { createGrantsContentExpiryJob } from "../../domains/grants-content-expiry-job";
 import { JobRegistry } from "../../domains/jobs/job-registry";
 import { JobsRepository } from "../../domains/jobs/jobs-repository";
 import { databaseRunAs } from "../../domains/jobs/jobs-runner";
@@ -291,6 +292,11 @@ export function registerJobServices(ctx: RegistrationContext): void {
         return bootedPendingDeletes(() => now);
       })
     );
+
+    // The content expiry a change to grants owes: queued before the expiry is
+    // tried and withdrawn once it lands, so a row left is one whose process
+    // failed or is gone, and the next jobs run expires the pages it left.
+    registry.register(createGrantsContentExpiryJob());
 
     // Job types the application and its plugins declared. Registered AFTER the
     // built-ins so a plugin cannot shadow one: `collectJobs` already refuses a

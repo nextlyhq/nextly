@@ -1,23 +1,27 @@
 /**
  * The expiry after a change to grants reads which collections and Singles
- * there are, and that read has no hand-off of its own: a failed read is tried
- * once more, and one that fails again is logged as an error, never thrown,
- * since the change it follows has committed.
+ * there are, and that read has no hand-off of its own. So the expiry is owed
+ * until it lands: queued as a job before it is tried, so a process gone first
+ * leaves it to the jobs queue; tried twice; and when both fail, logged as an
+ * error, never thrown, since the change it follows has committed, and tried
+ * again by this process with a growing wait until it lands, when the queued
+ * job is withdrawn.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { container } from "../../di/container";
 
 const content = vi.hoisted(() => vi.fn());
 const flush = vi.hoisted(() => vi.fn(async () => undefined));
+const revalidator = vi.hoisted(() => vi.fn());
 const logged = vi.hoisted(() => vi.fn());
+const informed = vi.hoisted(() => vi.fn());
 
 vi.mock("../../di/registrations/language-change-content-cache", () => ({
-  languageChangeContentCache: () => ({
-    content,
-    revalidator: () => ({ flush }),
-  }),
+  languageChangeContentCache: () => ({ content, revalidator }),
 }));
 vi.mock("../../observability/logger", () => ({
-  getNextlyLogger: () => ({ error: logged }),
+  getNextlyLogger: () => ({ error: logged, info: informed }),
 }));
 
 const { expireContentAfterGrantsChange } = await import(
@@ -26,17 +30,49 @@ const { expireContentAfterGrantsChange } = await import(
 
 const SCOPES = { collections: [{ slug: "posts" }], singles: [] };
 
+/** The slug a queued row carries, as stored: a row an earlier process queued must still match. */
+const JOB_SLUG = "nextly:grants-content-expiry";
+
+const enqueue = vi.fn();
+const withdrawUnclaimed = vi.fn();
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  // A fresh process: nothing owed from another test.
+  delete (globalThis as { __nextly_grants_expiry_retry?: unknown })
+    .__nextly_grants_expiry_retry;
   content.mockReset();
   flush.mockClear();
+  revalidator.mockReset();
+  revalidator.mockReturnValue({ flush });
   logged.mockClear();
+  informed.mockClear();
+  enqueue.mockReset();
+  enqueue.mockResolvedValue({ id: "job-1", deduped: false });
+  withdrawUnclaimed.mockReset();
+  withdrawUnclaimed.mockResolvedValue(true);
+  container.register("jobsRepository", () => ({ enqueue, withdrawUnclaimed }));
+});
+
+afterEach(() => {
+  container.clear();
+  vi.useRealTimers();
 });
 
 describe("the content expiry after a change to grants", () => {
-  it("expires every scope's tags", async () => {
+  it("queues the expiry before it is tried, expires every scope's tags, then withdraws the job", async () => {
     content.mockResolvedValue(SCOPES);
     await expireContentAfterGrantsChange();
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: JOB_SLUG, dedupeKey: null })
+    );
+    // Queued first: a process gone during the try still leaves it owed.
+    expect(enqueue.mock.invocationCallOrder[0]).toBeLessThan(
+      content.mock.invocationCallOrder[0] ?? 0
+    );
     expect(flush).toHaveBeenCalledWith([{ tags: ["nextly:posts"] }]);
+    expect(withdrawUnclaimed).toHaveBeenCalledWith("job-1");
     expect(logged).not.toHaveBeenCalled();
   });
 
@@ -46,15 +82,84 @@ describe("the content expiry after a change to grants", () => {
       .mockResolvedValue(SCOPES);
     await expireContentAfterGrantsChange();
     expect(flush).toHaveBeenCalledTimes(1);
+    expect(withdrawUnclaimed).toHaveBeenCalledWith("job-1");
     expect(logged).not.toHaveBeenCalled();
   });
 
-  it("logs an error, and does not throw, when both reads fail", async () => {
-    content.mockRejectedValue(new Error("database down"));
+  it("when both reads fail, logs without throwing, keeps the job, and tries again until it lands", async () => {
+    content
+      .mockRejectedValueOnce(new Error("database down"))
+      .mockRejectedValueOnce(new Error("database down"))
+      .mockRejectedValueOnce(new Error("database down"))
+      .mockResolvedValue(SCOPES);
     await expect(expireContentAfterGrantsChange()).resolves.toBeUndefined();
     expect(flush).not.toHaveBeenCalled();
+    expect(withdrawUnclaimed).not.toHaveBeenCalled();
     expect(logged).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "grants-change-content-expiry-failed" })
     );
+
+    // The first retry, after the first wait, fails too.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(content).toHaveBeenCalledTimes(3);
+    expect(flush).not.toHaveBeenCalled();
+
+    // The wait doubled: nothing at one second more, the next try at two.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(content).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(content).toHaveBeenCalledTimes(4);
+    expect(flush).toHaveBeenCalledWith([{ tags: ["nextly:posts"] }]);
+    expect(withdrawUnclaimed).toHaveBeenCalledWith("job-1");
+    expect(informed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "grants-change-content-expiry-recovered",
+      })
+    );
+
+    // Landed: the retries stop.
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(content).toHaveBeenCalledTimes(4);
+  });
+
+  it("queues the job on a later try when the queue refused it at first", async () => {
+    enqueue
+      .mockRejectedValueOnce(new Error("database down"))
+      .mockResolvedValue({ id: "job-2", deduped: false });
+    content
+      .mockRejectedValueOnce(new Error("database down"))
+      .mockRejectedValueOnce(new Error("database down"))
+      .mockRejectedValueOnce(new Error("database down"))
+      .mockResolvedValue(SCOPES);
+    await expireContentAfterGrantsChange();
+    expect(enqueue).toHaveBeenCalledTimes(1);
+
+    // The retry fails again, so the expiry is queued now, for a restart to find.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(enqueue).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(withdrawUnclaimed).toHaveBeenCalledWith("job-2");
+  });
+
+  it("is tried by this process alone where there is no jobs queue", async () => {
+    container.clear();
+    content
+      .mockRejectedValueOnce(new Error("database down"))
+      .mockRejectedValueOnce(new Error("database down"))
+      .mockResolvedValue(SCOPES);
+    await expireContentAfterGrantsChange();
+    expect(flush).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("queues and reads nothing in a process that caches nothing", async () => {
+    revalidator.mockReturnValue(undefined);
+    await expireContentAfterGrantsChange();
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(content).not.toHaveBeenCalled();
   });
 });

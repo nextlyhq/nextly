@@ -583,6 +583,23 @@ export class JobsRepository {
   }
 
   /**
+   * Remove a pending job no runner holds, for work that got done another way
+   * before a run reached it. Whether it was removed: a job a runner holds is
+   * left to finish, so its outcome is still recorded, and a job that ran
+   * already is no longer pending.
+   */
+  async withdrawUnclaimed(id: string): Promise<boolean> {
+    const removed = await this.db.delete(JOBS, {
+      and: [
+        { column: "id", op: "=", value: id },
+        { column: "state", op: "=", value: "pending" },
+        { column: "lockedBy", op: "IS NULL", value: null },
+      ],
+    });
+    return removed > 0;
+  }
+
+  /**
    * Remove terminal rows older than `before`, at most `limit` of them.
    *
    * A queue without this grows forever: every completed and every permanently

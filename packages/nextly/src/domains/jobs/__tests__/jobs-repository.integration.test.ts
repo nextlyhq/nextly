@@ -404,4 +404,48 @@ describe.each(getConfiguredTestDialects())("JobsRepository (%s)", dialect => {
     });
     expect(again.deduped).toBe(true);
   });
+
+  it("withdraws a pending job no runner holds, and leaves a held or finished one", async () => {
+    // Work done another way first withdraws its job; a runner already holding
+    // one finishes it, so its outcome is still recorded.
+    const app = await boot(dialect);
+    const repo = new JobsRepository(app.adapter);
+    const job = () =>
+      repo.enqueue({
+        slug: "test:noop",
+        input: {},
+        runAt: null,
+        runAsUserId: null,
+        dedupeKey: null,
+        now: NOW,
+      });
+    const free = await job();
+    const held = await job();
+    const finished = await job();
+    expect(await repo.claim(held.id, "runner-a", NOW, 30_000)).not.toBeNull();
+    expect(
+      await repo.claim(finished.id, "runner-b", NOW, 30_000)
+    ).not.toBeNull();
+    expect(
+      await repo.finalize({
+        id: finished.id,
+        runnerId: "runner-b",
+        outcome: "done",
+        nextAttemptAt: null,
+        lastError: null,
+        now: NOW,
+      })
+    ).toBe(true);
+
+    expect(await repo.withdrawUnclaimed(free.id)).toBe(true);
+    expect(await repo.withdrawUnclaimed(held.id)).toBe(false);
+    expect(await repo.withdrawUnclaimed(finished.id)).toBe(false);
+
+    const left = await app.adapter.select<{ id: string }>("nextly_jobs", {
+      columns: ["id"],
+    });
+    expect(left.map(row => row.id).sort()).toEqual(
+      [held.id, finished.id].sort()
+    );
+  });
 });
