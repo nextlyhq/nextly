@@ -1177,6 +1177,10 @@ describe("a related entry for a link, as visitors and pages allow", () => {
       "Editor › Link to this entryNo page for Staff yet"
     );
     expect(waiting?.getAttribute("aria-disabled")).toBe("true");
+    // The reason whole on the tooltip too, where a narrow row wraps it.
+    expect(waiting?.getAttribute("title")).toBe(
+      "Editor › Link to this entry: No page for Staff yet"
+    );
     if (waiting === undefined)
       throw new Error("The editor's entry is not listed.");
     fireEvent.click(waiting);

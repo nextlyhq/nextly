@@ -372,6 +372,20 @@ function option(
   };
 }
 
+/**
+ * A row's tooltip: its name, then why it can't be picked yet, or the value
+ * as the author reads it, whole where the row cuts it short.
+ */
+function optionTitle(option: FieldOption): string {
+  const { field } = option;
+  if (field.noPageFor !== undefined) {
+    return `${option.label}: No page for ${field.noPageFor} yet`;
+  }
+  return field.preview === undefined
+    ? option.label
+    : `${option.label}: ${field.preview}`;
+}
+
 /** The picker's row: the name, then the value as the author reads it, or why not. */
 function OptionRow({ option }: { option: FieldOption }): React.JSX.Element {
   const { field } = option;
@@ -539,11 +553,7 @@ function BindingPicker({
             : []
         )}
         renderChoice={choice => <OptionRow option={choice} />}
-        choiceTitle={choice =>
-          choice.field.preview === undefined
-            ? choice.label
-            : `${choice.label}: ${choice.field.preview}`
-        }
+        choiceTitle={optionTitle}
         searchFrom={0}
         leading={
           failed.length === 0 ? undefined : (

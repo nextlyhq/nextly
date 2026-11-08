@@ -7561,9 +7561,15 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 /* A choice listed but not to be had yet: its name drawn muted, its row's own
    words saying why, and a click doing nothing. Still reached by the arrow
-   keys, so a keyboard reader hears the reason too. */
+   keys, so a keyboard reader hears the reason too. Its row wraps rather than
+   cutting the reason short: the reason is the point of listing it. */
 .nx-font-pick__option[aria-disabled="true"] {
+  white-space: normal;
   cursor: not-allowed;
+}
+
+.nx-font-pick__option[aria-disabled="true"] .nx-binding-option {
+  flex-wrap: wrap;
 }
 
 .nx-font-pick__option[aria-disabled="true"] .nx-binding-option__name {
