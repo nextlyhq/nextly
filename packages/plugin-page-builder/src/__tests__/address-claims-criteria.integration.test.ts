@@ -155,10 +155,10 @@ function updateLive(
   });
 }
 
-/** Every claim row of `kinds`: its kind, path and holder, sorted. */
-async function held(
+/** Every claim row whose kind `keep` accepts: its kind, path and holder, sorted. */
+async function claimsWhere(
   t: TestNextly,
-  kinds: readonly string[] = ["address", "space"]
+  keep: (kind: string) => boolean
 ): Promise<string[]> {
   const found = await t.nextly.find({
     collection: ADDRESS_CLAIMS_SLUG,
@@ -167,12 +167,28 @@ async function held(
     limit: 200,
   });
   return (found.items as Record<string, unknown>[])
-    .filter(row => kinds.includes(String(row.kind)))
+    .filter(row => keep(String(row.kind)))
     .map(
       row =>
         `${String(row.kind)} ${String(row.path)} ${String(row.holderCollection)}:${String(row.holderId)}`
     )
     .sort();
+}
+
+/** Every claim row of `kinds`: its kind, path and holder, sorted. */
+function held(
+  t: TestNextly,
+  kinds: readonly string[] = ["address", "space"]
+): Promise<string[]> {
+  return claimsWhere(t, kind => kinds.includes(kind));
+}
+
+/**
+ * Every claim row of any kind but the locks, which serialise saves and serve
+ * nothing: a wait or any other row a save leaves behind is counted.
+ */
+function everyClaim(t: TestNextly): Promise<string[]> {
+  return claimsWhere(t, kind => kind !== "lock");
 }
 
 /**
@@ -501,10 +517,12 @@ describe.each(getConfiguredTestDialects())(
           const words = wordsOf(lost.reason);
           expect(words).toContain("/blog/both is already the address of");
           expect(words).toContain(`(${won.value})`);
-          expect(await held(t)).toEqual([
+          // The winner's claim is the only row left: the refused save
+          // keeps no claim, and no wait, of its own.
+          expect(await everyClaim(t)).toEqual([
             `address /blog/both ${first}:${won.value}`,
           ]);
-          // The refused save kept nothing of its own.
+          // Nor the document it tried to save.
           expect(
             await stored(t, loser, loser === "posts" ? "both" : "blog/both")
           ).toBe(false);
