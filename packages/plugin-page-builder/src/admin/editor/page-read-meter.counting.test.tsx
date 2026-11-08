@@ -275,4 +275,78 @@ describe("a page changing all the while its counts are slow", () => {
       "Couldn't count page reads. Retry"
     );
   });
+
+  it("starts no count after giving up, however the page changes, until Retry aborts the one given up on", async () => {
+    countWithStages.mockImplementation(
+      () => new Promise<PageReadReport>(() => undefined)
+    );
+    const changeFor = changingMeter();
+    await changeFor(20_000);
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Couldn't count page reads. Retry"
+    );
+    // A minute more of changes: still the one count, given up on.
+    await changeFor(60_000);
+    expect(countWithStages).toHaveBeenCalledTimes(1);
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Couldn't count page reads. Retry"
+    );
+    // What the count given up on draws with, as the count was handed it.
+    const [[givenUp]] = countWithStages.mock.calls as [
+      [{ draw: (element: React.ReactElement) => Promise<void> }],
+    ];
+    fireEvent.click(meter());
+    // Retry aborts it: what it would still draw, it no longer draws.
+    await expect(givenUp.draw(<div />)).rejects.toThrow();
+    await wait(0);
+    expect(countWithStages).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("a count given up on that answers after all", () => {
+  /** A count answering 25 seconds after it begins. */
+  function lateCount(): void {
+    countWithStages.mockImplementation(
+      () =>
+        new Promise<PageReadReport>(resolve => {
+          setTimeout(() => resolve(counted), 25_000);
+        })
+    );
+  }
+
+  it("is shown where the page has not changed since it began", async () => {
+    lateCount();
+    render(
+      <PageReadMeter
+        editor={editor}
+        drawnWith={drawnWith}
+        regions={NO_REGIONS}
+      />
+    );
+    await wait(20_000);
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Couldn't count page reads. Retry"
+    );
+    // Begun at 600 ms, it answers at 25.6 s.
+    await wait(5600);
+    expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
+  });
+
+  it("is not shown where the page changed since it began", async () => {
+    lateCount();
+    const fresh = () => ({ ...drawnWith }) as CountedDrawing;
+    const view = render(
+      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+    );
+    await wait(1000);
+    // A change after the count began, at 600 ms.
+    view.rerender(
+      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+    );
+    await wait(30_000);
+    expect(countWithStages).toHaveBeenCalledTimes(1);
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Couldn't count page reads. Retry"
+    );
+  });
 });
