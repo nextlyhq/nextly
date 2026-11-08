@@ -249,11 +249,21 @@ ${ROOT} [contenteditable="false"] { -webkit-touch-callout: none; }
    In pixels, not rems, so a site whose root font size is not 16px moves
    neither. Its spacing is in its own text's units, so it keeps its shape at
    every zoom. Written under the root, so it outweighs the marker's own
-   defaults in the page's sheet. */
+   defaults in the page's sheet. One row, its icon centred before its words,
+   here too: a marker a list's entry draws is made as the page is drawn, so
+   the page's sheet holds no defaults for it, and a site's own sheet may set
+   an icon on a line of its own. */
 ${ROOT} .nx-condition-hidden {
+  display: flex;
+  align-items: center;
   font-size: max(13px, calc(11px / var(--nx-canvas-zoom, 1)));
   gap: 0.6em;
   padding: 0.45em 0.75em;
+}
+
+${ROOT} .nx-condition-hidden > svg {
+  display: inline-block;
+  flex: none;
 }
 
 [data-nx-list-diagnostic="sort-fallback"] {
@@ -517,6 +527,14 @@ ${ROOT} [data-nx-list-visitors]:not([data-nx-list-still])::before {
   white-space: nowrap;
   pointer-events: none;
   zoom: calc(1 / var(--nx-canvas-zoom, 1));
+}
+
+/* Over a list's empty area, the same tag sits inside the area's dashed edge,
+   clear of it, rather than on the corner the empty state's own tag fills. */
+${EMPTY_LIST}[data-nx-list-visitors]:not([data-nx-list-still])::before {
+  inset-block-start: 0.25rem;
+  inset-inline-start: 0.25rem;
+  border-radius: 0.1875rem;
 }
 
 /* A region of the page's Layout, drawn locked around the page. Its content

@@ -76,14 +76,14 @@ describe("what the conditions did, in words", () => {
     // its entry is drawn.
     expect(
       conditionsCountWords({ ...appliedHiding(), byEntry: true }, "page")
-    ).toBe("Checked for each entry its list shows");
-    // Beside the page's own blocks, all shown: said only of those checked.
+    ).toBe("Conditions checked for each entry in the list");
+    // Beside the page's own blocks, all shown: said of those, on the page.
     expect(
       conditionsCountWords(
         { ...appliedHiding(), byEntry: true, shown: new Set(["intro"]) },
         "page"
       )
-    ).toBe("Every block checked shows for this page");
+    ).toBe("Every conditioned block shows on this page");
     expect(
       conditionsCountWords({ ...appliedHiding("a"), byEntry: true }, "page")
     ).toBe("1 block hidden for this page");
