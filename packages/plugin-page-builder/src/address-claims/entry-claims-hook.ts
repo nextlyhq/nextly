@@ -947,9 +947,10 @@ function servingChanges(
  * is held waits for it; one with no address holds nothing. Takes the
  * collection's lock first. The entries are read on `tx`, held for share: an
  * entry's save in flight holds its row and waits for the template's row or
- * this write's lock, and the database refuses one of the two as a deadlock,
- * which the adapter runs again, so the second reads what the first
- * committed.
+ * this write's lock, and the database refuses one of the two as a deadlock:
+ * that save fails and rolls back, nothing of it kept, and its caller may save
+ * again, then reading what the other committed: the adapter does not run a
+ * deadlocked transaction again itself.
  */
 async function settleEntries(
   deps: EntryClaimsDeps,

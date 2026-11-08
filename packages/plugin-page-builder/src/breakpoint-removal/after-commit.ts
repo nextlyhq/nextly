@@ -39,6 +39,7 @@
  * @module breakpoint-removal/after-commit
  */
 import { isPlainRecord } from "@nextlyhq/blocks-engine";
+import type { HookContext } from "@nextlyhq/plugin-sdk";
 
 import { asDocument } from "../component-store-source";
 import {
@@ -68,13 +69,32 @@ export function registerRemovalWriteReport(args: RemovalWriteReportArgs): void {
   }
 }
 
-/** Re-queue the written document on each run whose removed values it holds. */
+/**
+ * Re-queue the written document on each run whose removed values it holds,
+ * once the write has committed. A write inside a caller's transaction runs
+ * its after-hooks before that transaction commits, so the report is handed to
+ * the hook context's `afterCommit`, which holds it until the outermost
+ * transaction commits (and drops it on a rollback): read there, the runs take
+ * a pooled connection the save no longer holds, rather than one a save
+ * holding the pool's last connection would wait for until the pool's wait
+ * runs out. Outside a transaction it runs at once.
+ */
 async function reportWrite(
   args: RemovalWriteReportArgs,
   context: unknown
 ): Promise<void> {
   const written = writtenDocument(context);
   if (written === undefined) return;
+  const report = () => requeueWritten(args, written);
+  const { afterCommit } = context as Pick<HookContext, "afterCommit">;
+  await (afterCommit ? afterCommit(report) : report());
+}
+
+/** {@link reportWrite}'s work, for the document `written`. Never throws. */
+async function requeueWritten(
+  args: RemovalWriteReportArgs,
+  written: NonNullable<ReturnType<typeof writtenDocument>>
+): Promise<void> {
   try {
     // The runs first: a short table, and with no removal recorded, or none
     // whose ids the write holds, nothing else is read. A run's removed ids
