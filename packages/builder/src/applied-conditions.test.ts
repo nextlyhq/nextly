@@ -654,12 +654,17 @@ describe("what the canvas draws where a list's item hides a block", () => {
         within: [{ conditions: [[guides]] }],
       } as unknown as BlockNode["visibility"],
     });
-    const marker = hiddenAs(root, {
+    const marker = hiddenAs({ ...root, instanceOf: "placed" } as BlockNode, {
       values: { category: "News" },
       collection: "posts",
       fields: FIELDS,
     });
-    expect(marker).toMatchObject({ id: "root", type: CONDITION_HIDDEN_TYPE });
+    // Keeping the placement, so a press on the marker selects it.
+    expect(marker).toMatchObject({
+      id: "root",
+      type: CONDITION_HIDDEN_TYPE,
+      instanceOf: "placed",
+    });
     expect(
       hiddenAs(root, {
         values: { category: "Guides" },

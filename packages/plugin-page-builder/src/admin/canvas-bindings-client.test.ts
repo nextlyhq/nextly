@@ -196,6 +196,19 @@ describe("the canvas's binding sources", () => {
       },
     });
     expect(listConditionsFor(equality.nodes)?.ordersValues).toBe(false);
+    // A gate a placement carries onto a component's root orders a value too.
+    const carried = withEntries({
+      visibility: {
+        within: [
+          {
+            conditions: [
+              [{ field: "publishedAt", op: "less_than", value: "2026-03-02" }],
+            ],
+          },
+        ],
+      },
+    });
+    expect(listConditionsFor(carried.nodes)?.ordersValues).toBe(true);
   });
 
   it("names the collection a custom source's rows are entries of, given the site's queries", () => {

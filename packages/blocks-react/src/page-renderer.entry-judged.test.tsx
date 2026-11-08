@@ -205,6 +205,85 @@ describe("an editor judging a page's conditions for an entry", () => {
     expect(judge.judged.size).toBe(2);
   });
 
+  it("draws one marker for a conditioned placement whose component has several roots", () => {
+    // outer places multi under the VIP condition; multi has two roots with
+    // no conditions of their own, so each carries the placement's gate.
+    const multi: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [text("first", "First root"), text("second", "Second root")],
+    };
+    const outer: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        {
+          id: "nested",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "multi" },
+          visibility: { conditions: vip },
+        },
+      ],
+    };
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "placed",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "outer" },
+        },
+      ],
+    };
+    const definitions = new Map([
+      ["outer", outer],
+      ["multi", multi],
+    ]);
+    const judge = judgement("gold");
+    const drawn = prepareDocumentAsDrawn(page, {
+      resolver,
+      definitions,
+      entryJudged: judge,
+    });
+    // One authored placement, one marker and one hidden block.
+    expect(judge.asked).toHaveLength(1);
+    expect([...judge.judged.values()]).toEqual([false]);
+    const texts = blocksOf(drawn?.nodes ?? []).map(node => node.props.text);
+    expect(
+      texts.filter(words => String(words).startsWith("Hidden"))
+    ).toHaveLength(1);
+    expect(texts).not.toContain("First root");
+    expect(texts).not.toContain("Second root");
+  });
+
+  it("lifts a list item's block's conditions where asked, else leaves them for the list", () => {
+    const listed: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "list",
+          type: "core/collection-loop",
+          version: 1,
+          props: { collection: "posts" },
+          slots: { children: [text("badge", "Badge", vip)] },
+        },
+      ],
+    };
+    const badgeOf = (liftItems: boolean) =>
+      blocksOf(
+        prepareDocumentAsDrawn(listed, {
+          resolver,
+          entryJudged: { ...judgement("gold"), liftItems },
+        })?.nodes ?? []
+      ).find(node => node.id === "badge");
+    expect(badgeOf(false)?.visibility).toEqual({ conditions: vip });
+    expect(badgeOf(true)?.visibility).toBeUndefined();
+  });
+
   it("changes nothing where no editor asks: a component's conditioned blocks are held back as before", async () => {
     const html = await renderToHtml(
       <PageRenderer

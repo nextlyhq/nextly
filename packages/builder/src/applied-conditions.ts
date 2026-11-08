@@ -189,7 +189,7 @@ export function appliedConditionsOf(
     hidden: [...hidden, ...components.hidden],
     unjudged: unjudged || drawsUnjudged(drawn),
     byEntry: itemGated.size > 0 || components.byEntry,
-    entryJudgement: entryJudgementOf(preview, nameOf),
+    entryJudgement: entryJudgementOf(preview, nameOf, drawn),
   };
 }
 
@@ -224,6 +224,7 @@ function judgedComponentBlocks(
     ...(drawn.limits === undefined ? {} : { limits: drawn.limits }),
     entryJudged: {
       ...gateOf(preview),
+      ...(drawn.itemsJudged === true ? {} : { liftItems: true }),
       hiddenAs: node => {
         hidden.push(hiddenBlockOf(node, preview, nameOf));
         return undefined;
@@ -278,21 +279,33 @@ function hiddenBlockOf(
  */
 function entryJudgementOf(
   preview: ConditionsPreview,
-  nameOf: (node: BlockNode) => string
+  nameOf: (node: BlockNode) => string,
+  drawn: Pick<DrawnWith, "itemsJudged">
 ): EntryJudgement {
   return {
     ...gateOf(preview),
-    hiddenAs: node => {
-      const marker: ResolvedBlockNode = markerFor(
-        hiddenBlockOf(node, preview, nameOf),
-        node
-      );
-      const placement = (node as ResolvedBlockNode).instanceOf;
-      return placement === undefined
-        ? marker
-        : { ...marker, instanceOf: placement };
-    },
+    hiddenAs: node =>
+      markerKeepingPlacement(hiddenBlockOf(node, preview, nameOf), node),
+    // While the lists don't draw what a visitor reads, a component's block a
+    // list's item decides is drawn for every item, as a page's own is.
+    ...(drawn.itemsJudged === true ? {} : { liftItems: true }),
   };
+}
+
+/**
+ * A hidden block's marker, keeping the placement the block belongs to when a
+ * component's definition gave it, so a press on the marker selects that
+ * placement, as a press on any of the component's blocks does.
+ */
+function markerKeepingPlacement(
+  block: HiddenBlock,
+  node: BlockNode
+): ResolvedBlockNode {
+  const marker: ResolvedBlockNode = markerFor(block, node);
+  const placement = (node as ResolvedBlockNode).instanceOf;
+  return placement === undefined
+    ? marker
+    : { ...marker, instanceOf: placement };
 }
 
 /**
@@ -421,7 +434,7 @@ export function itemHiddenAsOf(sources: ItemMarkerSources): ItemHiddenAs {
     // The renderer asks only about a block the item hides; a verdict that
     // says otherwise draws the block's place empty rather than a false mark.
     if (verdict.shown) return undefined;
-    return markerFor(
+    return markerKeepingPlacement(
       {
         id: node.id,
         name: sources.nameOf(node),

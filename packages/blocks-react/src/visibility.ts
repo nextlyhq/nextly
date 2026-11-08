@@ -124,21 +124,28 @@ type Rewrite = { readonly node: BlockNode; readonly descend: boolean } | null;
 
 /**
  * The walk every pruning and marking pass takes: each node visited with the
- * scope its conditions read, dropped, kept or replaced as `visit` says.
- * Returns the ORIGINAL document when nothing changed, as `pruneNodes` does.
+ * scope its conditions read and the sibling stored before it, dropped, kept
+ * or replaced as `visit` says. Returns the ORIGINAL document when nothing
+ * changed, as `pruneNodes` does.
  */
 function rewriteNodesIn<Scope>(
   document: BlockDocument,
   root: Scope,
-  visit: (node: BlockNode, scope: Scope) => Rewrite,
+  visit: (
+    node: BlockNode,
+    scope: Scope,
+    previous: BlockNode | undefined
+  ) => Rewrite,
   within: (node: BlockNode, slot: string, scope: Scope) => Scope
 ): BlockDocument {
   let changed = false;
 
   const rewrite = (nodes: BlockNode[], scope: Scope): BlockNode[] => {
     const kept: BlockNode[] = [];
+    let previous: BlockNode | undefined;
     for (const node of nodes) {
-      const result = visit(node, scope);
+      const result = visit(node, scope, previous);
+      previous = node;
       if (result === null) {
         changed = true;
         continue;
@@ -272,6 +279,12 @@ export interface EntryJudgement extends ConditionGate {
   readonly hiddenAs: (node: BlockNode) => BlockNode | undefined;
   /** Told each block judged, by id, and whether it shows. */
   readonly onJudged?: (nodeId: string, shown: boolean) => void;
+  /**
+   * Lift the conditions of a block a list's item decides, as an editor draws
+   * it while its lists are not judged per item, rather than leaving them for
+   * the list to judge.
+   */
+  readonly liftItems?: boolean;
 }
 
 /**
@@ -288,22 +301,72 @@ export function markByConditions(
   judgement: EntryJudgement
 ): GatedDocument {
   const issues: ConditionIssue[] = [];
+  // The roots of one placement a gate hides, by the gate they carry: the
+  // first is drawn as its marker, the rest of its run drop with it.
+  const placementHidden = new WeakMap<BlockNode, string>();
   const marked = rewriteNodesIn(
     document,
     PAGE_SCOPE,
-    (node, scope): Rewrite => {
+    (node, scope, previous): Rewrite => {
       const verdict = entryVerdictOf(node, scope, judgement, issues);
-      if (verdict === "free" || verdict === "item") {
-        return { node, descend: true };
+      if (verdict === "free") return { node, descend: true };
+      if (verdict === "item") {
+        return judgement.liftItems === true
+          ? { node: liftedNode(node), descend: true }
+          : { node, descend: true };
       }
-      judgement.onJudged?.(node.id, verdict === "shown");
-      if (verdict === "shown") return { node: liftedNode(node), descend: true };
+      if (verdict === "shown") {
+        judgement.onJudged?.(node.id, true);
+        return { node: liftedNode(node), descend: true };
+      }
+      const carried = carriedGateHiding(node, judgement);
+      if (carried !== undefined) {
+        placementHidden.set(node, carried);
+        if (
+          previous !== undefined &&
+          placementHidden.get(previous) === carried
+        ) {
+          return null;
+        }
+      }
+      judgement.onJudged?.(node.id, false);
       const instead = judgement.hiddenAs(node);
       return instead === undefined ? null : { node: instead, descend: false };
     },
     conditionScopeIn
   );
   return { document: marked, held: new Set(), issues };
+}
+
+/**
+ * The placement gate a hidden block carries, as text, when that gate and not
+ * the block's own conditions is what hides it: the same for every root of
+ * one placement expanded in place, so its run of roots is one hidden block.
+ */
+function carriedGateHiding(
+  node: BlockNode,
+  gate: ConditionGate
+): string | undefined {
+  const envelope = node.visibility;
+  if (envelope === undefined || envelope === null) return undefined;
+  if (typeof envelope !== "object" || Array.isArray(envelope)) return undefined;
+  const within = (envelope as { within?: unknown }).within;
+  if (!Array.isArray(within) || within.length === 0) return undefined;
+  const own = (envelope as { conditions?: unknown }).conditions;
+  const ownHolds =
+    own === undefined ||
+    evaluateConditions(
+      {
+        id: node.id,
+        visibility: { conditions: own } as BlockNode["visibility"],
+      },
+      {
+        source: "entry",
+        ...(gate.entry === undefined ? {} : { subject: gate.entry }),
+        ...(gate.dayStart === undefined ? {} : { dayStart: gate.dayStart }),
+      }
+    ).shown;
+  return ownHolds ? JSON.stringify(within) : undefined;
 }
 
 /**
