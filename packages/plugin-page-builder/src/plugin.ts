@@ -50,19 +50,15 @@ import {
   contentAddressService,
   type ContentAddressService,
 } from "./address-claims/content-addresses";
+import { entryDesignReads } from "./address-claims/design-reads";
 import { ENTRY_SLUG_FIELD } from "./address-claims/entry-claims";
 import {
   registerEntryAddressClaims,
   releaseUndeclared,
   settleEntryClaimsAtStart,
   type EntryClaimsDeps,
-  type OwnDesign,
 } from "./address-claims/entry-claims-hook";
-import {
-  claimLocales,
-  pageClaims,
-  splitsList,
-} from "./address-claims/page-claims";
+import { claimLocales, pageClaims } from "./address-claims/page-claims";
 import {
   describeFor,
   registerPageAddressClaims,
@@ -149,15 +145,7 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
-import {
-  entryDesignKey,
-  TEMPLATE_CONTENT_FIELD,
-  TEMPLATE_ENTRY_COLLECTION_FIELD,
-  TEMPLATE_ENTRY_FIELD,
-  TEMPLATE_ENTRY_ID_FIELD,
-  templatesCollection,
-  TEMPLATES_SLUG,
-} from "./collections/templates";
+import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
 import {
@@ -1095,13 +1083,6 @@ async function* singlesRegistryPages(
 
 /** How many registry rows one page of the collection listing asks for. */
 const REGISTRY_PAGE_SIZE = 100;
-
-/**
- * How many published own designs one read takes, each with its document,
- * when a template's write or the start-up pass settles a collection's
- * entries' later pages.
- */
-const DESIGN_PAGE = 100;
 
 /**
  * Every collection's registry record, page by page, for the schema
@@ -3142,111 +3123,9 @@ export const pageBuilder = (
             address: address === null ? null : addressSegments(address),
           };
         },
-        // Hook-free and as the system, as the template is read, and on the
-        // write's own transaction: the routing columns of the entry's own
-        // design, and its document, judged here for a list split into pages.
-        publishedOwnDesign: async (collection, id, tx) => {
-          const key = entryDesignKey(collection, id);
-          const found =
-            await ctx.services.ownCollections.listEntriesInTransaction(
-              tx,
-              templatesSlug,
-              {
-                where: { [TEMPLATE_ENTRY_FIELD]: { equals: key } },
-                pagination: { limit: 1 },
-                select: {
-                  id: true,
-                  [TEMPLATE_ENTRY_FIELD]: true,
-                  status: true,
-                  [TEMPLATE_CONTENT_FIELD]: true,
-                },
-                depth: 0,
-              }
-            );
-          const row = found.data[0] as Record<string, unknown> | undefined;
-          // Compared again exactly: a database may compare text loosely.
-          return row?.[TEMPLATE_ENTRY_FIELD] === key &&
-            row.status === "published"
-            ? { paginates: splitsList(row[TEMPLATE_CONTENT_FIELD]) }
-            : null;
-        },
-        // The collection's template's document, read only for an entry it
-        // draws, on the write's own transaction, so a template's write is
-        // judged as it leaves the template.
-        templatePaginates: async (collection, tx) => {
-          const found =
-            await ctx.services.ownCollections.listEntriesInTransaction(
-              tx,
-              templatesSlug,
-              {
-                where: { collection: { equals: collection } },
-                pagination: { limit: 1 },
-                select: {
-                  id: true,
-                  collection: true,
-                  status: true,
-                  [TEMPLATE_CONTENT_FIELD]: true,
-                },
-                depth: 0,
-              }
-            );
-          const row = found.data[0] as Record<string, unknown> | undefined;
-          return (
-            row?.collection === collection &&
-            row.status === "published" &&
-            splitsList(row[TEMPLATE_CONTENT_FIELD])
-          );
-        },
-        // On the write's own transaction, a page at a time, stopping on a
-        // short page: the total beside a page is an unlocked count. Each
-        // design's document is read with it, judged for a list split into
-        // pages and dropped, a hundred to a page, since documents are large.
-        publishedDesigns: async (collection, tx) => {
-          const designs = new Map<string, OwnDesign>();
-          for (let page = 1; ; page += 1) {
-            const found =
-              await ctx.services.ownCollections.listEntriesInTransaction(
-                tx,
-                templatesSlug,
-                {
-                  // Published ones only, filtered by the database: a draft
-                  // design keeps no address, so reading and locking it would
-                  // only slow the write. Each row is still compared exactly.
-                  where: {
-                    [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection },
-                    status: { equals: "published" },
-                  },
-                  pagination: { limit: DESIGN_PAGE, page },
-                  // A unique order, so no design moves between pages.
-                  sort: { field: "id", direction: "asc" },
-                  select: {
-                    id: true,
-                    [TEMPLATE_ENTRY_FIELD]: true,
-                    [TEMPLATE_ENTRY_ID_FIELD]: true,
-                    status: true,
-                    [TEMPLATE_CONTENT_FIELD]: true,
-                  },
-                  depth: 0,
-                }
-              );
-            for (const value of found.data) {
-              const row = value as Record<string, unknown>;
-              const id = row[TEMPLATE_ENTRY_ID_FIELD];
-              // The key its entry makes, compared exactly, so a design
-              // matched loosely by collection is never counted.
-              if (
-                typeof id === "string" &&
-                row[TEMPLATE_ENTRY_FIELD] === entryDesignKey(collection, id) &&
-                row.status === "published"
-              ) {
-                designs.set(id, {
-                  paginates: splitsList(row[TEMPLATE_CONTENT_FIELD]),
-                });
-              }
-            }
-            if (found.data.length < DESIGN_PAGE) return designs;
-          }
-        },
+        // The entry's own design and the collection's template, judged for a
+        // list split into pages, on the write's own transaction.
+        ...entryDesignReads(ctx.services.ownCollections, templatesSlug),
         // The host's collection, read as the system, as a template's walk
         // reads it, but on the write's own transaction: a write holding the
         // pool's last connection never waits for a second one. One read

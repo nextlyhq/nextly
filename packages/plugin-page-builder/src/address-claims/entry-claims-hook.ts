@@ -764,14 +764,7 @@ async function settleDesignClaims(
   data: Row,
   before: Row | null
 ): Promise<void> {
-  const was =
-    write.operation !== "create" && designedEntry(before)?.published === true;
-  const now =
-    write.operation !== "delete" && designedEntry(data)?.published === true;
-  // Published before and after, the design changes what it draws only where
-  // it starts or stops splitting a list into pages.
-  const repaged =
-    was && now && splitsList(before?.content) !== splitsList(data.content);
+  const { was, now, repaged } = designPublishing(write.operation, data, before);
   if (was === now && !repaged) return;
   const { collection, id } = designed;
   const tx = write.transaction;
@@ -792,6 +785,24 @@ async function settleDesignClaims(
   const change = { from, to, was, now, before, data };
   if (!(await entryRedrawn(change, designs))) return;
   await settleDesigned(deps, tx, { collection, address: to, designs }, [id]);
+}
+
+/**
+ * Whether an own design was published before its write (`was`) and is after
+ * it (`now`), and, published throughout, whether the write starts or stops
+ * it splitting a list into pages (`repaged`).
+ */
+function designPublishing(
+  operation: HostWrite["operation"],
+  data: Row,
+  before: Row | null
+): { readonly was: boolean; readonly now: boolean; readonly repaged: boolean } {
+  const was =
+    operation !== "create" && designedEntry(before)?.published === true;
+  const now = operation !== "delete" && designedEntry(data)?.published === true;
+  const repaged =
+    was && now && splitsList(before?.content) !== splitsList(data.content);
+  return { was, now, repaged };
 }
 
 /**

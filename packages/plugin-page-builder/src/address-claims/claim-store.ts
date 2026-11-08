@@ -938,6 +938,33 @@ export async function dropStaleClaims(
   }
 }
 
+/**
+ * Claim each of `wanted` for `claim.holder`: refused where another document
+ * holds it, or, with `claim.wait`, waited for there instead.
+ */
+async function claimEach(
+  claims: Claims,
+  tx: Tx,
+  claim: {
+    readonly holder: Holder;
+    readonly describe: DescribeHolder;
+    readonly wait: boolean;
+  },
+  wanted: DesiredClaims
+): Promise<void> {
+  const { holder, describe, wait } = claim;
+  for (const address of wanted.addresses) {
+    await (wait
+      ? claimOrWait(claims, tx, { address, holder })
+      : claimAddress(claims, tx, { address, holder, describe }));
+  }
+  for (const list of wanted.spaces) {
+    await (wait
+      ? claimSpaceOrWait(claims, tx, { list, holder })
+      : claimSpace(claims, tx, { list, holder, describe }));
+  }
+}
+
 /** What a holder should hold: its addresses, and the spaces of its lists. */
 export interface DesiredClaims {
   readonly addresses: readonly ServedAddress[];
@@ -1000,20 +1027,12 @@ export async function reconcileHolder(
     ),
   ]);
   for (const row of staleWaits) await remove(claims, tx, row);
-  for (const address of claimAddresses) {
-    if (options.wait === true) {
-      await claimOrWait(claims, tx, { address, holder });
-    } else {
-      await claimAddress(claims, tx, { address, holder, describe });
-    }
-  }
-  for (const list of claimSpaces) {
-    if (options.wait === true) {
-      await claimSpaceOrWait(claims, tx, { list, holder });
-    } else {
-      await claimSpace(claims, tx, { list, holder, describe });
-    }
-  }
+  await claimEach(
+    claims,
+    tx,
+    { holder, describe, wait: options.wait === true },
+    { addresses: claimAddresses, spaces: claimSpaces }
+  );
   for (const row of release) {
     if (row.address === null) continue;
     await releaseClaims(claims, tx, holder, {
