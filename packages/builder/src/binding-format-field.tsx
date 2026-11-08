@@ -18,6 +18,7 @@
 import {
   bindingKindOf,
   checkFormat,
+  createBindingFormatter,
   type BindablePropKind,
   type BindingFieldShape,
   type BindingFormat,
@@ -216,6 +217,47 @@ export function defaultFormatFor(
   return preset === undefined
     ? undefined
     : { label: preset.label, format: preset.format };
+}
+
+/**
+ * A stored preview's value as the formatter reads it: a number's text as a
+ * number, a date's as the text it is.
+ */
+function previewValue(preview: string, field: BindingFieldShape): unknown {
+  if (bindingKindOf(field) !== "number") return preview;
+  const number = Number(preview);
+  return preview.trim() === "" || !Number.isFinite(number) ? preview : number;
+}
+
+/**
+ * Where the picker formats a preview: the browser's language and time zone,
+ * the closest the inspector has to the language edited and the site's zone.
+ */
+function previewEnv(): { readonly locale: string; readonly timeZone: string } {
+  const resolved = new Intl.DateTimeFormat().resolvedOptions();
+  return { locale: resolved.locale, timeZone: resolved.timeZone };
+}
+
+/**
+ * A field's preview as a pick would show it: formatted with the format the
+ * pick writes, by the engine's formatter, so a date reads "November 8, 2026"
+ * rather than its stored text. The preview as it is where there is no such
+ * format, or where it cannot be formatted, so nothing is lost.
+ */
+export function previewWithFormat(
+  preview: string,
+  format: BindingFormat,
+  kind: BindablePropKind | undefined,
+  field: BindingFieldShape
+): string {
+  const check = checkFormat(format, kind, field);
+  if (!check.ok || check.format === null) return preview;
+  const formatted = createBindingFormatter(previewEnv()).format(
+    previewValue(preview, field),
+    check.format,
+    field
+  );
+  return formatted.ok ? formatted.value.text : preview;
 }
 
 /**

@@ -230,6 +230,43 @@ describe("a date or a number picked for a text prop", () => {
     expect(title.textContent).not.toMatch(/Long date|Number/);
   });
 
+  it("previews a date's and a number's value in the format a pick writes", async () => {
+    const UPDATED = "2026-11-08T12:00:00.000Z";
+    mount(undefined, {
+      listBindingFields: async () => [
+        {
+          binding: { source: "entry" },
+          label: "Post",
+          fields: [
+            { name: "updatedAt", type: "date", public: true, preview: UPDATED },
+            { name: "price", type: "number", public: true, preview: "1234.5" },
+            // The control: text that looks like a date is shown as it is.
+            { name: "code", type: "text", public: true, preview: "2026-11-08" },
+          ],
+        },
+      ],
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Text to a field" })
+    );
+    // As the browser's language and zone write them, which the picker uses.
+    const zone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const longDate = new Intl.DateTimeFormat(undefined, {
+      dateStyle: "long",
+      timeZone: zone,
+    }).format(new Date(UPDATED));
+    const date = await screen.findByRole("option", { name: /^Updated at/ });
+    expect(date.textContent).toContain("Long date");
+    expect(date.textContent).toContain(longDate);
+    expect(date.textContent).not.toContain("2026-11-08T");
+    const price = screen.getByRole("option", { name: /^Price/ });
+    expect(price.textContent).toContain("Number");
+    expect(price.textContent).toContain(new Intl.NumberFormat().format(1234.5));
+    expect(screen.getByRole("option", { name: /^Code/ }).textContent).toBe(
+      "Code2026-11-08"
+    );
+  });
+
   it("writes the binding with Long date, in one edit", async () => {
     const editor = mount(undefined);
     fireEvent.click(

@@ -52,6 +52,7 @@ import {
   BindingFormatField,
   defaultFormatFor,
   offersFormat,
+  previewWithFormat,
 } from "./binding-format-field";
 import { bindOp, unbindOp } from "./binding-ops";
 import type {
@@ -216,7 +217,22 @@ function withFormatOnBind(
   prop: EditableProp
 ): FieldOption {
   const format = formatOnBind(choice.field, prop);
-  return format === undefined ? choice : { ...choice, format };
+  if (format === undefined) return choice;
+  const { preview } = choice.field;
+  if (preview === undefined) return { ...choice, format };
+  // Its value as the pick will show it, in the format the option names.
+  const shown = previewWithFormat(
+    preview,
+    format.format,
+    bindablePropKind(prop.schema),
+    choice.field
+  );
+  return {
+    ...choice,
+    format,
+    field: { ...choice.field, preview: shown },
+    search: [choice.label, shown].join(" "),
+  };
 }
 
 /** One option, with its text as the list searches it and a reader hears it. */
