@@ -307,6 +307,28 @@ describe("the Fallback's library picker", () => {
     expect(screen.queryByText(/Or paste an image address/)).toBeNull();
   });
 
+  it("captions each tile with its whole name, cut only at its end", async () => {
+    mountRow({ searchMedia: searchOf() });
+    await openLibrary();
+    const grid = screen.getByRole("listbox", {
+      name: "Images in the media library",
+    });
+    // Tiles side by side are told apart by how their names begin, so a
+    // caption is never cut in its middle, as the row's chosen file is.
+    expect(grid.querySelectorAll(".nx-middle-cut")).toHaveLength(0);
+    expect(
+      Array.from(grid.querySelectorAll(".nx-library-pick__caption")).map(
+        caption => caption.textContent
+      )
+    ).toEqual([
+      "spring-banner.jpg",
+      "campus.jpg",
+      "workbook.png",
+      "team.jpg",
+      "The course room",
+    ]);
+  });
+
   it("writes a picked tile's id through onFallback, and closes", async () => {
     const { onFallback } = mountRow({ searchMedia: searchOf() });
     await openLibrary();

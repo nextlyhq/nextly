@@ -11616,7 +11616,7 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
- * A file name cut in its middle (the row's file, a picker tile's caption):
+ * A file name cut in its middle (the row's chosen file):
  * the start shrinks with an ellipsis, the end (the extension and a few
  * letters before it) is never cut.
  */
@@ -11778,6 +11778,8 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   /* The admin's smallest text: a tile's name is how it is told apart. */
   font-size: 0.75rem;
   line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /*

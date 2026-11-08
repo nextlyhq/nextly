@@ -539,8 +539,8 @@ function splitForCut(
 
 /**
  * A file name cut in its middle where it is drawn narrow, its start and its
- * end kept ("spring-ba…ner.jpg"): files are told apart by their start, and
- * the end carries the extension. The start shrinks with an ellipsis; the end
+ * end kept ("spring-ba…ner.jpg"): the one chosen file is told by its start,
+ * and the end carries the extension. The start shrinks with an ellipsis; the end
  * is never cut. The whole name is on the tooltip and in the accessible name
  * of what holds it, so this is hidden from assistive technology.
  */
@@ -936,7 +936,12 @@ function TileContent({
           decoding="async"
         />
       )}
-      <MiddleCut text={label} className="nx-library-pick__caption" />
+      {/* Cut at its end, its start kept: tiles side by side are told apart by
+          how their names begin, and many end alike ("-final.png"). The whole
+          name is the tile's own label and tooltip. */}
+      <span className="nx-library-pick__caption" aria-hidden="true">
+        {label}
+      </span>
     </>
   );
 }
