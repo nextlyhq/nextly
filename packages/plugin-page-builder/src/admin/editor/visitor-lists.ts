@@ -12,8 +12,10 @@
  * @module visitor-lists
  */
 import {
+  DEFAULT_LIMITS,
   resolveComponentInstances,
   type BlockDocument,
+  type DocumentLimits,
   type BlockNode,
   type ConditionDemand,
   type DefinitionsById,
@@ -21,6 +23,7 @@ import {
 import {
   prepareDocumentAsDrawn,
   registeredBlocks,
+  repairingLookup,
   type EntryJudgement,
   type PageBindings,
 } from "@nextlyhq/blocks-react";
@@ -91,12 +94,14 @@ export function drawnNodesOf(
 export function canvasConditionsFor(
   document: BlockDocument,
   regions: readonly { readonly document: BlockDocument }[],
-  definitions: DefinitionsById | undefined
+  definitions: DefinitionsById | undefined,
+  /** The limits the canvas composes under. */
+  limits?: DocumentLimits
 ): ConditionDemand | undefined {
   return listConditionsFor([
     ...document.nodes,
     ...regions.flatMap(region => region.document.nodes),
-    ...reachedDefinitionNodes(document, definitions),
+    ...reachedDefinitionNodes(document, definitions, limits),
   ]);
 }
 
@@ -107,12 +112,17 @@ export function canvasConditionsFor(
  */
 function reachedDefinitionNodes(
   document: BlockDocument,
-  definitions: DefinitionsById | undefined
+  definitions: DefinitionsById | undefined,
+  limits: DocumentLimits | undefined
 ): BlockNode[] {
   if (definitions === undefined || definitions.size === 0) return [];
-  const { referenced } = resolveComponentInstances(document, definitions, {
-    conditioned: "carry",
-  });
+  // Under the canvas's own limits and from the definitions as the renderer
+  // reads them, so a component reached past the default depth is read too.
+  const { referenced } = resolveComponentInstances(
+    document,
+    repairingLookup(definitions, limits ?? DEFAULT_LIMITS),
+    { conditioned: "carry", ...(limits === undefined ? {} : { limits }) }
+  );
   return referenced.flatMap(id => definitions.get(id)?.nodes ?? []);
 }
 

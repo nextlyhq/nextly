@@ -486,6 +486,58 @@ describe("the conditioned blocks a page holds with its components", () => {
   });
 });
 
+describe("a conditioned placement inside a placed component", () => {
+  // The page places outer; outer places inner under conditions of its own;
+  // inner's root has none, so the placement's gate is carried onto it.
+  const inner = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "component",
+    nodes: [block("offer")],
+  } as BlockDocument;
+  const outer = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "component",
+    nodes: [
+      block("nested", {
+        type: COMPONENT_INSTANCE_TYPE,
+        props: { componentId: "inner" },
+        visibility: { conditions: [[guides]] },
+      }),
+    ],
+  } as BlockDocument;
+  const definitions = new Map([
+    ["outer", outer],
+    ["inner", inner],
+  ]);
+  const placed = page(
+    block("placed", {
+      type: COMPONENT_INSTANCE_TYPE,
+      props: { componentId: "outer" },
+    })
+  );
+
+  it("is a condition the page holds, so the switch is offered", () => {
+    // CONTROL: read without the definitions, the page holds none.
+    expect(conditionedBlocksIn(placed).readingEntry).toBe(false);
+    expect(
+      conditionedBlocksIn(placed, undefined, definitions).readingEntry
+    ).toBe(true);
+  });
+
+  it("names the placement's condition that hides the block", () => {
+    const applied = appliedConditionsOf(
+      placed,
+      previewFor({ category: "News" }),
+      nameOf,
+      { definitions }
+    );
+    expect(applied.hidden).toHaveLength(1);
+    expect(applied.hidden[0]?.reason).toBe(
+      "hidden for this post: Category is not Guides"
+    );
+  });
+});
+
 describe("the conditioned blocks a document holds", () => {
   it("tells a block reading the entry from one only a list's items read", () => {
     expect(conditionedBlocksIn(page(worksheet))).toEqual({

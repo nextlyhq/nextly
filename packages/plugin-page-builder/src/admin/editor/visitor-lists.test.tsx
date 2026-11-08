@@ -232,5 +232,15 @@ describe("what the canvas's reads are asked for a page's conditions", () => {
         new Map([["dated", dated]])
       )?.ordersValues
     ).toBe(true);
+    // Read under the canvas's own limits: a cap the page passes reads no
+    // component, as the canvas would compose none.
+    expect(
+      canvasConditionsFor(
+        placing,
+        [{ document: plain }],
+        new Map([["dated", dated]]),
+        { maxDepth: 64, maxNodes: 1, maxBytes: 1_000_000 }
+      )
+    ).toBeUndefined();
   });
 });

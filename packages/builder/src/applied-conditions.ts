@@ -22,6 +22,7 @@ import {
   evaluateConditions,
   isPlainRecord,
   mapForest,
+  placementGatesOf,
   resolveComponentInstances,
   revealConditioned,
   storedVisibilityOf,
@@ -50,7 +51,11 @@ import {
 } from "@nextlyhq/blocks-react";
 
 import { storedGroups } from "./condition-checks";
-import { asStoredDefinitions, gatedAsStored } from "./condition-gate";
+import {
+  asStoredDefinitions,
+  gatedAsDrawn,
+  gatedAsStored,
+} from "./condition-gate";
 import {
   conditionDraftOf,
   conditionLine,
@@ -584,8 +589,11 @@ export function conditionedBlocksIn(
           asStoredDefinitions(definitions, limits),
           { conditioned: "carry", ...(limits === undefined ? {} : { limits }) }
         ).document;
+  // A composed tree's blocks carry the gates of the placements they were
+  // expanded from, which only that tree holds: read as drawn there.
+  const gated = read === document ? gatedAsStored : gatedAsDrawn;
   walkScoped(read, limits, (block, scope) => {
-    if (gatedAsStored(block)) {
+    if (gated(block)) {
       any = true;
       readingEntry ||= scope.source === "entry";
       readingItems ||= scope.source !== "entry";
@@ -698,7 +706,7 @@ function reasonOf(
       unchecked: true,
     };
   }
-  const groups = storedGroups(block);
+  const groups = failingGateOf(block, preview);
   const only = groups?.length === 1 ? groups[0] : undefined;
   const failing =
     only === undefined
@@ -712,6 +720,46 @@ function reasonOf(
     reason: `hidden for this ${preview.noun}: ${why}`,
     unchecked: false,
   };
+}
+
+/**
+ * The groups of the gate that hides a block, said in its marker: its own
+ * conditions where they don't hold, else those of the placement it was
+ * expanded from that don't (`visibility.within`, which only a composed tree
+ * holds), else its own as they are.
+ */
+function failingGateOf(
+  block: BlockNode,
+  preview: ConditionsPreview
+): readonly (readonly Condition[])[] | undefined {
+  const own = storedGroups(block);
+  const envelope = block.visibility;
+  const placements = isPlainRecord(envelope) ? placementGatesOf(envelope) : [];
+  const carried = placements.flatMap(gate =>
+    isPlainRecord(gate)
+      ? [
+          storedGroups({
+            ...block,
+            visibility: { conditions: gate.conditions } as NodeVisibility,
+          }),
+        ]
+      : []
+  );
+  const gates = [own, ...carried].filter(
+    (groups): groups is readonly (readonly Condition[])[] =>
+      groups !== undefined && groups.length > 0
+  );
+  const failing = gates.find(
+    groups =>
+      !evaluateConditions(
+        {
+          id: block.id,
+          visibility: { conditions: groups.map(group => [...group]) },
+        },
+        inputOf(preview)
+      ).shown
+  );
+  return failing ?? own;
 }
 
 /** Whether one condition holds for the entry, as the engine judges it. */

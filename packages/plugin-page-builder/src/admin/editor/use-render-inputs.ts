@@ -1098,8 +1098,14 @@ export function useBoundCanvasRender(
   // renderer draws it while items are judged, so an ordering condition inside
   // a placed component's list asks for the site's zone too.
   const conditions = useMemo(
-    () => canvasConditionsFor(document, regions, canvasRender.definitions),
-    [document, regions, canvasRender.definitions]
+    () =>
+      canvasConditionsFor(
+        document,
+        regions,
+        canvasRender.definitions,
+        canvasRender.limits
+      ),
+    [document, regions, canvasRender.definitions, canvasRender.limits]
   );
   const bindings = useCanvasBindings(
     trees,
