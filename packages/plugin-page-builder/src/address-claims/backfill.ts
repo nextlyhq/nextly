@@ -46,6 +46,17 @@ export interface BackfillDeps {
   /** Where the host serves its pages (`pagePreviewPath`), if it says. */
   readonly pathTemplate?: string;
   readonly nextly: PagesReader;
+  /**
+   * The page `id` as committed, or null when it is gone, read on the
+   * transaction `tx` stands for, with no row lock of its own: the pass reads
+   * it under the page's claims lock, which a save of the page takes too. On
+   * the pass's own transaction, so a pass holding the pool's last connection
+   * never waits for a second one.
+   */
+  readonly readPage: (
+    tx: Tx,
+    id: string
+  ) => Promise<Readonly<Record<string, unknown>> | null>;
   readonly withTransaction: <T>(work: (tx: Tx) => Promise<T>) => Promise<T>;
   readonly warn: (message: string, context: Record<string, unknown>) => void;
   /**
@@ -213,28 +224,6 @@ export async function backfillPageClaims(deps: BackfillDeps): Promise<boolean> {
 }
 
 /**
- * The page `id` as committed now, or null when it is gone. Read under the
- * page's own lock, so a save of it that has not committed yet waits for this
- * pass, and one that has is what this reads.
- */
-async function currentPage(
-  deps: BackfillDeps,
-  id: string
-): Promise<Readonly<Record<string, unknown>> | null> {
-  const { items } = await deps.nextly.find({
-    collection: deps.pages,
-    where: { id: { equals: id } },
-    limit: 1,
-    overrideAccess: true,
-    depth: 0,
-  });
-  const [row] = items;
-  return typeof row === "object" && row !== null
-    ? (row as Readonly<Record<string, unknown>>)
-    : null;
-}
-
-/**
  * One page's claims: reconciled as a save would, or, where another document
  * already holds its address, left waiting for it. Its row is read again
  * inside each transaction, under its lock, rather than taken from the walk:
@@ -252,12 +241,8 @@ async function claimPage(deps: BackfillDeps, id: string): Promise<boolean> {
       if (wanted === null) return;
       // Reconciled even when it holds nothing now, so claims for an address
       // it is no longer served at are given up.
-      await reconcileHolder(
-        deps.claims,
-        tx,
-        holder,
-        wanted,
-        async other => `${other.collection} ${other.id}`
+      await reconcileHolder(deps.claims, tx, holder, wanted, other =>
+        Promise.resolve(`${other.collection} ${other.id}`)
       );
     });
     return true;
@@ -287,7 +272,9 @@ async function wantedNow(
   // Asked again under the lock: a pass superseded while it waited for the
   // lock leaves the page to the newer one, which reads it after this.
   if (deps.current?.() === false) return null;
-  const row = await currentPage(deps, holder.id);
+  // Under the page's own lock, so a save of it that has not committed yet
+  // waits for this pass, and one that has is what this reads.
+  const row = await deps.readPage(tx, holder.id);
   return row === null ? null : pageClaims(row, deps.locales, deps.pathTemplate);
 }
 

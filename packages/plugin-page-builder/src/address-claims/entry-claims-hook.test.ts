@@ -496,21 +496,29 @@ function designHarness(options: {
     },
     pages: "pages",
     pagesBackfilled: () => options.unclaimedPages === undefined,
-    // Found by slug, as the real read finds them.
-    pagesWithSlugs: async slugs =>
-      unclaimed.filter(page => slugs.includes(page.slug)),
+    // Found by slug, as the real read finds them, on the write's transaction.
+    pagesWithSlugs: async (slugs, tx) => {
+      if (tx === undefined) throw new Error("pages read off the write");
+      return unclaimed.filter(page => slugs.includes(page.slug));
+    },
     publishedPagesOn: async function* (tx) {
       // Asked inside a write, so always on its transaction.
       if (tx === undefined) throw new Error("pages read off the write");
       pageReads.push(tx);
       yield unclaimed;
     },
-    publishedEntries: async (asked, page, size) =>
-      ours(asked)
+    publishedEntries: async (asked, page, size, tx, lifecycle) => {
+      // Read on the write's transaction, so a write holding the pool's last
+      // connection never waits for a second one; and filtered by the
+      // lifecycle the hook read on it.
+      if (tx === undefined) throw new Error("entries read off the write");
+      if (!lifecycle) throw new Error("lifecycle not handed to the read");
+      return ours(asked)
         ? [...state.entries.values()]
             .filter(row => row.status === "published")
             .slice((page - 1) * size, page * size)
-        : [],
+        : [];
+    },
     describe: () => async holder => holder.id,
   };
   const handlers = new Map<string, Handler>();

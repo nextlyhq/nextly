@@ -422,6 +422,61 @@ describe("a window that regains focus", () => {
   });
 });
 
+describe("a refresh's read of the entry", () => {
+  it("names the entry only once this refresh's read has answered, the canvas keeping the latest", async () => {
+    listPreviewEntries.mockResolvedValue(listed([NEWEST]));
+    entriesReadable(["p2"]);
+    const { result } = renderHook(() => useTemplatePreview(ARGS));
+    await waitFor(() =>
+      expect(result.current.previewed).toMatchObject({
+        kind: "entry",
+        title: "Entry p2",
+      })
+    );
+    // This refresh's read of the entry is held, so it is seen mid-way.
+    let release = (): void => {};
+    readPreviewEntry.mockImplementationOnce(
+      ({ id }: { id: string }) =>
+        new Promise(resolve => {
+          release = () =>
+            resolve({
+              id,
+              title: "Renamed in another tab",
+              status: "published",
+              editorValues: { id },
+              publicValues: { id },
+              fields: [],
+            });
+        })
+    );
+    act(() => result.current.refresh());
+    await waitFor(() => expect(readPreviewEntry).toHaveBeenCalledTimes(2));
+    // The earlier read is never named as this refresh's entry.
+    expect(result.current.previewed).toEqual({
+      kind: "none",
+      reason: "loading",
+    });
+    expect(result.current.chip).toMatchObject({
+      id: "p2",
+      title: "Entry p2",
+      loading: true,
+    });
+    // What the canvas's reads are asked of stays the entry as last read.
+    expect(result.current.latest).toMatchObject({
+      kind: "entry",
+      title: "Entry p2",
+    });
+    act(() => release());
+    await waitFor(() =>
+      expect(result.current.previewed).toMatchObject({
+        kind: "entry",
+        title: "Renamed in another tab",
+      })
+    );
+    expect(result.current.chip).toMatchObject({ loading: false });
+  });
+});
+
 describe("stepping through the list", () => {
   const items = [NEWEST, OLDER, MADE_ELSEWHERE];
 
@@ -465,6 +520,16 @@ describe("what the strip says, following the canvas's own read", () => {
         publicValues: null,
         fields: [],
       },
+      latest: {
+        kind: "entry" as const,
+        collection: "posts",
+        id: "p2",
+        title: NEWEST.title,
+        editorValues: {},
+        publicValues: null,
+        fields: [],
+      },
+      scope: JSON.stringify(["posts", null, "u1"]),
       choose: vi.fn(),
       step: vi.fn(),
       refresh: vi.fn(),

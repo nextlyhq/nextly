@@ -9,10 +9,11 @@
  * never disagree about which fields count.
  *
  * Top-level means stored on the entry itself, addressed by its own name: a
- * blocks field directly in the collection's fields, or inside a container
- * that is presentation only (an unnamed group, tabs, a row), which stores
- * its children on the entry as they are. A blocks field inside a named group
- * or a repeater is stored under that field and is not one.
+ * blocks field directly in the collection's fields, or inside an unnamed
+ * group, which is presentation only and stores its children on the entry as
+ * they are. A blocks field inside a named group, or inside any other unnamed
+ * container (an unnamed repeater stores its children per row), is not one,
+ * so it is never offered and never accepted.
  *
  * @experimental Settles when collection templates ship.
  * @module templates/entry-content-fields
@@ -44,6 +45,16 @@ function wordsOf(field: {
 }
 
 /**
+ * Whether an unnamed container's children are stored on the entry itself:
+ * only a group's, as the binding sources' field shapes read a collection
+ * (`fieldShapesOf`). Any other unnamed container, a repeater above all,
+ * stores its children per row, and a blocks field there is no entry's own.
+ */
+function storedOnTheEntry(container: { readonly type?: unknown }): boolean {
+  return container.type === "group";
+}
+
+/**
  * The top-level blocks fields a collection's registry record declares, in
  * its order. None for a record that is not one.
  */
@@ -51,7 +62,9 @@ export function entryBlocksFieldsOf(record: unknown): EntryBlocksField[] {
   if (typeof record !== "object" || record === null) return [];
   const fields = (record as { fields?: unknown }).fields;
   const found: EntryBlocksField[] = [];
-  for (const field of addressableFields(fields)) {
+  for (const field of addressableFields(fields, {
+    descendInto: storedOnTheEntry,
+  })) {
     if (typeof field.name !== "string" || field.name === "") continue;
     if (!isBlocksField(field)) continue;
     found.push({

@@ -194,6 +194,14 @@ export type {
   BlockInspectorResolver,
   InspectorPanelProps,
 } from "./inspector-panel";
+/**
+ * A bound image's Fallback row: an image address, shown with its picture,
+ * and a reserved place for choosing a library file. The inspector draws it
+ * under a bound image's chip; exported so the same row can be given more
+ * ways to fill it without a second implementation. @experimental
+ */
+export { ImageBindingFallback } from "./image-binding-fallback";
+export type { ImageBindingFallbackProps } from "./image-binding-fallback";
 // What a host tells the inspector about the component it edits, beside it.
 export type { ComponentFieldsHost } from "./component-fields";
 // The banner over a component's own view: its name, its reach, and Back.
@@ -405,6 +413,7 @@ export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
  * for the sources the drawn page's bindings read.
  */
 export { useComposedEntryContent } from "./entry-content-canvas";
+export type { EntryContentLimits } from "./entry-content-canvas";
 /**
  * @experimental The entry a template is previewed with: the host provides it
  * around a template's editor, and anything inside reads it. `undefined`

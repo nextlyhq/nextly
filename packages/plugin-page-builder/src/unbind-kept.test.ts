@@ -71,7 +71,8 @@ describe("unbindPlan", () => {
     );
     expect(withFallback).toMatchObject({
       kept: { set: { text: "Ask us at the front desk" } },
-      answer: { kept: "fallback" },
+      // Marked, so the inspector says why the field's value wasn't kept.
+      answer: { kept: "fallback", unreadable: true },
     });
     expect(
       "answer" in withFallback ? withFallback.answer.reason : ""
@@ -163,6 +164,28 @@ describe("unbindPlan", () => {
       kept: { set: { src: address }, empty: ["mediaId"] },
       answer: { kept: "fallback", value: address, into: "src" },
     });
+  });
+
+  it("keeps a private image's media-library fallback in the media prop, the typed address emptied", () => {
+    const plan = unbindPlan(
+      "mediaId",
+      "memberPhoto",
+      view({
+        filled: { mediaId: "fallback-media" },
+        unreadable: { fallback: { value: "fallback-media" } },
+      }),
+      IMAGE
+    );
+    // Written into the address prop, the id would read as a broken address;
+    // the typed address the bound image never drew would appear if kept.
+    expect(plan).toEqual({
+      kept: { set: { mediaId: "fallback-media" }, empty: ["src"] },
+      answer: expect.objectContaining({
+        kept: "fallback",
+        value: "fallback-media",
+      }),
+    });
+    expect(plan).not.toHaveProperty("answer.into");
   });
 });
 
@@ -320,7 +343,8 @@ describe("an image bound into a collection other than the media library", () => 
       type: "core/heading",
       version: 1,
       props: {},
-      bindings: { text: { $bind: "startsAt" } },
+      // A date reaches a text prop only through a format.
+      bindings: { text: { $bind: "startsAt", format: { type: "date" } } },
     };
     const runOf = (shape: Record<string, unknown>) =>
       createBindingRun({

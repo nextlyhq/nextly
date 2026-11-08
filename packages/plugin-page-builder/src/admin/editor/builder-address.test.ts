@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  bindingSourcePath,
   builderAddress,
   fieldBuilderAddress,
   openAtFromSearch,
@@ -233,5 +234,81 @@ describe("openAtFromSearch", () => {
   it("opens at neither when the address names neither, or names them empty", () => {
     expect(openAtFromSearch("")).toEqual({});
     expect(openAtFromSearch("?section=&block=")).toEqual({});
+  });
+});
+
+describe("bindingSourcePath", () => {
+  const post = { kind: "collection", slug: "posts", documentId: "p1" } as const;
+
+  it("is the entry's edit screen for a binding to the entry, named or not", () => {
+    expect(bindingSourcePath({ $bind: "title" }, post)).toBe(
+      "/admin/collections/posts/p1"
+    );
+    expect(bindingSourcePath({ $bind: "title", source: "entry" }, post)).toBe(
+      "/admin/collections/posts/p1"
+    );
+  });
+
+  it("is the Single's screen for a binding to a Single, whatever the entry", () => {
+    expect(
+      bindingSourcePath(
+        { $bind: "phone", source: "single", sourceKey: "contact details" },
+        post
+      )
+    ).toBe("/admin/singles/contact%20details");
+  });
+
+  it("is the Single's own screen for an entry binding on a Single's page", () => {
+    expect(
+      bindingSourcePath({ $bind: "headline" }, { kind: "single", slug: "home" })
+    ).toBe("/admin/singles/home");
+  });
+
+  it("is the settings screen for a binding to the site", () => {
+    expect(bindingSourcePath({ $bind: "siteUrl", source: "site" }, null)).toBe(
+      "/admin/settings"
+    );
+  });
+
+  it("opens an entry's and a Single's screen in the language being edited", () => {
+    expect(bindingSourcePath({ $bind: "title" }, post, "ar")).toBe(
+      "/admin/collections/posts/p1?locale=ar"
+    );
+    expect(
+      bindingSourcePath(
+        { $bind: "phone", source: "single", sourceKey: "contact" },
+        post,
+        "pt-BR"
+      )
+    ).toBe("/admin/singles/contact?locale=pt-BR");
+    // The site settings have one language, so none is named.
+    expect(
+      bindingSourcePath({ $bind: "siteUrl", source: "site" }, post, "ar")
+    ).toBe("/admin/settings");
+  });
+
+  it("names no language for the default one", () => {
+    // The control: the same entry, no language given, no query.
+    expect(bindingSourcePath({ $bind: "title" }, post)).toBe(
+      "/admin/collections/posts/p1"
+    );
+    expect(bindingSourcePath({ $bind: "title" }, post, undefined)).not.toMatch(
+      /\?/
+    );
+  });
+
+  it("is nothing where no one screen edits the source", () => {
+    // A list's item is a different entry for every row; an unsaved entry,
+    // or none read, has no edit screen yet.
+    expect(
+      bindingSourcePath({ $bind: "title", source: "item" }, post)
+    ).toBeUndefined();
+    expect(
+      bindingSourcePath(
+        { $bind: "title" },
+        { kind: "collection", slug: "posts" }
+      )
+    ).toBeUndefined();
+    expect(bindingSourcePath({ $bind: "title" }, null)).toBeUndefined();
   });
 });

@@ -950,6 +950,20 @@ function warnOfStandIn(standIn: ProcessSiteSettings): void {
 }
 
 /**
+ * The route's media library, for a binding that follows into it; none where
+ * the route draws its images from a collection of its own
+ * (`mediaCollection`), whose rows the public reader finds, or where its
+ * reader has no library.
+ */
+function mediaLibraryOf(
+  config: BlocksPageConfig
+): Pick<BindingSourcesArgs, "media"> {
+  if (config.mediaCollection !== undefined) return {};
+  const library = mediaNamespaceOf(readerFor(config));
+  return library === undefined ? {} : { media: library };
+}
+
+/**
  * Where a route's pages read the site settings: the instance the route reads
  * its records through, chosen by {@link readerFor} and nowhere else, so a
  * page's site name and time zone come from the same instance as its content.
@@ -1024,16 +1038,52 @@ function drawnDocumentOf(
   let byField = DRAWN_DOCUMENTS.get(entry);
   const kept = byField?.get(field);
   if (kept !== undefined) return kept;
-  const document = composeEntryContent(readDocument(entry, field, context), {
-    valueOf: name => entry[name],
-    maxNodes: effectiveLimits(config).maxNodes,
-  });
+  const document = composedFor(entry, field, context, config);
   if (byField === undefined) {
     byField = new Map();
     DRAWN_DOCUMENTS.set(entry, byField);
   }
   byField.set(field, document);
   return document;
+}
+
+/**
+ * The document a route draws `entry` with, composed under the page's own
+ * limits, so the entry's blocks are cut where the page is; given the
+ * definitions of the components the page places, the template is charged
+ * what it draws once they are expanded, so every instance still resolves.
+ */
+function composedFor(
+  entry: ContentEntry,
+  field: string,
+  context: RenderContext,
+  config: BlocksPageConfig,
+  definitions?: DefinitionsById
+): BlockDocument {
+  const { maxNodes, maxDepth } = effectiveLimits(config);
+  return composeEntryContent(readDocument(entry, field, context), {
+    valueOf: name => entry[name],
+    maxNodes,
+    maxDepth,
+    ...(definitions === undefined ? {} : { definitions }),
+  });
+}
+
+/**
+ * The drawn document fitted to the definitions read for it (`composedFor`),
+ * for `readPageInputs`' `fit`: the page as first drawn where it places no
+ * component, so nothing is composed twice for a page that need not be.
+ */
+function fittedFor(
+  entry: ContentEntry,
+  field: string,
+  context: RenderContext,
+  config: BlocksPageConfig
+): (definitions: DefinitionsById) => BlockDocument {
+  return definitions =>
+    definitions.size === 0
+      ? drawnDocumentOf(entry, field, context, config)
+      : composedFor(entry, field, context, config, definitions);
 }
 
 function readDocument(
@@ -2735,6 +2785,8 @@ interface SourceReads {
   readonly reader: BlocksPublicReader;
   readonly budget: QueryBudget;
   readonly shapes: BlocksFieldShapes;
+  /** The media library, which a relation into `media` is read from. */
+  readonly media?: BindingSourcesArgs["media"];
 }
 
 /** How a read is cached: the route's scope, the page's language and window. */
@@ -2781,6 +2833,32 @@ async function readById(
   }
 }
 
+/**
+ * A media library item a binding follows into, read as the page's images
+ * are, through the library rather than as a collection's row: `media` is no
+ * collection the public reader finds, and asking it for one fails the read.
+ * Only the named fields are kept, as a row's read selects them; one claim.
+ */
+async function readMediaById(
+  reads: SourceReads,
+  media: NonNullable<BindingSourcesArgs["media"]>,
+  id: string,
+  fields: readonly string[]
+): Promise<PublicRecord> {
+  if (!reads.budget.take({ kind: "related" })) return undefined;
+  try {
+    const record = await media.findByID({ id, disableErrors: true });
+    if (record === null) return null;
+    return Object.fromEntries(
+      ["id", ...fields]
+        .filter(field => Object.hasOwn(record, field))
+        .map(field => [field, record[field]])
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 /** One Single as the public reads it, with only the named fields: one claim. */
 async function readSingle(
   reads: SourceReads,
@@ -2821,7 +2899,10 @@ async function withRelations(
     const id = record[name];
     if (target === undefined) continue;
     if (typeof id !== "string" && typeof id !== "number") continue;
-    const related = await readById(reads, target, id, inner, "related");
+    const related =
+      target === MEDIA_TAG_COLLECTION && reads.media !== undefined
+        ? await readMediaById(reads, reads.media, String(id), inner)
+        : await readById(reads, target, id, inner, "related");
     if (related !== undefined) followed = { ...followed, [name]: related };
   }
   return followed;
@@ -3043,6 +3124,19 @@ export interface BindingSourcesArgs {
   /** The documents drawn, as the read pipeline prepared them. */
   readonly documents: readonly BlockDocument[];
   /**
+   * The media library, as the page's images are read from it: a relation a
+   * binding follows into the built-in `media` collection (an image's alt text
+   * from the entry's featured image) is read here by id, since `media` is no
+   * collection the public reader finds. Absent, such a relation is not
+   * followed, and its bindings show their fallbacks.
+   */
+  readonly media?: {
+    findByID(args: {
+      id: string;
+      disableErrors?: boolean;
+    }): Promise<Record<string, unknown> | null>;
+  };
+  /**
    * What the bindings read, when the caller has worked it out already: the
    * editor's canvas works it out from the document it draws and sends only
    * that. Absent, it is read from `documents`.
@@ -3143,6 +3237,7 @@ export async function readBindingSources(
     reader: args.reader,
     budget: args.budget,
     shapes,
+    ...(args.media === undefined ? {} : { media: args.media }),
   };
   const entry =
     demand.entry === undefined
@@ -3399,6 +3494,9 @@ function routeReadSources(args: {
         page: context.slug,
         ...(context.locale === undefined ? {} : { locale: context.locale }),
         reader: publicReaderFor(config, context.locale, window),
+        // The library the route's images come from, so a binding into a
+        // media item (its alt text) is read as those images are.
+        ...mediaLibraryOf(config),
         budget,
         ...(config.cacheScope === undefined
           ? {}
@@ -3637,12 +3735,14 @@ function blocksRouteConfig(
                 budget,
               }),
               document,
+              // Fitted to the components it places, as the render is.
+              fit: fittedFor(entry, field, context, config),
               entrySource,
               onIssues: bindingIssueLog(context),
               regionsOnlyWhenBound: true,
             });
             const derived = await derivePageSeo(
-              document,
+              inputs.document,
               resolver,
               mediaResolver(config, readerFor(config), budget).resolve,
               // A later page of the page's list is its own address, so its
@@ -3697,17 +3797,20 @@ function blocksRouteConfig(
         window: listWindow,
         budget,
       });
-      const { page, bindings, presented } = await readPageInputs({
+      const inputs = await readPageInputs({
         terms,
         sources,
         document,
+        // Fitted to the components it places, as the render is.
+        fit: fittedFor(entry, field, context, config),
         entrySource,
         onIssues: bindingIssueLog(context),
       });
+      const { page, bindings, presented } = inputs;
       // The list as the render draws it: composed with its components'
       // definitions, repaired and held to the caps.
       const list = pagedListOf(
-        document,
+        inputs.document,
         page,
         effectiveLimits(config).maxNodes,
         bindings === undefined
@@ -3758,8 +3861,9 @@ function blocksRouteConfig(
     },
     render: async (entry, context) => {
       // The page as it is drawn: a template's with the entry's own blocks
-      // content composed in (`drawnDocumentOf`).
-      const document = drawnDocumentOf(entry, field, context, config);
+      // content composed in (`drawnDocumentOf`), fitted below to the
+      // components it places once their definitions are read.
+      const drawnFirst = drawnDocumentOf(entry, field, context, config);
       const resolved = styles ? await styles(entry, context) : undefined;
 
       // Built from the reader the ROUTE resolved this entry through, handed
@@ -3881,14 +3985,23 @@ function blocksRouteConfig(
           window: listWindow,
           budget,
         }),
-        document,
+        document: drawnFirst,
+        // Fitted to the components it places: the entry's content is cut to
+        // the room their expansion leaves, so every placement resolves.
+        fit: fittedFor(entry, field, context, config),
         entrySource,
         where: context,
         budget,
         onIssues: bindingIssueLog(context),
       });
-      const { definitions, page, regions, regionDefinitions, bindings } =
-        staged;
+      const {
+        document,
+        definitions,
+        page,
+        regions,
+        regionDefinitions,
+        bindings,
+      } = staged;
       drawnPage.number = staged.listPage?.page;
       // What a list reads ahead for its entries, through the page's own
       // reads: relations as the public reads them, links as the blocks drawn
