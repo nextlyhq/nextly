@@ -3,7 +3,7 @@ import type { FieldError, Resolver } from "react-hook-form";
 import { z } from "zod";
 
 import { filterStringArray } from "@admin/lib/type-guards";
-import { passwordSchema } from "@admin/lib/validation";
+import { passwordSchema } from "@admin/lib/password-schema";
 
 export type RoleKey = string;
 
