@@ -941,7 +941,7 @@ test.describe("Removing a breakpoint in Settings", () => {
     try {
       // An edit saved without publishing: a pending draft over the live row.
       const edited = await page.request.patch(`${ENTRIES}/${id}`, {
-        data: { title: "Styled, edited" },
+        data: { title: "Styled, edited", _overwrite: true },
       });
       expect(edited.ok(), `saving a draft: ${edited.status()}`).toBe(true);
       await openEditor(page, id);
@@ -969,7 +969,7 @@ test.describe("Removing a breakpoint in Settings", () => {
       );
     } finally {
       await page.request.patch(`${ENTRIES}/${id}`, {
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       });
       await storeSiteBreakpoints(page.request, null);
     }

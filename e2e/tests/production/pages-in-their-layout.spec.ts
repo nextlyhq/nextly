@@ -192,7 +192,7 @@ test.describe("a page served inside its Layout", () => {
     // 4. "No header or footer" switched on: neither is served.
     const switchedOff = await api.patch(
       `${API}/collections/pages/entries/${created.id}`,
-      { data: { noHeaderFooter: true, status: "published" } }
+      { data: { noHeaderFooter: true, status: "published", _overwrite: true } }
     );
     expect(
       switchedOff.ok(),
@@ -209,7 +209,7 @@ test.describe("a page served inside its Layout", () => {
     //    revalidated.
     const switchedOn = await api.patch(
       `${API}/collections/pages/entries/${created.id}`,
-      { data: { noHeaderFooter: false, status: "published" } }
+      { data: { noHeaderFooter: false, status: "published", _overwrite: true } }
     );
     expect(switchedOn.ok()).toBe(true);
     expect(await served(request)).toContain(HEADER_ONE);
@@ -220,6 +220,7 @@ test.describe("a page served inside its Layout", () => {
         data: {
           content: headingDocument("component", "hdr", HEADER_TWO),
           status: "published",
+          _overwrite: true,
         },
       }
     );

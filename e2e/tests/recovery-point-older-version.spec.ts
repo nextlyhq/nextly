@@ -75,7 +75,7 @@ test("a post another author wrote through REST after its recovery point is offer
   // Someone else then writes the document through the API.
   const other = await anotherAuthor(page.request, baseURL ?? "");
   const patched = await other.patch(`${POSTS}/${id}`, {
-    data: { excerpt: "written through the API afterwards" },
+    data: { excerpt: "written through the API afterwards", _overwrite: true },
   });
   expect(patched.ok(), await patched.text()).toBe(true);
   await other.dispose();
@@ -113,7 +113,7 @@ test("a component another author wrote after its recovery point says it is from 
 
   const other = await anotherAuthor(page.request, baseURL ?? "");
   const patched = await other.patch(`${COMPONENTS}/${id}`, {
-    data: { description: "written afterwards" },
+    data: { description: "written afterwards", _overwrite: true },
   });
   expect(patched.ok(), await patched.text()).toBe(true);
   await other.dispose();
