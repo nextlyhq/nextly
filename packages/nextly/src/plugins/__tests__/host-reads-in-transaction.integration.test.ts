@@ -20,7 +20,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
-import type { CollectionService } from "../../services/collections/collection-service";
 import { definePlugin, type PluginContext } from "../plugin-context";
 import type { PluginCollectionTransaction } from "../service-opts";
 import {
@@ -169,7 +168,7 @@ describeEachDialect("a plugin's host reads on its transaction", dialect => {
   it("refuses a host collection holding none of its field types, and a settled token, before reading", async () => {
     const ctx = await boot(dialect);
     const { collections, ownCollections } = ctx.services;
-    const service = handle().getService<CollectionService>("collectionService");
+    const service = handle().getService("collectionService");
     const listEntries = vi.spyOn(service, "listEntries");
     const findEntryById = vi.spyOn(service, "findEntryById");
     let kept: PluginCollectionTransaction | undefined;

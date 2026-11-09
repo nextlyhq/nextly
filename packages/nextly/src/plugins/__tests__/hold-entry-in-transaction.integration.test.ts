@@ -123,7 +123,7 @@ async function entry(t: TestNextly, title: string): Promise<string> {
     data: { title },
     overrideAccess: true,
   });
-  return String((made as { item: { id: unknown } }).item.id);
+  return String(made.item.id);
 }
 
 /** The titles of the notes stored, whatever they name. */

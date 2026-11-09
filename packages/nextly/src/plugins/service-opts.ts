@@ -1558,7 +1558,11 @@ export function ownCollectionReads(
     });
     if (!result.success) throw createErrorFromSingleResult(result);
     if (result.data === undefined) {
-      throw NextlyError.notFound({
+      // A read asked for the default document answers one when none is
+      // stored, so a success with no document is a broken promise from the
+      // read below, not a Single that is missing. Kept as a guard over values
+      // in hand, and internal for that reason.
+      throw NextlyError.internal({
         logContext: { reason: "own-single-read-no-document", single: slug },
       });
     }

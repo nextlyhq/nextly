@@ -702,7 +702,7 @@ export class DynamicCollectionRegistryService extends BaseService {
     ids: ReadonlyMap<string, string>;
     release: () => Promise<void>;
   }> {
-    const none = async (): Promise<void> => undefined;
+    const none = (): Promise<void> => Promise.resolve();
     if (slugs.length === 0) {
       return { existing: [], ids: new Map(), release: none };
     }
