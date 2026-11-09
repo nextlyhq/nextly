@@ -30,7 +30,7 @@ import {
   storeSiteBreakpoints,
   type SiteBreakpoints,
 } from "../support/site-breakpoints";
-import { test } from "../support/test";
+import { ownSeat, test } from "../support/test";
 
 import { openEditorWith, selection, structure } from "./editor-driver";
 
@@ -864,6 +864,9 @@ test.describe("chrome drawn over the frame stays on the block", () => {
 
 test.describe("a drag from the Add panel into the frame", () => {
   test.describe.configure({ timeout: 240_000 });
+  // An account of its own: the file's earlier tests open the editor again and
+  // again, and through one account these met the per-user REST limit.
+  ownSeat(1);
 
   // A gap of the first block's own, since blocks at the page's top level
   // carry no margin and nothing between them spaces them apart.

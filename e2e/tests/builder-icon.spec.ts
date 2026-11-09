@@ -46,7 +46,11 @@ async function clientReferencesOf(page: Page, path: string): Promise<string[]> {
       ...new Set(
         [...pushed.matchAll(/(?:^|\n)[0-9a-f]+:I(\[[^\n]*\])/g)].map(match => {
           const [module, , name] = JSON.parse(match[1] ?? "[]") as unknown[];
-          return `${String(module)}#${String(name)}`;
+          // Under `next dev` the module is a reference to another row of this
+          // payload, numbered per response, so it says nothing about which
+          // module this is. A production build's module id does.
+          const id = String(module);
+          return `${id.startsWith("$") ? "" : id}#${String(name)}`;
         })
       ),
     ].sort();

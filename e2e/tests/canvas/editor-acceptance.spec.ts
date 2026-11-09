@@ -273,9 +273,9 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
   4: async page => {
     await openLayers(page);
     await layerRow(page, "ea-third").click();
-    expect(await selection(page)).toEqual(["ea-third"]);
+    await expect.poll(() => selection(page)).toEqual(["ea-third"]);
     await layerRow(page, "ea-heading").click();
-    expect(await selection(page)).toEqual(["ea-heading"]);
+    await expect.poll(() => selection(page)).toEqual(["ea-heading"]);
   },
   5: async page => {
     await clickBlock(page, "ea-second");

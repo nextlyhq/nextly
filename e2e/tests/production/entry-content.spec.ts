@@ -107,7 +107,7 @@ test.describe("a template's Entry content on a published page", () => {
     expect(control.status).toBe(200);
     expect(control.html).toContain(TITLE);
     expect(control.payload).toContain(PUBLIC_WORDS);
-    expect(control.html).toMatch(/class="[^"]*nx-b-core--entry-content/);
+    expect(control.html).toMatch(/class="[^"]*nx-bt-core--entry-content/);
     expect(control.html).not.toContain(SECRET);
 
     // 4. Drawing `membersOnly`, which the public may not read: the page is
@@ -132,7 +132,7 @@ test.describe("a template's Entry content on a published page", () => {
       // And no Entry content element: the block draws nothing at all. Asked
       // of class attributes, since the page's stylesheet may name the class.
       expect(shown.html, who).not.toMatch(
-        /class="[^"]*nx-b-core--entry-content/
+        /class="[^"]*nx-bt-core--entry-content/
       );
     }
   });

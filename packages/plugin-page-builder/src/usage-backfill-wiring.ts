@@ -13,6 +13,7 @@ import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
 import {
   blocksFieldSurvey,
+  type FieldGroupDefinitions,
   singleUsageDeclaration,
 } from "./class-usage-blocks-fields";
 import {
@@ -86,6 +87,12 @@ export interface BackfillHost {
   collectionSlugs: () => Promise<readonly string[] | undefined>;
   /** The resolved registry record for one slug, or null when it is gone. */
   resolveCollection: (slug: string) => Promise<unknown>;
+  /**
+   * The field groups the site declares in code, by slug. A reference to one
+   * that holds no blocks field then leaves nothing out of the index's reach;
+   * without it, any field group on the site keeps every count a floor.
+   */
+  fieldGroups?: FieldGroupDefinitions;
   /** Whether a resolved collection stores a draft beside its published row. */
   hasDrafts: (collection: unknown) => Promise<boolean> | boolean;
   /**
@@ -215,7 +222,7 @@ export async function backfillSurvey(
     // every scope, as any gone scope's are (`forgetGoneScopes`).
     if (collection === null || collection === undefined) continue;
 
-    const survey = blocksFieldSurvey(collection);
+    const survey = blocksFieldSurvey(collection, host.fieldGroups);
     const fields = survey.addressable;
     // Recorded before the early return below, so a collection whose ONLY blocks
     // field is nested — which contributes no scope — still reports that the
@@ -243,7 +250,10 @@ export async function backfillSurvey(
     );
   }
   for (const single of singles) {
-    const survey = blocksFieldSurvey(singleUsageDeclaration(single));
+    const survey = blocksFieldSurvey(
+      singleUsageDeclaration(single),
+      host.fieldGroups
+    );
     if (survey.unaddressable) unaddressable = true;
     // Both forms, whatever the Single's versioning: the registry listing does
     // not say whether a Single keeps a working draft, and the draft read

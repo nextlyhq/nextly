@@ -1321,6 +1321,7 @@ function installContext(
       (await resolvedCollectionDraftSplit(resolvedCollectionView(collection)))
         .eligible,
     singles: () => singlesDeclaringBlocks(ctx),
+    fieldGroups: declaredFieldGroups(ctx),
     locales: () =>
       ctx.config.localization?.locales.map(locale => locale.code) ?? [],
     // The SAME bounds the renderer draws under, for the reason the write path

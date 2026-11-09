@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A list whose stored sort names a field the collection no longer has, or one visitors cannot read, now shows its entries in id order on a published page. Under Cache Components it drew nothing.
+A list whose stored sort names a field the collection no longer has, or one visitors cannot read, now shows its entries in id order on a published page. Under Cache Components it drew nothing. In the page builder, a list's "Choose a field" now takes focus to the sort, look tiles keep their contrast in the dark admin, and usage counts become exact on a site whose field groups, declared in code, hold no blocks field.

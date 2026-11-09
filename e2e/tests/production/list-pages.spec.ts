@@ -5,6 +5,8 @@ import {
   type Browser,
 } from "@playwright/test";
 
+import { CACHE_COMPONENTS } from "../support/cache-components";
+import { answeredNotFound } from "../support/not-found";
 import { test } from "../support/visible";
 
 /**
@@ -74,7 +76,7 @@ function pagedList(token: string) {
           empty: [
             {
               id: "empty-text",
-              type: "core/paragraph",
+              type: "core/text",
               version: 1,
               props: { text: EMPTY_TEXT },
             },
@@ -170,6 +172,24 @@ async function answer(
   };
 }
 
+/**
+ * Whether the route answers `path` as not found: a 404, or, under Cache
+ * Components on a path's first request, the not-found page behind a 200.
+ */
+async function notFoundAt(
+  request: APIRequestContext,
+  path: string
+): Promise<boolean> {
+  const response = await request.get(path, {
+    headers: { cookie: "" },
+    maxRedirects: 0,
+  });
+  const status = response.status();
+  return (
+    status === 404 || answeredNotFound({ status, html: await response.text() })
+  );
+}
+
 test.describe("a Collection list split into pages", () => {
   test("serves each page at its own address, links them, and grows a page", async ({
     page,
@@ -238,24 +258,33 @@ test.describe("a Collection list split into pages", () => {
     ]);
 
     // 3: one address per page.
-    expect(await answer(request, `${at}/page/1`)).toEqual({
-      status: 308,
-      location: at,
-    });
-    for (const malformed of ["0", "02", "-1", "1.5", "two"]) {
-      expect((await answer(request, `${at}/page/${malformed}`)).status).toBe(
-        404
+    if (CACHE_COMPONENTS) {
+      // Under Cache Components the route streams its static shell before it
+      // reaches the redirect, so the status is 200 by then and the redirect is
+      // in the document: the same address, one way to reach it.
+      const first = await request.get(`${at}/page/1`, {
+        headers: { cookie: "" },
+        maxRedirects: 0,
+      });
+      expect(await first.text()).toContain(
+        `<meta id="__next-page-redirect" http-equiv="refresh" content="0;url=${at}"`
       );
+    } else {
+      expect(await answer(request, `${at}/page/1`)).toEqual({
+        status: 308,
+        location: at,
+      });
     }
-    expect((await answer(request, `${at}/page/3`)).status).toBe(404);
+    for (const malformed of ["0", "02", "-1", "1.5", "two"]) {
+      expect(await notFoundAt(request, `${at}/page/${malformed}`)).toBe(true);
+    }
+    expect(await notFoundAt(request, `${at}/page/3`)).toBe(true);
 
     // 4: six more entries take the list onto a third page.
     await publishEntries(api, [26, 27, 28, 29, 30, 31]);
     await expect
-      .poll(async () => (await answer(request, `${at}/page/3`)).status, {
-        timeout: 30_000,
-      })
-      .toBe(200);
+      .poll(() => notFoundAt(request, `${at}/page/3`), { timeout: 30_000 })
+      .toBe(false);
     const third = await visit(browser, `${at}/page/3`);
     expect(third.numbers).toEqual(["31"]);
     expect(third.links.at(-1)).toEqual({
@@ -269,8 +298,8 @@ test.describe("a Collection list split into pages", () => {
     expect(empty.status).toBe(200);
     expect(empty.text).toContain(EMPTY_TEXT);
     expect(empty.links).toEqual([]);
-    expect((await answer(request, `/blocks/${EMPTY_SLUG}/page/2`)).status).toBe(
-      404
+    expect(await notFoundAt(request, `/blocks/${EMPTY_SLUG}/page/2`)).toBe(
+      true
     );
   });
 });

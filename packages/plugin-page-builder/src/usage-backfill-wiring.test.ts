@@ -278,6 +278,50 @@ describe("reporting content no scope can cover", () => {
     expect(survey.unaddressable).toBe(true);
   });
 
+  describe("a Single referencing a field group", () => {
+    const referencing = {
+      collectionSlugs: async () => [],
+      singles: async () => [
+        {
+          slug: "home",
+          fields: [
+            { type: "text", name: "headline" },
+            { type: "component", name: "card", component: "link-card" },
+          ],
+        },
+      ],
+    };
+    const declaring = (fields: unknown[]) => (slug: string) =>
+      slug === "link-card" ? { fields } : undefined;
+
+    it("leaves nothing out of reach when the group is declared with no blocks field", async () => {
+      const survey = await backfillSurvey(
+        host({
+          ...referencing,
+          fieldGroups: declaring([{ type: "text", name: "heading" }]),
+        })
+      );
+      expect(survey.unaddressable).toBe(false);
+    });
+
+    it("stays out of reach when the declared group holds a blocks field", async () => {
+      const survey = await backfillSurvey(
+        host({
+          ...referencing,
+          fieldGroups: declaring([{ type: "blocks", name: "body" }]),
+        })
+      );
+      expect(survey.unaddressable).toBe(true);
+    });
+
+    it("stays out of reach when the site does not declare the group", async () => {
+      const survey = await backfillSurvey(
+        host({ ...referencing, fieldGroups: () => undefined })
+      );
+      expect(survey.unaddressable).toBe(true);
+    });
+  });
+
   it("CONTROL: an ordinary site reports nothing out of reach", async () => {
     // Without this, reporting every site as unreachable would satisfy both
     // cases above and withhold completeness from every installation for ever.
