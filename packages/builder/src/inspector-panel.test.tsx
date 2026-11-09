@@ -445,6 +445,12 @@ describe("the picture the canvas draws, carried to the focal point", () => {
   });
 });
 
+/** The block card's title; a section under it draws a heading of its own. */
+function cardTitle(): HTMLElement {
+  const card = document.querySelector("[data-block-card]") as HTMLElement;
+  return within(card).getByRole("heading");
+}
+
 describe("InspectorPanel block card", () => {
   it("shows the icon, the author's label beside the type, and the description", () => {
     mount({ name: "Hero title" });
@@ -516,7 +522,7 @@ describe("InspectorPanel block card", () => {
 
   it("renames from a double-click on the title too", () => {
     const editor = mount({ name: "Hero title" });
-    fireEvent.doubleClick(screen.getByRole("heading"));
+    fireEvent.doubleClick(cardTitle());
 
     const field = screen.getByLabelText("Label");
     fireEvent.change(field, { target: { value: "Intro" } });
@@ -534,23 +540,21 @@ describe("InspectorPanel block card", () => {
     // the field and straight out of it. Writing there would put an op with no
     // effect on the undo stack, so one press of undo would appear to do nothing.
     const editor = mount({ name: "Hero title" });
-    fireEvent.doubleClick(screen.getByRole("heading"));
+    fireEvent.doubleClick(cardTitle());
     fireEvent.blur(screen.getByLabelText("Label"));
 
-    fireEvent.doubleClick(screen.getByRole("heading"));
+    fireEvent.doubleClick(cardTitle());
     const field = screen.getByLabelText("Label");
     fireEvent.change(field, { target: { value: "Something else" } });
     fireEvent.keyDown(field, { key: "Escape" });
 
     expect(editor.apply).not.toHaveBeenCalled();
-    expect(screen.getByRole("heading").textContent).toBe(
-      "Hero title · Heading"
-    );
+    expect(cardTitle().textContent).toBe("Hero title · Heading");
   });
 
   it("clears the label by unsetting the field", () => {
     const editor = mount({ name: "Hero title" });
-    fireEvent.doubleClick(screen.getByRole("heading"));
+    fireEvent.doubleClick(cardTitle());
     const field = screen.getByLabelText("Label");
     fireEvent.change(field, { target: { value: "  " } });
     fireEvent.blur(field);
@@ -944,9 +948,7 @@ describe("InspectorPanel advanced fields", () => {
     // answers "which of six headings is this" under every tab.
     mount({ name: "Hero title" });
     openAdvanced();
-    expect(screen.getByRole("heading").textContent).toBe(
-      "Hero title · Heading"
-    );
+    expect(cardTitle().textContent).toBe("Hero title · Heading");
   });
 });
 

@@ -549,7 +549,9 @@ describe("BlockToolbar", () => {
         if (this.matches(".nx-visitor-unreadable__badge")) {
           return new DOMRect(0, 0, 150, 22);
         }
-        return new DOMRect(0, 0, 0, 0);
+        // The canvas's size for everything else: a block's ancestors are
+        // asked whether they clip it, and an empty box would.
+        return new DOMRect(0, 0, 1000, 2000);
       });
     const marked = new Map([
       ["a", [{ prop: "text", path: "internalNote" }] as const],

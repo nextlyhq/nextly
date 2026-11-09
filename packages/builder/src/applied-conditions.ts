@@ -596,19 +596,23 @@ export function conditionedBlocksIn(
   let any = false;
   let readingEntry = false;
   let readingItems = false;
+  // Made sound before it is composed, as the renderer does, because that
+  // pass drops every placement gate it finds: afterwards it would drop the
+  // gates the composition has just written.
+  const sound = sanitizeDocument(document, limits ?? DEFAULT_LIMITS);
   const read =
     definitions === undefined || definitions.size === 0
-      ? document
+      ? sound
       : resolveComponentInstances(
-          document,
+          sound,
           asStoredDefinitions(definitions, limits),
           { conditioned: "carry", ...(limits === undefined ? {} : { limits }) }
         ).document;
   // A composed tree's blocks carry the gates of the placements they were
-  // expanded from, which only that tree holds: read as drawn there.
-  const gated = read === document ? gatedAsStored : gatedAsDrawn;
-  walkScoped(read, limits, (block, scope) => {
-    if (gated(block)) {
+  // expanded from, which only that tree holds; a sound stored document holds
+  // none, so the one reader serves both.
+  walkSound(read, limits, (block, scope) => {
+    if (gatedAsDrawn(block)) {
       any = true;
       readingEntry ||= scope.source === "entry";
       readingItems ||= scope.source !== "entry";
@@ -635,7 +639,19 @@ function walkScoped(
   limits: DocumentLimits | undefined,
   visit: (block: BlockNode, scope: ConditionScope) => boolean
 ): void {
-  const sound = sanitizeDocument(document, limits ?? DEFAULT_LIMITS);
+  walkSound(
+    sanitizeDocument(document, limits ?? DEFAULT_LIMITS),
+    limits,
+    visit
+  );
+}
+
+/** {@link walkScoped} over a tree already made sound, a composed one included. */
+function walkSound(
+  sound: BlockDocument,
+  limits: DocumentLimits | undefined,
+  visit: (block: BlockNode, scope: ConditionScope) => boolean
+): void {
   const roots: unknown[] = sound.nodes;
   const stack: Visit[] = roots
     .map(node => ({ node, scope: ENTRY_SCOPE }))
