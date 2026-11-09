@@ -502,12 +502,12 @@ jobs:
           fi
           schemas=$(find src -name '*.zod.ts' | wc -l | tr -d ' ')
           echo "generated Zod schemas: $schemas"
-          # The visual approach declares no collections in code (its schema lives
-          # in the database), so generation has nothing to write a schema for and
-          # the compile above is the whole check. The existing-app leg is the same:
-          # the config create-nextly-app writes into an existing app declares no
-          # collections or singles. Every other leg must write some.
-          if [ "${{ matrix.approach }}" != visual ] && [ "${{ matrix.existing }}" != "create-next-app" ]; then
+          # Only a code-first scaffold declares collections in its config, so only
+          # that approach must write a schema. The blank template and the config
+          # create-nextly-app writes into an existing app declare none, and the
+          # visual approach's schema lives in the database: generation has nothing
+          # to write for those, and the compile above is the whole check.
+          if [ "${{ matrix.approach }}" = code-first ]; then
             [ "$schemas" -gt 0 ] || { echo "generate:types wrote no Zod schema"; exit 1; }
           fi
 
@@ -736,6 +736,9 @@ jobs:
             jq -c '[.items[]? | select(.status == "published")][0] // empty')
           [ -n "$post" ] || { echo "the API lists no published post to write to"; exit 1; }
           id=$(echo "$post" | jq -r '.id'); slug=$(echo "$post" | jq -r '.slug'); old=$(echo "$post" | jq -r '.title')
+          # An update names the version it read, as the admin's own save does.
+          rev=$(echo "$post" | jq -r '._rev // empty')
+          [ -n "$rev" ] || { echo "the API listed the post without its version"; echo "$post"; exit 1; }
           page="$base/blog/$slug"
           # Read twice, so the page is in the cache before the write.
           for _ in 1 2; do
@@ -745,7 +748,7 @@ jobs:
           # The slug is sent unchanged, so the page stays at the URL just read.
           new="Fresh after the write $(date +%s)"
           code=$(api -o /tmp/patch.json -w '%{http_code}' -X PATCH "$base/admin/api/collections/posts/entries/$id" \
-            -H 'Content-Type: application/json' -d "$(jq -cn --arg t "$new" --arg s "$slug" '{title: $t, slug: $s}')")
+            -H 'Content-Type: application/json' -d "$(jq -cn --arg t "$new" --arg s "$slug" --arg r "$rev" '{title: $t, slug: $s, _rev: $r}')")
           [ "$code" = 200 ] || { echo "the update answered $code"; cat /tmp/patch.json; exit 1; }
           # One read, in sequence after the response: no retry, since the expiry must
           # have completed by then.
