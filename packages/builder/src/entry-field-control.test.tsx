@@ -7,6 +7,7 @@
  * entry's edit screen in a new tab.
  */
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -53,7 +54,7 @@ afterEach(() => {
 
 /** The builder's sheet, which jsdom does not apply. */
 const CHROME = readFileSync(
-  fileURLToPath(new URL("./styles/builder-chrome.css", import.meta.url)),
+  join(dirname(fileURLToPath(import.meta.url)), "styles/builder-chrome.css"),
   "utf8"
 );
 

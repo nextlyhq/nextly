@@ -100,7 +100,7 @@ describe("the page with its conditions applied", () => {
       {
         id: "worksheet",
         name: "Members’ worksheet",
-        reason: "hidden for this post: Category is not Guides",
+        reason: "hidden for this post: Category is not “Guides”",
         unchecked: false,
       },
     ]);
@@ -308,7 +308,7 @@ describe("the page with its conditions applied, as the canvas draws it", () => {
     expect(failing.shown.size).toBe(0);
     expect(failing.hidden).toHaveLength(1);
     expect(failing.hidden[0]).toMatchObject({
-      reason: "hidden for this post: Category is not Guides",
+      reason: "hidden for this post: Category is not “Guides”",
       unchecked: false,
     });
     // The canvas draws its marker in its place, keeping its placement.
@@ -538,7 +538,7 @@ describe("a conditioned placement inside a placed component", () => {
       block("dup", { visibility: { conditions: [[long]] } })
     );
     expect(first?.props.reason).toBe(
-      "hidden for this post: Category is not Guides"
+      "hidden for this post: Category is not “Guides”"
     );
     expect(second?.props.reason).not.toBe(first?.props.reason);
   });
@@ -552,7 +552,7 @@ describe("a conditioned placement inside a placed component", () => {
     );
     expect(applied.hidden).toHaveLength(1);
     expect(applied.hidden[0]?.reason).toBe(
-      "hidden for this post: Category is not Guides"
+      "hidden for this post: Category is not “Guides”"
     );
   });
 });
@@ -614,7 +614,7 @@ describe("what the canvas draws where a list's item hides a block", () => {
       version: 1,
       props: {
         name: "Guide badge",
-        reason: "hidden for this entry: Category is not Guides",
+        reason: "hidden for this entry: Category is not “Guides”",
         unchecked: false,
       },
       visibility: { devices: { mobile: false } },

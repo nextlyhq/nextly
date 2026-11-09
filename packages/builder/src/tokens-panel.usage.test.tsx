@@ -234,6 +234,9 @@ describe("the count at the end of each row", () => {
         "color.brand": reach(12, ["c-card", "c-hero"]),
         "color.text": reach(0),
         "font-size.body": reach(1),
+        // A host answers for every variable asked, and a type size's row
+        // waits for both of its halves before it is counted.
+        "line-height.body": reach(0),
         "space.4": reach(2, [], false),
       }),
     });
@@ -496,8 +499,9 @@ describe("removing a variable in use", () => {
     render(<Hosted usage={usage} />);
     const editor = await openEditor(/^Space 4.*Used in 3 places$/);
     fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    // Answered once Remove has read the counts again.
     expect(
-      within(editor).getByText(
+      await within(editor).findByText(
         "It's used in 3 places, and they would lose this size:"
       )
     ).toBeDefined();
@@ -548,8 +552,9 @@ describe("removing a variable not counted yet", () => {
     render(<Hosted usage={usage} />);
     const editor = await openEditor(/^Text.*No uses counted yet/);
     fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    // Answered once Remove has read the counts again.
     expect(
-      within(editor).getByText(
+      await within(editor).findByText(
         /Pages are counted by the site's background jobs/
       )
     ).toBeDefined();
@@ -615,11 +620,15 @@ describe("removing a type size", () => {
     expect(onChange).not.toHaveBeenCalled();
     const pricing = await within(editor).findByText("Pricing");
     expect(pricing.closest("li")?.textContent).toBe("Pricing · page");
-    // Only the part in use is listed, and alone it needs no name.
+    // Only the part in use is listed, and alone it needs no name. Asked of
+    // the refusal: the editor's own field above it is labelled Line height.
     expect(usage.pages.map(read => read.identity)).toEqual([
       "line-height.body",
     ]);
-    expect(within(editor).queryByText("Line height")).toBeNull();
+    const refusal = within(editor).getByRole("region", {
+      name: "Body can't be removed while it's in use.",
+    });
+    expect(within(refusal).queryByText("Line height")).toBeNull();
   });
 
   it("lists each part's places under its name when both are used", async () => {
@@ -635,8 +644,12 @@ describe("removing a type size", () => {
     fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
     expect(await within(editor).findByText("Homepage")).toBeDefined();
     expect(await within(editor).findByText("Pricing")).toBeDefined();
-    expect(within(editor).getByText("Size")).toBeDefined();
-    expect(within(editor).getByText("Line height")).toBeDefined();
+    // Asked of the refusal: the editor's own fields above it share the names.
+    const refusal = within(editor).getByRole("region", {
+      name: "Body can't be removed while it's in use.",
+    });
+    expect(within(refusal).getByText("Size")).toBeDefined();
+    expect(within(refusal).getByText("Line height")).toBeDefined();
   });
 
   it("confirms as before once neither part is used", async () => {
@@ -853,10 +866,11 @@ describe("a removal the save refuses", () => {
     render(<Refusing usage={usage} />);
     let editor = await openEditor(/^Text.*Not used anywhere$/);
     fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    // Taken before the press: the refused save reads again within it.
+    const readsBefore = usage.asked.length;
     fireEvent.click(
       within(editor).getByRole("button", { name: "Remove Text" })
     );
-    const readsBefore = usage.asked.length;
 
     // The save refused: Text is read again, and its row catches up.
     await screen.findByRole("button", { name: /^Text.*Used in 1 place$/ });

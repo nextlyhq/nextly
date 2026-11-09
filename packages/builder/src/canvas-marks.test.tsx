@@ -426,7 +426,7 @@ describe("selection marks", () => {
     const marker = container.querySelector(".nx-condition-hidden");
     expect(marker?.getAttribute("data-nx-node")).toBe("b");
     expect(marker?.textContent).toBe(
-      "Gold offer · hidden for this post: tier is not gold"
+      "Gold offer · hidden for this post: tier is not “gold”"
     );
   });
 
@@ -501,7 +501,7 @@ describe("selection marks", () => {
     await waitFor(() => expect(marker()).not.toBeNull());
     expect(marker()?.getAttribute("data-nx-node")).toBe(applied.hidden[0]?.id);
     expect(marker()?.textContent).toBe(
-      "Gold offer · hidden for this post: tier is not gold"
+      "Gold offer · hidden for this post: tier is not “gold”"
     );
     const shownBadges = Array.from(
       container.querySelectorAll(

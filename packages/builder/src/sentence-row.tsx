@@ -288,13 +288,13 @@ export function useSentenceRows<Stored, Draft>(
       : draftsAfter(overStored.drafts, lastEdit.current?.edit);
   // Settled once the change is drawn, so the edit is read for it alone.
   React.useEffect(() => {
+    // Read here, not in the updater: React may run that on the next render,
+    // when the line below has already spent the edit.
+    const edit = lastEdit.current?.edit;
     setOverStored(state =>
       state.basis === storedText
         ? state
-        : {
-            basis: storedText,
-            drafts: draftsAfter(state.drafts, lastEdit.current?.edit),
-          }
+        : { basis: storedText, drafts: draftsAfter(state.drafts, edit) }
     );
     lastEdit.current = undefined;
   }, [storedText]);
