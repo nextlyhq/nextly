@@ -397,7 +397,7 @@ test.describe("the composition exit tests", () => {
     // Served, published: both copies drawn, and no two elements share an id.
     await itemOf(
       await api.patch(`${API}/collections/pages/entries/${target}`, {
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       }),
       "publishing the page"
     );
@@ -466,6 +466,7 @@ test.describe("the composition exit tests", () => {
         data: {
           content: cardDefinition(`Card title ${STAMP}`, v2),
           status: "published",
+          _overwrite: true,
         },
       }),
       "publishing the card"

@@ -91,7 +91,7 @@ test("a type size picked for a heading is stored as a reference, and follows the
   const before = await storedTokens(page);
   try {
     const seeded = await page.request.patch(SITE_STYLE, {
-      data: { tokens: { tokens: TYPE_SCALE } },
+      data: { tokens: { tokens: TYPE_SCALE }, _overwrite: true },
     });
     expect(seeded.ok(), `seeding the type scale: ${seeded.status()}`).toBe(
       true
@@ -187,7 +187,7 @@ test("a type size picked for a heading is stored as a reference, and follows the
     await expect.poll(() => headingSize(page)).toBe("40px");
   } finally {
     const restored = await page.request.patch(SITE_STYLE, {
-      data: { tokens: before },
+      data: { tokens: before, _overwrite: true },
     });
     expect(restored.ok(), `restoring the variables: ${restored.status()}`).toBe(
       true
@@ -202,7 +202,7 @@ test("Escape closes an open picker and leaves the selection, and the next one go
   const before = await storedTokens(page);
   try {
     const seeded = await page.request.patch(SITE_STYLE, {
-      data: { tokens: { tokens: TYPE_SCALE } },
+      data: { tokens: { tokens: TYPE_SCALE }, _overwrite: true },
     });
     expect(seeded.ok(), `seeding the type scale: ${seeded.status()}`).toBe(
       true
@@ -261,7 +261,7 @@ test("Escape closes an open picker and leaves the selection, and the next one go
     }
   } finally {
     const restored = await page.request.patch(SITE_STYLE, {
-      data: { tokens: before },
+      data: { tokens: before, _overwrite: true },
     });
     expect(restored.ok(), `restoring the variables: ${restored.status()}`).toBe(
       true

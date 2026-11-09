@@ -66,6 +66,7 @@ test.describe("the production exit demo", () => {
             },
           ],
         },
+        _overwrite: true,
       },
     });
     expect(

@@ -53,7 +53,7 @@ async function seedTranslated(
   const { item } = (await entry.json()) as { item: { id: string } };
   const spanish = await page.request.patch(
     `${API}/collections/${slug}/entries/${item.id}?locale=es`,
-    { data: { headline: "Hola" } }
+    { data: { headline: "Hola", _overwrite: true } }
   );
   expect(spanish.ok(), await spanish.text()).toBe(true);
 }

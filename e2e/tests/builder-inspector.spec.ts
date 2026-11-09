@@ -474,7 +474,7 @@ test.describe("the inspector", () => {
       ((site.item ?? site) as Record<string, unknown>).classes ?? [];
     const storeClasses = async (value: unknown): Promise<void> => {
       const stored = await page.request.patch(SITE_STYLE, {
-        data: { classes: value },
+        data: { classes: value, _overwrite: true },
       });
       expect(stored.ok(), `storing shared styles: ${stored.status()}`).toBe(
         true

@@ -66,7 +66,7 @@ test.describe(
         });
         const theirs = `Written by the second editor ${uniqueTag()}`;
         const written = await other.page.request.patch(SINGLE_API, {
-          data: { tagline: theirs },
+          data: { tagline: theirs, _overwrite: true },
         });
         expect(written.ok(), await written.text()).toBe(true);
 
