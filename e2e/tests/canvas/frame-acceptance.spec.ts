@@ -414,7 +414,10 @@ test.describe("the canvas keeps the site's colours whatever the admin's theme", 
       try {
         const nodes = [text("lead", "The site's own colours")];
         const stored = await page.request.patch("/admin/api/singles/homepage", {
-          data: { layout: { formatVersion: 1, kind: "page", nodes } },
+          data: {
+            layout: { formatVersion: 1, kind: "page", nodes },
+            _overwrite: true,
+          },
         });
         expect(stored.ok()).toBe(true);
         await page.setViewportSize({ width: 1440, height: 900 });
@@ -723,6 +726,7 @@ test.describe("a locked block's ring", () => {
             kind: "page",
             nodes: [text("held", "A locked block")],
           },
+          _overwrite: true,
         },
       });
       expect(unlocked.ok(), `unlocking: ${unlocked.status()}`).toBe(true);

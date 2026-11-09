@@ -65,7 +65,9 @@ async function storedClasses(
 
 /** Store the site's shared styles, as a test's starting point or its cleanup. */
 async function storeClasses(page: Page, classes: unknown): Promise<void> {
-  const stored = await page.request.patch(SITE_STYLE, { data: { classes } });
+  const stored = await page.request.patch(SITE_STYLE, {
+    data: { classes, _overwrite: true },
+  });
   expect(
     stored.ok(),
     `storing the shared styles: ${stored.status()} ${await stored.text()}`

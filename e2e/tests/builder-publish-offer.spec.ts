@@ -13,7 +13,7 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 test.describe.configure({ mode: "serial", lock: [LOCK.siteDefaultLayout] });
 
@@ -198,7 +198,7 @@ test("publishes the page only, leaving the component, when asked to", async ({
   const promo = await component(api, `Promo ${s}`, "published");
   const unpublished = await api.patch(
     `${API}/collections/components/entries/${promo}`,
-    { data: { status: "draft" } }
+    { data: { status: "draft", _overwrite: true } }
   );
   expect(unpublished.ok(), await unpublished.text()).toBe(true);
   const pageId = await draftPage(api, `Offers ${s}`, [promo]);
@@ -266,7 +266,7 @@ test("cancelling leaves the page a draft and the save state as it was", async ({
   await expect(offer(page)).toBeHidden();
   await expect(pageStatus(page)).toHaveText("Page status: Draft");
   // A cancelled publish is not a failed one.
-  await expect(page.getByText("Not saved")).toHaveCount(0);
+  await expect(includingHidden(page).getByText("Not saved")).toHaveCount(0);
   expect(await statusOf(api, "pages", pageId)).toBe("draft");
   expect(await statusOf(api, "components", card)).toBe("draft");
 });
