@@ -16,7 +16,11 @@ const POSTS = [
   { id: "c", title: "Cedar" },
 ];
 
-/** A reader holding one page, whose `related` field names two posts. */
+/**
+ * A reader holding one page, whose `related` field names two posts. It keeps
+ * to the limit it is asked for, as the real reader does, so a list that
+ * asked for no limit would come back with every post.
+ */
 function provider(): BlocksDataProvider & { asked: BlocksQuery[] } {
   const asked: BlocksQuery[] = [];
   return {
@@ -35,7 +39,7 @@ function provider(): BlocksDataProvider & { asked: BlocksQuery[] } {
             : [byId.value];
       const items =
         ids === undefined ? POSTS : POSTS.filter(post => ids.includes(post.id));
-      return { items, total: items.length };
+      return { items: items.slice(0, query.limit), total: items.length };
     },
   };
 }

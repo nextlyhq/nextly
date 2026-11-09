@@ -36,9 +36,11 @@ vi.mock("nextly/runtime", async importOriginal => {
 });
 
 import { throughBoundary } from "./__tests__/through-boundary";
+import { coreBlocks } from "./blocks";
 import type { NamedQueryLookup } from "./context";
 import { createBlocksPage } from "./next";
 import type { PageRendererProps } from "./page-renderer";
+import { createBlockResolver } from "./resolver";
 
 /** The page `news`: one list of a custom source, its title bound per item. */
 const news: BlockDocument = {
@@ -102,6 +104,9 @@ async function pageBindings(lookup: NamedQueryLookup) {
   const route = createBlocksPage({
     collections: ["pages"],
     field: "content",
+    // The route presents only blocks it can resolve, and this page's list is
+    // what its field shapes are read for.
+    blocks: createBlockResolver(coreBlocks),
     timeZone: "Asia/Karachi",
     namedQueries: lookup,
     nextly: instance() as never,
@@ -142,28 +147,28 @@ describe("a routed custom source whose rows are a schema of their own", () => {
     // Through JSON, as stored: a condition is read from what a page holds.
     JSON.parse(
       JSON.stringify({
-      formatVersion: DOCUMENT_FORMAT_VERSION,
-      kind: "page",
-      nodes: [
-        {
-          id: "list",
-          type: "core/collection-loop",
-          version: 1,
-          props: { namedQuery: { name: "events.soon", params: {} } },
-          slots: {
-            children: [
-              {
-                id: "badge",
-                type: "core/heading",
-                version: 1,
-                props: { text: "Soon", level: "h3" },
-                visibility: { conditions: [[condition]] },
-              },
-            ],
-            empty: [],
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          {
+            id: "list",
+            type: "core/collection-loop",
+            version: 1,
+            props: { namedQuery: { name: "events.soon", params: {} } },
+            slots: {
+              children: [
+                {
+                  id: "badge",
+                  type: "core/heading",
+                  version: 1,
+                  props: { text: "Soon", level: "h3" },
+                  visibility: { conditions: [[condition]] },
+                },
+              ],
+              empty: [],
+            },
           },
-        },
-      ],
+        ],
       })
     ) as BlockDocument;
 
@@ -192,6 +197,7 @@ describe("a routed custom source whose rows are a schema of their own", () => {
     const route = createBlocksPage({
       collections: ["pages"],
       field: "content",
+      blocks: createBlockResolver(coreBlocks),
       timeZone: "Asia/Karachi",
       namedQueries: {
         definitionOf: name => (name === soon.name ? soon : undefined),
@@ -209,7 +215,11 @@ describe("a routed custom source whose rows are a schema of their own", () => {
     // its condition orders a date.
     await expect(
       zoneFor(
-        eventsPage({ field: "startsAt", op: "greater_than", value: "2026-11-01" })
+        eventsPage({
+          field: "startsAt",
+          op: "greater_than",
+          value: "2026-11-01",
+        })
       )
     ).resolves.toBe("Asia/Karachi");
   });
