@@ -7,12 +7,16 @@
 import type { BindingFieldShape } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import type { HostAddress } from "../host-rewrite/contract";
+import { documentKeyOf, type HostAddress } from "../host-rewrite/contract";
 import type { HostDocument } from "../host-rewrite/rewrite";
 
 import type { BindingReportRow } from "./rows";
 import { runFullCheck, type BindingReportDeps } from "./scan";
 import type { BindingReportStore, FullCheck, ReportedDocument } from "./store";
+
+/** A page's key in the report, as the check writes it. */
+const keyOf = (id: string): string =>
+  documentKeyOf({ kind: "collection", slug: "pages", id });
 
 /** The store, in memory, keeping its marks as the table does. */
 function memoryStore() {
@@ -132,7 +136,7 @@ function site(contents: Record<string, unknown>, fingerprint: () => string) {
   });
   const documents = Object.keys(contents).map(
     (id): HostDocument => ({
-      key: `collection:pages:${id}`,
+      key: keyOf(id),
       hosts: [{ host: host(id), access: "write" }],
     })
   );
@@ -194,7 +198,7 @@ describe("the check of every document", () => {
     const using = deps(memory.store, pages.reading);
     expect(await runFullCheck(pages.walk, using, LATER())).toBe("complete");
     expect((await memory.store.list()).map(row => row.documentKey)).toEqual([
-      "collection:pages:a",
+      keyOf("a"),
     ]);
     expect(memory.check()).toMatchObject({ checked: "v1", checking: null });
     expect(memory.check().completedAt).not.toBeNull();
@@ -217,14 +221,14 @@ describe("the check of every document", () => {
     expect(await runFullCheck(pages.walk, using, LATER())).toBe("complete");
     expect(
       (await memory.store.list()).map(row => row.documentKey).sort()
-    ).toEqual(["collection:pages:a", "collection:pages:b"]);
+    ).toEqual([keyOf("a"), keyOf("b")]);
   });
 
   it("leaves a document a write marked during the check to the next pass, which settles it", async () => {
     const memory = memoryStore();
     const contents: Record<string, unknown> = { a: pageBinding("headline") };
     const pages = site(contents, () => "v1");
-    const key = "collection:pages:a";
+    const key = keyOf("a");
     const document: ReportedDocument = {
       documentKey: key,
       kind: "collection",
@@ -257,7 +261,7 @@ describe("the check of every document", () => {
     const memory = memoryStore();
     const pages = site({ a: pageBinding("headline") }, () => "v1");
     const document: ReportedDocument = {
-      documentKey: "collection:pages:a",
+      documentKey: keyOf("a"),
       kind: "collection",
       slug: "pages",
       documentId: "a",
@@ -277,7 +281,7 @@ describe("the check of every document", () => {
     await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER());
     expect(memory.rows.get(document.documentKey)?.dirty).toBeNull();
     expect((await memory.store.list()).map(row => row.documentKey)).toEqual([
-      "collection:pages:a",
+      keyOf("a"),
     ]);
   });
 
@@ -285,7 +289,7 @@ describe("the check of every document", () => {
     const memory = memoryStore();
     const pages = site({ a: pageBinding("headline") }, () => "v1");
     await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER());
-    const key = "collection:pages:a";
+    const key = keyOf("a");
     expect(memory.rows.get(key)?.rows).toHaveLength(1);
     await memory.store.markDirty({
       documentKey: key,
@@ -319,7 +323,7 @@ describe("the check of every document", () => {
     await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER());
     for (const id of ["a", "b", "c"]) {
       await memory.store.markDirty({
-        documentKey: `collection:pages:${id}`,
+        documentKey: keyOf(id),
         kind: "collection",
         slug: "pages",
         documentId: id,
@@ -340,15 +344,15 @@ describe("the check of every document", () => {
     };
     await runFullCheck(pages.walk, deps(memory.store, reading), LATER());
     expect([...pages.read].sort()).toEqual(["a", "b", "c"]);
-    expect(memory.rows.get("collection:pages:a")?.dirty).not.toBeNull();
-    expect(memory.rows.get("collection:pages:b")?.dirty).toBeNull();
+    expect(memory.rows.get(keyOf("a"))?.dirty).not.toBeNull();
+    expect(memory.rows.get(keyOf("b"))?.dirty).toBeNull();
   });
 
   it("drops a document's row once a complete check no longer finds it", async () => {
     const memory = memoryStore();
     await memory.store.record(
       {
-        documentKey: "collection:pages:gone",
+        documentKey: keyOf("gone"),
         kind: "collection",
         slug: "pages",
         documentId: "gone",
@@ -366,7 +370,7 @@ describe("the check of every document", () => {
       ]
     );
     // Recorded well before the check starts.
-    const held = memory.rows.get("collection:pages:gone");
+    const held = memory.rows.get(keyOf("gone"));
     if (held !== undefined) held.at = new Date(Date.now() - 10_000);
     const pages = site({ a: pageBinding("title") }, () => "v2");
     expect(

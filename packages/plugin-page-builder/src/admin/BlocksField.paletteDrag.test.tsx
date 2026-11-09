@@ -417,6 +417,16 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
         refetch: () => {},
       };
     }
+    // Any other read of the editor (the bindings report, a template's entry
+    // designs) is not the library these cases count, and answers nothing.
+    if (args.path !== paths.library) {
+      return {
+        data: undefined,
+        pending: false,
+        error: null,
+        refetch: () => {},
+      };
+    }
     routeReads += 1;
     return {
       data: libraryAnswer,

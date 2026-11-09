@@ -19,6 +19,7 @@ import {
 } from "./builder-view";
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PATTERNS_SLUG } from "./collections/patterns";
+import { TEMPLATES_SLUG } from "./collections/templates";
 import { pageBuilder } from "./plugin";
 import { TRANSFER_IMPORT_COMPONENT } from "./transfer/transfer-contract";
 
@@ -39,11 +40,23 @@ const REPLACED = {
   },
 };
 
+/**
+ * The views the plugin replaces, the Templates collection's aside: its own
+ * actions and panels are the templates' wiring, not the component store's.
+ */
+function componentViews(
+  plugin: ReturnType<typeof pageBuilder>
+): Record<string, unknown> {
+  const { [TEMPLATES_SLUG]: _templates, ...others } =
+    plugin.contributes?.admin?.views ?? {};
+  return others;
+}
+
 describe("Delete component's admin wiring", () => {
   it("replaces the plugin's own Components Delete when it is the store", () => {
     const plugin = pageBuilder();
 
-    expect(plugin.contributes?.admin?.views).toEqual({
+    expect(componentViews(plugin)).toEqual({
       [COMPONENTS_SLUG]: { documentActions: REPLACED },
     });
     // The plugin's own list draws the tools itself: no header tools.
@@ -64,7 +77,7 @@ describe("Delete component's admin wiring", () => {
 
     // No `beforeList`: that slot is the host's to fill, and a host's own
     // would drop it. The tools are drawn in the header, told the store.
-    expect(plugin.contributes?.admin?.views).toEqual({
+    expect(componentViews(plugin)).toEqual({
       "site-components": { documentActions: REPLACED },
     });
     expect(plugin.contributes?.admin?.header).toEqual({

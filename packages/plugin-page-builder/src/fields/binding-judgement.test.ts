@@ -10,6 +10,7 @@ import {
   registerBlocks,
   type BindingFieldShape,
 } from "@nextlyhq/blocks-engine";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import type {
   PluginFieldValidateArgs,
   PluginFieldWrite,
@@ -445,6 +446,15 @@ describe("the bindings a page's placed components bring", () => {
 });
 
 describe("a template's bindings", () => {
+  // The core blocks, as the plugin registers them at boot: what a prop will
+  // take is read from the block, so an unregistered one has no misfits.
+  beforeEach(() => {
+    registerBlocks([...coreBlocks], { source: "binding-judgement-test" });
+  });
+  afterEach(() => {
+    clearBlocks();
+  });
+
   // Templates are entries of their own collection, whose fields are not the
   // ones a template binds: it binds the entries of the collection it draws.
   const SHAPES: Readonly<Record<string, readonly BindingFieldShape[]>> = {

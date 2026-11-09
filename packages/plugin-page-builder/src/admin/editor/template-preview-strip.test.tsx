@@ -91,7 +91,9 @@ const ROWS: readonly PreviewEntryItem[] = [
 function previewOf(
   overrides: Partial<TemplatePreview> & { current?: PreviewEntryItem } = {}
 ): TemplatePreview {
-  const { current = ROWS[1], ...rest } = overrides;
+  // Spread, not a destructuring default: a default would also replace the
+  // `current: undefined` that asks for a preview with nothing to show.
+  const { current, ...rest } = { current: ROWS[1], ...overrides };
   const previewed: PreviewedEntry =
     current === undefined
       ? { kind: "none", reason: "empty" }

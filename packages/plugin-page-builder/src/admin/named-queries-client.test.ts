@@ -298,8 +298,11 @@ describe("canvasNamedRuns", () => {
     await runs(body);
     expect(run).toHaveBeenCalledTimes(1);
     at = 36_000;
-    await runs(body);
+    const again = runs(body);
     expect(run).toHaveBeenCalledTimes(2);
+    // A run of its own, which answers once it is told to.
+    finish(answer({ counted: true, reads: 1 }));
+    await again;
   });
 
   it("drops only the run that failed, never one started after it", async () => {

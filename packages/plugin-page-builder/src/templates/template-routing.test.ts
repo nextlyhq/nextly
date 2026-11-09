@@ -64,26 +64,29 @@ describe("the routing permission", () => {
     expect(MANAGE_TEMPLATE_ROUTING_PERMISSION).toBe("manage-template-routing");
   });
 
-  it("admits a caller holding it, and a super admin", () => {
+  it("admits a caller holding it, whatever their role is called", () => {
     expect(
       mayManageTemplateRouting({
-        roles: ["editor"],
         permissions: ["update-templates", "manage-template-routing"],
       })
-    ).toBe(true);
-    expect(
-      mayManageTemplateRouting({ roles: ["super-admin"], permissions: [] })
     ).toBe(true);
   });
 
   it("refuses a caller who may update templates but not change routing", () => {
     expect(
       mayManageTemplateRouting({
-        roles: ["editor"],
         permissions: ["read-templates", "update-templates"],
       })
     ).toBe(false);
     expect(mayManageTemplateRouting({})).toBe(false);
+  });
+
+  it("reads no role: a role's name alone admits nobody", () => {
+    const named = {
+      roles: ["super-admin"],
+      permissions: [],
+    };
+    expect(mayManageTemplateRouting(named)).toBe(false);
   });
 });
 
