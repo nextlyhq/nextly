@@ -36,6 +36,7 @@ import {
   isChipsField,
   isDataField,
 } from "../../../collections/fields/guards";
+import { declaresOwnId } from "../../../collections/fields/repeater-row-identity";
 import {
   ICON_ID_MAX_LENGTH,
   ICON_ID_PATTERN,
@@ -59,7 +60,6 @@ import {
   reserveAppliedGlobals,
 } from "./plugin-codegen";
 import type { PluginEmission } from "./plugin-codegen";
-import { declaresOwnId } from "../../../collections/fields/repeater-row-identity";
 
 // ============================================================
 // Types
