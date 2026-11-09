@@ -33,7 +33,8 @@ let refreshing = false;
 let readError: Error | null = null;
 /** Holds every write until released, to look at the section mid-check. */
 let held: Promise<void> | null = null;
-let saveAnswer: SiteCodeSaved;
+/** What a save answers; undefined is a route that answered nothing at all. */
+let saveAnswer: SiteCodeSaved | undefined;
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginRoute: () => ({
@@ -46,10 +47,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   writePluginRoute: async ({ body }: { body: Record<string, unknown> }) => {
     writes.push(body);
     if (held !== null) await held;
-    return {
-      message: "",
-      item: body.dryRun === true ? checkAnswer : saveAnswer,
-    };
+    const item = body.dryRun === true ? checkAnswer : saveAnswer;
+    return item === undefined ? undefined : { message: "", item };
   },
 }));
 
@@ -391,7 +390,7 @@ describe("the site's code in Settings", () => {
         },
       ],
     };
-    saveAnswer = undefined as unknown as SiteCodeSaved;
+    saveAnswer = undefined;
     show();
     editHead("<script>a()</script>");
     fireEvent.click(screen.getByRole("button", { name: "Save code" }));

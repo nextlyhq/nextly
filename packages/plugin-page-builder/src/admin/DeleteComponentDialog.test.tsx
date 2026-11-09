@@ -185,10 +185,10 @@ describe("the dry run", () => {
   it("lists the documents that use it, counting the ones the author can't view, and offers to turn each copy into plain blocks", async () => {
     show();
     await shown(/is used in 3 documents/);
-    const home = screen.getByRole("link", { name: /^Home / });
+    const home = screen.getByRole("link", { name: /^Home\b/ });
     expect(home.getAttribute("href")).toBe("/admin/collections/pages/p1");
     expect(
-      screen.getByRole("link", { name: /^Footer / }).getAttribute("href")
+      screen.getByRole("link", { name: /^Footer\b/ }).getAttribute("href")
     ).toBe("/admin/singles/site-footer");
     expect(screen.getByText("and 1 document you can't view")).toBeTruthy();
     expect(
@@ -226,8 +226,8 @@ describe("the dry run", () => {
       );
     show();
     await shown(/is used in 2 documents\./);
-    expect(screen.getByRole("link", { name: /^Home / })).toBeTruthy();
-    expect(screen.getByRole("link", { name: /^Pricing / })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /^Home\b/ })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /^Pricing\b/ })).toBeTruthy();
   });
 
   it("offers a plain delete when nothing uses it", async () => {
@@ -314,8 +314,8 @@ describe("the dry run", () => {
     expect(screen.queryByRole("button", { name: /then delete/ })).toBeNull();
     release();
     await shown(/is used in 2 documents\./);
-    expect(screen.getByRole("link", { name: /^Home / })).toBeTruthy();
-    expect(screen.getByRole("link", { name: /^Pricing / })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /^Home\b/ })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /^Pricing\b/ })).toBeTruthy();
     expect(screen.queryByText(/Nothing uses/)).toBeNull();
     expect(screen.getByRole("button", { name: /then delete/ })).toBeTruthy();
   });
@@ -357,7 +357,7 @@ describe("the dry run", () => {
       );
     show();
     expect(await screen.findByText(/A Layout uses/)).toBeTruthy();
-    expect(screen.getByRole("link", { name: /^Main / })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /^Main\b/ })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /then delete/ })).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Delete component" })
@@ -401,7 +401,7 @@ describe("the dry run", () => {
     answer = () => envelope({ ...USED, mayDelete: false });
     show();
     await shown(/You don't have permission to delete/);
-    expect(screen.getByRole("link", { name: /^Home / })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /^Home\b/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /then delete/ })).toBeNull();
   });
@@ -732,12 +732,13 @@ describe("the delete", () => {
             })
           );
     show();
+    // Found before `act`: an update inside it waits for it to end, so the
+    // dry run's answer could never draw the button being waited for.
+    const start = await screen.findByRole("button", {
+      name: "Turn each copy into plain blocks, then delete",
+    });
     await act(async () => {
-      fireEvent.click(
-        await screen.findByRole("button", {
-          name: "Turn each copy into plain blocks, then delete",
-        })
-      );
+      fireEvent.click(start);
     });
     await waitFor(() =>
       expect(document.activeElement).toBe(

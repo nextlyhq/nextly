@@ -17,11 +17,24 @@ const nextly = vi.hoisted(() => ({
 
 // The handle is replaced and nothing else is, so the editor and public
 // readers the route builds run as they do in production.
-vi.mock("nextly/runtime", async importOriginal => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  requireNextly: () => nextly,
-  bindingFieldShapes: async () => [{ name: "audience", type: "text" }],
-}));
+vi.mock("nextly/runtime", async importOriginal => {
+  const actual = await importOriginal<typeof import("nextly/runtime")>();
+  return {
+    ...actual,
+    requireNextly: () => nextly,
+    bindingFieldShapes: async () => [{ name: "audience", type: "text" }],
+    // The real public reader, told what is hidden as a reader over a stand-in
+    // is: no schema is registered here for it to read that from.
+    createPublicReader: (
+      reader: Parameters<typeof actual.createPublicReader>[0],
+      binding: Parameters<typeof actual.createPublicReader>[1]
+    ) =>
+      actual.createPublicReader(reader, {
+        ...binding,
+        declarations: { hiddenFields: async () => [] },
+      }),
+  };
+});
 
 import { CONDITIONS_PREVIEW_ENTRY_PATH } from "./conditions-preview-contract";
 import {

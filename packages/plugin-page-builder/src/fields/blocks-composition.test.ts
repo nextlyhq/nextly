@@ -1540,9 +1540,19 @@ describe("a component save judged inside the templates that use it", () => {
       write(stored.readStored, COMPONENTS, "cards"),
       { hostsOf: finder(), listFields, status: "published", templates }
     );
-    // One read for the three templates, never one per template.
-    expect(templates.storedTargetsOf).toHaveBeenCalledTimes(1);
-    expect(templates.storedTargetsOf).toHaveBeenCalledWith(["t1", "t2", "t3"]);
+    // A publish judges both of the forms it changes, each with one read for
+    // the three templates: never one read per template.
+    expect(templates.storedTargetsOf).toHaveBeenCalledTimes(2);
+    expect(templates.storedTargetsOf).toHaveBeenNthCalledWith(1, [
+      "t1",
+      "t2",
+      "t3",
+    ]);
+    expect(templates.storedTargetsOf).toHaveBeenNthCalledWith(2, [
+      "t1",
+      "t2",
+      "t3",
+    ]);
     expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
   });
 
