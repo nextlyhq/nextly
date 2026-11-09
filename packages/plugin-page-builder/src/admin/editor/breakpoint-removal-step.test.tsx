@@ -26,6 +26,7 @@ import type {
   SiteBreakpointRemovalStatus,
   SiteBreakpointsDryRun,
   SiteBreakpointRemovalsRead,
+  SiteCodeRead,
   SiteSettingsRead,
 } from "../../library-contract";
 
@@ -39,6 +40,16 @@ const SET = {
 const WITHOUT_MOBILE = { viewport: [SET.viewport[0]], container: [] };
 
 let siteRead: SiteSettingsRead;
+/** The site's code, with nothing saved: the Site tab shows it beside these. */
+const CODE_READ: SiteCodeRead = {
+  head: "",
+  body: "",
+  version: "rev-1",
+  policyDeclared: true,
+  described: { head: [], body: [] },
+  changedAt: null,
+  changedBy: null,
+};
 const refetch = vi.fn();
 /** Every write the dialog sent, by path and body. */
 const writes: Array<{ path: string; body: Record<string, unknown> }> = [];
@@ -63,8 +74,10 @@ function removalsOf(read: SiteSettingsRead): SiteBreakpointRemovalsRead {
 }
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
-  usePluginRoute: () => ({
-    data: siteRead,
+  // Each section of the Site tab reads its own route, so each is answered
+  // with its own shape: the code section reads the site's code, not settings.
+  usePluginRoute: ({ path }: { path: string }) => ({
+    data: path === "/site/code" ? CODE_READ : siteRead,
     pending: false,
     error: null,
     fetching: false,

@@ -1378,7 +1378,8 @@ describe("a save held for the author's pause", () => {
     expect(value.preview.mock.calls).toEqual([
       ["tokens", set(1), "held"],
       ["tokens", set(2), "held"],
-      ["tokens", set(2), "stored"],
+      // Stored, with what the write stored: here the value it was sent.
+      ["tokens", set(2), "stored", set(2)],
     ]);
   });
 

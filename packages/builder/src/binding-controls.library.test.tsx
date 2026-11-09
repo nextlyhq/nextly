@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 /**
  * The core block library, walked block by block: every prop of a bindable
  * type the inspector offers gets a bind button, but those a group draws and

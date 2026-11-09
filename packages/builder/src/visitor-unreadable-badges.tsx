@@ -69,6 +69,7 @@ import {
   type TabDraft,
 } from "./canvas-tab-places";
 import { useMediaSummary, type MediaSummary } from "./content-controls";
+import { isHTMLElement } from "./dom-kind";
 import type { Rect } from "./geometry";
 import {
   canvasContentRect,
@@ -146,7 +147,7 @@ function badgeWidthOf(
   const drawn = layer?.querySelector(`[data-badge-node="${CSS.escape(id)}"]`);
   // In the chrome's coordinates, as the outline and the band are: measured
   // through the overlay's own normalization, which a scaled canvas needs.
-  const width = drawn instanceof HTMLElement ? space.sizeOf(drawn).width : 0;
+  const width = isHTMLElement(drawn) ? space.sizeOf(drawn).width : 0;
   return width > 0 ? width : BADGE_WIDTH_ESTIMATE_PX;
 }
 

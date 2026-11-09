@@ -2,8 +2,13 @@
  * The report's rows for one document: each broken binding once, with what is
  * wrong and what a visitor sees instead.
  */
-import type { BindingFieldShape } from "@nextlyhq/blocks-engine";
-import { describe, expect, it } from "vitest";
+import {
+  clearBlocks,
+  registerBlocks,
+  type BindingFieldShape,
+} from "@nextlyhq/blocks-engine";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DeclaredShapesReader } from "../fields/binding-judgement";
 
@@ -38,6 +43,15 @@ const report = (nodes: unknown[], settings?: unknown) =>
   );
 
 describe("a document's bindings to fix", () => {
+  // The core blocks, as the plugin registers them at boot: which props a
+  // block has, and what each will take, is read from the block.
+  beforeEach(() => {
+    registerBlocks([...coreBlocks], { source: "bindings-report-test" });
+  });
+  afterEach(() => {
+    clearBlocks();
+  });
+
   it("lists a missing field with the fallback a visitor sees", async () => {
     const { rows } = await report([
       node(

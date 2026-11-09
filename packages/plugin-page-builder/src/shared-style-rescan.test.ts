@@ -178,7 +178,9 @@ describe("every stored document still using a style", () => {
     await expect(
       storedUsesOf(["c-card"], stoppedBy(stopping, stop.signal), classes)
     ).rejects.toMatchObject({
-      logContext: { reason: "stored-document-walk-stopped" },
+      // Stopped at the first row's other forms, the next read after the abort;
+      // a form that cannot be read is refused, with the stop as its cause.
+      cause: { logContext: { reason: "stored-document-walk-stopped" } },
     });
     expect(cursors).toEqual([undefined]);
   });

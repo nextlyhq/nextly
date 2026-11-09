@@ -956,6 +956,9 @@ export function PageRenderer({
     {
       fetchPolicyId,
       ...(mayFetchUrl === undefined ? {} : { mayFetchUrl }),
+      // This tree is the one drawn: a conditioned block still in it was kept
+      // because its conditions held, so a compile serves its rules.
+      drawn: true,
       // The tree the stored artifact describes. This render prunes before it
       // resolves — a gated drop and a drawless drop are both covered by the
       // artifact and licensed to keep it — and both can remove the last node of

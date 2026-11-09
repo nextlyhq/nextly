@@ -34,13 +34,20 @@ describe("pages carries no custom CSS surface", () => {
   it("declares no custom CSS permission; each it declares is one a route reads", () => {
     // A permission nothing consults grants nothing when held and prevents
     // nothing when withheld, while still being offered to an administrator to
-    // assign. So the declared list is exactly the permissions a route reads:
-    // `manage-page-builder-site`, demanded by make-default, and
-    // `lock-page-builder-shared-styles`, demanded by the shared-style lock.
+    // assign. So the declared list is exactly the permissions something reads:
+    // `manage-page-builder-site`, demanded by make-default,
+    // `lock-page-builder-shared-styles`, demanded by the shared-style lock, and
+    // `manage-template-routing`, asked by the template address field's rules
+    // and the template action (`templates/template-routing.test.ts`,
+    // `templates/template-actions-route.test.ts`).
     const declared = pageBuilder().contributes?.permissions ?? [];
     expect(
       declared.map(permission => `${permission.action}-${permission.resource}`)
-    ).toEqual(["manage-page-builder-site", "lock-page-builder-shared-styles"]);
+    ).toEqual([
+      "manage-page-builder-site",
+      "lock-page-builder-shared-styles",
+      "manage-template-routing",
+    ]);
     const routes = pageBuilder().contributes?.routes ?? [];
     const route = (suffix: string) =>
       routes.find(candidate => candidate.path.endsWith(suffix));
@@ -177,10 +184,14 @@ describe("where a page previews", () => {
     expect("breakpoints" in (preview as object)).toBe(false);
   });
 
-  it("escapes a slug that would otherwise change the path", () => {
+  it("keeps the segments of a page's path, and escapes a slug that would otherwise change it", () => {
     const url = pagesCollection({ previewPath: "/{slug}" }).admin?.preview?.url;
 
-    expect(url?.({ slug: "a/b" })).toBe("/a%2Fb");
+    // The slug is a path (`db.slugPaths`), so a page's own segments stay.
+    expect(url?.({ slug: "docs/install" })).toBe("/docs/install");
+    // Anything that would leave the template, or end the path, is encoded.
+    expect(url?.({ slug: "../admin" })).toBe("/..%2Fadmin");
+    expect(url?.({ slug: "a?b#c" })).toBe("/a%3Fb%23c");
   });
 });
 

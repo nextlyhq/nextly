@@ -11,11 +11,13 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import {
+  createBlockResolver,
   createStandaloneContext,
   PageRenderer,
   prepareDocumentAsDrawn,
   registeredBlocks,
 } from "@nextlyhq/blocks-react";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -83,7 +85,9 @@ describe("the lists the canvas finds in what it draws", () => {
     const stream = await renderToReadableStream(
       createElement(PageRenderer, {
         document: PAGE,
-        blocks: registeredBlocks(),
+        // The core blocks themselves: nothing has filled the editor's registry
+        // here, and a list that is not drawn reports nothing.
+        blocks: createBlockResolver(coreBlocks),
         definitions: DEFINITIONS,
         siteStyles: false,
         context: createStandaloneContext({

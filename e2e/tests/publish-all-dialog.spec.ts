@@ -33,11 +33,11 @@ async function authorWithAHeldChange(page: Page): Promise<string> {
   const id = ((await created.json()) as { item?: { id?: string } }).item?.id;
   if (typeof id !== "string") throw new Error("the new author has no id");
   const spanish = await page.request.patch(`${AUTHORS}/${id}?locale=es`, {
-    data: { jobTitle: "Matemática", status: "published" },
+    data: { jobTitle: "Matemática", status: "published", _overwrite: true },
   });
   expect(spanish.ok(), `publishing Spanish: ${spanish.status()}`).toBe(true);
   const held = await page.request.patch(`${AUTHORS}/${id}?locale=en`, {
-    data: { jobTitle: "Mathematician and writer" },
+    data: { jobTitle: "Mathematician and writer", _overwrite: true },
   });
   expect(held.ok(), `holding an English change: ${held.status()}`).toBe(true);
   return id;

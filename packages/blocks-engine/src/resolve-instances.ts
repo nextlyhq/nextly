@@ -3332,7 +3332,7 @@ function cloneDefinitionNode(
   // The node stands, gated, exactly as the host case leaves it standing — the
   // pass that prunes it wants it there — and its planned slot content is given
   // back, because nothing will place it.
-  if (!survivesGating(node, plan)) {
+  if (!survivesGating(node, plan, ctx.run)) {
     if (plan !== undefined) refundPlannedSlots(plan, ctx.run);
     return [scoped];
   }
@@ -3399,7 +3399,7 @@ function composeSurvivingSlots(
     if (!chargePrepassEntry(work, ctx.run)) return;
     if (!isPlainRecord(node) || typeof node.id !== "string") continue;
     const plan = ctx.plans.get(node.id);
-    if (!survivesGating(node, plan)) {
+    if (!survivesGating(node, plan, ctx.run)) {
       // Refunded for the OVERRIDE only, because that is the one the clone
       // refunds. The two ways a node stops being served end differently there:
       // an override that hides emits nothing and the charge comes back, while
@@ -3692,10 +3692,15 @@ function composeOwnedSlots(
  */
 function survivesGating(
   node: ResolvedBlockNode,
-  plan: NodePlan | undefined
+  plan: NodePlan | undefined,
+  run: ResolveRun
 ): boolean {
   if (plan?.visible === false) return false;
   if (plan?.visible === true) return true;
+  // A resolution carrying conditions expands a gated instance at any depth,
+  // as `expandInstance` does at the page's own level, and hands the gate to
+  // the roots that replace it.
+  if (run.carryConditions && node.type === COMPONENT_INSTANCE_TYPE) return true;
   return !isConditionGated(node);
 }
 

@@ -9,6 +9,7 @@ import {
   type BindingFieldShape,
   type BlockDocument,
   type BlockNode,
+  type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
@@ -31,6 +32,10 @@ async function renderToHtml(element: ReactElement): Promise<string> {
 }
 
 const resolver = createBlockResolver(coreBlocks);
+
+const BASE_ONLY: StyleCompileContext = {
+  breakpoints: { viewport: [{ id: "base", label: "Base" }], container: [] },
+};
 
 const POSTS: readonly BindingFieldShape[] = [
   { name: "title", type: "text" },
@@ -87,6 +92,9 @@ async function renderWith(
       document={document}
       blocks={resolver}
       siteStyles={false}
+      // With no compile context the page draws no sheet, and a block's rules
+      // could not be told apart from their absence.
+      styleContext={BASE_ONLY}
       context={createStandaloneContext({
         data: { find: () => Promise.resolve({ items: [...items] }) },
         fieldShapes: {
@@ -143,10 +151,16 @@ describe("an editor told what to draw for a hidden block", () => {
       ["pill", "2", "posts"],
       ["pill", "3", "posts"],
     ]);
-    // The marker sits where the pill would: before the item's name.
-    expect(html.indexOf(">Hidden for this entry<")).toBeLessThan(
-      html.indexOf(">A post<", html.indexOf(">Featured<") + 1)
-    );
+    // The marker sits where the pill would, before its item's name, in each
+    // item in the list's order.
+    expect(html.match(/>(?:Featured|Hidden for this entry|A post)</g)).toEqual([
+      ">Featured<",
+      ">A post<",
+      ">Hidden for this entry<",
+      ">A post<",
+      ">Hidden for this entry<",
+      ">A post<",
+    ]);
   });
 
   it("draws nothing where it is given nothing to draw", async () => {

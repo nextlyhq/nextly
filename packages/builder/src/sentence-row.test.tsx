@@ -12,7 +12,11 @@ import { useSentenceRows } from "./sentence-row";
 
 afterEach(cleanup);
 
-/** Rows over a list of strings, each its own draft. */
+/**
+ * Rows over a list of strings, each its own draft. A caller writes the stored
+ * list in the same event as the row's edit, so a test does both in one `act`:
+ * the edit and the list it changed land in one render.
+ */
 function rowsOver(initial: readonly string[]) {
   return renderHook(
     ({ stored }: { stored: readonly string[] }) =>
@@ -29,8 +33,8 @@ describe("a draft over a stored row", () => {
     });
     act(() => {
       result.current.remove(result.current.rows[0]!);
+      rerender({ stored: ["second"] });
     });
-    rerender({ stored: ["second"] });
     expect(result.current.rows[0]).toMatchObject({
       draft: "second, edited",
       drafted: true,
@@ -44,8 +48,8 @@ describe("a draft over a stored row", () => {
     });
     act(() => {
       result.current.change(result.current.rows[0]!, "first, written", true);
+      rerender({ stored: ["first, written", "second"] });
     });
-    rerender({ stored: ["first, written", "second"] });
     expect(result.current.rows[1]).toMatchObject({
       draft: "second, edited",
       drafted: true,
@@ -53,8 +57,8 @@ describe("a draft over a stored row", () => {
     // CONTROL: its own row written, the draft is what the row now holds.
     act(() => {
       result.current.change(result.current.rows[1]!, "second, written", true);
+      rerender({ stored: ["first, written", "second, written"] });
     });
-    rerender({ stored: ["first, written", "second, written"] });
     expect(result.current.rows[1]).toMatchObject({
       draft: "second, written",
       drafted: false,
@@ -68,8 +72,8 @@ describe("a draft over a stored row", () => {
     });
     act(() => {
       result.current.remove(result.current.rows[0]!);
+      rerender({ stored: ["same"] });
     });
-    rerender({ stored: ["same"] });
     expect(result.current.rows[0]).toMatchObject({
       draft: "same, edited",
       drafted: true,
@@ -85,8 +89,8 @@ describe("a draft over a stored row", () => {
     });
     act(() => {
       result.current.change(result.current.rows[0]!, "equals", true);
+      rerender({ stored: ["equals", "second"] });
     });
-    rerender({ stored: ["equals", "second"] });
     expect(result.current.rows[1]).toMatchObject({
       draft: "second, edited",
       drafted: true,

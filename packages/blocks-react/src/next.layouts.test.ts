@@ -49,6 +49,17 @@ vi.mock("nextly/runtime", async importActual => {
       }
     ),
     releaseBoundedRevalidate: vi.fn(async () => 42),
+    // The public's fields of every source: a condition on a field visitors
+    // may not read fails closed, so the entry's title must be one.
+    bindingFieldShapes: vi.fn(async () => [{ name: "title", type: "text" }]),
+    // No Nextly instance is registered here to say which fields are hidden.
+    createPublicReader: (
+      ...[source, binding]: Parameters<typeof actual.createPublicReader>
+    ) =>
+      actual.createPublicReader(source, {
+        ...binding,
+        declarations: { hiddenFields: () => [] },
+      }),
     // The real factory, observed: what the helper asks the route to tag EVERY
     // page with is the static half of a page's tags.
     createContentRoute: vi.fn((config: unknown) => {

@@ -259,7 +259,7 @@ test("a new variable with a dark value is kept, and the sheet applies it on a da
     }
   } finally {
     const restored = await page.request.patch(SITE_STYLE, {
-      data: { tokens: before },
+      data: { tokens: before, _overwrite: true },
     });
     expect(restored.ok(), `restoring the variables: ${restored.status()}`).toBe(
       true
@@ -317,6 +317,7 @@ test("a mode picked in the Design panel draws the canvas in it, on a device that
             },
           ],
         },
+        _overwrite: true,
       },
     });
     expect(seeded.ok(), `seeding the variables: ${seeded.status()}`).toBe(true);
@@ -385,7 +386,7 @@ test("a mode picked in the Design panel draws the canvas in it, on a device that
     expect(await adminChrome(page)).toEqual(lightChrome);
   } finally {
     const restored = await page.request.patch(SITE_STYLE, {
-      data: { tokens: before },
+      data: { tokens: before, _overwrite: true },
     });
     expect(restored.ok(), `restoring the variables: ${restored.status()}`).toBe(
       true
@@ -446,7 +447,10 @@ async function seedVariables(
     variable => !added.some(entry => entry.name === variable.name)
   );
   const seeded = await page.request.patch(SITE_STYLE, {
-    data: { tokens: { ...section, tokens: [...kept, ...added] } },
+    data: {
+      tokens: { ...section, tokens: [...kept, ...added] },
+      _overwrite: true,
+    },
   });
   expect(
     seeded.ok(),
@@ -661,6 +665,7 @@ test("a role that may read Design but not change it sees the variables read-only
             { ...harbour, values: { light: "#000000" } },
           ],
         },
+        _overwrite: true,
       },
     });
     expect(changed.status(), await changed.text()).toBe(403);
@@ -678,7 +683,7 @@ test("a role that may read Design but not change it sees the variables read-only
       expect(deleted.ok(), `deleting the page: ${deleted.status()}`).toBe(true);
     }
     const restored = await page.request.patch(SITE_STYLE, {
-      data: { tokens: before },
+      data: { tokens: before, _overwrite: true },
     });
     expect(restored.ok(), `restoring the variables: ${restored.status()}`).toBe(
       true
@@ -871,12 +876,13 @@ test("each variable action is kept across a reload: rename, value, dark value, r
             kind: "page",
             nodes: usingViolet(false),
           },
+          _overwrite: true,
         },
       });
       expect(freed.ok(), `freeing the page: ${freed.status()}`).toBe(true);
     }
     const restored = await page.request.patch(SITE_STYLE, {
-      data: { tokens: before },
+      data: { tokens: before, _overwrite: true },
     });
     expect(restored.ok(), `restoring the variables: ${restored.status()}`).toBe(
       true

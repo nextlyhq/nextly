@@ -20,10 +20,23 @@ const nextly = vi.hoisted(() => ({
   findSingle: vi.fn(),
 }));
 
-vi.mock("nextly/runtime", async importOriginal => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  requireNextly: () => nextly,
-}));
+vi.mock("nextly/runtime", async importOriginal => {
+  const actual = await importOriginal<typeof import("nextly/runtime")>();
+  return {
+    ...actual,
+    requireNextly: () => nextly,
+    // The real public reader, told what is hidden as a reader over a stand-in
+    // is: no schema is registered here for it to read that from.
+    createPublicReader: (
+      reader: Parameters<typeof actual.createPublicReader>[0],
+      binding: Parameters<typeof actual.createPublicReader>[1]
+    ) =>
+      actual.createPublicReader(reader, {
+        ...binding,
+        declarations: { hiddenFields: async () => [] },
+      }),
+  };
+});
 
 import { LIST_ENTRIES_ROUTE_PATH } from "./list-entries-contract";
 import { listEntriesRoute } from "./list-entries-route";

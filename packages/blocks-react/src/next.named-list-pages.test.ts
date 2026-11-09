@@ -22,9 +22,11 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { throughBoundary } from "./__tests__/through-boundary";
+import { coreBlocks } from "./blocks";
 import type { NamedQueryLookup } from "./context";
 import { createBlocksPage } from "./next";
 import type { PageRendererProps } from "./page-renderer";
+import { createBlockResolver } from "./resolver";
 
 /** What Next.js's `notFound()` throws, for the App Router to answer 404. */
 const NOT_FOUND = { digest: "NEXT_HTTP_ERROR_FALLBACK;404" };
@@ -107,6 +109,9 @@ async function served(slug: string[], lookup: NamedQueryLookup) {
   const route = createBlocksPage({
     collections: ["pages"],
     field: "content",
+    // The route presents only blocks it can resolve, and this page's one
+    // list is what it counts.
+    blocks: createBlockResolver(coreBlocks),
     // Today is read in the site's zone; none is readable in this process.
     timeZone: "Asia/Karachi",
     namedQueries: lookup,
@@ -148,9 +153,9 @@ describe("a routed named query's list split into pages", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const { lookup } = query(false);
-      await expect(
-        served(["news", "page", "2"], lookup)
-      ).rejects.toMatchObject(NOT_FOUND);
+      await expect(served(["news", "page", "2"], lookup)).rejects.toMatchObject(
+        NOT_FOUND
+      );
       // One line naming the query and the page, under a reference.
       const lines = warn.mock.calls.map(call => String(call[0]));
       expect(lines.filter(line => line.includes("posts.counted"))).toHaveLength(
