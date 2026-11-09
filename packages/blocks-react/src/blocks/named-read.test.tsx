@@ -34,6 +34,7 @@ import {
   type PageContext,
 } from "../context";
 import { PageRenderer } from "../page-renderer";
+import { prepareDocument, regateDocument } from "../prepare-document";
 import { createBlockResolver } from "../resolver";
 
 import { coreBlocks } from "./index";
@@ -181,15 +182,27 @@ function context(overrides: Partial<PageContext>): PageContext {
   };
 }
 
+const resolver = createBlockResolver(coreBlocks);
+
+/** The page as its route prepares it, gated for a page with no entry. */
+function routePrepared(document: BlockDocument) {
+  const prepared = prepareDocument(document, { resolver });
+  return prepared === null ? undefined : regateDocument(prepared, {})?.prepared;
+}
+
 async function drawn(
   document: BlockDocument,
   ctx: PageContext,
   onBindingIssues?: BindingIssuesHandler
 ): Promise<HTMLElement> {
+  // Prepared as the route prepares it: a render the route has not prepared
+  // holds every conditioned block back, a list item's among them.
+  const prepared = routePrepared(document);
   const stream = await renderToReadableStream(
     <PageRenderer
       document={document}
-      blocks={createBlockResolver(coreBlocks)}
+      blocks={resolver}
+      {...(prepared === undefined ? {} : { prepared })}
       context={ctx}
       bindings={{}}
       {...(onBindingIssues === undefined ? {} : { onBindingIssues })}

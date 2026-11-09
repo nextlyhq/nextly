@@ -55,23 +55,6 @@ export const BUTTON_VARIANT_MAP = {
   },
 };
 
-/**
- * Button Component - Design System Specification
- *
- * Interactive button element for user actions. Supports multiple variants,
- * sizes, and the asChild pattern for composition.
- *
- * Variants:
- * - default/primary: Primary action button (blue background, white text)
- * - secondary: Secondary action button (gray background)
- * - destructive: Destructive action button (red background)
- * - outline: Outlined button (transparent background, border)
- * - ghost: Minimal button (transparent, no border)
- * - link: Link-style button (underlined text)
- *
- * Note: 'primary' is a semantic alias for 'default' variant for better code readability
- * @experimental
- */
 // The keyboard focus ring: a 2px outline of the ring token, set 2px out from
 // the button. An outline's offset is a real gap, not a painted one, so the
 // surface the button sits on (a card, the page, a dialog) shows through it in
@@ -91,6 +74,23 @@ export const BUTTON_VARIANT_MAP = {
 const BUTTON_FOCUS_RING =
   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [.overflow-hidden>&]:focus-visible:outline-offset-[-2px] [.overflow-hidden>&]:focus-visible:shadow-[inset_0_0_0_4px_var(--nx-background)]";
 
+/**
+ * Button Component - Design System Specification
+ *
+ * Interactive button element for user actions. Supports multiple variants,
+ * sizes, and the asChild pattern for composition.
+ *
+ * Variants:
+ * - default/primary: Primary action button (blue background, white text)
+ * - secondary: Secondary action button (gray background)
+ * - destructive: Destructive action button (red background)
+ * - outline: Outlined button (transparent background, border)
+ * - ghost: Minimal button (transparent, no border)
+ * - link: Link-style button (underlined text)
+ *
+ * Note: 'primary' is a semantic alias for 'default' variant for better code readability
+ * @experimental
+ */
 const buttonVariants: VariantsFn<typeof BUTTON_VARIANT_MAP> = cva(
   `inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium cursor-pointer transition-all duration-150 ${BUTTON_FOCUS_RING} disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] [&_svg]:text-current`,
   {

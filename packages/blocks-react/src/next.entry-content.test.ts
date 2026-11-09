@@ -167,6 +167,9 @@ describe("a list split into pages inside the entry's content", () => {
     const route = createBlocksPage({
       collections: ["posts"],
       field: "content",
+      // The route presents only blocks it can resolve, and the entry's list
+      // is what it counts.
+      blocks: createBlockResolver(coreBlocks),
       // Today is read in the site's zone; none is readable in this process.
       timeZone: "Asia/Karachi",
       namedQueries: query().lookup,
