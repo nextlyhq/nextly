@@ -18,7 +18,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 
 import { defineCollection, defineSingle, json, text } from "../../config";
-import type { CollectionService } from "../../services/collections/collection-service";
 import { definePlugin, type PluginContext } from "../plugin-context";
 import type { PluginCollectionTransaction } from "../service-opts";
 import {
@@ -187,7 +186,7 @@ describeEachDialect("a plugin's own reads on its transaction", dialect => {
   it("refuses a collection it did not declare, and a settled token, before reading", async () => {
     const ctx = await boot(dialect);
     const { collections, ownCollections } = ctx.services;
-    const service = handle().getService<CollectionService>("collectionService");
+    const service = handle().getService("collectionService");
     const listEntries = vi.spyOn(service, "listEntries");
     const findEntryById = vi.spyOn(service, "findEntryById");
     let kept: PluginCollectionTransaction | undefined;

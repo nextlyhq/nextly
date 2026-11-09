@@ -70,6 +70,7 @@ import type { EmailService } from "../services/email/email-service";
 import type { MediaService } from "../services/media/media-service";
 import type { Logger } from "../services/shared";
 import type { UserService } from "../services/users/user-service";
+import type { OpenTransactionProbe } from "../shared/lib/open-transaction";
 import { runInPluginTransaction } from "../shared/lib/plugin-transaction-scope";
 import {
   type AfterCommitAdapter,
@@ -1795,7 +1796,9 @@ export type PluginServiceName = (typeof PLUGIN_SERVICE_NAMES)[number];
  * reachable without binding plugin-context to an adapter class, and the
  * `afterCommit` a store announces its committed change through.
  */
-export interface AdapterTransactions extends AfterCommitAdapter {
+export interface AdapterTransactions
+  extends AfterCommitAdapter,
+    OpenTransactionProbe {
   /**
    * The callback receives the transaction's own context, whose `getDrizzle()`
    * is bound to the transaction's connection. Ignoring it and using the pooled

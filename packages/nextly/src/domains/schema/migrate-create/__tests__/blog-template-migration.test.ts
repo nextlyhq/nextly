@@ -76,7 +76,7 @@ interface SqlColumn {
 function createdTables(sql: string): Map<string, SqlColumn[]> {
   const tables = new Map<string, SqlColumn[]>();
   const statement =
-    /CREATE TABLE IF NOT EXISTS\s+[`"]([^`"]+)[`"]\s*\(([\s\S]*?)\n\)/g;
+    /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+[`"]([^`"]+)[`"]\s*\(([\s\S]*?)\n\)/g;
   for (const [, table, body] of sql.matchAll(statement)) {
     const columns: SqlColumn[] = [];
     for (const line of body.split("\n")) {
@@ -110,7 +110,7 @@ function uniqueKeys(sql: string): string[] {
     for (const c of columns)
       if (/\bUNIQUE\b/i.test(c.rest)) keys.push(`${table}(${c.name})`);
   const statement =
-    /CREATE TABLE IF NOT EXISTS\s+[`"]([^`"]+)[`"]\s*\(([\s\S]*?)\n\)/g;
+    /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+[`"]([^`"]+)[`"]\s*\(([\s\S]*?)\n\)/g;
   for (const [, table, body] of sql.matchAll(statement))
     for (const line of body.split("\n")) {
       const key = /^\s*UNIQUE\b(?:\s+KEY)?[^(]*\(([^)]*)\)/i.exec(line);
@@ -405,7 +405,7 @@ describe("the blog template's MySQL migration", () => {
     const reference =
       /FOREIGN KEY\s*\(`([^`]+)`\)\s*REFERENCES\s+`([^`]+)`\s*\(`([^`]+)`\)/;
     for (const [, table, body] of sql.matchAll(
-      /CREATE TABLE IF NOT EXISTS\s+`([^`]+)`\s*\(([\s\S]*?)\n\)/g
+      /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+`([^`]+)`\s*\(([\s\S]*?)\n\)/g
     ))
       for (const [, column, target, targetColumn] of body.matchAll(
         new RegExp(reference.source, "g")
@@ -453,7 +453,7 @@ describe("the blog template's MySQL migration", () => {
     const columnsOf = (list: string) =>
       list.split(",").map(c => c.trim().replace(/[`"]/g, "").split(/\s+/)[0]);
     const statement =
-      /CREATE TABLE IF NOT EXISTS\s+`([^`]+)`\s*\(([\s\S]*?)\n\)/g;
+      /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+`([^`]+)`\s*\(([\s\S]*?)\n\)/g;
     for (const [, table, body] of sql.matchAll(statement)) {
       for (const line of body.split("\n")) {
         const inline = /^\s*`([^`]+)`\s+.*\b(PRIMARY KEY|UNIQUE)\b/.exec(line);

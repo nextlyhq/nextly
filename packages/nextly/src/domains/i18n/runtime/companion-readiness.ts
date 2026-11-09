@@ -52,12 +52,11 @@
  * @module domains/i18n/runtime/companion-readiness
  */
 
+import { connectionOf } from "../../../shared/lib/read-transaction-scope";
 import {
   isMissingTable,
   type MigrationDialect,
 } from "../../field-groups/migration/session";
-
-import { connectionOf } from "../../../shared/lib/read-transaction-scope";
 
 import type { CompanionIntrospectAdapter } from "./companion-io";
 

@@ -229,7 +229,7 @@ describe("carryStoredPasswords", () => {
     expect([...kept]).toEqual([HASH_A]);
   });
 
-  it("gives a row without an id none of the passwords of a list whose rows carry ids", () => {
+  it("refuses a row without an id that changed at a place no sent row names", () => {
     const fields = [
       {
         name: "lines",
@@ -241,25 +241,33 @@ describe("carryStoredPasswords", () => {
       },
     ];
     // Row `a` is removed, a new row is added in its place, and `b` is kept.
+    // Paired by place the new row would take `a`'s password, so the write is
+    // refused rather than the password moved or silently dropped.
     const data: Record<string, unknown> = {
       lines: [{ label: "new" }, { id: "b", label: "b" }],
     };
 
-    carryStoredPasswords(
-      data,
-      {
-        lines: [
-          { id: "a", label: "a", pw: HASH_A },
-          { id: "b", label: "b", pw: HASH_B },
-        ],
-      },
-      fields,
-      NO_FIELD_GROUPS
-    );
+    let refused: unknown;
+    try {
+      carryStoredPasswords(
+        data,
+        {
+          lines: [
+            { id: "a", label: "a", pw: HASH_A },
+            { id: "b", label: "b", pw: HASH_B },
+          ],
+        },
+        fields,
+        NO_FIELD_GROUPS
+      );
+    } catch (error) {
+      refused = error;
+    }
 
-    const lines = data.lines as Array<Record<string, unknown>>;
-    expect(lines[0]?.pw).toBeUndefined();
-    expect(lines[1]?.pw).toBe(HASH_B);
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: { errors: [{ path: "lines.0", code: "ROW_ID_REQUIRED" }] },
+    });
   });
 
   describe("repeater rows, now stored with ids", () => {

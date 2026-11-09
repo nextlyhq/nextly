@@ -119,6 +119,8 @@ function resolving(
       insertEvent: () => Promise.resolve("evt_2"),
       supersede: () => Promise.resolve(),
       markRolledBack: () => Promise.resolve(),
+      recordRemoval: () => Promise.resolve("evt_3"),
+      listFileRemovals: () => Promise.resolve([]),
     },
     fileExists: () => Promise.resolve(true),
     loadTargetSnapshot: () => Promise.resolve(null),
