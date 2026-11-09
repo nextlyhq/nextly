@@ -67,6 +67,7 @@ import {
 import {
   getCachedNextly,
   NextlyError,
+  resolvedCollectionView,
   respondMutation,
   type PluginCollectionTransaction,
   type PluginRouteContext,
@@ -98,6 +99,11 @@ import {
   type CompositionRouteContext,
 } from "./composition-route-kit";
 import { relationId } from "./default-layout/store";
+import type { StoredForms } from "./fields/added-undefined-ids";
+import {
+  newBindingIssues,
+  type BindingJudging,
+} from "./fields/binding-judgement";
 import {
   JUDGEMENT_CONTEXT,
   judgeInTransaction,
@@ -171,6 +177,8 @@ export function pageActionRequestOf(raw: unknown): PageActionRequest {
 export interface PageActionsSetup {
   readonly store?: ComponentStore;
   readonly limits?: () => DocumentLimits;
+  /** What an action's bindings are judged with; absent, they are not. */
+  readonly bindings?: () => BindingJudging | undefined;
 }
 
 /** The context the page actions run with. */
@@ -269,6 +277,9 @@ export async function runPageAction(
   );
   const options = asCaller(ctx, page.locale);
   await collections.warmLocalizedReadiness(page.collection);
+  // Before the transaction opens: a save inside one does not read the schema
+  // its bindings are judged against, so the dry run below can't see them.
+  const unbindable = await bindingRefusals(ctx, page, field, data, read, setup);
   const judged = await judgeInTransaction(
     run => collections.withTransaction(run),
     (tx: PluginCollectionTransaction) =>
@@ -306,11 +317,12 @@ export async function runPageAction(
     };
   };
 
-  if (judged.refusal !== null) {
-    if (body.dryRun !== true) throw refusedAction(judged.refusal.messages);
+  const refusals = [...unbindable, ...(judged.refusal?.messages ?? [])];
+  if (judged.refusal !== null || refusals.length > 0) {
+    if (body.dryRun !== true) throw refusedAction(refusals);
     return {
       message: "Nothing was written: the site would refuse this action.",
-      item: result(true, undefined, judged.refusal.messages),
+      item: result(true, undefined, refusals),
     };
   }
   if (body.dryRun === true) {
@@ -331,6 +343,86 @@ export async function runPageAction(
     message: "The page was changed.",
     item: result(false, applied.item, []),
     ...(applied.warnings === undefined ? {} : { warnings: applied.warnings }),
+  };
+}
+
+/**
+ * The messages the action's document is refused with for its bindings, by the
+ * rule a save judges them by: a problem either stored form already holds is
+ * kept, and only one this action makes is refused.
+ */
+async function bindingRefusals(
+  ctx: PageActionsContext,
+  page: PageActionRequest["page"],
+  field: string,
+  data: Record<string, unknown>,
+  read: ReadPage,
+  setup: PageActionsSetup
+): Promise<readonly string[]> {
+  const judging = setup.bindings?.();
+  if (judging === undefined || data[field] === undefined) return [];
+  const issues = await newBindingIssues(
+    data[field],
+    {
+      data,
+      path: field,
+      write: {
+        kind: "collection",
+        slug: page.collection,
+        id: page.id,
+        inTransaction: false,
+        ...(page.locale === undefined ? {} : { locale: page.locale }),
+      },
+    },
+    await fieldLabelOf(ctx, page.collection, field),
+    {
+      ...judging,
+      storedForms: () => storedFormsOf(ctx, page, field, read),
+    }
+  );
+  return issues.map(issue => issue.message);
+}
+
+/** The field's label as its collection declares it, else its name. */
+async function fieldLabelOf(
+  ctx: PageActionsContext,
+  collection: string,
+  field: string
+): Promise<string> {
+  const { fields } = resolvedCollectionView(
+    await ctx.services.collections.getCollection(collection, {})
+  );
+  const declared = fields.find(
+    candidate => (candidate as { name?: unknown }).name === field
+  ) as { label?: unknown } | undefined;
+  return typeof declared?.label === "string" ? declared.label : field;
+}
+
+/**
+ * The live and working-draft forms of the page, as the caller may read them.
+ * A form the caller can't read leaves the page unreadable, so nothing can tell
+ * a new problem from one it held, and the save's own judgement decides.
+ */
+async function storedFormsOf(
+  ctx: PageActionsContext,
+  page: PageActionRequest["page"],
+  field: string,
+  read: ReadPage
+): Promise<StoredForms> {
+  const live = await readStoredPage(
+    ctx,
+    page.collection,
+    page.id,
+    field,
+    page.locale,
+    false
+  );
+  if (live === null) return { forms: [], readable: false };
+  return {
+    forms: [live.page.document, read.page.document].filter(
+      (form): form is BlockDocument => form !== null
+    ),
+    readable: true,
   };
 }
 
@@ -368,13 +460,17 @@ async function readForAction(
   return { ...read, fingerprint };
 }
 
-/** The stored page as the caller may read it, its working draft first. */
+/**
+ * The stored page as the caller may read it: its working draft first, unless
+ * `draft` asks for the live row alone.
+ */
 async function readStoredPage(
   ctx: PageActionsContext,
   collection: string,
   pageId: string,
   field: string,
-  locale: string | undefined
+  locale: string | undefined,
+  draft = true
 ): Promise<ReadPage | null> {
   const row = await readOrNull(async () =>
     (await getCachedNextly()).findByID({
@@ -383,7 +479,7 @@ async function readStoredPage(
       ...(await readingAsUser(ctx)),
       ...(locale === undefined ? {} : { locale }),
       status: "all",
-      draft: true,
+      draft,
       depth: 0,
     })
   );

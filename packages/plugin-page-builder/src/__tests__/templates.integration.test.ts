@@ -623,9 +623,9 @@ describe.each(getConfiguredTestDialects())(
               (caught: unknown) => caught
             );
 
-        const refused = (await write({ content: relatedTagsDesign(3) })) as
-          | NextlyError
-          | undefined;
+        const refused = (await write(
+          asOverwrite({ content: relatedTagsDesign(3) })
+        )) as NextlyError | undefined;
         expect(NextlyError.isValidation(refused)).toBe(true);
         expect(JSON.stringify(refused?.publicData)).toContain(
           "TEMPLATE_COLLECTION_UNKNOWN"
@@ -635,7 +635,9 @@ describe.each(getConfiguredTestDialects())(
         // The control: the same write naming the collection is judged
         // against it and kept.
         expect(
-          await write({ content: relatedTagsDesign(3), collection: "posts" })
+          await write(
+            asOverwrite({ content: relatedTagsDesign(3), collection: "posts" })
+          )
         ).toBeUndefined();
         expect((await storedList(t, id))?.props.limit).toBe(3);
       });
