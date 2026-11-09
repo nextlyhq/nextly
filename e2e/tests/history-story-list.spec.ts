@@ -46,7 +46,9 @@ async function write(
   url: string,
   data: Record<string, unknown>
 ): Promise<{ id: string }> {
-  const response = await page.request[method](url, { data });
+  const response = await page.request[method](url, {
+    data: method === "patch" ? { ...data, _overwrite: true } : data,
+  });
   expect(response.ok(), await response.text()).toBe(true);
   const { item } = (await response.json()) as { item: { id: string } };
   return item;

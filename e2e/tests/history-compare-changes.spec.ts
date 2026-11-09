@@ -32,6 +32,7 @@ async function noteWithChanges(page: Page): Promise<string> {
     data: {
       summary: "as it stands now",
       details: { subtitle: "second subtitle", byline: "Ana" },
+      _overwrite: true,
     },
   });
   expect(updated.ok(), await updated.text()).toBe(true);

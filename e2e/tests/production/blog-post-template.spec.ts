@@ -29,7 +29,7 @@ import {
   TEMPLATES,
   type SeededJournal,
 } from "../support/blog-post-template";
-import { test } from "../support/visible";
+import { includingHidden, test } from "../support/visible";
 
 /**
  * The blog template's post page, rebuilt with a collection template and
@@ -347,7 +347,7 @@ test.describe("the blog post page, rebuilt with a template", () => {
         toc.filter(each => each.level === 3).length
       );
       for (const { id, text } of toc) {
-        await expect(page.locator(`[id="${id}"]`)).toHaveText(text);
+        await expect(page.locator(`[id="${id}"]:visible`)).toHaveText(text);
       }
     });
 
@@ -519,7 +519,7 @@ test.describe("the blog post page, rebuilt with a template", () => {
           page.locator('a[href^="/categories/"], a[href^="/tags/"]')
         ).toHaveCount(0);
         await expect(
-          page.getByText("Topic focus", { exact: true })
+          includingHidden(page).getByText("Topic focus", { exact: true })
         ).toHaveCount(0);
         // The lists and the Entry content draw no element at all, not an
         // empty one. Asked of class attributes, since the stylesheet names

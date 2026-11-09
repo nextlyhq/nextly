@@ -239,6 +239,7 @@ test.describe("a component's exposed fields", () => {
             nodes: NODES,
             exposed,
           },
+          _overwrite: true,
         },
       });
       expect(written.ok(), `publishing: ${written.status()}`).toBe(true);
