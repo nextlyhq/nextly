@@ -237,9 +237,18 @@ function Studio({
   );
 }
 
+/**
+ * A tab of the panel. `hidden`, because an open dialog hides the rest of the
+ * page from the accessibility tree, and these cases look at the tabs while a
+ * style's or a variable's dialog is still open over them.
+ */
+function tab(name: string): HTMLElement {
+  return screen.getByRole("tab", { name, hidden: true });
+}
+
 /** Choose a tab as a pointer does. */
 function openTab(name: string): void {
-  fireEvent.mouseDown(screen.getByRole("tab", { name }), { button: 0 });
+  fireEvent.mouseDown(tab(name), { button: 0 });
 }
 
 describe("the Variables studio's usage", () => {
@@ -265,11 +274,7 @@ describe("the Variables studio's usage", () => {
     fireEvent.click(card);
 
     await waitFor(() =>
-      expect(
-        screen
-          .getByRole("tab", { name: "Shared styles" })
-          .getAttribute("aria-selected")
-      ).toBe("true")
+      expect(tab("Shared styles").getAttribute("aria-selected")).toBe("true")
     );
     expect(await screen.findByRole("dialog", { name: "Card" })).toBeTruthy();
   });
@@ -312,10 +317,6 @@ describe("the Variables studio's usage", () => {
       blockType: "core/button",
     });
     // The Variables tab stays: a look does not open in Shared styles.
-    expect(
-      screen
-        .getByRole("tab", { name: "Variables" })
-        .getAttribute("aria-selected")
-    ).toBe("true");
+    expect(tab("Variables").getAttribute("aria-selected")).toBe("true");
   });
 });

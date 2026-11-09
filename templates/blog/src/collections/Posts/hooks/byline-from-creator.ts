@@ -33,6 +33,7 @@
  * Where the hook context has no Direct API (some CLI paths), nothing is
  * looked up.
  */
+import type { CollectionSlug } from "nextly";
 import type { HookHandler } from "nextly/config";
 
 /** The shared-context key `beforeChange` leaves for `afterChange`. */
@@ -47,10 +48,17 @@ type DirectApi = NonNullable<
 const isNamed = (byline: unknown): boolean =>
   byline !== undefined && byline !== null && byline !== "";
 
+/**
+ * A slug this hook is handed at run time, as the Direct API names one. The
+ * slug is the site's own (a site can install these collections under other
+ * names) or the hook context's, so no generated type can name it here.
+ */
+const slugOf = (slug: string): CollectionSlug => slug as CollectionSlug;
+
 /** The id of the profile whose `account` is `accountId`, if there is one. */
 async function profileOf(
   nextly: DirectApi,
-  authors: string,
+  authors: CollectionSlug,
   accountId: string
 ): Promise<string | undefined> {
   const found = await nextly.find({
@@ -79,7 +87,7 @@ export function bylineFromCreator(options: { authors: string }): {
   beforeChange: HookHandler;
   afterChange: HookHandler;
 } {
-  const { authors } = options;
+  const authors = slugOf(options.authors);
 
   const beforeChange: HookHandler = async ({
     operation,
@@ -123,14 +131,16 @@ export function bylineFromCreator(options: { authors: string }): {
       try {
         const profile = await profileOf(nextly, authors, user.id);
         if (profile === undefined) return;
-        const post = await nextly.findByID({
-          collection,
+        // Read as a plain row: the collection is named at run time, so the
+        // generated types can't say this one has a `byline`.
+        const post: Record<string, unknown> | null = await nextly.findByID({
+          collection: slugOf(collection),
           id: postId,
           depth: 0,
         });
         if (!post || isNamed(post.byline)) return;
         await nextly.update({
-          collection,
+          collection: slugOf(collection),
           id: postId,
           data: {
             byline: profile,

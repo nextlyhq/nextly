@@ -132,6 +132,7 @@ describe("the shared-style permission", () => {
     expect(declared).toEqual([
       "manage-page-builder-site",
       "lock-page-builder-shared-styles",
+      "manage-template-routing",
     ]);
   });
 
@@ -738,7 +739,7 @@ describe("removing unused shared styles", () => {
             path: "",
             code: SHARED_STYLE_IN_USE_CODE,
             message:
-              "Nothing was removed. Card is used on 2 documents. Hero is used on 1 document.",
+              "Nothing was removed. Card is used on 2 documents. hero is used on 1 document.",
           },
         ],
       },

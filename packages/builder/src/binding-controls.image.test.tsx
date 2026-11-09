@@ -159,7 +159,9 @@ function mount(
                 type: "acme/picture",
                 version: 1,
                 props,
-                bindings,
+                // Absent rather than holding `undefined`, as a stored block
+                // is: the engine refuses to edit a node holding that value.
+                ...(bindings === undefined ? {} : { bindings }),
               } as BlockNode,
             ],
           } as BlockDocument
@@ -384,7 +386,9 @@ describe("a bound image", () => {
     mount({ mediaId: { $bind: "gone" } });
     // Once the sources are read (the chip names the post), not while they
     // are, when the note is neutral anyway.
-    await screen.findByText(/Post/);
+    await screen.findByRole("button", {
+      name: "Image: bound to Gone of this post",
+    });
     const note = await screen.findByText(/comes from a bound field\./);
     expect(note.textContent).toMatch(/an image address has none/);
     expect(screen.queryByText(/comes from a bound library file/)).toBeNull();

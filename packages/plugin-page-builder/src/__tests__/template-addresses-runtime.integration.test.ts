@@ -124,9 +124,8 @@ describe.each(getConfiguredTestDialects())(
         ],
         seedPublic: true,
       });
-      // The instance's first user is its super admin, whom the routing rule
-      // admits, so it is made here and never acts: every author below holds
-      // only what it is granted.
+      // The instance's first user is its super admin, so it is made here and
+      // never acts: every author below holds only what it is granted.
       await person(current, "owner");
       return current;
     }

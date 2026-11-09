@@ -99,7 +99,7 @@ test("Undo saves a changed variable back as it was, and Redo saves it again", as
     ).toHaveCount(0);
   } finally {
     const restored = await page.request.patch(SITE_STYLE, {
-      data: { tokens: before },
+      data: { tokens: before, _overwrite: true },
     });
     expect(restored.ok(), `restoring the tokens: ${restored.status()}`).toBe(
       true

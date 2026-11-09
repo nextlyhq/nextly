@@ -38,25 +38,13 @@ import { InspectorPanel } from "./inspector-panel";
 import { propGroupsOf } from "./prop-groups";
 
 beforeAll(() => {
-  // What the picker asks of an element and of CSS, which jsdom does not
-  // draw: its active option scrolled into view, and a chip found by an
-  // escaped id once a pick closes it.
+  // What the picker asks of an element, which jsdom does not draw: its
+  // active option scrolled into view.
   const element = window.Element.prototype as unknown as Record<
     string,
     unknown
   >;
   element.scrollIntoView = function scrollIntoView(): void {};
-  const css = (globalThis as { CSS?: { escape?: (text: string) => string } })
-    .CSS;
-  if (css?.escape === undefined) {
-    Object.defineProperty(globalThis, "CSS", {
-      value: {
-        ...css,
-        escape: (text: string) => text.replace(/["\\]/g, "\\$&"),
-      },
-      configurable: true,
-    });
-  }
 });
 
 afterEach(() => {
@@ -895,7 +883,7 @@ describe("a link's entry bound to the entry a relation names", () => {
     );
     fireEvent.click(await authorEntry("Fields for Link"));
     const chip = await screen.findByRole("button", {
-      name: "Entry: bound to Author › Link to this entry of this post",
+      name: "Entry: bound to Author of this post",
     });
     await waitFor(() => {
       expect(window.document.activeElement).toBe(chip);
@@ -932,7 +920,7 @@ describe("a link's entry bound to the entry a relation names", () => {
       both
     );
     const chip = await screen.findByRole("button", {
-      name: "Entry: bound to Author › Link to this entry of this post",
+      name: "Entry: bound to Author of this post",
     });
     expect(
       screen.queryByRole("button", { name: /^Link: bound to/ })
@@ -1000,7 +988,7 @@ describe("a link's entry bound to the entry a relation names", () => {
     /** The options the entry chip's Change field lists, once it says so. */
     const changeOptions = async (): Promise<(string | null)[]> => {
       const chip = await screen.findByRole("button", {
-        name: "Entry: bound to Author › Link to this entry of this post",
+        name: "Entry: bound to Author of this post",
       });
       fireEvent.keyDown(chip, { key: "Enter" });
       fireEvent.click(
@@ -1121,13 +1109,21 @@ describe("a related entry for a link, as visitors and pages allow", () => {
         },
       ],
     } as BlockDocument;
+    let current = document;
+    let redraw: (next: BlockDocument) => void = () => undefined;
     const editor = {
       document,
       selectedId: "b",
       selection: { ids: ["b"], primary: "b" },
       applyAll: vi.fn(() => document),
       select: vi.fn(),
-      apply: vi.fn(() => document),
+      // As the editor applies an edit: on the document it holds, the result
+      // drawn, so a binding removed is drawn removed and its note is said.
+      apply: vi.fn((op: BuilderOp) => {
+        current = applyOp(current, op).document;
+        redraw(current);
+        return current;
+      }),
       undo: vi.fn(),
       redo: vi.fn(),
       canUndo: false,
@@ -1135,15 +1131,21 @@ describe("a related entry for a link, as visitors and pages allow", () => {
       undoDepth: 0,
       composed: () => undefined,
     } as unknown as EditorState;
-    render(
-      <InspectorPanel
-        editor={editor}
-        contentServices={{
-          listBindingFields: async () => RELATED,
-          ...(planUnbind === undefined ? {} : { planUnbind }),
-        }}
-      />
+    const contentServices = {
+      listBindingFields: async () => RELATED,
+      ...(planUnbind === undefined ? {} : { planUnbind }),
+    };
+    const view = render(
+      <InspectorPanel editor={editor} contentServices={contentServices} />
     );
+    redraw = next => {
+      view.rerender(
+        <InspectorPanel
+          editor={{ ...editor, document: next } as EditorState}
+          contentServices={contentServices}
+        />
+      );
+    };
     return editor;
   }
 
@@ -1747,10 +1749,7 @@ describe("every bindable prop", () => {
         label: "Tone",
         role: "content",
         type: "select",
-        options: [
-          { label: "Calm", value: "calm" },
-          { label: "Loud", value: "loud" },
-        ],
+        options: ["calm", "loud"],
       },
       body: { label: "Body", role: "content", type: "richText" },
       glyph: { label: "Glyph", role: "content", type: "icon" },

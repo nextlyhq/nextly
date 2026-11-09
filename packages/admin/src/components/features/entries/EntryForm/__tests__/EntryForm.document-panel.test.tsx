@@ -264,7 +264,11 @@ describe("a side panel section declared to sit above the form on a phone", () =>
       .map(section => section.getAttribute("data-panel-section"));
     expect(inSheet).not.toContain("Design");
     expect(inSheet).toContain("Details");
-    expect(screen.getAllByRole("region", { name: "Design" })).toHaveLength(1);
+    // The open sheet is modal, so the page behind it is hidden from the
+    // accessibility tree; the one above the form still counts.
+    expect(
+      screen.getAllByRole("region", { name: "Design", hidden: true })
+    ).toHaveLength(1);
   });
 
   it("stays in the docked panel, where it was placed, on a wide editor", () => {

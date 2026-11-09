@@ -202,8 +202,9 @@ describe("the canvas surface is the site's, not the admin's", () => {
      * The admin's tokens would repaint the page whenever the admin changed
      * theme, so the page's own rules name only the site's tokens. The
      * exceptions are the admin's words on the page, which take the tokens the
-     * frame hands them: a Layout region's badge and tag, and a collection
-     * list's note to its author and its "When empty" tag.
+     * frame hands them: a Layout region's badge and tag, a collection list's
+     * note to its author and its "When empty" tag, and the danger hue of an
+     * Entry content block's failed note to its author.
      */
     expect(CANVAS_FRAME_SHEET).toContain("var(--nx-canvas-site-ground");
     const naming = [
@@ -222,7 +223,7 @@ describe("the canvas surface is the site's, not the admin's", () => {
       // content is, by the same handed token.
       for (const part of selectors) {
         expect(part, "a rule painting with an admin token").toMatch(
-          /^(\.nx-canvas-region|\[data-nx-site-chrome\]|\[data-nx-list-diagnostic|\.nx-canvas \[data-nx-list-)/
+          /^(\.nx-canvas-region|\[data-nx-site-chrome\]|\[data-nx-list-diagnostic|\.nx-canvas \[data-nx-list-|\[data-nx-entry-content-note="failed"\])/
         );
       }
     }

@@ -139,7 +139,7 @@ CREATE TABLE IF NOT EXISTS "dc_posts_tags" (
 -- and use snake_case column names for all fields (e.g., hero_title not heroTitle).
 
 -- Site Settings single
-CREATE TABLE IF NOT EXISTS "single_site_settings" (
+CREATE TABLE "single_site_settings" (
   "id" TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16)))),
   "title" TEXT NOT NULL DEFAULT 'Site Settings',
   "slug" TEXT NOT NULL DEFAULT 'site-settings',
@@ -156,7 +156,7 @@ CREATE TABLE IF NOT EXISTS "single_site_settings" (
 );
 
 -- Navigation single
-CREATE TABLE IF NOT EXISTS "single_navigation" (
+CREATE TABLE "single_navigation" (
   "id" TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16)))),
   "title" TEXT NOT NULL DEFAULT 'Navigation',
   "slug" TEXT NOT NULL DEFAULT 'navigation',
@@ -172,7 +172,7 @@ CREATE TABLE IF NOT EXISTS "single_navigation" (
 );
 
 -- Homepage single
-CREATE TABLE IF NOT EXISTS "single_homepage" (
+CREATE TABLE "single_homepage" (
   "id" TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16)))),
   "title" TEXT NOT NULL DEFAULT 'Homepage',
   "slug" TEXT NOT NULL DEFAULT 'homepage',
@@ -241,6 +241,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uq_single_homepage_slug" ON "single_homepage"
 -- The core schema handles FK creation automatically
 
 -- ============ SINGLES DATA DEFAULTS ============
+-- The tables above are created without IF NOT EXISTS: this file made them, so the
+-- rows written here reach no table that was already there, and `nextly migrate`
+-- does not have to ask for consent before writing them.
 -- Insert default documents for each single so they're accessible immediately
 -- SQLite uses INSERT OR IGNORE instead of ON CONFLICT DO NOTHING
 INSERT OR IGNORE INTO "single_site_settings" ("id", "title", "slug", "status", "site_name", "tagline", "created_at", "updated_at")

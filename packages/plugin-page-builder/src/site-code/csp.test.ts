@@ -711,9 +711,10 @@ describe("what site code needs of a policy", () => {
       await cspHash("a()"),
       await cspHash(SITE_CODE_BOOTSTRAP),
     ]);
+    // Built, as the loader starts them, and nonceable: `nonce` is set on each.
     expect(facts.loads).toEqual([
-      { kind: "script", url: GTAG },
-      { kind: "script", url: "/js/own.js" },
+      { kind: "script", url: GTAG, built: true, nonceable: true },
+      { kind: "script", url: "/js/own.js", built: true, nonceable: true },
     ]);
   });
 });

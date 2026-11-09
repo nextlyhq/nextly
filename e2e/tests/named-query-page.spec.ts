@@ -121,7 +121,9 @@ async function changed(
   endpoint: string,
   data: Record<string, unknown>
 ): Promise<void> {
-  const response = await api.patch(endpoint, { data });
+  const response = await api.patch(endpoint, {
+    data: { ...data, _overwrite: true },
+  });
   expect(response.ok(), await response.text()).toBe(true);
 }
 
@@ -203,7 +205,9 @@ test("a named query's page refreshes when a collection or a Single it reads chan
     expect(await served()).not.toContain(SENTINEL);
   } finally {
     await signedIn
-      .patch(HOMEPAGE, { data: { title: originalHeadline ?? null } })
+      .patch(HOMEPAGE, {
+        data: { title: originalHeadline ?? null, _overwrite: true },
+      })
       .catch(() => undefined);
     await signedIn.dispose();
     await visitor.dispose();
