@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS "dc_posts_tags" (
 -- and use snake_case column names for all fields (e.g., hero_title not heroTitle).
 
 -- Site Settings single
-CREATE TABLE IF NOT EXISTS "single_site_settings" (
+CREATE TABLE "single_site_settings" (
   "id" text PRIMARY KEY DEFAULT (gen_random_uuid()::text),
   "title" text NOT NULL DEFAULT 'Site Settings',
   "slug" text NOT NULL DEFAULT 'site-settings',
@@ -157,7 +157,7 @@ CREATE TABLE IF NOT EXISTS "single_site_settings" (
 );
 
 -- Navigation single
-CREATE TABLE IF NOT EXISTS "single_navigation" (
+CREATE TABLE "single_navigation" (
   "id" text PRIMARY KEY DEFAULT (gen_random_uuid()::text),
   "title" text NOT NULL DEFAULT 'Navigation',
   "slug" text NOT NULL DEFAULT 'navigation',
@@ -173,7 +173,7 @@ CREATE TABLE IF NOT EXISTS "single_navigation" (
 );
 
 -- Homepage single
-CREATE TABLE IF NOT EXISTS "single_homepage" (
+CREATE TABLE "single_homepage" (
   "id" text PRIMARY KEY DEFAULT (gen_random_uuid()::text),
   "title" text NOT NULL DEFAULT 'Homepage',
   "slug" text NOT NULL DEFAULT 'homepage',
@@ -257,6 +257,9 @@ ADD CONSTRAINT "fk_site_settings_logo"
 FOREIGN KEY ("logo") REFERENCES "media"("id") ON DELETE SET NULL;
 
 -- ============ SINGLES DATA DEFAULTS ============
+-- The tables above are created without IF NOT EXISTS: this file made them, so the
+-- rows written here reach no table that was already there, and `nextly migrate`
+-- does not have to ask for consent before writing them.
 -- Insert default documents for each single so they're accessible immediately
 INSERT INTO "single_site_settings" ("id", "title", "slug", "status", "site_name", "tagline", "created_at", "updated_at")
 VALUES (gen_random_uuid(), 'Site Settings', 'site-settings', 'published', 'My Blog', 'Thoughts on web development', now(), now())

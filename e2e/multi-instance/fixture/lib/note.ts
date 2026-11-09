@@ -52,6 +52,8 @@ export async function writeNote(nextly: Nextly, value: string): Promise<void> {
   await nextly.update({
     collection: "notes",
     where: { slug: { equals: NOTE_SLUG } },
-    data: { value },
+    // Last write wins here: the suite is about what each instance serves after
+    // a write, so nothing in it holds a version to send.
+    data: { value, _overwrite: true },
   });
 }

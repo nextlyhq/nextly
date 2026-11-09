@@ -20,7 +20,7 @@
 import fs from "fs";
 import path from "path";
 
-import type { Nextly } from "nextly";
+import type { Nextly, SingleSlug } from "nextly";
 
 import { ownPostsUnlessPublisher } from "../../access/own-posts";
 
@@ -631,7 +631,7 @@ export async function seedSingles(
   nextly: Pick<Nextly, "updateSingle">,
   seedData: Pick<SeedData, "siteSettings" | "navigation" | "homepage">
 ): Promise<void> {
-  const write = async (slug: string, data: Record<string, unknown>) => {
+  const write = async (slug: SingleSlug, data: Record<string, unknown>) => {
     console.log(`  Updating ${slug}...`);
     try {
       await nextly.updateSingle({
