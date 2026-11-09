@@ -15,11 +15,14 @@ import { SendTestDialog } from "@admin/components/features/email-hub/sending/Sen
 import { explainSetupFailure } from "@admin/components/features/email-hub/sending/setup-copy";
 import {
   EMAIL_PROVIDER_FORM_ID,
-  EmailProviderForm,
   emailCatalogState,
   isUnregisteredProviderType,
-  type EmailProviderPayload,
-} from "@admin/components/features/settings/EmailProviderForm";
+} from "@admin/components/features/settings/EmailProviderForm/email-provider-catalog";
+import type { EmailProviderPayload } from "@admin/components/features/settings/EmailProviderForm/schemas/emailProviderSchema";
+import {
+  LazyEmailProviderForm,
+  preloadEmailProviderForm,
+} from "@admin/components/features/settings/EmailProviderForm/LazyEmailProviderForm";
 import { AlertTriangle, Loader2, Send } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -51,6 +54,10 @@ import type {
 } from "@admin/services/emailProviderApi";
 
 type UpdateProvider = ReturnType<typeof useUpdateEmailProvider>["mutate"];
+
+// The form's code is fetched as this page loads, beside its own data, so the
+// form is ready by the time the page has something to put in it.
+preloadEmailProviderForm();
 
 /** Saved, then back to the list; a refusal says what to fix. */
 function saveProvider(
@@ -461,7 +468,7 @@ function EditProvider({
                 onSaveAnyway={saveAnyway}
               />
             )}
-            <EmailProviderForm
+            <LazyEmailProviderForm
               mode="edit"
               provider={provider}
               descriptors={descriptors}

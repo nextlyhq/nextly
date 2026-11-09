@@ -25,8 +25,10 @@ import { useState, useCallback, useMemo } from "react";
 import { EmailHubLayout } from "@admin/components/features/email-hub/EmailHubLayout";
 import { SendingOverview } from "@admin/components/features/email-hub/sending/SendingOverview";
 import { SendTestDialog } from "@admin/components/features/email-hub/sending/SendTestDialog";
-import { emailCatalogState } from "@admin/components/features/settings/EmailProviderForm";
-import { clearSelectionValue } from "@admin/components/features/settings/EmailProviderForm/ProviderConfigFields";
+import {
+  clearSelectionValue,
+  emailCatalogState,
+} from "@admin/components/features/settings/EmailProviderForm/email-provider-catalog";
 import {
   AlertTriangle,
   Edit,
