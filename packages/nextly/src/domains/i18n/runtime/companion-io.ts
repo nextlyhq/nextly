@@ -21,8 +21,8 @@ import { and, eq, sql } from "drizzle-orm";
 import type { RequestActor } from "../../../auth/request-actor";
 import { isUniqueViolation } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
-import { readsOnTransaction } from "../../../shared/lib/read-transaction-scope";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
+import { readsOnTransaction } from "../../../shared/lib/read-transaction-scope";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
 import {
   readIndexUniqueness,

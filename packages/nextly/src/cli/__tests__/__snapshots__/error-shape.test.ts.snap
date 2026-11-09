@@ -401,6 +401,13 @@ exports[`each cause a documented code covers, as a command ends with it > SQLITE
   Docs: https://nextlyhq.com/docs/cli/errors/nextly-migration-foreign-key-violation  (NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION)"
 `;
 
+exports[`each code, as a command ends with it > ACTION_NOT_AVAILABLE 1`] = `
+"✗ This action isn't available for this entry.
+  Why:  An action runs only on the entries its plugin declared it for, judged on each entry as its caller reads it. Nothing was run.
+  Next: Run the action on an entry the admin offers it on.
+  Docs: https://nextlyhq.com/docs/cli/errors/action-not-available  (ACTION_NOT_AVAILABLE)"
+`;
+
 exports[`each code, as a command ends with it > ADMIN_EMAIL_IN_USE 1`] = `
 "✗ An account already uses that email. Nothing was created.
   Why:  That account would be given the administrator role and keep its own password, so the password given would be ignored.
@@ -1089,6 +1096,13 @@ exports[`each code, as a command ends with it > PLAN_CHANGED_AFTER_CONSENT 1`] =
         It would act on now: dc_tags; dc_tags_locales.
   Next: Run \`nextly prune\` again to see what it would do now.
   Docs: https://nextlyhq.com/docs/cli/errors/plan-changed-after-consent  (PLAN_CHANGED_AFTER_CONSENT)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_ACTION_ROW_NOT_FOUND 1`] = `
+"✗ A plugin's action named an entry that could not be found for this caller.
+  Why:  An action acts only on entries its caller may read; one they may not read is answered as one that does not exist. Nothing was run.
+  Next: Run the action on an entry the caller can open in the admin.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-action-row-not-found  (PLUGIN_ACTION_ROW_NOT_FOUND)"
 `;
 
 exports[`each code, as a command ends with it > PLUGIN_ADMIN_WIDGET_NOT_JSON 1`] = `

@@ -975,12 +975,6 @@ export class PushSchemaPipeline {
               ...approvedRebuilds,
             ])
           : new Map();
-      // Asked only where drizzle-kit may run: the fast path emits from this
-      // apply's own operations and never reads the media table. A catalogue
-      // read, which cannot abort the PostgreSQL transaction it may be in.
-      const retainedSizes = canEmitWithoutDrizzleKit(resolvedOps, dialect)
-        ? false
-        : await hasRetiredSizesColumn(db, dialect);
       const drizzleSchema = this.testHooks._buildDrizzleSchemaOverride
         ? this.testHooks._buildDrizzleSchemaOverride(patchedDesired, dialect)
         : this.buildDrizzleSchema(
@@ -996,7 +990,13 @@ export class PushSchemaPipeline {
                 renames,
                 desiredUnique
               ),
-            retainedSizes
+            // Asked only where drizzle-kit may run and the runtime tables are
+            // built here: the fast path emits from this apply's own operations
+            // and never reads the media table. A catalogue read, which cannot
+            // abort the PostgreSQL transaction it may be in.
+            canEmitWithoutDrizzleKit(resolvedOps, dialect)
+              ? false
+              : await hasRetiredSizesColumn(db, dialect)
           );
 
       // Scope drizzleSchema down to the table(s) actually touched by

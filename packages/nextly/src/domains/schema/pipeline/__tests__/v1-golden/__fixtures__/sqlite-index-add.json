@@ -1,4 +1,6 @@
 {
-  "sqlStatements": ["CREATE INDEX `g1_title_idx` ON `g1` (`title`);"],
+  "sqlStatements": [
+    "CREATE INDEX `g1_title_idx` ON `g1` (`title`);"
+  ],
   "hints": []
 }

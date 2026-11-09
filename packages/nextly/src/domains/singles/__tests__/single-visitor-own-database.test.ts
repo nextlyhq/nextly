@@ -269,7 +269,10 @@ async function visitorUpdatesSeo(): Promise<Record<string, unknown>> {
 
   await service.update(
     "site-settings",
-    { seo: { metaTitle: "Home", canonical: "https://example.com/" } },
+    {
+      seo: { metaTitle: "Home", canonical: "https://example.com/" },
+      _overwrite: true,
+    },
     { overrideAccess: false }
   );
 

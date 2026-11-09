@@ -40,6 +40,7 @@ import {
   isFieldGroupField,
   isDataField,
 } from "../../../collections/fields/guards";
+import { declaresOwnId } from "../../../collections/fields/repeater-row-identity";
 import { NextlyError } from "../../../errors";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
@@ -65,7 +66,6 @@ import {
   pluginTsType,
   reserveAppliedGlobals,
 } from "./plugin-codegen";
-import { declaresOwnId } from "../../../collections/fields/repeater-row-identity";
 
 // ============================================================
 // Types

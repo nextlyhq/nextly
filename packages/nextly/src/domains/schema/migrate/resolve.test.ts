@@ -526,6 +526,9 @@ describe("resolveMigration", () => {
           repo.insertEvent(values),
         markRolledBack: (id: string, input?: { note?: string | null }) =>
           repo.markRolledBack(id, input),
+        recordRemoval: (input: { filename: string; sha256: string | null }) =>
+          repo.recordRemoval(input),
+        listFileRemovals: () => repo.listFileRemovals(),
         supersede: () => Promise.reject(new Error("process stopped")),
       };
       await expect(
