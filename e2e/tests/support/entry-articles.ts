@@ -99,7 +99,9 @@ async function templateVersion(
   api: APIRequestContext,
   id: string
 ): Promise<string> {
-  const read = await api.get(`${TEMPLATES}/${id}`);
+  // `status=all`: a template that was never published has no published copy,
+  // and a plain read answers it as not found.
+  const read = await api.get(`${TEMPLATES}/${id}?status=all`);
   expect(read.ok(), await read.text()).toBe(true);
   // The entry as the route answers it, bare or in a mutation's envelope.
   const body = (await read.json()) as {

@@ -11,6 +11,7 @@ import { expect, type Page } from "@playwright/test";
 import {
   block,
   clickBlock,
+  emptyHomepage,
   openEditorWith,
   pressSave,
   selection,
@@ -186,6 +187,8 @@ test("a type size picked for a heading is stored as a reference, and follows the
     await page.keyboard.press("Escape");
     await expect.poll(() => headingSize(page)).toBe("40px");
   } finally {
+    // Off the homepage first: a variable still in use cannot be removed.
+    await emptyHomepage(page);
     const restored = await page.request.patch(SITE_STYLE, {
       data: { tokens: before, _overwrite: true },
     });
@@ -260,6 +263,8 @@ test("Escape closes an open picker and leaves the selection, and the next one go
       await expect.poll(() => selection(page)).toEqual(["escape-section"]);
     }
   } finally {
+    // Off the homepage first: a variable still in use cannot be removed.
+    await emptyHomepage(page);
     const restored = await page.request.patch(SITE_STYLE, {
       data: { tokens: before, _overwrite: true },
     });

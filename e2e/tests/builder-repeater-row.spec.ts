@@ -19,6 +19,7 @@ import {
   createRuntimeCollection,
   pageWithHeading,
   removeMigrationsOf,
+  removeRuntimeCollection,
 } from "./support/runtime-collection";
 import { LOCK } from "./support/locks";
 import { CANVAS_FRAME, canvasFrame } from "./support/canvas-frame";
@@ -92,6 +93,7 @@ test("opens a repeater row's blocks field by the row's id, and stays on that row
   try {
     await makeAndEdit();
   } finally {
+    await removeRuntimeCollection(api, slug);
     await removeMigrationsOf(slug);
   }
 
@@ -139,9 +141,18 @@ test("opens a repeater row's blocks field by the row's id, and stays on that row
       name: /^Drag to reorder .* 2$/,
     });
     await handle.focus();
+    // Each key waits for the announcement of the one before: the keyboard
+    // sensor listens for a move only once the pick-up has been handled, and a
+    // key pressed sooner is lost.
+    const announced = page.locator('[id^="DndLiveRegion-"]');
     await page.keyboard.press("Space");
+    await expect(announced).toContainText("Picked up");
+    await page.waitForTimeout(250);
     await page.keyboard.press("ArrowUp");
+    await expect(announced).toContainText("is over");
+    await page.waitForTimeout(250);
     await page.keyboard.press("Space");
+    await expect(announced).toContainText("moved to position 1");
     // Its way in now comes first, still naming the same row's id.
     await expect(
       page.getByRole("link", { name: OPEN_BUILDER_ACTION }).first()
@@ -194,6 +205,7 @@ test("refuses an address whose row is gone, and one naming a row by position", a
   try {
     await refuse();
   } finally {
+    await removeRuntimeCollection(api, slug);
     await removeMigrationsOf(slug);
   }
 

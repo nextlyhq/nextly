@@ -741,7 +741,8 @@ test.describe("Removing a breakpoint in Settings", () => {
       await expect(
         dialog.getByRole("heading", { name: "Put Small back?" })
       ).toBeVisible();
-      await dialog.getByRole("button", { name: "Back" }).click();
+      // Exact: "Put Small back" is the step's other button.
+      await dialog.getByRole("button", { name: "Back", exact: true }).click();
       expect((await storedTextStyles(page.request, id))[small]).toBeUndefined();
 
       // Put back: the breakpoint is defined again and the page's styles return.
@@ -750,7 +751,8 @@ test.describe("Removing a breakpoint in Settings", () => {
       await expect(
         dialog.getByText("Small is back, with its styles")
       ).toBeVisible();
-      await expect(dialog.getByText("put back")).toBeVisible();
+      // Exact: the sentence above says "put back" too.
+      await expect(dialog.getByText("put back", { exact: true })).toBeVisible();
       await expect
         .poll(async () => (await storedTextStyles(page.request, id))[small])
         .toBeDefined();

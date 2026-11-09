@@ -132,8 +132,15 @@ test.describe("Entry content on a template", () => {
     await canvasBlock(page, HEADING).click();
     await expect(card).not.toHaveText("Entry content");
     // The pointer passes through the article's blocks to the block, so the
-    // press is made where the words are, whatever receives it.
-    await frame.getByText(`${newer} body`).click({ force: true });
+    // press is made where the words are, whatever receives it: at the line's
+    // far end, clear of the toolbar the heading above drew over its start.
+    const body = frame.getByText(`${newer} body`);
+    const box = await body.boundingBox();
+    if (box === null) throw new Error("[e2e] The body has no box.");
+    await body.click({
+      force: true,
+      position: { x: box.width - 4, y: box.height / 2 },
+    });
     await expect(card).toHaveText("Entry content");
 
     // 2. Field offers both of the articles' blocks fields, Body chosen.

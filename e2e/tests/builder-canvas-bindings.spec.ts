@@ -66,6 +66,9 @@ async function seed(
           props: {
             collection: "bound-entries",
             limit: 10,
+            // Sorted, so the order asserted below is the list's own: unsorted
+            // entries come in id order, and an id is random.
+            sort: "title",
             filters: [{ field: "title", op: "contains", value: mark }],
           },
           slots: {

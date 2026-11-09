@@ -25,9 +25,10 @@
  */
 import { expect, type APIRequestContext } from "@playwright/test";
 
+import { LOCK } from "./support/locks";
 import { fileAccount, test } from "./support/test";
 
-test.describe.configure({ mode: "serial" });
+test.describe.configure({ mode: "serial", lock: [LOCK.homepage] });
 
 const API = "/admin/api";
 const PAGES = `${API}/collections/block-pages/entries`;
