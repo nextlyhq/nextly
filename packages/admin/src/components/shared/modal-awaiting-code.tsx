@@ -60,22 +60,29 @@ export function ModalAwaitingCode({
             The content of this dialog
           </DialogDescription>
         </DialogHeader>
-        {failure ? (
-          <ModuleLoadFailure
-            message="This could not be loaded."
-            exhausted={failure.exhausted}
-            onRetry={failure.onRetry}
-          />
-        ) : (
-          <div className="space-y-4 py-4">
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        {/* One height for both states: the dialog is centred, so a retry that
+            went loading and then failed would otherwise resize it and move the
+            control under the pointer. */}
+        <div className="flex min-h-[18.5rem] flex-col justify-center">
+          {failure ? (
+            <ModuleLoadFailure
+              message="This could not be loaded."
+              exhausted={failure.exhausted}
+              onRetry={failure.onRetry}
+              // Aligned as `DialogHeader` aligns the title above it.
+              className="items-center text-center sm:items-start sm:text-left"
+            />
+          ) : (
+            <div className="space-y-4 py-4">
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </div>
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-3/4" />
             </div>
-            <Skeleton className="h-10 w-full" />
-            <Skeleton className="h-10 w-full" />
-            <Skeleton className="h-10 w-3/4" />
-          </div>
-        )}
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   );
