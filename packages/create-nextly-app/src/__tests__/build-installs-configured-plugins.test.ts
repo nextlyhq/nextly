@@ -17,7 +17,11 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { DatabaseConfig, ProjectType } from "../types";
-import { configuredPlugins, generatePackageJson } from "../utils/template";
+import {
+  configuredPlugins,
+  generatePackageJson,
+  pluginInstallSteps,
+} from "../utils/template";
 
 const TEMPLATES = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -69,6 +73,12 @@ const importedPlugins = (text: string) => [
   ),
 ];
 
+/** Whether a config lists a plugin imported from its own source, not a package. */
+const registersOwnPlugin = (text: string) =>
+  /from\s+"\.[^"]*"/.test(text) &&
+  /plugins:\s*\[\s*\w/.test(text) &&
+  importedPlugins(text).length === 0;
+
 const dirs: string[] = [];
 afterEach(async () => {
   for (const dir of dirs.splice(0)) {
@@ -108,9 +118,15 @@ describe("a scaffold's build installs the plugins its config registers", () => {
       );
       const wanted = importedPlugins(text);
 
-      expect(installs, relative(file)).toEqual(
-        wanted.map(pkg => `nextly plugins install ${pkg}`)
-      );
+      if (registersOwnPlugin(text)) {
+        expect(installs, relative(file)).toEqual([
+          "nextly plugins install --all",
+        ]);
+      } else {
+        expect(installs, relative(file)).toEqual(
+          wanted.map(pkg => `nextly plugins install ${pkg}`)
+        );
+      }
       for (const install of installs) {
         expect(steps.indexOf(install)).toBeGreaterThan(
           steps.indexOf("nextly migrate")
@@ -126,15 +142,66 @@ describe("a scaffold's build installs the plugins its config registers", () => {
     expect(plugged).toContain("blog/configs/codefirst.config.ts");
   });
 
-  // The blog's visual config registers no plugin package (only one of its own,
-  // from its own source), and installing one it does not configure would fail
-  // the build.
-  it("installs nothing for a config that registers no plugin package", async () => {
+  // A production boot refuses any enabled plugin nothing has installed, the
+  // ones a site wrote itself included: the blog's visual config registers one
+  // from its own source, which a package name cannot name, so the build installs
+  // every plugin the config registers.
+  it("installs a config's own plugin through --all, which names it for the build", async () => {
     const text = await readFile(
       path.join(TEMPLATES, "blog/configs/visual.config.ts"),
       "utf8"
     );
-    expect(await buildScript("blog", text)).not.toContain("plugins install");
+    const steps = (await buildScript("blog", text)).split(" && ");
+    expect(steps).toContain("nextly plugins install --all");
+    expect(steps.indexOf("nextly plugins install --all")).toBeGreaterThan(
+      steps.indexOf("nextly migrate")
+    );
+    expect(steps.indexOf("nextly plugins install --all")).toBeLessThan(
+      steps.indexOf("next build")
+    );
+  });
+
+  it("installs nothing for a config with no plugins", async () => {
+    expect(
+      await buildScript(
+        "blank",
+        "export default defineConfig({ plugins: [] });"
+      )
+    ).not.toContain("plugins install");
+  });
+});
+
+describe("the install steps a config's plugins need", () => {
+  it("names only the packages when every plugin is one", () => {
+    expect(
+      pluginInstallSteps(
+        'import { seo } from "@nextlyhq/plugin-seo";\nexport default defineConfig({ plugins: [seo()] });'
+      )
+    ).toEqual(["nextly plugins install @nextlyhq/plugin-seo"]);
+  });
+
+  it("installs everything when a plugin of the site's own is listed beside a package", () => {
+    expect(
+      pluginInstallSteps(
+        [
+          'import { seo } from "@nextlyhq/plugin-seo";',
+          'import { credits } from "./src/credits";',
+          "export default defineConfig({ plugins: [seo(), credits] });",
+        ].join("\n")
+      )
+    ).toEqual(["nextly plugins install --all"]);
+  });
+
+  it("does not take an option identifier in a call for a plugin of the site's own", () => {
+    expect(
+      pluginInstallSteps(
+        [
+          'import { seo } from "@nextlyhq/plugin-seo";',
+          'import { fields } from "./src/fields";',
+          "export default defineConfig({ plugins: [seo({ fields })] });",
+        ].join("\n")
+      )
+    ).toEqual(["nextly plugins install @nextlyhq/plugin-seo"]);
   });
 });
 

@@ -35,10 +35,6 @@
     "count": 1,
     "digests": ["84381fd424963009"]
   },
-  ".github/workflows/scaffold-build.yml": {
-    "count": 1,
-    "digests": ["4466be5c8d0ef87e"]
-  },
   "packages/admin/src/components/features/entries/EntryForm/EntryForm.tsx": {
     "count": 2,
     "digests": ["69eafeb47e136856", "92043ca6e49d929a"]
