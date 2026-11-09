@@ -98,7 +98,7 @@ async function postsTemplate(api: APIRequestContext): Promise<string> {
   }
   if (id === undefined) throw new Error("[e2e] No posts template.");
   const designed = await api.patch(`${TEMPLATES}/${id}`, {
-    data: { content: DESIGN },
+    data: { content: DESIGN, _overwrite: true },
   });
   expect(designed.ok(), await designed.text()).toBe(true);
   return id;

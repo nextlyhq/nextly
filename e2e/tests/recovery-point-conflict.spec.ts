@@ -84,7 +84,7 @@ test.describe(
       const other = await request.newContext({ baseURL, storageState });
       try {
         const written = await other.patch(`${POSTS}/${id}`, {
-          data: { excerpt: "Theirs" },
+          data: { excerpt: "Theirs", _overwrite: true },
         });
         expect(written.ok(), await written.text()).toBe(true);
 

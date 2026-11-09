@@ -10,7 +10,7 @@
  */
 import { expect } from "@playwright/test";
 
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { EVERY_DIALECT } from "./support/every-dialect";
 import { LOCKED_POST as POST } from "./support/locked-post";
@@ -45,7 +45,9 @@ test.describe("one person in two tabs", { tag: EVERY_DIALECT }, () => {
     await expect(page.getByText(OPENED_ELSEWHERE)).toBeVisible({
       timeout: 45_000,
     });
-    await expect(page.getByText(/took over this document/)).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByText(/took over this document/)
+    ).toHaveCount(0);
     await expect(POST.field(page)).toHaveValue(unsaved);
     await expect(POST.field(page)).not.toBeEditable();
 

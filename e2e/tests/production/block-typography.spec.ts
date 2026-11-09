@@ -72,6 +72,7 @@ test("a heading outranks body text with no author styling at all", async ({
           },
         ],
       },
+      _overwrite: true,
     },
   });
   expect(

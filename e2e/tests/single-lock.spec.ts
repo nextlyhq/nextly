@@ -39,7 +39,7 @@ const SITE_SETTINGS: LockedScreen = {
   async prepare(api) {
     const stored = `Stored tagline ${uniqueTag()}`;
     const written = await api.patch(SITE_SETTINGS_API, {
-      data: { tagline: stored },
+      data: { tagline: stored, _overwrite: true },
     });
     expect(written.ok(), await written.text()).toBe(true);
     // A Single's read is the bare document, not a mutation's `{ item }`.

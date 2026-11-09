@@ -8,7 +8,7 @@
 import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 const RUN = Date.now().toString(36);
 
@@ -99,8 +99,10 @@ for (const [label, fields] of [
       await expect(page.getByLabel(field)).toBeVisible();
     }
     // No other type's settings, and no type picker: the type was chosen.
-    await expect(page.getByLabel("SMTP Host")).toHaveCount(0);
-    await expect(page.getByText("Provider Type")).toHaveCount(0);
+    await expect(includingHidden(page).getByLabel("SMTP Host")).toHaveCount(0);
+    await expect(includingHidden(page).getByText("Provider Type")).toHaveCount(
+      0
+    );
   });
 }
 
