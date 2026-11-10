@@ -78,3 +78,30 @@ export function entityAfterUpdate(
     fields: [...fields],
   };
 }
+
+/**
+ * The fills an update gives the rows already there for each Required field it
+ * adds (`pushAnswers.fills`), as the writer takes them: the value its push
+ * fills them with, which its file must fill them with too, before the column
+ * becomes NOT NULL. A unique field takes no one value, and a field the push
+ * gives no value (a relationship) has none to write: the push and the file
+ * refuse those alike.
+ */
+export function updateFills(
+  fills: ReadonlyArray<{ field: string; value: unknown; required: boolean }>,
+  fields: readonly FieldDefinition[]
+): Array<{ column: string; kind: "fill"; value: unknown }> {
+  return fills
+    .filter(
+      fill =>
+        fill.required &&
+        fill.value !== null &&
+        fill.value !== undefined &&
+        fields.find(f => f.name === fill.field)?.unique !== true
+    )
+    .map(fill => ({
+      column: fill.field,
+      kind: "fill" as const,
+      value: fill.value,
+    }));
+}

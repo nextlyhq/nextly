@@ -41,11 +41,14 @@ import {
   type BuilderSaveSetup,
   type CollectionSaveDeps,
 } from "../../schema/builder-save/collection-save";
+import { renamedFieldsOf } from "../../schema/builder-save/schema-change-save";
 import {
   entityAfterUpdate,
+  updateFills,
   type UpdateSettings,
 } from "../../schema/builder-save/update-save";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
+import type { BrowserRenameResolution } from "../../schema/pipeline/prompt-dispatcher/browser";
 import {
   applyCollectionSchemaChange,
   refuseNewCollectionIndexNamesTaken,
@@ -526,7 +529,18 @@ export class CollectionMetadataService extends BaseService {
     deps: CollectionSaveDeps,
     slug: string,
     before: DeletedCollectionRow,
-    artifacts: { metadataUpdates: { fields?: FieldDefinition[] } },
+    artifacts: {
+      metadataUpdates: { fields?: FieldDefinition[] };
+      /** What the update's push is answered with: its renames and fills go into the file too. */
+      pushAnswers: {
+        renameResolutions: readonly BrowserRenameResolution[];
+        fills: ReadonlyArray<{
+          field: string;
+          value: unknown;
+          required: boolean;
+        }>;
+      };
+    },
     update: UpdateSettings,
     push: (() => Promise<void>) | undefined
   ): Promise<MetadataServiceResult | undefined> {
@@ -553,6 +567,12 @@ export class CollectionMetadataService extends BaseService {
           previous,
           entity: entityAfterUpdate(previous, update, fields),
           change: "update",
+          // What the update's push does, written as the schema dialog's save
+          // writes it, so a deploy replaying the file ends as this database.
+          renamedFields: renamedFieldsOf(
+            artifacts.pushAnswers.renameResolutions
+          ),
+          resolutions: updateFills(artifacts.pushAnswers.fills, fields),
           junctions: relations.junctions,
           keys: relations.keys,
         },

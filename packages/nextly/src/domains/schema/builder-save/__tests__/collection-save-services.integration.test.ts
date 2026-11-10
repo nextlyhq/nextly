@@ -18,6 +18,7 @@ import { join } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { defineFieldGroup, text } from "../../../../config";
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import type { ServiceContainer } from "../../../../services";
 import type { CollectionService } from "../../../collections/services/collection-service";
@@ -667,6 +668,58 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual(files);
     });
 
+    /** The newest update file `updateCollection` wrote for `articles`, as a deploy replays it. */
+    const latestUpdateFile = () => {
+      const folder = join(t.basePath, "database", "history");
+      const updates = readdirSync(folder)
+        .filter(f => f.endsWith("_articles_update.sql"))
+        .sort();
+      return readFileSync(join(folder, updates[updates.length - 1]!), "utf-8");
+    };
+
+    it("writes a plugin's rename of a field as a rename, so a deploy keeps its values", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      const service = t.getService("collectionService");
+      await service.createCollection(created("articles"), {});
+
+      await service.updateCollection(
+        "articles",
+        { fields: [{ name: "content", type: "text" }] } as Parameters<
+          CollectionService["updateCollection"]
+        >[1],
+        {}
+      );
+
+      const file = latestUpdateFile();
+      expect(file).toMatch(/RENAME COLUMN/i);
+      expect(file).not.toMatch(/DROP COLUMN/i);
+    });
+
+    it("writes the fill a plugin's required field gives existing rows, so a deploy can make it required", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      const service = t.getService("collectionService");
+      await service.createCollection(created("articles"), {});
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      await adapter.executeQuery(
+        "INSERT INTO dc_articles (id, title, body, slug, created_at, updated_at) VALUES ('a', 'T', 'x', 'a', '2026-11-06 00:00:00', '2026-11-06 00:00:00')"
+      );
+
+      await service.updateCollection(
+        "articles",
+        {
+          fields: [
+            { name: "body", type: "text" },
+            { name: "rating", type: "number", required: true },
+          ],
+        } as Parameters<CollectionService["updateCollection"]>[1],
+        {}
+      );
+
+      expect(latestUpdateFile()).toMatch(
+        /UPDATE[^;]*rating[^;]*WHERE[^;]*rating[^;]*IS NULL/i
+      );
+    });
+
     it("writes a field named with capitals under its own name, its column in snake case", async () => {
       vi.stubEnv("NODE_ENV", "development");
       const service = t.getService("collectionService");
@@ -747,6 +800,57 @@ describe.each(getConfiguredTestDialects())(
       );
       const adapter = t.adapter as unknown as DrizzleAdapter;
       expect(await adapter.tableExists("dc_articles")).toBe(false);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a field-group field renamed through updateCollection (%s)",
+  dialect => {
+    it("moves the group's rows to the new name in the update's file, so a deploy keeps them", async () => {
+      const t = await createTestNextly({
+        dialect,
+        db: {
+          migrationsDir: "./database/history",
+          uiSchemaFile: "./schema/builder.json",
+        },
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "svc_meta",
+            fields: [text({ name: "note" })],
+          }),
+        ],
+      });
+      instance = t;
+      vi.stubEnv("NODE_ENV", "development");
+      const service = t.getService("collectionService");
+      await service.createCollection(
+        {
+          name: "articles",
+          label: "Article",
+          fields: [{ name: "hero", type: "component", component: "svc_meta" }],
+        } as Parameters<CollectionService["createCollection"]>[0],
+        {}
+      );
+
+      await service.updateCollection(
+        "articles",
+        {
+          fields: [
+            { name: "banner", type: "component", component: "svc_meta" },
+          ],
+        } as Parameters<CollectionService["updateCollection"]>[1],
+        {}
+      );
+
+      const folder = join(t.basePath, "database", "history");
+      const update = readdirSync(folder)
+        .filter(f => f.endsWith("_articles_update.sql"))
+        .sort()
+        .pop();
+      expect(readFileSync(join(folder, update!), "utf-8")).toMatch(
+        /UPDATE[^;]*_parent_field[^;]*'banner'[^;]*'hero'/
+      );
     });
   }
 );

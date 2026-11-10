@@ -2041,8 +2041,9 @@ export class DynamicCollectionService extends BaseService {
 
   /**
    * What a Builder save writes for a collection's relationships going from
-   * `oldFields` to `newFields`: its junction statements and its foreign keys
-   * before and after, every one naming the table each target is stored in
+   * `oldFields` to `newFields`: a renamed field-group field's association
+   * move, its junction statements and its foreign keys before and after,
+   * every key and junction naming the table each target is stored in
    * (`collectionTablesBySlug`), so a key or a junction to a collection whose
    * slug was renamed references the table it kept. One reading for every
    * writer of a save: create, update, the schema dialog and delete.
@@ -2059,13 +2060,32 @@ export class DynamicCollectionService extends BaseService {
       ...oldFields,
       ...newFields,
     ]);
-    return {
-      junctions: this.junctionStatements(
-        tableName,
+    const junctions = this.junctionStatements(
+      tableName,
+      oldFields,
+      newFields,
+      targetTables
+    );
+    // A renamed field-group field's rows moved to its new name, as the push
+    // moves them (`associationStatements`); its groups' tables are resolved
+    // only when there is a rename to move.
+    const renamesGroup =
+      this.schemaService.detectFieldGroupAssociationRename(
         oldFields,
-        newFields,
-        targetTables
-      ),
+        newFields
+      ) !== null;
+    const fieldGroupTableNames = renamesGroup
+      ? await this.resolveFieldGroupTableNames([...oldFields, ...newFields])
+      : new Map<string, string>();
+    const moved = (from: FieldDefinition[], to: FieldDefinition[]) =>
+      this.schemaService.associationStatements(tableName, from, to, {
+        fieldGroupTableNames,
+      });
+    return {
+      junctions: {
+        up: [...moved(oldFields, newFields), ...junctions.up],
+        down: [...junctions.down, ...moved(newFields, oldFields)],
+      },
       keys: {
         before: this.relationshipForeignKeys(
           tableName,

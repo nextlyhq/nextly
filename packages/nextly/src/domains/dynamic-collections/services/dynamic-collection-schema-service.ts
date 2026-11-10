@@ -984,6 +984,29 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
+   * The statements that move a renamed field-group field's association to its
+   * new name (`associationMove`), when the change renames no column, as the
+   * change's migration file decides it; none otherwise. What the push runs
+   * beside its diff and what a Builder save writes into its file are both
+   * read here, so the two cannot move it differently.
+   */
+  associationStatements(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    options?: {
+      associationRename?: AssociationRename;
+      fieldGroupTableNames?: ReadonlyMap<string, string>;
+    }
+  ): string[] {
+    if (this.detectFieldRename(oldFields, newFields) !== null) return [];
+    return (
+      this.associationMove(tableName, oldFields, newFields, options)
+        ?.statements ?? []
+    );
+  }
+
+  /**
    * What a collection change needs beside the schema pipeline's push, which leaves these tables
    * out of its diff: a renamed field-group field's association, and the junction tables of
    * many-to-many fields. The same statements the change's migration file carries for them, from
@@ -1004,13 +1027,8 @@ export class DynamicCollectionSchemaService {
       targetTables?: CollectionTables;
     }
   ): string[] {
-    // The association moves only when no column is renamed, as the file decides it.
-    const association =
-      this.detectFieldRename(oldFields, newFields) === null
-        ? this.associationMove(tableName, oldFields, newFields, options)
-        : null;
     return [
-      ...(association?.statements ?? []),
+      ...this.associationStatements(tableName, oldFields, newFields, options),
       ...this.junctionLifecycle(
         tableName,
         options?.junctionFields?.old ?? oldFields,

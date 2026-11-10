@@ -97,9 +97,7 @@ export function saveOfSchemaChange(args: {
       previous,
       entity,
       change: "update",
-      renamedFields: (args.answers.renameResolutions ?? [])
-        .filter(r => r.choice === "rename")
-        .map(r => ({ from: r.fromColumn, to: r.toColumn })),
+      renamedFields: renamedFieldsOf(args.answers.renameResolutions ?? []),
       ...(resolutions.length === 0 ? {} : { resolutions }),
       ...(args.answers.acknowledgedConversions === undefined
         ? {}
@@ -108,6 +106,19 @@ export function saveOfSchemaChange(args: {
       keys: args.keys,
     },
   };
+}
+
+/**
+ * The renames a save's rename answers accept, as the writer takes them: the
+ * schema dialog's and an update's own (`updateCollection`) through this one
+ * reading, so the two write a rename the same way.
+ */
+export function renamedFieldsOf(
+  resolutions: readonly BrowserRenameResolution[]
+): NonNullable<CollectionSave["renamedFields"]> {
+  return resolutions
+    .filter(r => r.choice === "rename")
+    .map(r => ({ from: r.fromColumn, to: r.toColumn }));
 }
 
 /**
