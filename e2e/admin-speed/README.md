@@ -58,6 +58,9 @@ are likewise the fewest any load took, since an extra copy of a request sends
 its own statements and one slow answer can add a round; statements may move by
 5% and rounds by one.
 
+It serves on port 3103, or `ADMIN_SPEED_PORT`, and refuses to start when that
+port is already taken.
+
 Each PostgreSQL and MySQL run creates and drops a database of its own on the
 server `E2E_DB_SERVER_URL_POSTGRESQL` or `E2E_DB_SERVER_URL_MYSQL` names, or on
 the local test containers by default.

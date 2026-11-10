@@ -53,9 +53,10 @@ const PLAYGROUND = path.join(ROOT, "apps", "playground");
 const PINS_FILE = path.join(HERE, "pins.json");
 const PRELOAD = path.join(HERE, "preload.mjs");
 const DIST_DIR = ".next-admin-speed";
-const PORT = Number(
-  process.env.ADMIN_SPEED_PORT || process.env.E2E_PROD_PORT || 3103
-);
+// A port of its own, never the production suite's (`E2E_PROD_PORT`): a server
+// of another run already listening there would answer this check's browser
+// while its statements came from this run's server.
+const PORT = Number(process.env.ADMIN_SPEED_PORT || 3103);
 const BASE = `http://localhost:${PORT}`;
 const SECRET = "admin-speed-check-secret-not-for-production-0123456789";
 const USER = { email: "dev@nextly.local", password: "DevPassword123!" };
@@ -200,6 +201,9 @@ async function startServer(env) {
       throw new Error(`the server exited:\n${output.slice(-2000)}`);
     await sleep(25);
   }
+  // The port answering is only ours if our server is still running.
+  if (server.exitCode !== null)
+    throw new Error(`the server exited:\n${output.slice(-2000)}`);
   return {
     started,
     listening: Date.now(),
@@ -696,6 +700,11 @@ function compare(measured, pins) {
 }
 
 async function main() {
+  if (await portOpen(PORT)) {
+    throw new Error(
+      `port ${PORT} is already in use; stop what listens there, or set ADMIN_SPEED_PORT to a free one`
+    );
+  }
   const dir = path.join(ROOT, "e2e", ".playwright", "admin-speed");
   fs.mkdirSync(dir, { recursive: true });
   if (flag("build")) {
