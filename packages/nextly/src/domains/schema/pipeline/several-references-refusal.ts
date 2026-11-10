@@ -21,7 +21,10 @@ import { liveTableName, renamesOf, type ApplyRenames } from "./live-uniques";
 import type { DesiredSchema } from "./types";
 
 /** Each dialect's condition on a column, given its quoted identifier. */
-type RowCondition = Record<SupportedDialect, (c: SQL) => SQL>;
+type RowCondition = Record<
+  SupportedDialect,
+  (c: ReturnType<typeof sql.identifier>) => SQL
+>;
 
 /** How many rows of `table` meet `condition` on `column`. */
 function rowsWhere(

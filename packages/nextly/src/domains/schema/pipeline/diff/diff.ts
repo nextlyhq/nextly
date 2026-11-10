@@ -265,7 +265,7 @@ export function diffSnapshots(
 }
 
 /** Whether `op` is a guard requiring a column empty before a relation's switch (`requireEmpty`). */
-function isEmptyColumnGuard(op: Operation): boolean {
+function isEmptyColumnGuard(op: Operation): op is ChangeColumnTypeOp {
   return op.type === "change_column_type" && op.conversion === "requireEmpty";
 }
 
@@ -281,7 +281,7 @@ function retypedForReferenceSwitches(
   const guarded = new Set(
     columnOps
       .filter(isEmptyColumnGuard)
-      .map(op => `${op.tableName}.${(op as ChangeColumnTypeOp).columnName}`)
+      .map(op => `${op.tableName}.${op.columnName}`)
   );
   return columnOps.filter(
     (op): op is ChangeColumnTypeOp =>
