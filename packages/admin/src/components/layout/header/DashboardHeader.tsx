@@ -5,10 +5,13 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from "@admin/components/icons";
+import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { cn } from "@admin/lib/utils";
 
 import { usePanelFold } from "../PanelFold";
 
+import { pluginHeaderItems } from "./header-visibility";
 import { HeaderTrail } from "./HeaderTrail";
 import { TopBarPlaceTarget } from "./TopBarPlaces";
 
@@ -27,7 +30,11 @@ interface DashboardHeaderProps {
  * panel folded, the toggle that brings the panel back comes first, and below
  * the width where the rail shows, the menu button that opens it in a drawer
  * comes before that. The reader's Inbox and account menu are at the foot of the
- * icon rail, so the bar's width belongs to the page.
+ * icon rail, so the bar's width belongs to the page, save for one thing: a
+ * plugin's own header item (`header.slot`) stays at the bar's far right, on
+ * every page, where plugins have always put it. Some draw a button there, and
+ * some draw nothing and register what a page needs, so it is mounted for as
+ * long as the bar is.
  *
  * Its height is `--admin-bar-height`, which whatever measures against the bar
  * reads too.
@@ -36,6 +43,7 @@ export function DashboardHeader({
   className,
   onOpenMenu,
 }: DashboardHeaderProps): JSX.Element {
+  const pluginItems = pluginHeaderItems(useBranding()?.plugins);
   return (
     <header
       className={cn(
@@ -69,6 +77,16 @@ export function DashboardHeader({
         name="end"
         className="flex shrink-0 items-center gap-2 empty:hidden"
       />
+      {pluginItems.length > 0 && (
+        <div
+          className="flex shrink-0 items-center gap-1"
+          data-testid="plugin-header-items"
+        >
+          {pluginItems.map(item => (
+            <PluginSlot key={item.name} path={item.slot} />
+          ))}
+        </div>
+      )}
     </header>
   );
 }

@@ -5,12 +5,12 @@
  *
  * A plugin's header powers carry over: `header.hide` and `hideDefaults` hide
  * the same items in their new places (the bell here, the help links in the
- * menu), and a plugin's header item is handed to the menu to draw. The bell
+ * menu). A plugin's own header item stays in the top bar. The bell
  * shows the schema-change journal only where the builder runs. Nothing here
  * is drawn until the answers deciding it are in, so the foot never changes
  * after its first paint.
  */
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AdminBranding } from "@admin/types/branding";
@@ -56,17 +56,14 @@ vi.mock("@admin/components/features/notifications", () => ({
 vi.mock("../UserProfileDropdown", () => ({
   UserProfileDropdown: ({
     hidden,
-    pluginItems,
     side,
   }: {
     hidden: ReadonlySet<string>;
-    pluginItems: readonly { name: string; slot: string }[];
     side?: string;
   }) => (
     <div
       data-testid="account-menu"
       data-hidden={[...hidden].sort().join(",")}
-      data-plugin-items={pluginItems.map(p => p.slot).join(",")}
       data-side={side}
     />
   ),
@@ -130,24 +127,6 @@ describe("the rail's account foot", () => {
     );
   });
 
-  it("hands each plugin's header item to the menu, the current spelling first", () => {
-    mockBranding = {
-      plugins: [
-        {
-          name: "@acme/a",
-          collections: [],
-          header: { slot: "@acme/a/admin#Publish" },
-        },
-        { name: "@acme/b", collections: [], headerSlot: "@acme/b/admin#Badge" },
-      ],
-    } as AdminBranding;
-    render(<RailAccount />);
-    expect(screen.getByTestId("account-menu")).toHaveAttribute(
-      "data-plugin-items",
-      "@acme/a/admin#Publish,@acme/b/admin#Badge"
-    );
-  });
-
   it("shows the bell's schema changes only where the builder runs", () => {
     mockBranding = { plugins: [], showBuilder: false } as AdminBranding;
     const { unmount } = render(<RailAccount />);
@@ -203,24 +182,29 @@ describe("the rail's account foot while its answers arrive", () => {
 
 describe("the rail's account foot and Next.js's development badge", () => {
   afterEach(() => {
-    vi.unstubAllEnvs();
-    vi.resetModules();
+    document.querySelectorAll("nextjs-portal").forEach(node => node.remove());
   });
 
-  it("keeps its foot clear below the avatar in development only", async () => {
+  it("keeps no space below the avatar where Next.js draws no overlay", () => {
     mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
-    // Read at import, from the build, as a bundler inlines it.
-    vi.stubEnv("NODE_ENV", "development");
-    vi.resetModules();
-    const dev = await import("../RailAccount");
-    const { unmount } = render(<dev.RailAccount />);
-    expect(screen.getByTestId("rail-account").className).toContain("pb-16");
-    unmount();
-
-    vi.stubEnv("NODE_ENV", "production");
-    vi.resetModules();
-    const prod = await import("../RailAccount");
-    render(<prod.RailAccount />);
+    render(<RailAccount />);
     expect(screen.getByTestId("rail-account").className).not.toContain("pb-16");
+  });
+
+  it("keeps its foot clear once Next.js's development overlay is in the page", async () => {
+    mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
+    render(<RailAccount />);
+    // Next.js adds its overlay after the page has started, as `next dev` does.
+    await act(async () => {
+      document.body.append(document.createElement("nextjs-portal"));
+    });
+    expect(screen.getByTestId("rail-account").className).toContain("pb-16");
+  });
+
+  it("keeps its foot clear where the overlay was there first", () => {
+    document.body.append(document.createElement("nextjs-portal"));
+    mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
+    render(<RailAccount />);
+    expect(screen.getByTestId("rail-account").className).toContain("pb-16");
   });
 });

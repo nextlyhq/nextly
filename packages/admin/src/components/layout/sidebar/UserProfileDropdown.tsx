@@ -21,7 +21,6 @@ import {
   User as UserIcon,
   LogOut,
 } from "@admin/components/icons";
-import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { ThemeChoice } from "@admin/components/shared/theme-toggle";
 import { ROUTES } from "@admin/constants/routes";
 import {
@@ -46,8 +45,6 @@ interface UserProfileDropdownProps {
    * by the same rule that hid them from the top bar.
    */
   hidden?: ReadonlySet<"github" | "discord" | "docs" | "notifications">;
-  /** Plugins' own header items, drawn in the menu's help group. */
-  pluginItems?: readonly { name: string; slot: string }[];
   /** Where the menu opens from its trigger: to the right of the rail. */
   side?: "top" | "right" | "bottom" | "left";
   align?: "start" | "center" | "end";
@@ -76,19 +73,17 @@ const HELP_LINKS = [
 ] as const;
 
 /**
- * Documentation, GitHub and Discord, then any plugin's own item, as one group.
+ * Documentation, GitHub and Discord, as one group.
  * They lived as icons across the top bar on every page; here they are a click
  * away without taking the bar's width from the page.
  */
 function HelpAndCommunity({
   hidden,
-  pluginItems,
 }: {
   hidden: ReadonlySet<string>;
-  pluginItems: readonly { name: string; slot: string }[];
 }): JSX.Element | null {
   const links = HELP_LINKS.filter(link => !hidden.has(link.id));
-  if (links.length === 0 && pluginItems.length === 0) return null;
+  if (links.length === 0) return null;
   return (
     <>
       <DropdownMenuLabel className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">
@@ -105,13 +100,6 @@ function HelpAndCommunity({
             />
           </a>
         </DropdownMenuItem>
-      ))}
-      {/* A plugin's header item is its own component; it is drawn here as
-          it was in the bar, so whatever it renders keeps working. */}
-      {pluginItems.map(item => (
-        <div key={item.name} className="px-1 py-1">
-          <PluginSlot path={item.slot} />
-        </div>
       ))}
       <DropdownMenuSeparator className="my-1" />
     </>
@@ -185,7 +173,6 @@ export function UserProfileDropdown({
   onLogout,
   className,
   hidden = new Set(),
-  pluginItems = [],
   side = "bottom",
   align = "end",
 }: UserProfileDropdownProps): JSX.Element {
@@ -228,7 +215,7 @@ export function UserProfileDropdown({
           <InterfaceLanguageChoice />
           <ThemeChoice />
           <DropdownMenuSeparator className="my-1" />
-          <HelpAndCommunity hidden={hidden} pluginItems={pluginItems} />
+          <HelpAndCommunity hidden={hidden} />
           {/* Muted foreground so this menu label meets contrast; a faint primary alpha did not. */}
           <DropdownMenuItem
             // The signed-in person's own page, which every one of them may
