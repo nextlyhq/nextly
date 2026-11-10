@@ -50,6 +50,7 @@ import {
 import { container } from "../../../di/container";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
+import type { ValidationPublicData } from "../../../errors/public-data";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
 import {
   resolveRequestFacts,
@@ -1054,6 +1055,34 @@ export type DraftPromotionRefused = (args: {
   authenticatedScope?: AuthenticatedScope;
 }) => Promise<boolean>;
 
+/** One reason a list read refuses a query: where, which rule, and why. */
+export type QueryRefusalProblem = ValidationPublicData["errors"][number];
+
+/**
+ * The problems a refusal from {@link CollectionQueryService.assertQueryReadable}
+ * names, or `undefined` for any other failure.
+ *
+ * The one place the chain's refusal shape is named. Every check in it refuses
+ * through `NextlyError.validation` with the problems it found: the release
+ * filter (through `refuseFilterProblems`), password fields, hidden columns
+ * (`refuseHiddenColumnFilter`), field read rules, field-group rules, the sort,
+ * the group key, and fields the read leaves out. A validation error that names
+ * no problem is not one of them, nor is a database or programming failure, so
+ * those stay failures rather than reading as an answer.
+ */
+export function queryRefusalProblems(
+  error: unknown
+): QueryRefusalProblem[] | undefined {
+  if (!NextlyError.is(error) || error.code !== "VALIDATION_ERROR") {
+    return undefined;
+  }
+  const data = error.publicData;
+  if (data === undefined || !("errors" in data)) return undefined;
+  return Array.isArray(data.errors) && data.errors.length > 0
+    ? data.errors
+    : undefined;
+}
+
 export class CollectionQueryService extends BaseService {
   /** The site's languages as they are now: the source may be the language registry. */
   private get localization(): SanitizedLocalizationConfig | undefined {
@@ -1332,6 +1361,31 @@ export class CollectionQueryService extends BaseService {
           "A password field cannot be filtered or sorted on. Its stored value never leaves the server, and which rows match would disclose it.",
       })),
     });
+  }
+
+  /**
+   * Every reason a list read would refuse this caller's query, or none,
+   * without throwing: what an offer of a filter or a rule asks before showing
+   * it, so the admin offers nothing the read it leads to would refuse.
+   *
+   * DERIVED from {@link assertQueryReadable}, the chain the read itself runs,
+   * by running it unchanged and reading its refusal. Not a second answer to
+   * the question: the chain is its one implementation, and an offer that
+   * judged by a copy would agree on the day it was written and drift after.
+   * Only the chain's refusal is read as an answer ({@link queryRefusalProblems});
+   * any other failure is rethrown, for the caller to treat as a refusal.
+   */
+  async queryReadableProblems(
+    params: Parameters<CollectionQueryService["assertQueryReadable"]>[0]
+  ): Promise<QueryRefusalProblem[]> {
+    try {
+      await this.assertQueryReadable(params);
+      return [];
+    } catch (error) {
+      const problems = queryRefusalProblems(error);
+      if (problems) return problems;
+      throw error;
+    }
   }
 
   /**

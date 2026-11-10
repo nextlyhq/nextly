@@ -13,15 +13,15 @@
  * Every write is made by the writer the run is walked with (as the person the
  * run belongs to, or as the system for a run no one person owns), writes only
  * the blocks field, and carries the hash of the value it was computed from, so
- * a write
- * that would overwrite somebody's edit is refused and the host is read again
- * (see `expectations`). Doubt never reads as "nothing to do": a host that
- * cannot be read, read to the end, or addressed is reported as left.
+ * a write that would overwrite somebody's edit is refused and the host is read
+ * again (core's conditional write, judged under the write's own row lock).
+ * Doubt never reads as "nothing to do": a host that cannot be read, read to
+ * the end, or addressed is reported as left.
  *
  * @module host-rewrite/rewrite
  * @experimental
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
+import { NextlyError, storedValueHash } from "@nextlyhq/plugin-sdk";
 
 import {
   documentKeyOf,
@@ -36,7 +36,6 @@ import {
 import type { RunPhase } from "./fence";
 import type { HostState, ProgressStore } from "./progress";
 import { scannedOutcomes } from "./scan";
-import { storedHash } from "./stored-hash";
 
 /** How a host's value can be reached. */
 export type HostAccess =
@@ -526,7 +525,9 @@ async function decideLive(
       ...(read.liveState === null
         ? { mode: "save" as const }
         : { mode: "publish" as const, publishAs: read.liveState }),
-      expected: { form, hash: await storedHash(read.published.value) },
+      // The stored value exactly as read, which the conditional write hashes
+      // again under its row lock.
+      expected: { form, hash: await storedValueHash(read.published) },
       ...(read.rev === undefined ? {} : { rev: read.rev }),
     },
   };
@@ -582,7 +583,7 @@ async function decideWithDraft(
       host: candidate.host,
       value: outcome.value,
       mode: "save",
-      expected: { form: "draft", hash: await storedHash(draft.value) },
+      expected: { form: "draft", hash: await storedValueHash(draft) },
       ...(read.rev === undefined ? {} : { rev: read.rev }),
     },
   };

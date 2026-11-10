@@ -198,12 +198,14 @@ function allLocalesLifecycle(
   successMessage: string
 ): MethodHandler<CollectionsHandlerType> {
   return {
-    execute: async (svc, p, body) => {
+    execute: async (svc, p, body, request) => {
       // `requireParam` rather than an inline throw: a missing route parameter is
       // caller-fixable, and a bare `Error` here would surface it as a 500.
       const collectionName = requireParam(p, "collectionName");
       const entryId = requireParam(p, "entryId");
       const result = await svc[method]({
+        // The request this transition's hooks are told about.
+        request,
         collectionName,
         entryId,
         actor: readAuthenticatedActor(),

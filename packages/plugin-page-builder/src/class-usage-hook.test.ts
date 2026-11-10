@@ -16,18 +16,19 @@ import {
   registerClassUsageMaintenance,
   type ClassUsagePluginContext,
 } from "./class-usage-hook";
+import type { ClassUsageIndexStore } from "./class-usage-maintenance";
+import type { SingleToWalk } from "./host-rewrite/site";
 
-const INDEX = "nx_pb_class_usage";
+/** The name each fake index store tags the calls it passes on with. */
+const INDEX = "class-index";
 /**
- * The COMPONENT index's collection, wired like the plugin wires it.
+ * The COMPONENT index's store, wired like the plugin wires it.
  *
- * Omitting it left the registration with `undefined`, so the re-entry guard
- * excluded a collection that does not exist, the delete loop asked a store for
- * one, and the fake below — keyed on "is this the class index" — answered the
- * component store with the DOCUMENT payload. Every test here then exercised a
- * configuration the plugin never creates.
+ * Both stores pass their calls on to the one recorded `api` below, tagged with
+ * which index they are, so a test reads every write in one place and an index
+ * the hook forgot shows as calls that never happened.
  */
-const COMPONENT_INDEX = "nx_pb_component_usage";
+const COMPONENT_INDEX = "component-index";
 
 /** A document whose single node applies the given classes. */
 const documentUsing = (...classes: string[]) => ({
@@ -44,6 +45,7 @@ function harness(
     draftSplit?: () => Promise<{ eligible: boolean }>;
     locales?: readonly string[];
     markDirty?: () => Promise<void>;
+    single?: (slug: string) => Promise<SingleToWalk | undefined>;
   } = {}
 ) {
   const registered: string[] = [];
@@ -96,14 +98,30 @@ function harness(
     // BOTH variants are read by id above; only `draft` differs between them,
     // and it selects the working-draft overlay. `find` therefore models the
     // INDEX store alone, never a document read.
-    create: vi.fn(async () => ({})),
-    delete: vi.fn(async () => ({})),
+    create: vi.fn(async (_args: Record<string, unknown>) => ({})),
+    delete: vi.fn(async (_args: Record<string, unknown>) => ({})),
+    // A Single with no working draft: the draft read answers its live row,
+    // without the overlay's mark, which the reader declines.
+    findSingle: vi.fn(async (_args: Record<string, unknown>) => ({
+      id: "s1",
+      content: documentUsing("hero"),
+    })),
   };
+
+  /** An index store passing its calls on to `api`, tagged with its index. */
+  const store = (collection: string): ClassUsageIndexStore => ({
+    find: args => api.find({ ...args, collection }),
+    create: args => api.create({ ...args, collection }),
+    delete: args => api.delete({ ...args, collection }),
+  });
 
   const reconcile = registerClassUsageMaintenance({
     ctx,
-    indexCollection: INDEX,
-    componentIndexCollection: COMPONENT_INDEX,
+    stores: () => ({
+      classIndex: store(INDEX),
+      componentIndex: store(COMPONENT_INDEX),
+    }),
+    single: options.single ?? (async () => undefined),
     draftSplit: options.draftSplit ?? (async () => ({ eligible: false })),
     locales: () => options.locales ?? [],
     limits: () => DEFAULT_LIMITS,
@@ -239,24 +257,10 @@ describe("a document that was deleted", () => {
     expect(api.delete).not.toHaveBeenCalled();
   });
 
-  it("SKIPS its own index collection, whose rows this deletes", async () => {
-    // Every row removed here is itself a delete on the index collection, which
-    // fires this same handler again.
-    const { fireDelete, api } = harness();
-
-    await fireDelete();
-    expect(api.find).toHaveBeenCalled();
-    api.find.mockClear();
-
-    await fireDelete({ collection: INDEX });
-
-    expect(api.find).not.toHaveBeenCalled();
-  });
-
   it("SKIPS a Single, which a wildcard registration also receives", async () => {
-    // Core namespaces a Single's hooks as `single:<slug>`. The index models
-    // Single subjects but a plugin has no supported way to read one, so none
-    // are written and there are none to forget.
+    // Core namespaces a Single's hooks as `single:<slug>`. A Single's one
+    // document is not deleted with an entry's delete, so there is nothing of
+    // it to forget here; the backfill's sweep removes rows of one that is gone.
     const { fireDelete, api } = harness();
 
     await fireDelete();
@@ -335,17 +339,6 @@ describe("which writes it acts on", () => {
     await fire();
 
     expect(draftSplit).not.toHaveBeenCalled();
-    expect(api.findByID).not.toHaveBeenCalled();
-    expect(api.create).not.toHaveBeenCalled();
-  });
-
-  it("SKIPS its own index collection, which it writes", async () => {
-    // Every row this inserts is a create on that collection, which fires this
-    // hook again. Without the guard the first maintained save recurses.
-    const { fire, api } = harness();
-
-    await fire({ collection: INDEX });
-
     expect(api.findByID).not.toHaveBeenCalled();
     expect(api.create).not.toHaveBeenCalled();
   });
@@ -502,25 +495,53 @@ describe("a write inside a caller-owned transaction", () => {
 });
 
 describe("a Single, which a wildcard registration also receives", () => {
-  it("is SKIPPED rather than looked up as a collection", async () => {
+  it("is not looked up as a collection, and does nothing when it holds no blocks", async () => {
     // Core namespaces a Single's hooks as `single:<slug>`, and this plugin
-    // contributes its own site-style Single — so every style save reached this
+    // contributes its own site-style Single — so every style save reaches this
     // handler. Handing that namespace to the collection service answers
-    // not-found, and since failures now raise, every Single save would be
+    // not-found, and since failures raise, every Single save would be
     // reported as a maintenance failure.
-    //
-    // Skipped rather than adapted: a plugin has no supported way to read a
-    // Single's document. The one available path CREATES the row when it is
-    // absent, so reconciling Singles would materialise every Single in the app
-    // as a side effect of asking about them.
-    const { fire, api, errors } = harness();
+    const getCollection = vi.fn(async () => ({}));
+    const { fire, api, errors } = harness({ getCollection });
 
     await expect(
       fire({ collection: "single:site-style" })
     ).resolves.toBeUndefined();
 
+    expect(getCollection).not.toHaveBeenCalled();
+    expect(api.findSingle).not.toHaveBeenCalled();
     expect(api.create).not.toHaveBeenCalled();
     expect(errors).toEqual([]);
+  });
+
+  it("maintains a Single holding blocks, filed under its slug, read without creating it", async () => {
+    const { fire, api } = harness({
+      single: async slug =>
+        slug === "home"
+          ? { slug, fields: [{ type: "blocks", name: "content" }] }
+          : undefined,
+    });
+
+    await fire({ collection: "single:home", data: { id: "s1" } });
+
+    // Every read of the Single declines to create its document.
+    expect(api.findSingle).toHaveBeenCalled();
+    for (const [args] of api.findSingle.mock.calls) {
+      expect(args).toMatchObject({ slug: "home", createIfMissing: false });
+    }
+    expect(api.findByID).not.toHaveBeenCalled();
+    // Its rows name the Single, with no entry id.
+    expect(api.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: INDEX,
+        data: expect.objectContaining({
+          scope: "single",
+          entity: "home",
+          entityKey: "",
+          classId: "hero",
+        }),
+      })
+    );
   });
 
   it("still maintains an ordinary collection whose slug merely contains a colon", async () => {
@@ -531,6 +552,39 @@ describe("a Single, which a wildcard registration also receives", () => {
     await fire({ collection: "my:pages" });
 
     expect(api.create).toHaveBeenCalled();
+  });
+});
+
+describe("a Single whose fields' languages the registry does not say", () => {
+  it("reads a blocks field in a nameless group in every language", async () => {
+    // The component the French document uses appears in no other language:
+    // read as shared, it was never recorded.
+    const { fire, api } = harness({
+      locales: ["en", "fr"],
+      single: async slug => ({
+        slug,
+        fields: [
+          { type: "group", fields: [{ type: "blocks", name: "content" }] },
+        ],
+        localized: true,
+        languagesUnknown: true,
+      }),
+    });
+    api.findSingle.mockImplementation(
+      async (args: Record<string, unknown>) => ({
+        id: "s1",
+        content: documentUsing(args.locale === "fr" ? "fr-only" : "hero"),
+      })
+    );
+
+    await fire({ collection: "single:home", data: { id: "s1" } });
+
+    expect(api.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: INDEX,
+        data: expect.objectContaining({ locale: "fr", classId: "fr-only" }),
+      })
+    );
   });
 });
 

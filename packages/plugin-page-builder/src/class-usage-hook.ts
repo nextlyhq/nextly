@@ -56,19 +56,25 @@
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 import type { HookContext } from "nextly";
 
-import { blocksFieldsOf } from "./class-usage-blocks-fields";
+import {
+  blocksFieldsOf,
+  singleUsageDeclaration,
+} from "./class-usage-blocks-fields";
 import { forgetDeletedDocument } from "./class-usage-maintenance";
 import { classUsageIndex } from "./class-usage-reconcile";
 import {
   classUsageDocumentReader,
-  classUsageIndexStore,
   type ClassUsageDirectApi,
 } from "./class-usage-runtime";
 import { reconcileWrittenDocument, usageTarget } from "./class-usage-write";
 import { componentUsageIndex } from "./component-usage";
+import type { SingleToWalk } from "./host-rewrite/site";
+import type { UsageIndexStores } from "./usage-index-tables";
 import {
+  hookTargetOf,
   requestContextFor,
   writeTargetOf,
+  type SingleWriteTarget,
   type WriteTarget,
 } from "./write-target";
 
@@ -143,17 +149,20 @@ export interface DraftSplitResolver {
  */
 export function registerClassUsageMaintenance(args: {
   ctx: ClassUsagePluginContext;
-  /** The collection the CLASS index's rows live in. */
-  indexCollection: string;
   /**
-   * The collection the COMPONENT index's rows live in.
+   * Where BOTH indexes' rows live: the plugin's own tables.
    *
-   * A second index, not a second hook. One registration reads the written
-   * collection's configuration, resolves its draft split and reads each locale
-   * and variant of the document ONCE, and every index derives from that read —
-   * where a second wildcard registration would repeat all of it on every save.
+   * Two indexes, not two hooks. One registration reads the written document's
+   * configuration, resolves its draft split and reads each locale and variant
+   * of the document ONCE, and every index derives from that read — where a
+   * second wildcard registration would repeat all of it on every save.
    */
-  componentIndexCollection: string;
+  stores: () => UsageIndexStores;
+  /**
+   * A live Single's declaration, read from the Singles registry, or
+   * `undefined` when no live Single has that slug.
+   */
+  single: (slug: string) => Promise<SingleToWalk | undefined>;
   /** Resolves whether a collection keeps a working draft beside its published row. */
   draftSplit: DraftSplitResolver;
   /** The site's configured locales, read per call. */
@@ -279,8 +288,8 @@ async function maintainOrRaise(
  * Drop the rows of a document that has just been deleted.
  *
  * Shares every guard a write goes through — `writeTargetOf` answers the
- * transaction, the Single namespace, this plugin's own index and the missing
- * Direct API identically here, and a delete is exactly as unable to run on a
+ * transaction, the Single namespace and the missing Direct API identically
+ * here, and a delete is exactly as unable to run on a
  * pre-commit transactional path as a save is.
  *
  * It does NOT consult the collection's configuration, and that is deliberate
@@ -299,12 +308,9 @@ async function forget(
   args: Parameters<typeof registerClassUsageMaintenance>[0],
   context: UnknownRecord
 ): Promise<void> {
-  const target = writeTargetOf<ClassUsageDirectApi>(context, {
-    // BOTH, because the hook is on the wildcard: a write to either index would
-    // otherwise re-enter this handler and maintain an index against its own
-    // bookkeeping rows.
-    excluded: [args.indexCollection, args.componentIndexCollection],
-  });
+  // No collection is excluded: the index rows live in the plugin's own
+  // tables, which raise no hooks, so this cannot re-enter itself.
+  const target = writeTargetOf<ClassUsageDirectApi>(context);
   if (target === null) return;
 
   // Every index, because a document's rows survive it in each of them and
@@ -317,13 +323,11 @@ async function forget(
   // document that no longer exists, and they would count towards their
   // references until somebody ran a rebuild nobody knew was needed.
   const failures: unknown[] = [];
-  for (const indexCollection of [
-    args.indexCollection,
-    args.componentIndexCollection,
-  ]) {
+  const stores = args.stores();
+  for (const store of [stores.classIndex, stores.componentIndex]) {
     try {
       await forgetDeletedDocument({
-        store: classUsageIndexStore(target.nextly, indexCollection),
+        store,
         scope: "collection",
         entity: target.slug,
         entityKey: target.documentId,
@@ -374,14 +378,60 @@ async function planMaintenance(
   args: Parameters<typeof registerClassUsageMaintenance>[0],
   context: UnknownRecord
 ): Promise<Parameters<typeof reconcileWrittenDocument>[0] | null> {
-  const target = writeTargetOf<ClassUsageDirectApi>(context, {
-    // BOTH, because the hook is on the wildcard: a write to either index would
-    // otherwise re-enter this handler and maintain an index against its own
-    // bookkeeping rows.
-    excluded: [args.indexCollection, args.componentIndexCollection],
-  });
+  // No collection is excluded: the index rows live in the plugin's own
+  // tables, which raise no hooks, so a maintenance write cannot re-enter here.
+  const target = hookTargetOf<ClassUsageDirectApi>(context);
   if (target === null) return null;
-  return maintenanceOf(args, target, requestContextFor(context));
+  return target.kind === "single"
+    ? singleMaintenanceOf(args, target)
+    : maintenanceOf(args, target, requestContextFor(context));
+}
+
+/**
+ * The reconciliation of a Single's one document, or `null` when the Single
+ * holds no blocks field. Its rows are filed under its slug with an empty
+ * `entityKey`, and both forms are maintained, as the backfill walks them.
+ */
+async function singleMaintenanceOf(
+  args: Parameters<typeof registerClassUsageMaintenance>[0],
+  target: SingleWriteTarget<ClassUsageDirectApi>
+): Promise<Parameters<typeof reconcileWrittenDocument>[0] | null> {
+  const single = await args.single(target.slug);
+  if (single === undefined) return null;
+  const declaration = singleUsageDeclaration(single);
+  if (blocksFieldsOf(declaration).length === 0) return null;
+  return {
+    ...indexWork(args, target.nextly),
+    collection: {
+      scope: "single",
+      slug: target.slug,
+      fields: declaration.fields,
+      localized: declaration.localized,
+      hasDrafts: true,
+    },
+    documentId: "",
+  };
+}
+
+/** What every reconciliation shares: the indexes, the reader, the site's locales and bounds. */
+function indexWork(
+  args: Parameters<typeof registerClassUsageMaintenance>[0],
+  nextly: ClassUsageDirectApi
+): Pick<
+  Parameters<typeof reconcileWrittenDocument>[0],
+  "store" | "targets" | "read" | "locales" | "limits"
+> {
+  const stores = args.stores();
+  return {
+    store: stores.classIndex,
+    targets: [
+      usageTarget(classUsageIndex, stores.classIndex),
+      usageTarget(componentUsageIndex, stores.componentIndex),
+    ],
+    read: classUsageDocumentReader(nextly),
+    locales: args.locales(),
+    limits: args.limits(),
+  };
 }
 
 /**
@@ -404,18 +454,7 @@ async function maintenanceOf(
   const split = await args.draftSplit(collection);
 
   return {
-    store: classUsageIndexStore(target.nextly, args.indexCollection),
-    targets: [
-      usageTarget(
-        classUsageIndex,
-        classUsageIndexStore(target.nextly, args.indexCollection)
-      ),
-      usageTarget(
-        componentUsageIndex,
-        classUsageIndexStore(target.nextly, args.componentIndexCollection)
-      ),
-    ],
-    read: classUsageDocumentReader(target.nextly),
+    ...indexWork(args, target.nextly),
     collection: {
       slug: target.slug,
       fields: collection.fields,
@@ -423,8 +462,6 @@ async function maintenanceOf(
       hasDrafts: split.eligible,
     },
     documentId: target.documentId,
-    locales: args.locales(),
-    limits: args.limits(),
   };
 }
 

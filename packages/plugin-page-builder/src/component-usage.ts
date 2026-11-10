@@ -10,7 +10,7 @@
  *
  * ## Which walk, and why it is not this module's own
  *
- * `componentUsageIn` is the resolver's, published from the engine. The question
+ * `componentReachIn` is the resolver's, published from the engine. The question
  * is which components this page RESOLVES, and a reader that stopped anywhere
  * else would answer about a different document than the one being served —
  * which is the mistake `research:pb6-t4c3-reachability` records: discovery must
@@ -25,10 +25,15 @@
  *
  * @module component-usage
  */
-import { componentUsageIn } from "@nextlyhq/blocks-engine";
+import {
+  componentReachIn,
+  isPlainRecord,
+  MAX_ENVELOPE_ENTRIES,
+} from "@nextlyhq/blocks-engine";
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
 import type { ComponentUsageRow } from "./collections/component-usage-index";
+import { MAX_COMPONENT_ID_LENGTH } from "./schema/tables";
 import { readStoredJson } from "./stored-json";
 import { countDocumentsUsing, type UsageCount } from "./usage-count";
 import type {
@@ -57,7 +62,65 @@ export function componentUsageOf(
 ): UsageDerivation {
   const document = readStoredJson(stored);
   if (!isRecordWithNodes(document)) return { ids: [], complete: true };
-  return componentUsageIn(document.nodes, limits.maxNodes);
+  // Every component the document can install, not only the ids its nodes
+  // store: a definition's variants can preset an exposure that re-points one
+  // of its own instances, and `componentReachIn` applies them with the
+  // resolver's own writer. Through the same depth-first survey
+  // `componentUsageIn` makes, so the stored ids are the ones the page resolves.
+  const reach = componentReachIn(document, limits.maxNodes);
+  if (!reach.complete) {
+    return { ids: reach.ids.filter(mayNameAComponent), complete: false };
+  }
+  const ids = reach.ids.filter(mayNameAComponent);
+  const seen = new Set(ids);
+  for (const placement of reach.placements) {
+    for (const id of overrideValuesOf(placement.node)) {
+      if (seen.has(id) || !mayNameAComponent(id)) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+  }
+  return { ids, complete: true };
+}
+
+/**
+ * Whether a value could be a component's id: no longer than the plugin
+ * records one. A longer value names no component, so leaving it out loses no
+ * use, and storing it would fail on MySQL, whose column is that wide, on every
+ * write and every walk of the document.
+ */
+function mayNameAComponent(id: string): boolean {
+  return id.length <= MAX_COMPONENT_ID_LENGTH;
+}
+
+/**
+ * The text values a placement's overrides set, each a component the
+ * placement may install.
+ *
+ * A placement installs a component when its override sets an exposure the
+ * placed definition points at one of its own instances' `componentId`. Which
+ * exposures do that is the definition's to say, and the index does not read
+ * other definitions while deriving one document's rows; and such an exposure
+ * may take any text, so no definition can list the values in advance. So
+ * every text value is recorded as a component the placement may install. A
+ * value naming no component is a row no lookup asks about, and one that does
+ * is counted as a use, the direction a delete check must fail in.
+ *
+ * None when the overrides hold more entries than the envelope admits, since
+ * the resolver applies none of them.
+ */
+function overrideValuesOf(node: unknown): string[] {
+  if (!isPlainRecord(node) || !isPlainRecord(node.props)) return [];
+  const overrides = node.props.overrides;
+  if (!isPlainRecord(overrides)) return [];
+  const keys = Object.keys(overrides);
+  if (keys.length > MAX_ENVELOPE_ENTRIES) return [];
+  const values: string[] = [];
+  for (const key of keys) {
+    const value: unknown = overrides[key];
+    if (typeof value === "string" && value !== "") values.push(value);
+  }
+  return values;
 }
 
 /**

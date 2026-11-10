@@ -148,39 +148,67 @@ export async function readUsageIndexHealth<TRow extends UsageSubject>(args: {
      * the honesty. An unwalked scope becomes walked; unreachable content stays
      * unreachable until the plugin learns to reach it, so a backfill that
      * finished every scope it CAN see must still not claim the index covers the
-     * site.
-     *
-     * Singles are the case today: a plugin has no supported way to read one —
-     * the available path CREATES the row when absent — so `writeTargetOf`
-     * declines every `single:` hook and no scope is enumerated for them. A site
-     * whose homepage is a blocks-backed Single would otherwise have every
-     * collection scope recorded and be told the index is whole, while the
-     * component that homepage renders reads as used by nothing.
+     * site. A blocks field nested under a named group, in a collection or a
+     * Single, is the case today: no row can name where it is stored.
      */
     unreachable: () => Promise<boolean>;
   };
 }): Promise<UsageIndexHealth> {
-  // The bookkeeping first, from its own snapshot, then the markers.
-  //
-  // The run, its progress and the dirty mark live in the plugin's tables and
-  // are read in one snapshot transaction, so they describe one moment however
-  // writers interleave. The markers live in the index collections, which that
-  // transaction cannot reach, so they are read after it. The order is what
-  // keeps that sound: a walk writes its `unreadable` markers before it records
-  // the scope as done, so a scope seen as done has its markers already
-  // committed, and the read that follows sees them.
-  const progress = await backfillFinished(args.backfill);
+  // The bookkeeping first, then the markers. A walk writes its `unreadable`
+  // markers before it records the scope as done, so a scope seen as done has
+  // its markers already committed, and the read that follows sees them. The
+  // plugin's own service reads both from one snapshot instead.
+  const progress =
+    args.backfill === undefined
+      ? undefined
+      : await backfillReading(args.backfill);
   const markers = await args.read({
     where: args.index.whereUndetermined(),
     groupBy: "entityKey",
   });
+  // Existence, not how many. One unreadable document is enough to make every
+  // count a floor, and `truncated` on this read only means there are more of
+  // them than the cap — which does not change the answer.
+  return usageIndexHealthFrom(progress, markers.buckets.length > 0);
+}
 
+/** What health is decided from: the scopes, the recorded run, and what is out of reach. */
+export interface UsageBackfillReading {
+  /** Every scope that exists now. */
+  scopes: readonly BackfillScope[];
+  /** The run, its progress and the dirty mark, from one snapshot. */
+  progress: UsageProgressReading;
+  /** Whether content exists this index cannot cover at all. */
+  unreachable: boolean;
+}
+
+/** The three backfill facts, each asked once. */
+async function backfillReading(backfill: {
+  scopes: () => Promise<readonly BackfillScope[]>;
+  progress: () => Promise<UsageProgressReading>;
+  unreachable: () => Promise<boolean>;
+}): Promise<UsageBackfillReading> {
+  const [scopes, progress, unreachable] = await Promise.all([
+    backfill.scopes(),
+    backfill.progress(),
+    backfill.unreachable(),
+  ]);
+  return { scopes, progress, unreachable };
+}
+
+/**
+ * Health, from facts already read. `backfill` absent is a caller that cannot
+ * say how far the backfill got: not covered, and no mark known, so not whole,
+ * and no run this can see will change that.
+ */
+export function usageIndexHealthFrom(
+  backfill: UsageBackfillReading | undefined,
+  anyUndetermined: boolean
+): UsageIndexHealth {
+  const progress = backfillFinished(backfill);
   return {
     coversExistingDocuments: progress.covers,
-    // Existence, not how many. One unreadable document is enough to make every
-    // count a floor, and `truncated` on this read only means there are more of
-    // them than the cap — which does not change the answer.
-    anyUndetermined: markers.buckets.length > 0,
+    anyUndetermined,
     dirty: progress.dirty,
     backfillPending: progress.pending,
   };
@@ -195,25 +223,15 @@ export async function readUsageIndexHealth<TRow extends UsageSubject>(args: {
  * locale or drafts and there are scopes nothing has walked while the flag still
  * says the index is whole.
  */
-async function backfillFinished(
-  backfill:
-    | {
-        scopes: () => Promise<readonly BackfillScope[]>;
-        progress: () => Promise<UsageProgressReading>;
-        unreachable: () => Promise<boolean>;
-      }
-    | undefined
-): Promise<{ covers: boolean; dirty: boolean; pending: boolean }> {
-  // Nothing to ask: not covered, and no mark known. Not whole either way, and
-  // no run this can see will change that.
+function backfillFinished(backfill: UsageBackfillReading | undefined): {
+  covers: boolean;
+  dirty: boolean;
+  pending: boolean;
+} {
   if (backfill === undefined) {
     return { covers: false, dirty: false, pending: false };
   }
-  const [scopes, progress, unreachable] = await Promise.all([
-    backfill.scopes(),
-    backfill.progress(),
-    backfill.unreachable(),
-  ]);
+  const { scopes, progress, unreachable } = backfill;
   // All three, and none implies another. Every scope walked under the current
   // derivation says the work this index CAN do is done; unreachable content
   // says there is content it cannot do at all; a site can be in any mix.

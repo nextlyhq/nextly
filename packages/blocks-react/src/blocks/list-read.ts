@@ -30,6 +30,7 @@ import {
   readListQuery,
   safeTimeZone,
   isListDay,
+  listDayAfter,
   LIST_LIMIT_MAX,
   LIST_LIMIT_MIN,
   type ListFilter,
@@ -149,14 +150,6 @@ export function dayStartIn(day: string, zone: string): string {
   ).toISOString();
 }
 
-/** The day after a `YYYY-MM-DD` day. */
-function nextDay(day: string): string {
-  const [year, month, date] = day.split("-").map(Number);
-  return new Date(Date.UTC(year ?? 0, (month ?? 1) - 1, (date ?? 1) + 1))
-    .toISOString()
-    .slice(0, 10);
-}
-
 /**
  * A day filter as a comparison of instants: "after the 1st" is "from the
  * start of the 2nd", "on or before the 1st" is "before the start of the 2nd",
@@ -171,7 +164,7 @@ function dayRow(
       return {
         field: row.field,
         op: "gte",
-        value: dayStartIn(nextDay(row.value), zone),
+        value: dayStartIn(listDayAfter(row.value), zone),
       };
     case "greater_than_equal":
       return {
@@ -185,7 +178,7 @@ function dayRow(
       return {
         field: row.field,
         op: "lt",
-        value: dayStartIn(nextDay(row.value), zone),
+        value: dayStartIn(listDayAfter(row.value), zone),
       };
   }
 }

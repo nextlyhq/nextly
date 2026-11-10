@@ -1397,6 +1397,7 @@ export function SharedStylesStudio({
   styleContext,
   suppliedClassIds,
   tokens,
+  looks,
 }: {
   classes: ClassSurface;
   pageBlocks: PageClassBlocks;
@@ -1404,6 +1405,8 @@ export function SharedStylesStudio({
   suppliedClassIds: readonly string[] | undefined;
   /** The site's variables as the canvas draws them, for the rows' preview tile. */
   tokens: SiteTokenSet | undefined;
+  /** The look the inspector edits on its own, which a Block looks row chooses. */
+  looks?: React.ComponentProps<typeof SharedStylesPanel>["looks"];
 }): React.JSX.Element {
   const mayChange = useCan("update-site-style");
   const access = useSharedStylesClient();
@@ -1420,6 +1423,7 @@ export function SharedStylesStudio({
       onRename={classes.rename}
       currentRenameAttempt={classes.currentRenameAttempt}
       pendingNames={classes.pendingNames}
+      {...(looks === undefined ? {} : { looks })}
     />
   );
 }

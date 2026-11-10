@@ -35,11 +35,11 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 
 ## Availability
 
-|            |                                                                                                 |
+| | |
 | ---------- | ----------------------------------------------------------------------------------------------- |
-| Package    | `@nextlyhq/plugin-page-builder`, plus `@nextlyhq/blocks-react` in your app                      |
-| Status     | Alpha. The block model, the registries, the render pipeline and the editor can all still change |
-| Permission | Editing a page requires update access to the collection holding it                              |
+| Package | `@nextlyhq/plugin-page-builder`, plus `@nextlyhq/blocks-react` in your app |
+| Status | Alpha. The block model, the registries, the render pipeline and the editor can all still change |
+| Permission | Editing a page requires update access to the collection holding it |
 
 ## Install
 
@@ -68,12 +68,18 @@ boot refuses to start:
 npx nextly plugins install @nextlyhq/plugin-page-builder
 ```
 
-The plugin keeps the bookkeeping behind its usage counts (how far the background job
-has indexed existing pages, and whether an index write has failed) in two tables of
-its own, `page_builder__usage_runs` and `page_builder__usage_progress`. No admin
-screen or API reaches them. Installing creates them; a site upgrading from a version
-without them runs `npx nextly migrate` before it starts on the new version, since a
-production boot refuses a plugin whose tables are behind it.
+The plugin keeps its usage counts in tables of its own: which documents place each
+component and apply each shared style (`page_builder__component_usage` and
+`page_builder__class_usage`), and the bookkeeping behind them, how far the background
+job has indexed existing content and whether an index write has failed
+(`page_builder__usage_runs` and `page_builder__usage_progress`). No admin screen or
+API reaches them. The counts cover collection entries and Singles, and a component a
+placement chooses through one of its fields counts as used where it is placed.
+Installing creates the tables; a site upgrading from a version without them runs
+`npx nextly migrate` before it starts on the new version, since a production boot
+refuses a plugin whose tables are behind it. After the upgrade the background job
+indexes every page and Single again, and until it has finished, counts read as "at
+least" rather than as exact.
 
 Last, run `npx nextly generate:types`. It writes the file that registers the builder's
 screen with the admin, and that file also loads the editor's styles, so there is nothing

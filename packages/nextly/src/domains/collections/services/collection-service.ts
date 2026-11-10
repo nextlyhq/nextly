@@ -289,8 +289,8 @@ export class CollectionService extends BaseService {
     });
     // Reached only on a successful commit; a rejected transaction throws above
     // and flushes nothing. The captured `collector` outlives the map binding.
-    // On SQLite this transaction may itself be a savepoint of an enclosing one,
-    // so the flush and maintenance wait for that one's commit.
+    // This transaction may have joined an enclosing one, on any dialect, so
+    // the flush and maintenance wait for that one's commit.
     const collectedIntents = collector ?? [];
     await this.afterCommit(async () => {
       if (ownsFlush && collectedIntents.length > 0) {

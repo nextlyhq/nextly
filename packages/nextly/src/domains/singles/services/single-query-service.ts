@@ -180,7 +180,7 @@ import type { ComponentSchemas } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import { shapeDraftSnapshot } from "../../versions/shape-draft-snapshot";
 import { VersionCaptureService } from "../../versions/version-capture-service";
-import { withVersionConflictRetry } from "../../versions/version-conflict";
+import { versionConflictRetries } from "../../versions/version-conflict";
 import { VersionsRepository } from "../../versions/versions-repository";
 import type {
   GetSingleOptions,
@@ -1260,17 +1260,19 @@ export class SingleQueryService extends BaseService {
       // hook may write, and a response built from the earlier snapshot would
       // report values the read no longer finds.
       const read = await this.readDocument(slug, singleMeta, options);
-      const { translations } = read;
-      let { doc } = read;
+      let { doc, translations } = read;
 
       // 6. Auto-create if document doesn't exist. Capture the initial version
       // when the Single is versioned so a first-read materialization still
       // starts a history (the mutation path records its own first version).
       if (!doc) {
-        const answered = await this.answerWithoutCreating(slug, options);
-        if (answered !== null) return answered;
-        this.logger.info("Auto-creating Single document", { slug });
-        doc = await this.createDefaultDocumentOnce(singleMeta);
+        const absent = await this.documentInPlaceOfNone(
+          slug,
+          singleMeta,
+          options
+        );
+        if ("answer" in absent) return absent.answer;
+        ({ doc, translations } = absent);
       }
 
       // 6.5. Apply Draft/Published auto-filter. For Singles the rule is
@@ -2254,9 +2256,103 @@ export class SingleQueryService extends BaseService {
     if (await entityRemovedFromCode("single", slug)) {
       return singleAbsentResult(slug);
     }
-    return options.createIfMissing === false
+    return options.createIfMissing === false && options.whenAbsent !== "default"
       ? singleWithoutDocumentResult()
       : null;
+  }
+
+  /**
+   * What a read that found no stored document goes on with: the answer it
+   * gives instead when it must not create one, the default document it
+   * creates otherwise, or, for `whenAbsent: "default"`, that default
+   * document built and not stored, read on from here as the created one is.
+   */
+  private async documentInPlaceOfNone(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    options: GetSingleOptions
+  ): Promise<
+    | { answer: SingleResult }
+    | { doc: SingleDocument; translations: JoinedTranslations | undefined }
+  > {
+    const answered = await this.answerWithoutCreating(slug, options);
+    if (answered !== null) return { answer: answered };
+    if (options.createIfMissing === false) {
+      return this.unstoredDefaultDocument(slug, singleMeta, options);
+    }
+    this.logger.info("Auto-creating Single document", { slug });
+    return {
+      doc: await this.createDefaultDocumentOnce(singleMeta),
+      translations: undefined,
+    };
+  }
+
+  /**
+   * The default document a creating read would store, built by the same
+   * function and not written: the main row as it would be inserted, and, for a
+   * localized Single, the default-language translation row the creation would
+   * seed, so the rest of the read resolves its languages as it resolves the
+   * stored one's. Nothing is written: no row, no translation, no version and
+   * no event.
+   *
+   * The translation row is offered only where the creation would write one:
+   * the Single is localized, has translatable defaults, and its translations
+   * table exists. Otherwise the read goes on with no joined translations, as a
+   * read of the stored document would, and finds none.
+   */
+  private async unstoredDefaultDocument(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    options: GetSingleOptions
+  ): Promise<{
+    doc: SingleDocument;
+    translations: JoinedTranslations | undefined;
+  }> {
+    const built = await this.buildDefaultDocument(singleMeta);
+    const doc = { ...built.insertValues } as SingleDocument;
+    const localeChain = resolveLocaleChain(
+      this.localization,
+      options.locale,
+      options.fallbackLocale
+    );
+    const companion = this.companionOf(slug, singleMeta);
+    const seed = this.companionForDefaultsSeed(
+      singleMeta,
+      built.localizedDefaults
+    );
+    if (
+      !localeChain ||
+      !companion ||
+      !seed ||
+      !this.localization ||
+      !(await this.localizedDefaultsCompanionExists(
+        singleMeta,
+        built.localizedDefaults
+      ))
+    ) {
+      return { doc, translations: undefined };
+    }
+    const { companion: values } = splitLocalizedWrite(
+      built.localizedDefaults,
+      seed.localizedFields
+    );
+    const status = (built.document as { status?: string }).status;
+    return {
+      doc,
+      translations: {
+        mainTable: null,
+        companion,
+        localeChain,
+        companionRows: [
+          {
+            ...values,
+            _parent: doc.id,
+            _locale: this.localization.defaultLocale,
+            ...(seed.hasStatus ? { _status: status ?? "draft" } : {}),
+          },
+        ],
+      },
+    };
   }
 
   /**
@@ -2370,75 +2466,73 @@ export class SingleQueryService extends BaseService {
     // Versioned Single: insert the default row and record its v1 snapshot in one
     // transaction, so the Single never ends up with a live row but no history.
     // Retry on a version_no allocation race, mirroring the write paths.
-    const inserted = await withVersionConflictRetry(() =>
-      this.adapter.transaction(async tx => {
-        const row = await tx.insert<SingleDocument>(
-          singleMeta.tableName,
-          snakeCaseDefaults,
-          { returning: "*" }
-        );
-        // Match the read shape: keep user field keys (which may contain
-        // underscores like `site_title`) exactly, converting only the timestamp
-        // columns; strip password hashes and the system owner column so history
-        // never retains them; parse JSON-backed fields (stored as strings on
-        // SQLite) so a restore equals a normal read. A freshly materialized
-        // default has no component subtrees yet, so components is empty.
-        const parentRow = convertTimestampsToCamelCase({
-          ...(row as Record<string, unknown>),
-        });
-        // Overlay the seeded localized defaults (keyed by field name) onto the
-        // snapshot so v1 carries the default locale's content, mirroring how a
-        // normal localized write overlays its companion values before capturing.
-        // Without this, restoring v1 could not bring back the seeded defaults
-        // (including a localized title/slug), since they live on the companion.
-        // Gated on `seedApplied`: when the companion table does not yet exist the
-        // seed no-ops, so overlaying here would record defaults that were never
-        // persisted.
-        if (seedApplied) {
-          for (const [name, value] of Object.entries(localizedDefaults)) {
-            parentRow[name] = value;
-          }
+    const inserted = await this.adapter.transaction(async tx => {
+      const row = await tx.insert<SingleDocument>(
+        singleMeta.tableName,
+        snakeCaseDefaults,
+        { returning: "*" }
+      );
+      // Match the read shape: keep user field keys (which may contain
+      // underscores like `site_title`) exactly, converting only the timestamp
+      // columns; strip password hashes and the system owner column so history
+      // never retains them; parse JSON-backed fields (stored as strings on
+      // SQLite) so a restore equals a normal read. A freshly materialized
+      // default has no component subtrees yet, so components is empty.
+      const parentRow = convertTimestampsToCamelCase({
+        ...(row as Record<string, unknown>),
+      });
+      // Overlay the seeded localized defaults (keyed by field name) onto the
+      // snapshot so v1 carries the default locale's content, mirroring how a
+      // normal localized write overlays its companion values before capturing.
+      // Without this, restoring v1 could not bring back the seeded defaults
+      // (including a localized title/slug), since they live on the companion.
+      // Gated on `seedApplied`: when the companion table does not yet exist the
+      // seed no-ops, so overlaying here would record defaults that were never
+      // persisted.
+      if (seedApplied) {
+        for (const [name, value] of Object.entries(localizedDefaults)) {
+          parentRow[name] = value;
         }
-        applyReadShape(
-          parentRow,
+      }
+      applyReadShape(
+        parentRow,
+        singleMeta.fields,
+        singleMeta.tableName,
+        await passwordReachOf(
           singleMeta.fields,
-          singleMeta.tableName,
-          await passwordReachOf(
-            singleMeta.fields,
-            this.fieldGroupDataService,
-            tx.getDrizzle()
-          )
-        );
-        const { versionNo } = await captureInTx(tx, this.versionCapture, {
-          lifecycle: hasLifecycle(singleMeta),
-          ref: {
-            scopeKind: "single",
-            scopeSlug: singleMeta.slug,
-            entryId: (row as { id: string }).id,
-          },
-          contentStatus: (parentRow as { status?: unknown }).status,
-          // System-materialized default: no authoring user.
-          parts: { parentRow, components: {} },
-          createdBy: null,
-          // Tagged with the default locale when the snapshot carries seeded
-          // translatable defaults; null for a non-localized single (main row only).
-          locale: seedLocale,
-          maxPerDoc: versionsConfig.maxPerDoc,
-        });
-        // Seed the default-locale companion with the localized defaults in the
-        // same transaction as the insert and version snapshot.
-        await this.seedLocalizedDefaultsCompanion(
-          tx,
-          singleMeta,
-          id,
-          localizedDefaults,
-          status,
-          companionExists
-        );
-        await this.recordCreated(tx, singleMeta.slug, row, versionNo);
-        return row;
-      })
-    );
+          this.fieldGroupDataService,
+          tx.getDrizzle()
+        )
+      );
+      const { versionNo } = await captureInTx(tx, this.versionCapture, {
+        lifecycle: hasLifecycle(singleMeta),
+        ref: {
+          scopeKind: "single",
+          scopeSlug: singleMeta.slug,
+          entryId: (row as { id: string }).id,
+        },
+        contentStatus: (parentRow as { status?: unknown }).status,
+        // System-materialized default: no authoring user.
+        parts: { parentRow, components: {} },
+        createdBy: null,
+        // Tagged with the default locale when the snapshot carries seeded
+        // translatable defaults; null for a non-localized single (main row only).
+        locale: seedLocale,
+        maxPerDoc: versionsConfig.maxPerDoc,
+      });
+      // Seed the default-locale companion with the localized defaults in the
+      // same transaction as the insert and version snapshot.
+      await this.seedLocalizedDefaultsCompanion(
+        tx,
+        singleMeta,
+        id,
+        localizedDefaults,
+        status,
+        companionExists
+      );
+      await this.recordCreated(tx, singleMeta.slug, row, versionNo);
+      return row;
+    }, versionConflictRetries());
 
     this.logger.debug("Created default Single document", {
       slug: singleMeta.slug,

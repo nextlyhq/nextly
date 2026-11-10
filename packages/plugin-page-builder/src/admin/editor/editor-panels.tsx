@@ -45,6 +45,7 @@ import {
 } from "../pattern-library-client";
 
 import { DesignPanel } from "./design-panel";
+import { useLookEditing, type LookEditingState } from "./look-editing";
 import {
   withoutSelf,
   withoutSelfPatterns,
@@ -401,8 +402,12 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   const [searchOpen, setSearchOpen] = useState(false);
   // The Pages panel, and the request its rows send to open Settings.
   const pages = usePagesPanel(mount.initialDocument.kind === "page");
+  // Which look the inspector edits on its own: chosen in the Design panel,
+  // left by selecting a block, by the bar's Back, or by Esc.
+  const lookEditing = useLookEditing(editor);
   return {
     entryFields,
+    lookEditing,
     search: { open: searchOpen, setOpen: setSearchOpen },
     pages,
     checklist,
@@ -436,6 +441,8 @@ export type EditorPanels = OfferedLibrary &
     availablePanels: typeof AVAILABLE_PANELS;
     search: { open: boolean; setOpen: (open: boolean) => void };
     pages: PagesPanelMount;
+    /** The look edited on its own from the Design panel, with no block. */
+    lookEditing: LookEditingState;
   };
 
 /**
@@ -471,7 +478,10 @@ export function editorPanelRenderer({
   canvasElement,
   layerVerbs,
   documentDirty,
+  lookEditing,
 }: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
+  /** The look edited on its own, which the Design panel's Block looks choose. */
+  lookEditing?: LookEditingState;
   /** Whether the editor holds work not yet saved, for the Pages panel's copy note. */
   documentDirty: boolean;
   /** The regions of the page's Layout, as read-only rows in Layers. */
@@ -633,6 +643,14 @@ export function editorPanelRenderer({
             variables: () => <VariablesTab />,
             classes: () => (
               <SharedStylesStudio
+                {...(lookEditing === undefined
+                  ? {}
+                  : {
+                      looks: {
+                        onEdit: lookEditing.edit,
+                        editing: lookEditing.look,
+                      },
+                    })}
                 classes={classes}
                 pageBlocks={pageClassBlocks}
                 styleContext={classSummaryContext}

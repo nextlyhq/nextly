@@ -353,9 +353,12 @@ export type {
  *   `security.breachedPasswords`; `OpaqueSecrets` (`ctx.security.opaque`); and
  *   `OneTimeSecrets` (`ctx.security.secrets`) with `SecretData` and
  *   `TxOption`. Held experimental until a first-party plugin signs people in
- *   with them (see STABILITY.md).
+ *   with them (see STABILITY.md). `PluginReceivedWebhooks`
+ *   (`ctx.security.webhooks`), verifying a received webhook against a
+ *   `standardWebhooks` or a plugin's own `InboundWebhookScheme`, is
+ *   experimental too, until a first-party plugin receives webhooks with it.
  */
-export { PasswordTooLongError } from "nextly";
+export { PasswordTooLongError, standardWebhooks } from "nextly";
 export type {
   PluginSecurityApi,
   PasswordHelper,
@@ -366,6 +369,13 @@ export type {
   OneTimeSecrets,
   SecretData,
   TxOption,
+  PluginReceivedWebhooks,
+  InboundWebhookScheme,
+  InboundWebhookDelivery,
+  InboundWebhookReading,
+  VerifyWebhookOptions,
+  WebhookVerification,
+  WebhookRefusal,
 } from "nextly";
 
 /**
@@ -675,7 +685,11 @@ export type {
  *   language) of fields of a plugin field type stored as JSON, judged by the
  *   person's read access. `updateIfUnchanged` makes the ordinary update as
  *   that person, refused with a `CONFLICT` error when the field no longer
- *   hashes, under the write's own row lock, to what was read.
+ *   hashes, under the write's own row lock, to what was read. Either may be
+ *   made as the system (`{ overrideAccess: true }`), judged as the Direct
+ *   API's own `overrideAccess: true` call is, by no access rule or field
+ *   read rule; the system may read any field stored as JSON, and its read
+ *   also gives the live row's lifecycle (`PluginStoredLifecycle`).
  *   `storedValueHash` is the one hash both sides compare.
  */
 export { readStoredFields, storedValueHash, updateIfUnchanged } from "nextly";
@@ -684,6 +698,9 @@ export type {
   PluginStoredDocument,
   PluginStoredFields,
   PluginStoredFieldsRequest,
+  PluginStoredIdentity,
+  PluginStoredLifecycle,
+  PluginSystemIdentity,
   PluginWriteExpectation,
 } from "nextly";
 
@@ -733,6 +750,26 @@ export {
 export type {
   PluginListFilterDeclaration,
   PluginListFilterOption,
+} from "nextly";
+
+/**
+ * Contributions a plugin adds to admin places (`contributes.admin.contributions`):
+ * blocks, tabs, list columns, row and bulk actions and side panel sections,
+ * each ordered at its place, with a declared visibility rule and permission.
+ * @experimental Nothing in the admin draws them yet (see STABILITY.md).
+ */
+export type {
+  AdminBlockContribution,
+  AdminBulkActionContribution,
+  AdminColumnContribution,
+  AdminContribution,
+  AdminContributionAction,
+  AdminRowActionContribution,
+  AdminSidebarSectionContribution,
+  AdminTabContribution,
+  AdminContributionKind,
+  RowPredicate,
+  RowPredicateValue,
 } from "nextly";
 
 /**

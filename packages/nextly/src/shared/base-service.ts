@@ -233,10 +233,13 @@ export abstract class BaseService<
    *
    * ## Transaction Behavior by Dialect
    *
-   * - **PostgreSQL** — routes through Drizzle's native `db.transaction(fn)`. Supports
-   *   savepoints, isolation levels, and fully async callbacks. tx is a real
-   *   `NodePgTransaction`.
-   * - **MySQL** — same as PostgreSQL via `MySql2Transaction`.
+   * - **PostgreSQL** — routes through Drizzle's `db.transaction(fn)` on the adapter's
+   *   handle, whose transactions are the adapter's: called inside a transaction the
+   *   flow is already in, it joins it, on that transaction's connection, as a
+   *   savepoint; otherwise it opens one on a client of its own. Supports isolation
+   *   levels and fully async callbacks. tx is a Drizzle handle on that connection.
+   * - **MySQL** — the same, joined flat: a failure inside a joined call fails the
+   *   transaction it joined, which then rolls back as a whole.
    * - **SQLite** — better-sqlite3's `db.transaction()` rejects any callback that returns
    *   a promise (`TypeError: Transaction function cannot return a promise`). Since
    *   every Nextly service method is async, we cannot use Drizzle's native SQLite
@@ -331,17 +334,17 @@ export abstract class BaseService<
         () => work(this.db)
       );
     }
-    // PG/MySQL: Drizzle's native transaction API supports async callbacks
-    // and binds the callback's `tx` to a pooled client that automatically
-    // runs BEGIN/COMMIT/ROLLBACK around the callback.
+    // PG/MySQL: the adapter's Drizzle handle takes async callbacks, joins the
+    // transaction the calling flow is inside, and otherwise opens one on a
+    // pooled client, running BEGIN, COMMIT or ROLLBACK around the callback.
     return this.db.transaction(work);
   }
 
   /**
    * Run what a write does outside the database (an event, an after-hook, a
-   * cache flush, a webhook drain) once the write is durable: now on
-   * PostgreSQL and MySQL, and on SQLite after the outermost transaction
-   * enclosing this call commits, never for one that rolls back. See
+   * cache flush, a webhook drain) once the write is durable: after the
+   * outermost transaction enclosing this call commits, on every dialect, and
+   * never for one that rolls back; at once outside any transaction. See
    * {@link afterCommit}.
    */
   protected afterCommit(effect: () => unknown): Promise<void> {

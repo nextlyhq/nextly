@@ -20,11 +20,22 @@
  * @experimental
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
-import { desc, eq, lt } from "@nextlyhq/plugin-sdk/db";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  lt,
+  ne,
+  not,
+  inArray,
+} from "@nextlyhq/plugin-sdk/db";
 import type { PluginDatabase } from "@nextlyhq/plugin-sdk/schema";
 
 import {
   documentKeyOf,
+  formKey,
   type HostAddress,
   type HostForm,
   type StoredForm,
@@ -49,6 +60,13 @@ const SITE_STYLE_FRAGMENT_KEY = "site-style";
 export interface ClassesFragment {
   readonly classes: Readonly<Record<string, RemovedStyles>>;
   readonly overridden: readonly string[];
+  /**
+   * The override each of `overridden` was stored as, by id: an undo takes out
+   * a stored entry still equal to it, whatever the code says of that class
+   * since. Absent on rows kept before it was recorded, where the code's class
+   * as it is now stands in.
+   */
+  readonly overrides?: Readonly<Record<string, unknown>>;
 }
 
 /** One kept row: a stored value's fragment, or the shared styles'. */
@@ -79,8 +97,27 @@ export interface FragmentStore {
   forget(runId: string): Promise<void>;
   /** A removal's rows, the newest first. */
   forRun(runId: string): Promise<StoredFragment[]>;
-  /** Delete every row kept before `before`. */
-  purge(before: Date): Promise<void>;
+  /**
+   * A removal's rows for stored values, a page at a time: at most `limit`,
+   * by document key after `after`, each document's rows the newest first.
+   * The last document of a full page may be cut short.
+   */
+  valuesAfter(
+    runId: string,
+    after: string | null,
+    limit: number
+  ): Promise<StoredFragment[]>;
+  /** A removal's rows for one document, the newest first. */
+  forDocument(runId: string, documentKey: string): Promise<StoredFragment[]>;
+  /** A removal's row for the shared styles, the newest; `null` for none. */
+  sharedStyles(runId: string): Promise<StoredFragment | null>;
+  /** Whether a removal kept anything at all. */
+  keptAny(runId: string): Promise<boolean>;
+  /**
+   * Delete every row kept before `before`, except the rows of `keep`: the
+   * removals an open undo is still putting back.
+   */
+  purge(before: Date, keep?: readonly string[]): Promise<void>;
 }
 
 /** The fragment store over the plugin's own `ctx.db`. */
@@ -116,35 +153,90 @@ export function fragmentStore(
         // Ids are UUIDv7, so the newest row sorts last by id.
         .orderBy(desc(t.id))
         .all();
-      return rows.map(
-        row =>
-          ({
-            runId: row.runId,
-            host: row.host,
-            form: row.form,
-            fragment: row.fragment,
-            keptAt: row.createdAt,
-          }) as StoredFragment
-      );
+      return rows.map(storedOf);
     },
-    purge: async before => {
+    valuesAfter: async (runId, after, limit) => {
+      const t = columns();
+      const rows = await db
+        .select(breakpointRemovalFragments)
+        .where(
+          allOf(
+            eq(t.runId, runId),
+            ne(t.documentKey, SITE_STYLE_FRAGMENT_KEY),
+            ...(after === null ? [] : [gt(t.documentKey, after)])
+          )
+        )
+        .orderBy(asc(t.documentKey), desc(t.id))
+        .limit(limit)
+        .all();
+      return rows.map(storedOf);
+    },
+    forDocument: async (runId, documentKey) => {
+      const t = columns();
+      const rows = await db
+        .select(breakpointRemovalFragments)
+        .where(allOf(eq(t.runId, runId), eq(t.documentKey, documentKey)))
+        .orderBy(desc(t.id))
+        .all();
+      return rows.map(storedOf);
+    },
+    sharedStyles: async runId => {
+      const t = columns();
+      const row = await db
+        .select(breakpointRemovalFragments)
+        .where(
+          allOf(eq(t.runId, runId), eq(t.documentKey, SITE_STYLE_FRAGMENT_KEY))
+        )
+        .orderBy(desc(t.id))
+        .first();
+      return row === null ? null : storedOf(row);
+    },
+    keptAny: async runId => {
+      const t = columns();
+      const row = await db
+        .select(breakpointRemovalFragments)
+        .where(eq(t.runId, runId))
+        .limit(1)
+        .first();
+      return row !== null;
+    },
+    purge: async (before, keep = []) => {
+      const t = columns();
       await db
         .delete(breakpointRemovalFragments)
-        .where(lt(columns().createdAt, before));
+        .where(
+          allOf(
+            lt(t.createdAt, before),
+            ...(keep.length === 0 ? [] : [not(inArray(t.runId, [...keep]))])
+          )
+        );
     },
   };
 }
 
-/** A host and form as one key: what the step saw is what the writer writes. */
-function formKey(host: HostAddress, form: HostForm): string {
-  return JSON.stringify([
-    host.kind,
-    host.slug,
-    host.id ?? "",
-    host.path,
-    host.locale ?? "",
-    form,
-  ]);
+/** One condition of a query. */
+type Condition = ReturnType<typeof eq>;
+
+/** Every one of `rest` and `first`: never empty, so never nothing. */
+function allOf(first: Condition, ...rest: Condition[]): Condition {
+  return and(first, ...rest) ?? first;
+}
+
+/** A row as read back, in the shape the store answers. */
+function storedOf(row: {
+  runId: string;
+  host: unknown;
+  form: string;
+  fragment: unknown;
+  createdAt: Date;
+}): StoredFragment {
+  return {
+    runId: row.runId,
+    host: row.host,
+    form: row.form,
+    fragment: row.fragment,
+    keptAt: row.createdAt,
+  } as StoredFragment;
 }
 
 /** What the strip refused when it had no fragment to keep for a write. */

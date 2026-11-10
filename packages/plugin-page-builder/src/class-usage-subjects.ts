@@ -24,6 +24,7 @@
  */
 import type { ClassUsageSubject } from "./class-usage-reconcile";
 import type { ClassUsageVariant } from "./collections/class-usage-index";
+import type { UsageScope } from "./usage-index";
 
 /** The locale sentinel for a field whose values are not per-language. */
 const NOT_LOCALIZED = "";
@@ -46,9 +47,14 @@ export interface BlocksFieldDescriptor {
 
 /** Everything about the written collection that decides its subjects. */
 export interface WrittenDocument {
-  /** The collection's slug, stored as `entity`. */
+  /**
+   * Whether this is a collection's entry or a Single's one document; a
+   * collection entry when absent.
+   */
+  scope?: UsageScope;
+  /** The collection's slug, or the Single's, stored as `entity`. */
   collection: string;
-  /** The document's id, stored as `entityKey`. */
+  /** The document's id, stored as `entityKey`; empty for a Single. */
   entityKey: string;
   /** Every blocks field declared on the collection. */
   fields: readonly BlocksFieldDescriptor[];
@@ -121,11 +127,9 @@ function localesFor(
  * document with two blocks fields on a three-locale site with drafts has
  * twelve; one with a single unlocalized field on a site without drafts has one.
  *
- * Every subject carries `scope: "collection"`. Singles are addressed by slug
- * with an empty `entityKey` and are not reachable from a collection hook, so
- * they are not enumerated here — a plugin has no supported way to read a
- * Single's document, and inventing one would materialise every Single in the
- * app as a side effect of reading it.
+ * Every subject carries the document's scope. A Single is addressed by its
+ * slug with an empty `entityKey`, since it has one document and its row may
+ * not exist yet.
  */
 export function classUsageSubjectsFor(
   document: WrittenDocument
@@ -137,7 +141,7 @@ export function classUsageSubjectsFor(
     for (const locale of localesFor(field, document.locales)) {
       for (const variant of variants) {
         subjects.push({
-          scope: "collection",
+          scope: document.scope ?? "collection",
           entity: document.collection,
           entityKey: document.entityKey,
           field: field.name,

@@ -43,6 +43,7 @@ import {
   readStoredFieldsOn,
   showsUnpublished,
   STORED_FORMS,
+  storesJson,
   type StoredFieldsRead,
   type FieldScope,
 } from "../domains/collections/services/stored-field-read";
@@ -72,6 +73,31 @@ export type PluginStoredDocument =
       readonly collection?: never;
       readonly id?: never;
     };
+
+/**
+ * @experimental The system: trusted server code, such as a plugin's own job
+ * that no person started. Judged as a Direct API call made with
+ * `overrideAccess: true` is: no access rule, no draft gate and no lifecycle
+ * visibility is asked of it, as none is of that call. Everything else holds:
+ * the request is parsed alike, the read runs no hook, and a conditional
+ * write's expectation is judged under the write's own row lock.
+ */
+export interface PluginSystemIdentity {
+  readonly overrideAccess: true;
+  /** The system is no caller: one carrying a user is refused. */
+  readonly user?: never;
+  readonly authenticatedScope?: never;
+}
+
+/**
+ * @experimental Who a stored read or a conditional write is made as: a route's
+ * caller, as `ctx.caller.identity()` resolved them and judged as their own
+ * read or update is, or the system. The two never mix: a caller carrying
+ * `overrideAccess` is neither, and is refused.
+ */
+export type PluginStoredIdentity =
+  | (PluginRouteIdentity & { readonly overrideAccess?: never })
+  | PluginSystemIdentity;
 
 /** @experimental A read of the stored form of some of a document's fields. */
 export type PluginStoredFieldsRequest = PluginStoredDocument & {
@@ -104,7 +130,29 @@ export type PluginStoredFields =
   | {
       readonly kind: "found";
       readonly values: Readonly<Record<string, PluginStoredValue>>;
+      /**
+       * The live row's lifecycle, read with the values in the same snapshot
+       * and with no read hook. Answered to the system alone: a person's read
+       * leaves it out.
+       */
+      readonly live?: PluginStoredLifecycle;
     };
+
+/**
+ * @experimental A stored document's lifecycle in the language read, as the
+ * stored read gives it to the system.
+ */
+export interface PluginStoredLifecycle {
+  /**
+   * The live row's state where it is one the workflow calls public, as
+   * stored (`published`, or whatever the workflow names a public state);
+   * `null` where the row is in another state or the document has no
+   * lifecycle. Writing a public row means publishing it again in that state.
+   */
+  readonly publicState: string | null;
+  /** Whether a working draft is pending in the language read. */
+  readonly workingDraft: boolean;
+}
 
 /**
  * @experimental What a conditional write expects to find stored, judged under
@@ -147,7 +195,7 @@ export type PluginConditionalUpdate = PluginStoredDocument & {
  */
 const PLUGIN_JSON_FIELDS: FieldScope = {
   only: "Only fields of a plugin field type stored as JSON, at top level or inside named groups, can be read.",
-  admits: type => getFieldType(type)?.storage === "json",
+  admits: field => getFieldType(field.type)?.storage === "json",
   refusal: (entity, topLevel) =>
     fieldsCarryingReadRules(
       entity.kind,
@@ -162,14 +210,29 @@ const PLUGIN_JSON_FIELDS: FieldScope = {
 };
 
 /**
+ * The fields the system may read the stored form of: every field stored as
+ * JSON, built-in (a repeater, a named group, `json`) or a plugin's. A field
+ * read rule does not refuse one, as no field rule is asked of a Direct API
+ * read made with `overrideAccess: true`; a field stored any other way still
+ * is refused.
+ */
+const SYSTEM_JSON_FIELDS: FieldScope = {
+  only: "Only fields stored as JSON, at top level or inside named groups, can be read.",
+  admits: storesJson,
+};
+
+/**
  * @experimental The stored form of some of a document's fields, as the
- * person `identity` names may read them, with no read hook run.
+ * person `identity` names may read them, or as the system, with no read hook
+ * run.
  *
  * Read as a write path reads them: the live row, or the working draft a
  * preview shows, in one language, with no `afterRead` hook of the collection
  * or of a field and no population. Only the fields named are returned, and
  * each must be of a plugin field type stored as JSON and governed by no
- * field-level read rule; any other is refused by name.
+ * field-level read rule; any other is refused by name. The system may read
+ * any field stored as JSON, whatever field rule governs it, and is also told
+ * the live row's lifecycle (`live`).
  *
  * Judged as their ordinary read is: the person must be able to read the
  * collection or Single, asked of the one read decision through
@@ -179,12 +242,15 @@ const PLUGIN_JSON_FIELDS: FieldScope = {
  * person who may update the document, as a preview is. So does a `published`
  * read whose live row, in the language read, is in a state an ordinary read
  * would not show them (one the workflow does not call public): to anyone else
- * it answers `absent`, as the ordinary read answers not found.
+ * it answers `absent`, as the ordinary read answers not found. The system is
+ * judged as an `overrideAccess: true` read: none of this, and no field read
+ * rule, is asked of it.
  */
 export async function readStoredFields(
-  identity: PluginRouteIdentity,
+  identity: PluginStoredIdentity,
   request: PluginStoredFieldsRequest
 ): Promise<PluginStoredFields> {
+  const person = personOf(identity);
   const named = parsedRequest(STORED_READ, request, READ_REFUSAL);
   const document = documentOf(named);
   // The language is resolved once, as the gate's own reads resolve it, and
@@ -196,14 +262,27 @@ export async function readStoredFields(
     form: named.form,
     ...(language.locale === undefined ? {} : { locale: language.locale }),
   };
-  await assertMayRead(identity, document, asked, language.rule);
+  if (person !== undefined) {
+    await assertMayRead(person, document, asked, language.rule);
+  }
 
-  const read = await storedSnapshot(document, asked);
+  const read = await storedSnapshot(document, asked, person === undefined);
   if (!read.found) return { kind: "absent" };
-  if (!(await liveFormShown(identity, document, asked, read.liveState))) {
+  const values = Object.fromEntries(read.values);
+  if (person === undefined) {
+    return {
+      kind: "found",
+      values,
+      live: {
+        publicState: publicStateOf(read.liveState),
+        workingDraft: read.workingDraft,
+      },
+    };
+  }
+  if (!(await liveFormShown(person, document, asked, read.liveState))) {
     return { kind: "absent" };
   }
-  return { kind: "found", values: Object.fromEntries(read.values) };
+  return { kind: "found", values };
 }
 
 /**
@@ -232,12 +311,15 @@ function oneLanguage(requested: string | undefined): {
  * MySQL and in SQLite's one transaction at a time, so a write committing
  * between the main row and its language row cannot pair one's state with the
  * other's value. What a read inside a transaction can only remember is
- * settled on the pool first.
+ * settled on the pool first. The system's read takes its own scope, and asks
+ * the live state and whether a working draft is pending in the same snapshot.
  */
 async function storedSnapshot(
   document: ReturnType<typeof documentOf>,
-  request: PluginStoredFieldsRequest
+  request: PluginStoredFieldsRequest,
+  asSystem: boolean
 ): Promise<StoredFieldsRead> {
+  const scope = asSystem ? SYSTEM_JSON_FIELDS : PLUGIN_JSON_FIELDS;
   const adapter = getService("adapter");
   const defaultLocale = appLocalization()?.defaultLocale ?? null;
   const target = {
@@ -248,16 +330,18 @@ async function storedSnapshot(
   };
   await prepareStoredRead(
     { db: adapter, executor: undefined, defaultLocale },
-    PLUGIN_JSON_FIELDS,
+    scope,
     target
   );
   return adapter.transaction(
     tx =>
       readStoredFieldsOn(
         { db: tx, executor: tx.getDrizzle(), defaultLocale },
-        PLUGIN_JSON_FIELDS,
+        scope,
         target,
-        { askState: !showsUnpublished(request.form) }
+        asSystem
+          ? { askState: true, askDraft: true }
+          : { askState: !showsUnpublished(request.form) }
       ),
     { isolationLevel: "repeatable read", readOnly: true }
   );
@@ -279,13 +363,32 @@ async function liveFormShown(
   liveState: string | null | undefined
 ): Promise<boolean> {
   if (showsUnpublished(request.form) || liveState === undefined) return true;
-  const shown = resolveStatusFilter({
-    collectionHasStatus: true,
-    overrideAccess: false,
-  });
+  const shown = publicStates();
   if (shown === null) return true;
-  if (liveState !== null && shown.values.includes(liveState)) return true;
+  if (liveState !== null && shown.includes(liveState)) return true;
   return mayEdit(identity, document, request.locale);
+}
+
+/**
+ * The states the workflow calls public, as core's status filter answers for
+ * a reader who may not see unpublished work; `null` where it filters nothing.
+ */
+function publicStates(): readonly string[] | null {
+  return (
+    resolveStatusFilter({ collectionHasStatus: true, overrideAccess: false })
+      ?.values ?? null
+  );
+}
+
+/**
+ * The live state where it is one {@link publicStates} names; `null` for any
+ * other state, a row storing none, or a document with no lifecycle
+ * (`undefined`).
+ */
+function publicStateOf(liveState: string | null | undefined): string | null {
+  if (liveState === undefined || liveState === null) return null;
+  const shown = publicStates();
+  return shown === null || shown.includes(liveState) ? liveState : null;
 }
 
 /**
@@ -294,12 +397,13 @@ async function liveFormShown(
  *
  * The update is the ordinary one, made as the person `identity` names under
  * access rules: refused where they may not update the document (or publish
- * it, where `data` publishes). The expectation is judged inside the update's
- * own transaction, once it holds the entry's row lock, against the value as
- * committed then; where it no longer hashes to `expect.hash`, or a working
- * draft is pending under `noPendingDraft`, the update is refused with a
- * `CONFLICT` error and changes nothing. Read the document again and decide
- * again.
+ * it, where `data` publishes). Made as the system, it is an
+ * `overrideAccess: true` update, judged by no access rule. The expectation is
+ * judged inside the update's own transaction, once it holds the entry's row
+ * lock, against the value as committed then; where it no longer hashes to
+ * `expect.hash`, or a working draft is pending under `noPendingDraft`, the
+ * update is refused with a `CONFLICT` error and changes nothing. Read the
+ * document again and decide again.
  *
  * The expectation reads a stored value, so it is first judged as
  * {@link readStoredFields} is: a field that read could not return cannot be
@@ -309,9 +413,10 @@ async function liveFormShown(
  * expectation never compared.
  */
 export async function updateIfUnchanged(
-  identity: PluginRouteIdentity,
+  identity: PluginStoredIdentity,
   update: PluginConditionalUpdate
 ): Promise<void> {
+  const person = personOf(identity);
   const named = parsedRequest(CONDITIONAL_UPDATE, update, WRITE_REFUSAL);
   const expected = expectationOf(named.expect);
   const language = oneLanguage(named.locale);
@@ -339,14 +444,19 @@ export async function updateIfUnchanged(
   const context: Record<string, unknown> = {};
   const pin = { document, expect: expected, checked: false };
   expectStoredValue(context, pin);
-  const as = {
-    user: identity.user,
-    overrideAccess: false as const,
-    context,
-    ...(identity.authenticatedScope === undefined
-      ? {}
-      : { actor: identity.authenticatedScope }),
-  };
+  // As the person under access rules, or as the system, which the Direct
+  // API's own `overrideAccess: true` call is.
+  const as =
+    person === undefined
+      ? { overrideAccess: true as const, context }
+      : {
+          user: person.user,
+          overrideAccess: false as const,
+          context,
+          ...(person.authenticatedScope === undefined
+            ? {}
+            : { actor: person.authenticatedScope }),
+        };
   const nextly = requireNextly();
   if (document.kind === "single") {
     await nextly.updateSingle({
@@ -395,6 +505,24 @@ function parsedRequest<T>(
   if (!parsed.success) throw NextlyError.invalidInput({ message: refusal });
   return parsed.data;
 }
+
+/**
+ * The person or key `identity` names, or `undefined` for the system. Parsed at
+ * the boundary with the request it comes with: `overrideAccess` is the
+ * system's alone, and only as `true`, so a caller carrying one of its own, or
+ * anything that is neither, is refused rather than read as either.
+ */
+function personOf(
+  identity: PluginStoredIdentity
+): PluginRouteIdentity | undefined {
+  if (!STORED_IDENTITY.safeParse(identity).success) {
+    throw NextlyError.invalidInput({ message: IDENTITY_REFUSAL });
+  }
+  return identity.overrideAccess === true ? undefined : identity;
+}
+
+const IDENTITY_REFUSAL =
+  "A stored read or a conditional write is made as a route's caller, as `ctx.caller.identity()` resolved them, or as the system, `{ overrideAccess: true }`.";
 
 const READ_REFUSAL =
   "A stored read names one document (a collection and an entry id, or a Single, and not both), at least one field, and the form `published` or `draft`.";
@@ -479,6 +607,18 @@ const UPDATE_PARTS = {
   locale: z.string().optional(),
   expect: EXPECTATION,
 };
+
+/**
+ * Who a stored read or a conditional write is made as: the system exactly, or
+ * a caller with a user and no `overrideAccess` of its own.
+ */
+const STORED_IDENTITY = z.union([
+  z.strictObject({ overrideAccess: z.literal(true) }),
+  z.looseObject({
+    user: z.looseObject({ id: z.string().min(1) }),
+    overrideAccess: z.undefined().optional(),
+  }),
+]);
 
 /** A whole conditional write, parsed as one before anything is asked or read. */
 const CONDITIONAL_UPDATE = z.union([

@@ -230,7 +230,7 @@ value.
 
 ```json
 {
-  "conditions": [[{ "field": "status", "op": "eq", "value": "vip" }]],
+  "conditions": [[{ "field": "tier", "op": "equals", "value": "vip" }]],
   "devices": { "mobile": false }
 }
 ```
@@ -247,9 +247,19 @@ The two mechanisms are deliberately separate and must not be conflated:
 Conflating them would either leak a conditioned node into the payload or stop a
 hidden-on-mobile node being indexed.
 
-> **`conditions` is reserved, and it currently fails CLOSED.** No evaluator
-> exists — `op` is an open string and nothing decides whether a predicate holds
-> — so the renderer omits any node carrying `conditions` **for every visitor**,
+A condition names one field of the entry the page shows, or of the list item
+when the block is inside a list. Its `op` is one of `equals`, `not_equals`,
+`contains`, `not_contains`, `greater_than`, `less_than`, `exists`, `not_exists`,
+`is_true` and `is_false`. Which ones a field takes depends on its kind: an order
+only on a number or a date (compared by whole days, written `YYYY-MM-DD`), text
+search only on text, and only `exists` and `not_exists` on a field holding
+several values. The older spellings `eq`, `ne`, `neq`, `gt` and `lt` are read
+as the operators they name. A condition may check only a field the public may
+read, since whether the block shows would otherwise reveal its value. Saving
+refuses any other operator or field.
+
+> **The renderer does not evaluate `conditions` yet, so it currently fails
+> CLOSED.** It omits any node carrying `conditions` **for every visitor**,
 > rather than serving it to those who match.
 >
 > This is deliberate: conditions gate personalised and status-restricted

@@ -44,6 +44,7 @@ import type { ClassUsageVariant } from "./collections/class-usage-index";
 import { componentUsageIndex } from "./component-usage";
 import { walkPages } from "./paged-walk";
 import { isSupersededRun } from "./usage-bookkeeping";
+import type { UsageScope } from "./usage-index";
 
 /** How many documents one query asks for. */
 const PAGE_SIZE = 100;
@@ -216,6 +217,18 @@ interface PageTally {
 }
 
 /**
+ * The `entityKey` a walked document's rows are filed under: its id for a
+ * collection entry, and empty for a Single, which has one document and is
+ * addressed by its slug alone.
+ */
+function entityKeyOf(
+  args: { scope?: UsageScope },
+  item: { id: string }
+): string {
+  return args.scope === "single" ? "" : item.id;
+}
+
+/**
  * Bring ONE document's rows into agreement, across every index.
  *
  * Its own function rather than a loop inside the page walk. The walk COUNTS and
@@ -230,6 +243,7 @@ interface PageTally {
 async function repairOneDocument(
   args: {
     targets: readonly UsageTarget[];
+    scope?: UsageScope;
     collection: string;
     field: string;
     locale: string;
@@ -239,9 +253,9 @@ async function repairOneDocument(
   item: { id: string } & Record<string, unknown>
 ): Promise<{ changed: boolean; unread: boolean; failure?: unknown }> {
   const subject = {
-    scope: "collection" as const,
+    scope: args.scope ?? "collection",
     entity: args.collection,
-    entityKey: item.id,
+    entityKey: entityKeyOf(args, item),
     field: args.field,
     locale: args.locale,
     variant: args.variant,
@@ -290,6 +304,7 @@ async function repairOneDocument(
 async function rebuildOnePage(
   args: {
     targets: readonly UsageTarget[];
+    scope?: UsageScope;
     collection: string;
     field: string;
     locale: string;
@@ -310,7 +325,7 @@ async function rebuildOnePage(
 
   for (const item of items) {
     if (!isStoredDocument(item)) continue;
-    visited.add(item.id);
+    visited.add(entityKeyOf(args, item));
     count(tally, await repairOneDocument(args, item));
     tally.last = item.id;
     // After the document, never before it: a walk stopped before its first
@@ -394,7 +409,13 @@ export interface UsageRebuildArgs {
    * check acts on.
    */
   targets: readonly UsageTarget[];
-  /** The collection whose documents are walked. */
+  /**
+   * Whether `collection` names a collection or a Single; a collection when
+   * absent. A Single's rows are filed with an empty `entityKey`, and its
+   * document store answers with its one document.
+   */
+  scope?: UsageScope;
+  /** The collection whose documents are walked, or the Single. */
   collection: string;
   /** The blocks field on those documents. */
   field: string;
@@ -553,7 +574,7 @@ export async function walkUsageIndexes(
     // reconciles a row whose document is gone.
     try {
       const swept = await target.forgetAbsent({
-        scope: "collection",
+        scope: args.scope ?? "collection",
         entity: args.collection,
         field: args.field,
         locale: args.locale,
@@ -628,7 +649,13 @@ export interface PageBuilderRebuildArgs {
   classIndex: ClassUsageIndexStore;
   /** Where the COMPONENT index's rows live. */
   componentIndex: ClassUsageIndexStore;
-  /** The collection whose documents are walked. */
+  /**
+   * Whether `collection` names a collection or a Single; a collection when
+   * absent. A Single's rows are filed with an empty `entityKey`, and its
+   * document store answers with its one document.
+   */
+  scope?: UsageScope;
+  /** The collection whose documents are walked, or the Single. */
   collection: string;
   /** The blocks field on those documents. */
   field: string;

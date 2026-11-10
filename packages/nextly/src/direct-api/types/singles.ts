@@ -95,6 +95,22 @@ export interface FindSingleArgs<TSlug extends SingleSlug = SingleSlug>
    * @default true
    */
   createIfMissing?: boolean;
+
+  /**
+   * With `createIfMissing: false`, what a Single with no stored document
+   * answers. `"default"` answers the default document a creating read would
+   * store, through the same read (access rules, lifecycle filter, field rules
+   * and read hooks), without storing anything: so a caller can see what the
+   * Single will hold once it is first read. Refused unless `createIfMissing`
+   * is `false`, since a creating read answers the created document anyway.
+   *
+   * A default computed by a function is computed again for each such read, so
+   * a function that is not deterministic may answer differently from what is
+   * later stored.
+   *
+   * @experimental
+   */
+  whenAbsent?: "default";
 }
 
 /**

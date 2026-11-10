@@ -110,6 +110,10 @@ import {
 import { createPluginPrincipals } from "./principals/api";
 import type { PluginPrincipalsApi, PrincipalRef } from "./principals/types";
 import {
+  createPluginReceivedWebhooks,
+  type PluginReceivedWebhooks,
+} from "./security/inbound-webhooks";
+import {
   createOneTimeSecrets,
   type OneTimeSecrets,
   type SecretsAdapter,
@@ -742,6 +746,8 @@ export interface PluginSecurityApi {
   readonly opaque: OpaqueSecrets;
   /** One-purpose links and codes, spent once. */
   readonly secrets: OneTimeSecrets;
+  /** Verifying the webhooks the plugin receives, in a common scheme or its own. */
+  readonly webhooks: PluginReceivedWebhooks;
 }
 
 /** @experimental Writing one plugin's declared audit events. */
@@ -2244,6 +2250,9 @@ export function createPluginContext(
         logger,
       }),
       opaque: createOpaqueSecrets(),
+      // Pure, holding no state: the secrets come with each call, from
+      // wherever the plugin keeps them.
+      webhooks: createPluginReceivedWebhooks(),
       // Kept within this plugin's name. The adapter is read per call, as the
       // context can be built before the database connects, and through this
       // context's own resolver rather than the global container: a context

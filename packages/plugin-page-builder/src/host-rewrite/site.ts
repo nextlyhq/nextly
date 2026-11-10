@@ -10,7 +10,15 @@
  *
  * @module host-rewrite/site
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
+import {
+  NextlyError,
+  readStoredFields,
+  updateIfUnchanged,
+  type PluginStoredDocument,
+  type PluginStoredFields,
+  type PluginStoredIdentity,
+  type PluginStoredValue,
+} from "@nextlyhq/plugin-sdk";
 
 import { blocksFieldReach } from "../class-usage-blocks-fields";
 import { documentVersionOf, withVersionFrom } from "../document-version";
@@ -21,18 +29,12 @@ import {
 import { layoutReferencesOf } from "../layout-component-usage";
 
 import { documentKeyOf, type HostAddress, type LeftHost } from "./contract";
-import {
-  HOST_CHANGED,
-  writeExpecting,
-  type StoredExpectation,
-} from "./expectations";
-import { PUBLIC_STATES } from "./lifecycle";
 import type {
   HostCandidate,
   HostDocument,
+  HostRead,
   HostReader,
   HostSource,
-  HostWrite,
   HostWriter,
   ReadValue,
   WriteResult,
@@ -74,10 +76,12 @@ export interface RewriteDirectApi extends LayoutGuardDirectApi {
  * The identity a write runs as: the caller's request, as it resolved it, or
  * the system, for a run no person started (removing a component's retired
  * field values, which no reader is ever shown and every write already drops).
+ * The conditional write's own identity, so either is judged by core.
  */
-export type WriteIdentity =
-  | (Record<string, unknown> & { readonly overrideAccess: false })
-  | { readonly overrideAccess: true };
+export type WriteIdentity = PluginStoredIdentity;
+
+/** The system, as the stored read and the conditional write take it. */
+const THE_SYSTEM = { overrideAccess: true } as const;
 
 /** What the rewrite needs from the installed plugin and the person running it. */
 export interface RewriteSite {
@@ -91,7 +95,7 @@ export interface RewriteSite {
   readonly singles: () => Promise<readonly SingleToWalk[] | undefined>;
   /** The site's configured languages. */
   readonly locales: () => readonly string[];
-  /** The site's default language, which validation names as no language. */
+  /** The site's default language. */
   readonly defaultLocale: () => string | undefined;
   /** The RESOLVED slug Layouts are stored under. */
   readonly layouts: string;
@@ -500,33 +504,27 @@ async function layoutsNaming(site: RewriteSite): Promise<LeftHost[]> {
   return left;
 }
 
-/** Reads a host's stored forms as the system. */
-export function siteHostReader(site: Pick<RewriteSite, "nextly">): HostReader {
+/**
+ * Reads a host's stored forms as the system, with no read hook: the values
+ * and the lifecycle alike come from the stored read, so a site's `afterRead`
+ * hook can neither hide a copy nor change how the host is written back.
+ */
+export function siteHostReader(
+  site: Pick<RewriteSite, "nextly" | "resolveCollection" | "singles">
+): HostReader {
   return async host => {
-    const nextly = await site.nextly();
-    // Whether the row is public is asked of core's own lifecycle filter: a
-    // read bounded to `published` answers every state the collection's
-    // workflow calls public, so no state name is compared here.
-    const shown = await readRow(nextly, host, "public");
-    const live = shown ?? (await readRow(nextly, host, "all"));
-    const pending = await readRow(nextly, host, "draft");
-    const draft =
-      pending !== null && pending._isWorkingDraft === true
-        ? valueAt(pending, host.path)
-        : null;
-    // The version a read gives is the live row's, with or without a draft.
-    const rev = documentVersionOf(live);
-    return {
-      ...(rev === undefined ? {} : { rev }),
-      published: live === null ? { kind: "absent" } : valueAt(live, host.path),
-      draft,
-      // A row with no lifecycle has no state to keep: it is saved, not
-      // published.
-      liveState:
-        shown !== null && typeof shown.status === "string"
-          ? shown.status
-          : null,
-    };
+    // A fixed host is read through its top-level field, whose stored value
+    // holds the rest of its path; a group kept per language is stored whole
+    // that way, in the host's language.
+    const fields =
+      host.path.length === 0
+        ? await scannedFields(site, host)
+        : host.path.slice(0, 1);
+    const forms = await storedForms(host, fields);
+    // The row's version, the one thing taken from a Direct API read: the
+    // write sends it back, so a save since the read refuses it.
+    const rev = documentVersionOf(await readRow(await site.nextly(), host));
+    return { ...forms, ...(rev === undefined ? {} : { rev }) };
   };
 }
 
@@ -559,14 +557,167 @@ export async function documentHasWorkingDraft(
 }
 
 /**
+ * A host's stored forms, from the stored read of `fields`: the live row's,
+ * its public state, and the pending working draft's where one is. One field
+ * is a fixed path's; several are a whole-row scan's, given back as one row
+ * of those fields.
+ */
+async function storedForms(
+  host: HostAddress,
+  fields: readonly string[]
+): Promise<Omit<HostRead, "rev">> {
+  const live = await readStored(host, fields, "published");
+  if (live.kind === "absent") {
+    return { published: { kind: "absent" }, draft: null, liveState: null };
+  }
+  // The system's read always carries it; a read that does not is not one to
+  // judge a host by.
+  if (live.live === undefined) {
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage: "The stored read gave no lifecycle for this document.",
+    });
+  }
+  const draft = live.live.workingDraft
+    ? await readStored(host, fields, "draft")
+    : undefined;
+  return {
+    published: hostValue(live, host, fields),
+    draft:
+      draft === undefined
+        ? null
+        : draft.kind === "absent"
+          ? { kind: "absent" }
+          : hostValue(draft, host, fields),
+    liveState: live.live.publicState,
+  };
+}
+
+/** One stored read of a host's fields, in one form and its language. */
+function readStored(
+  host: HostAddress,
+  fields: readonly string[],
+  form: "published" | "draft"
+): Promise<PluginStoredFields> {
+  return readStoredFields(THE_SYSTEM, {
+    ...storedDocumentOf(host),
+    fields,
+    form,
+    ...(host.locale === undefined ? {} : { locale: host.locale }),
+  });
+}
+
+/**
+ * A host's value from a read that found its document: the one field's for a
+ * fixed path, or for a scan a row holding every field read that stores one.
+ */
+function hostValue(
+  read: Extract<PluginStoredFields, { kind: "found" }>,
+  host: HostAddress,
+  fields: readonly string[]
+): ReadValue {
+  if (host.path.length === 0) {
+    const row: Record<string, unknown> = {};
+    for (const field of fields) {
+      const value = within(read.values[field], []);
+      if (value.kind === "value") row[field] = value.value;
+    }
+    return { kind: "value", value: row };
+  }
+  return within(read.values[host.path[0] ?? ""], host.path.slice(1));
+}
+
+/**
+ * The value at `path` inside a stored top-level value. Nothing stored there,
+ * a `null` included, is absent: a field never filled holds no copy, and
+ * reads as one that does not exist, never as a value to judge.
+ */
+function within(
+  stored: PluginStoredValue | undefined,
+  path: readonly string[]
+): ReadValue {
+  if (stored === undefined || stored.kind === "absent") {
+    return { kind: "absent" };
+  }
+  let value: unknown = stored.value;
+  for (const key of path) {
+    if (!isRecord(value)) return { kind: "absent" };
+    value = value[key];
+  }
+  return value === undefined || value === null
+    ? { kind: "absent" }
+    : { kind: "value", value };
+}
+
+/**
+ * The top-level fields a whole-row scan reads: each the walk cannot follow to
+ * a fixed path, so it may hold a blocks value no host of its own reaches.
+ * Read through the stored read like any host, never from a hooked row; one
+ * the stored read cannot answer (a field kept in another table) makes the
+ * read refuse, and the host is reported as unreadable, never unchanged.
+ */
+async function scannedFields(
+  site: Pick<RewriteSite, "resolveCollection" | "singles">,
+  host: HostAddress
+): Promise<string[]> {
+  const declaration =
+    host.kind === "single"
+      ? (await site.singles())?.find(single => single.slug === host.slug)
+      : await site.resolveCollection(host.slug);
+  const fields = unreachedFieldsOf(
+    declaration as { fields?: unknown; localized?: unknown } | undefined
+  );
+  if (fields === undefined || fields.length === 0) {
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage:
+        "This document holds a blocks value no field of it can be read for.",
+    });
+  }
+  return fields;
+}
+
+/**
+ * The top-level field names whose declarations hold a blocks field with no
+ * fixed path, asked of the walk itself one declaration at a time; a nameless
+ * group's own fields are its parent's columns, so they are asked in turn.
+ * `undefined` where such a declaration has no name to read it by.
+ */
+function unreachedFieldsOf(
+  declaration: { fields?: unknown; localized?: unknown } | undefined
+): string[] | undefined {
+  const listed = declaration?.fields;
+  if (!Array.isArray(listed)) return undefined;
+  const localized = declaration?.localized;
+  const names: string[] = [];
+  const seen = new Set<unknown>();
+  const stack: unknown[] = [...listed];
+  while (stack.length > 0) {
+    const field = stack.pop();
+    if (seen.has(field)) continue;
+    seen.add(field);
+    if (!blocksFieldReach({ fields: [field], localized }).unreachable) continue;
+    const name = (field as { name?: unknown } | null)?.name;
+    if (typeof name === "string" && name !== "") {
+      names.push(name);
+      continue;
+    }
+    const inner = (field as { fields?: unknown } | null)?.fields;
+    if (!Array.isArray(inner)) return undefined;
+    stack.push(...inner);
+  }
+  return names;
+}
+
+/**
  * One read of a host's row, or `null` when there is none: `all` reads the
- * main row in any state, `public` only in a state the workflow calls public,
- * and `draft` overlays a pending working draft where there is one.
+ * main row in any state, and `draft` overlays a pending working draft where
+ * there is one.
  */
 async function readRow(
   nextly: RewriteDirectApi,
   host: HostAddress,
-  read: "all" | "public" | "draft"
+  read: "all" | "draft" = "all"
 ): Promise<Record<string, unknown> | null> {
   try {
     const row = await fetchRow(nextly, host, readOptions(host, read));
@@ -593,12 +744,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-/** The options one read of a host is made with, as the system. */
-function readOptions(host: HostAddress, read: "all" | "public" | "draft") {
+/** The options one read of a host's row is made with, as the system. */
+function readOptions(host: HostAddress, read: "all" | "draft") {
   return {
     depth: 0,
     overrideAccess: true,
-    status: read === "public" ? PUBLIC_STATES : ("all" as const),
+    status: "all" as const,
     ...(host.locale === undefined
       ? {}
       : { locale: host.locale, fallbackLocale: false as const }),
@@ -606,72 +757,20 @@ function readOptions(host: HostAddress, read: "all" | "public" | "draft") {
   };
 }
 
-/** The value at a path of a row; the whole row for the empty path. */
-function valueAt(
-  row: Record<string, unknown>,
-  path: readonly string[]
-): ReadValue {
-  let value: unknown = row;
-  for (const key of path) {
-    if (typeof value !== "object" || value === null) return { kind: "absent" };
-    value = (value as Record<string, unknown>)[key];
-  }
-  return value === undefined || value === null
-    ? { kind: "absent" }
-    : { kind: "value", value };
+/** The document a host belongs to, as the stored read and write name it. */
+function storedDocumentOf(host: HostAddress): PluginStoredDocument {
+  return host.kind === "single"
+    ? { single: host.slug }
+    : { collection: host.slug, id: host.id ?? "" };
 }
-
-/**
- * What a write's validation must find before it may land.
- *
- * A save depends on the one form it was computed from. A publish depends on
- * more: the live row it was computed from, and the absence of a pending
- * draft, since a publish would put a draft created meanwhile live, the
- * author's other changes with it. With no pending draft the draft form reads
- * as the live row, so it must hash the same; and the draft's absence is asked
- * as such, because a draft that leaves this field alone hashes the same too.
- */
-function expectationFor(
-  nextly: RewriteDirectApi,
-  write: HostWrite,
-  defaultLocale: string | undefined
-): StoredExpectation {
-  // The language as validation names it: none for the default one.
-  const locale =
-    write.host.locale === undefined || write.host.locale === defaultLocale
-      ? {}
-      : { locale: write.host.locale };
-  const judged = { done: false };
-  if (write.mode !== "publish") {
-    return { host: write.host, forms: [write.expected], ...locale, judged };
-  }
-  return {
-    host: write.host,
-    ...locale,
-    judged,
-    forms: [write.expected, { form: "draft", hash: write.expected.hash }],
-    noPendingDraft: async () => {
-      const pending = await readRow(nextly, write.host, "draft");
-      return pending === null || pending._isWorkingDraft !== true;
-    },
-  };
-}
-
-/** The identity a write made as the system runs as: past every access rule. */
-interface SystemIdentity {
-  readonly overrideAccess: true;
-}
-
-/** Who a writer's writes are made as: a person, or the system. */
-type WriterIdentity = WriteIdentity | SystemIdentity;
 
 /** Writes a host as the person running the rewrite, checked against what was read. */
 export function siteHostWriter(
-  site: Pick<RewriteSite, "nextly" | "defaultLocale"> & {
-    readonly identity: () => Promise<WriterIdentity>;
-  }
+  site: Pick<RewriteSite, "identity">
 ): HostWriter {
   return async write => {
+    // A host below a group is only ever read: the walk leaves one holding a
+    // copy to its author, so no write reaches here with one, nor with a scan.
     const field = write.host.path[0];
     if (field === undefined || write.host.path.length !== 1) {
       return {
@@ -688,31 +787,24 @@ export function siteHostWriter(
       },
       write.rev
     );
-    const nextly = await site.nextly();
     const identity = await site.identity();
-    const inLocale =
-      write.host.locale === undefined ? {} : { locale: write.host.locale };
     try {
-      await writeExpecting(
-        expectationFor(nextly, write, site.defaultLocale()),
-        () =>
-          write.host.kind === "single"
-            ? nextly.updateSingle({
-                slug: write.host.slug,
-                data,
-                depth: 0,
-                ...inLocale,
-                ...identity,
-              })
-            : nextly.update({
-                collection: write.host.slug,
-                id: write.host.id ?? "",
-                data,
-                depth: 0,
-                ...inLocale,
-                ...identity,
-              })
-      );
+      // Made only if the field still hashes, under the write's own row lock,
+      // to what was read; a publish also only if no working draft is pending,
+      // since it would put that draft live with it.
+      await updateIfUnchanged(identity, {
+        ...storedDocumentOf(write.host),
+        data,
+        ...(write.host.locale === undefined
+          ? {}
+          : { locale: write.host.locale }),
+        expect: {
+          field,
+          form: write.expected.form,
+          hash: write.expected.hash,
+          ...(write.mode === "publish" ? { noPendingDraft: true } : {}),
+        },
+      });
       return { kind: "written" };
     } catch (error) {
       return writeFailure(error);
@@ -735,7 +827,11 @@ export function systemHostWriter(
   });
 }
 
-/** What a failed write came to; anything this does not recognise is thrown. */
+/**
+ * What a failed write came to; anything this does not recognise is thrown. A
+ * conflict is the conditional write refusing: the host changed since it was
+ * read, or a draft is pending under a publish, so it is read again.
+ */
 function writeFailure(error: unknown): WriteResult {
   if (NextlyError.isForbidden(error)) return { kind: "forbidden" };
   if (NextlyError.isNotFound(error)) return { kind: "changed" };
@@ -747,14 +843,12 @@ function writeFailure(error: unknown): WriteResult {
   return validationFailure(error);
 }
 
-/** What a validation refusal came to: the host changed, or refused, and why. */
+/** What a validation refusal came to: the write refused, and why. */
 function validationFailure(error: NextlyError): WriteResult {
   const issues = (error.publicData as { errors?: unknown } | undefined)?.errors;
   const list = Array.isArray(issues)
     ? (issues as { code?: unknown; message?: unknown }[])
     : [];
-  if (list.some(issue => issue.code === HOST_CHANGED))
-    return { kind: "changed" };
   return {
     kind: "refused",
     detail:

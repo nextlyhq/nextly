@@ -41,6 +41,7 @@ import {
   ICON_ID_PATTERN,
 } from "../../../collections/fields/types/icon";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
+import { isRequired } from "../../../shared/lib/entry-validation";
 
 import { fieldAdmitsNull } from "./field-nullability";
 import {
@@ -477,12 +478,12 @@ export class ZodGenerator {
     // column. Whether the set and the icon exist is a runtime question, so an
     // unknown id still parses. An optional field also takes "", the value the
     // admin clears it to and the entry validator treats as left out; a
-    // required one still refuses it.
+    // required one still refuses it. Whether it is required is the entry
+    // validator's own `isRequired`, which reads both spellings (`required`
+    // and `validation.required`), so the two cannot disagree about "".
     else if (isIconField(field)) {
       const idShape = `z.string().max(${String(ICON_ID_MAX_LENGTH)}).regex(${String(ICON_ID_PATTERN)})`;
-      zodSchema = fieldAdmitsNull(field)
-        ? `${idShape}.or(z.literal(""))`
-        : idShape;
+      zodSchema = isRequired(field) ? idShape : `${idShape}.or(z.literal(""))`;
     }
     // Number fields
     else if (isNumberField(field)) {

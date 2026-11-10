@@ -1,14 +1,18 @@
 /**
  * What a core service does after its write, when it is called inside a
- * plugin's `ctx.db.transaction` on SQLite.
+ * plugin's `ctx.db.transaction`, on SQLite and PostgreSQL, and on MySQL.
  *
- * The service's own transaction nests there as a savepoint, so its change is
- * durable only once the plugin's transaction commits. Its after-hooks, events,
+ * The service's own transaction joins the plugin's, as a savepoint on SQLite
+ * and PostgreSQL, so its change is durable only once the plugin's transaction
+ * commits. Its after-hooks, events,
  * cache revalidation and write-path maintenance wait for that commit: they run
  * once, after it, and never for a change it rolls back. A savepoint that rolls
- * back inside a committing transaction drops only its own. Outside any
- * transaction they run as the service returns, as before.
+ * back inside a committing transaction drops only its own. MySQL joins flat,
+ * with no savepoint, so there a service call that fails fails the plugin's
+ * whole transaction, even when the plugin caught it. Outside any transaction
+ * they run as the service returns, as before.
  */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
@@ -34,7 +38,12 @@ import {
   type PluginMediaService,
   type PluginUserService,
 } from "../plugin-context";
-import { createTestNextly, type TestNextly } from "../test-nextly";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "../test-nextly";
 
 const SLUG = "notes";
 const PDF = pdfDocument("after-commit");
@@ -63,7 +72,9 @@ interface Seen {
   revalidated: string[];
 }
 
-async function boot(): Promise<{ ctx: Captured; seen: Seen }> {
+async function boot(
+  dialect: TestDialect = "sqlite"
+): Promise<{ ctx: Captured; seen: Seen }> {
   let captured: Captured | undefined;
   const seen: Seen = { log: [], revalidated: [] };
   const afterChange = (args: { value?: unknown }) => {
@@ -87,6 +98,7 @@ async function boot(): Promise<{ ctx: Captured; seen: Seen }> {
     },
   });
   current = await createTestNextly({
+    dialect,
     plugins: [plugin],
     collections: [
       defineCollection({
@@ -108,8 +120,10 @@ async function boot(): Promise<{ ctx: Captured; seen: Seen }> {
   });
   if (!captured) throw new Error("the plugin's init did not run");
   // The SQLite runtime auto-sync does not create the core auth tables.
-  for (const statement of generateSqliteCoreTableStatements()) {
-    await current.adapter.executeQuery(statement);
+  if (dialect === "sqlite") {
+    for (const statement of generateSqliteCoreTableStatements()) {
+      await current.adapter.executeQuery(statement);
+    }
   }
   // An install's first account is super-admin, which a plugin may not create;
   // core makes it, before anything below is listening.
@@ -204,11 +218,21 @@ const TRANSACTIONS: ReadonlyArray<
   ["ctx.db.raw", db => work => db.raw.transaction(() => work())],
 ];
 
-describe.each(TRANSACTIONS)(
-  "a core write inside a transaction through %s on sqlite",
-  (_, transactionOf) => {
+/** SQLite and PostgreSQL join as a savepoint; MySQL is below. */
+const SAVEPOINT_DIALECTS = getConfiguredTestDialects().filter(
+  dialect => dialect !== "mysql"
+);
+const MATRIX = SAVEPOINT_DIALECTS.flatMap(dialect =>
+  TRANSACTIONS.map(
+    ([name, transactionOf]) => [name, dialect, transactionOf] as const
+  )
+);
+
+describe.each(MATRIX)(
+  "a core write inside a transaction through %s on %s",
+  (_, dialect, transactionOf) => {
     it("announces nothing when the transaction rolls back", async () => {
-      const { ctx, seen } = await boot();
+      const { ctx, seen } = await boot(dialect);
 
       await expect(
         transactionOf(ctx.db)(async () => {
@@ -227,7 +251,7 @@ describe.each(TRANSACTIONS)(
     });
 
     it("announces each change once, after the transaction commits", async () => {
-      const { ctx, seen } = await boot();
+      const { ctx, seen } = await boot(dialect);
       let seenInside: string[] = [];
       let revalidatedInside: string[] = [];
 
@@ -246,7 +270,7 @@ describe.each(TRANSACTIONS)(
     });
 
     it("drops only what a rolled-back savepoint announced", async () => {
-      const { ctx, seen } = await boot();
+      const { ctx, seen } = await boot(dialect);
 
       await transactionOf(ctx.db)(async () => {
         await ctx.collections.createEntry(SLUG, { title: "kept" }, {});
@@ -256,9 +280,15 @@ describe.each(TRANSACTIONS)(
         await ctx.collections
           .withTransaction(async () => {
             await ctx.collections.createEntry(SLUG, { title: "undone" }, {});
+            await adapterOf(current!).afterCommit(() => {
+              seen.log.push("callback:undone");
+            });
             throw new Error("savepoint failed");
           })
           .catch(() => undefined);
+        await adapterOf(current!).afterCommit(() => {
+          seen.log.push("callback:kept");
+        });
         await ctx.users.create(
           {
             email: "sibling@example.com",
@@ -271,13 +301,15 @@ describe.each(TRANSACTIONS)(
       await current!.events.settle();
 
       expect(seen.log).not.toContain("field.afterChange:undone");
+      expect(seen.log).not.toContain("callback:undone");
+      expect(seen.log).toContain("callback:kept");
       expect(seen.log.filter(e => e === "hook.afterCreate")).toHaveLength(1);
       expect(seen.log).toContain("field.afterChange:kept");
       expect(seen.log).toContain("user.created");
     });
 
     it("announces as the service returns outside any transaction", async () => {
-      const { ctx, seen } = await boot();
+      const { ctx, seen } = await boot(dialect);
 
       await ctx.collections.createEntry(SLUG, { title: "alone" }, {});
       const afterCreate = [...seen.log];
@@ -295,7 +327,7 @@ describe.each(TRANSACTIONS)(
     });
 
     it("drops a deleted user's event and a Single's effects on rollback", async () => {
-      const { ctx, seen } = await boot();
+      const { ctx, seen } = await boot(dialect);
       const doomed = await ctx.users.create(
         { email: "doomed@example.com", name: "d", password: "Passw0rd!long" },
         {}
@@ -339,7 +371,7 @@ describe.each(TRANSACTIONS)(
     });
 
     it("holds a collection transaction's cache flush for the outer commit", async () => {
-      const { ctx, seen } = await boot();
+      const { ctx, seen } = await boot(dialect);
 
       await expect(
         transactionOf(ctx.db)(async () => {
@@ -372,7 +404,7 @@ describe.each(TRANSACTIONS)(
     });
 
     it("announces an entry's update and deletion only once they commit", async () => {
-      const { ctx, seen } = await boot();
+      const { ctx, seen } = await boot(dialect);
       const created = (await ctx.collections.createEntry(
         SLUG,
         { title: "before" },
@@ -423,6 +455,41 @@ describe.each(TRANSACTIONS)(
     });
   }
 );
+
+/** The adapter a test's Nextly runs on. */
+function adapterOf(handle: TestNextly): DrizzleAdapter {
+  return handle.adapter as unknown as DrizzleAdapter;
+}
+
+if (getConfiguredTestDialects().includes("mysql")) {
+  describe.each(TRANSACTIONS)(
+    "a core write inside a transaction through %s on mysql",
+    (_, transactionOf) => {
+      it("fails the whole transaction when a joined service call fails, though the plugin caught it", async () => {
+        const { ctx, seen } = await boot("mysql");
+
+        const outcome = await transactionOf(ctx.db)(async () => {
+          await ctx.collections.createEntry(SLUG, { title: "kept" }, {});
+          // MySQL joins the service's transaction flat: no savepoint can undo
+          // its part alone, so its failure fails the plugin's transaction.
+          await ctx.collections
+            .withTransaction(async () => {
+              await ctx.collections.createEntry(SLUG, { title: "undone" }, {});
+              throw new Error("the joined call failed");
+            })
+            .catch(() => undefined);
+        }).then(
+          () => "committed",
+          () => "rolled back"
+        );
+        await current!.events.settle();
+
+        expect(outcome).toBe("rolled back");
+        expect(seen.log).toEqual([]);
+      });
+    }
+  );
+}
 
 describe("a publish inside ctx.db.transaction on sqlite", () => {
   const STATUS_EVENTS = [

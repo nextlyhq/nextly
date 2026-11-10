@@ -57,8 +57,27 @@ import {
 } from "./geometry-dom";
 import { useHoveredBlock } from "./hovered-block";
 import { UNNAMED_COMPONENT } from "./layers";
+import { LOOK_REACH_ATTRIBUTE } from "./look-reach";
 import { TOOLBAR_GAP_PX, toolbarPlacement } from "./toolbar-actions";
 import { EDITING_ATTRIBUTE } from "./use-inline-text";
+
+/**
+ * The marks that are the marked element's outline and nothing more, by the
+ * attribute that asks for each: a block an edit to the look being edited
+ * reaches, and a drop's parent and refused target.
+ */
+const OUTLINE_MARKS = [
+  [LOOK_REACH_ATTRIBUTE, "look-reach"],
+  [DROP_PARENT_ATTRIBUTE, "drop-parent"],
+  [DROP_REFUSED_ATTRIBUTE, "drop-refused"],
+] as const;
+
+/** The outline-only marks an element asks for, drawn as `box`. */
+function outlineMarksOf(marked: Element, box: Omit<Mark, "kind">): Mark[] {
+  return OUTLINE_MARKS.filter(([attribute]) =>
+    marked.hasAttribute(attribute)
+  ).map(([, kind]) => ({ ...box, kind }));
+}
 
 /** One box to draw, in the chrome's coordinates. */
 interface Mark {
@@ -66,6 +85,7 @@ interface Mark {
     | "selected"
     | "hovered"
     | "exposed"
+    | "look-reach"
     | "drop-parent"
     | "drop-refused";
   /** The rest of a multi-block selection, drawn thinner than the primary. */
@@ -592,7 +612,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
   const copies = new Map<Element | null, number>();
   root
     .querySelectorAll(
-      `[${SELECTED_ATTRIBUTE}], [${EXPOSED_ATTRIBUTE}], [${DROP_PARENT_ATTRIBUTE}], [${DROP_REFUSED_ATTRIBUTE}]`
+      `[${SELECTED_ATTRIBUTE}], [${EXPOSED_ATTRIBUTE}], [${LOOK_REACH_ATTRIBUTE}], [${DROP_PARENT_ATTRIBUTE}], [${DROP_REFUSED_ATTRIBUTE}]`
     )
     .forEach(marked => {
       // A canvas rendered inside a block of this one marks its own elements.
@@ -641,12 +661,8 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
           ...(marked.hasAttribute(EDITING_ATTRIBUTE) ? { editing: true } : {}),
         });
       }
-      if (marked.hasAttribute(DROP_PARENT_ATTRIBUTE)) {
-        found.push({ ...outline, ...plain, kind: "drop-parent" });
-      }
-      if (marked.hasAttribute(DROP_REFUSED_ATTRIBUTE)) {
-        found.push({ ...outline, ...plain, kind: "drop-refused" });
-      }
+      // The marks drawn as the element's outline alone, one per attribute.
+      found.push(...outlineMarksOf(marked, { ...outline, ...plain }));
     });
   placements.forEach(({ placement, parts, ...look }) => {
     const ring = ringOf(placementOutline(parts));

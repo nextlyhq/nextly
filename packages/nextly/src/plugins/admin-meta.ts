@@ -30,6 +30,11 @@ import { pluginAdminSlug } from "./plugin-slug";
 import { collectPluginTranslations } from "./plugin-translations";
 import { collectPluginRoutes } from "./routes/collect-routes";
 import { isRouteError } from "./routes/route-error";
+import {
+  collectionContributors,
+  renamedSlug,
+  servedCollectionSlug,
+} from "./served-collection-slug";
 import { settingsPermissionOf } from "./settings-permission";
 import { validatedClientConfig } from "./validate-client-config";
 import {
@@ -198,27 +203,6 @@ export { pluginAdminSlug } from "./plugin-slug";
  * applies) but contribute NO behavioral admin UI — no menu/pages/settings.
  */
 /**
- * The slug a plugin's collection is served under once the host's rename map
- * applies, or the declared slug where the map does not name it.
- *
- * An OWN property only. `renameMap` is an ordinary object, so a plugin whose
- * collection is legitimately called `constructor` or `toString` would index
- * into `Object.prototype` and resolve its slug to a function — and `??` cannot
- * see that, because an inherited method is neither null nor undefined. The
- * destination would become `/admin/collections/function Object() { [native
- * code] }` and the gate an equally unseeded permission.
- */
-function renamedSlug(
-  renameMap: Record<string, string>,
-  collection: string
-): string {
-  const renamed = Object.prototype.hasOwnProperty.call(renameMap, collection)
-    ? renameMap[collection]
-    : undefined;
-  return typeof renamed === "string" ? renamed : collection;
-}
-
-/**
  * Resolve a menu item's destination and gate through the plugin's renameMap.
  *
  * An item naming one of the plugin's own collections is re-pointed at the slug
@@ -351,40 +335,6 @@ function mountableRoutes(
         fullPath: c.fullPath,
       }))
     : undefined;
-}
-
-/**
- * The plugin that contributes each declared collection slug, the first where
- * two do. Disabled plugins count: their collections are still served.
- */
-function collectionContributors(
-  plugins: readonly PluginDefinition[]
-): Map<string, PluginDefinition> {
-  const contributors = new Map<string, PluginDefinition>();
-  for (const plugin of plugins) {
-    for (const slug of pluginCollectionSlugs(plugin)) {
-      if (!contributors.has(slug)) contributors.set(slug, plugin);
-    }
-  }
-  return contributors;
-}
-
-/**
- * The slug a filter's named collection is served under. A collection is
- * renamed by the host through the plugin that contributes it, so the slug is
- * resolved through that plugin's rename map: the filter's own plugin when it
- * contributes the collection, else the plugin that does. A slug no plugin
- * contributes names one of the app's collections, as written.
- */
-function servedCollectionSlug(
-  owner: PluginDefinition,
-  slug: string,
-  contributors: ReadonlyMap<string, PluginDefinition>
-): string {
-  const contributor = pluginCollectionSlugs(owner).includes(slug)
-    ? owner
-    : contributors.get(slug);
-  return contributor ? renamedSlug(contributor.renameMap ?? {}, slug) : slug;
 }
 
 /**

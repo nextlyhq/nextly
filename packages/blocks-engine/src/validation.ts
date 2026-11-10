@@ -82,6 +82,10 @@ import { walkNodes } from "./tree";
 import type { SlotDefaultSource } from "./tree";
 import { variantLabelIssues } from "./variant-labels";
 import { isConditionGated } from "./visibility";
+import {
+  CONDITION_ISSUE_CODES,
+  conditionIssues,
+} from "./visibility-conditions";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
 export type IssueSeverity = "error" | "warning";
@@ -386,7 +390,8 @@ const DOCUMENT_ISSUE_CODES = {
 export type IssueCode =
   | keyof typeof DOCUMENT_ISSUE_CODES
   | BindingIssueCode
-  | keyof typeof LIST_ISSUE_CODES;
+  | keyof typeof LIST_ISSUE_CODES
+  | keyof typeof CONDITION_ISSUE_CODES;
 
 /**
  * The stable issue-code vocabulary, each with a one-line description. Tests
@@ -403,6 +408,9 @@ export const ISSUE_CODES: { readonly [Code in IssueCode]: string } = {
   // A collection list's query codes, from the module that reads the query, so
   // the editor, the API and the renderer name a list's problem alike.
   ...LIST_ISSUE_CODES,
+  // A block's visibility condition codes, the ones the renderer reports for
+  // the same conditions, so an author sees one name for one problem.
+  ...CONDITION_ISSUE_CODES,
 };
 
 /**
@@ -647,22 +655,15 @@ export function validateDocument(
   // work above is. A problem a stored form already held stays a warning, so a
   // list a schema change broke does not make its page unsavable.
   if (!overLimits) {
-    const entry = ctx.bindingEntry;
+    const judgement = schemaJudgement(ctx, survey.limits.maxNodes);
     issues.push(
-      // As validation issues: the path names the list, so the block's id the
-      // judgement also carries is left to the editor that asks for it.
-      ...listQueryIssues(envelope.nodes, {
-        ...(ctx.listFields === undefined ? {} : { fields: ctx.listFields }),
-        // A Single's page is no collection's entry: its renderer has no
-        // entry to read a relation of.
-        ...(entry === undefined
-          ? {}
-          : {
-              entryCollection: "collection" in entry ? entry.collection : null,
-            }),
-        ...(ctx.stored === undefined ? {} : { stored: ctx.stored }),
-        maxNodes: survey.limits.maxNodes,
-      }).map(({ nodeId: _nodeId, ...issue }) => issue)
+      // As validation issues: the path names the block, so the block's id
+      // each judgement also carries is left to the editor that asks for it.
+      ...listQueryIssues(envelope.nodes, judgement).map(withoutNodeId),
+      // Each block's visibility conditions, judged as its lists are: the
+      // operator always, the field against the entry's or the list item's
+      // schema when given, a problem a stored form held kept a warning.
+      ...conditionIssues(envelope.nodes, judgement).map(withoutNodeId)
     );
   }
 
@@ -3344,4 +3345,41 @@ function validateComponentInstance(
       message: `A component instance's props.overrides must be an object keyed by exposed id, not ${describeValue(overrides)}.`,
     });
   }
+}
+
+/**
+ * What a list's query and a block's conditions are judged with: the fields
+ * the public may read of each collection, the collection of the page's
+ * entry, and the stored forms whose problems stay warnings. One judgement
+ * for both, so a field a list may filter by is the field a condition may
+ * check.
+ */
+function schemaJudgement(
+  ctx: ValidationContext,
+  maxNodes: number
+): {
+  readonly fields?: ListFieldSource;
+  readonly entryCollection?: string | null;
+  readonly stored?: readonly BlockDocument[];
+  readonly maxNodes: number;
+} {
+  const entry = ctx.bindingEntry;
+  return {
+    ...(ctx.listFields === undefined ? {} : { fields: ctx.listFields }),
+    // A Single's page is no collection's entry: its renderer has no entry
+    // to read a relation of, or to check a condition against.
+    ...(entry === undefined
+      ? {}
+      : { entryCollection: "collection" in entry ? entry.collection : null }),
+    ...(ctx.stored === undefined ? {} : { stored: ctx.stored }),
+    maxNodes,
+  };
+}
+
+/** A judgement's finding as a validation issue, without its block's id. */
+function withoutNodeId<Issue extends { readonly nodeId: string }>({
+  nodeId: _nodeId,
+  ...issue
+}: Issue): Omit<Issue, "nodeId"> {
+  return issue;
 }

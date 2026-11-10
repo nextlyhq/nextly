@@ -36,7 +36,7 @@ import { z } from "nextly/zod";
 
 import { documentVersionOf, withVersionFrom } from "./document-version";
 import { titleFieldIn } from "./entries-route";
-import { entryOf, findAsCaller } from "./entry-reads";
+import { entryOf, findAsCaller, singleReadableByCaller } from "./entry-reads";
 import { chunked, ID_BATCH_SIZE } from "./id-batches";
 import {
   SHARED_STYLE_COUNT_ROUTE_PATH,
@@ -157,6 +157,12 @@ export type ReadNamedDocuments = (
   collection: string,
   ids: readonly string[]
 ) => Promise<readonly { id: string; title: string }[] | null>;
+
+/**
+ * A Single's title as the where-used list names it, or `null` when the
+ * caller may not read it.
+ */
+export type ReadNamedSingle = (slug: string) => Promise<string | null>;
 
 /** A refusal naming what is wrong with a request body. */
 function invalidRequest(message: string): NextlyError {
@@ -385,15 +391,22 @@ function byCollectionThenId(
 async function readableUses(
   found: DocumentsUsing,
   usage: SharedStyleUsageSource,
-  readNamed: ReadNamedDocuments
+  readers: { named: ReadNamedDocuments; single: ReadNamedSingle }
 ): Promise<{ readable: SharedStyleUseItem[]; hidden: number }> {
   const readable: SharedStyleUseItem[] = [];
   let hidden = 0;
-  for (const { collection, documents } of found.collections) {
+  for (const { collection, documents, single } of found.collections) {
+    // A Single's one document, named by its label, if the caller may read it.
+    if (single === true) {
+      const named = await readers.single(collection);
+      if (named === null) hidden += 1;
+      else readable.push({ id: "", title: named, collection, kind: "pages" });
+      continue;
+    }
     const ids = documents.filter((doc): doc is string => doc !== null);
     const kind = usage.kindOf(collection);
     for (const batch of chunked(ids, ID_BATCH_SIZE)) {
-      const named = (await readNamed(collection, batch)) ?? [];
+      const named = (await readers.named(collection, batch)) ?? [];
       hidden += batch.length - named.length;
       for (const doc of named) {
         readable.push({ id: doc.id, title: doc.title, collection, kind });
@@ -414,11 +427,15 @@ async function readableUses(
 export async function readSharedStyleUses(
   req: Request,
   usage: SharedStyleUsageSource,
-  readNamed: ReadNamedDocuments
+  readNamed: ReadNamedDocuments,
+  readSingle: ReadNamedSingle
 ): Promise<Response> {
   const { id, page } = whereUsedQuery(req.url);
   const found = await listingOf(usage, id, await usage.health());
-  const { readable, hidden } = await readableUses(found, usage, readNamed);
+  const { readable, hidden } = await readableUses(found, usage, {
+    named: readNamed,
+    single: readSingle,
+  });
   const limit = SHARED_STYLE_WHERE_USED_MAX;
   const totalPages = Math.max(1, Math.ceil(readable.length / limit));
   return respondList(readable.slice((page - 1) * limit, page * limit), {
@@ -712,6 +729,24 @@ function namedDocumentsReader(
   };
 }
 
+/**
+ * A Single the caller may read, named by its label from the Singles registry,
+ * which creates nothing; read through the Single API as the caller.
+ */
+function namedSingleReader(
+  ctx: Pick<PluginRouteContext, "caller" | "services">
+): ReadNamedSingle {
+  return async slug => {
+    if (!(await singleReadableByCaller(ctx, slug))) return null;
+    const listed = await ctx.services.singles.list({
+      slugAllowlist: [slug],
+      limit: 1,
+    });
+    const label = listed.data[0]?.label;
+    return typeof label === "string" && label !== "" ? label : slug;
+  };
+}
+
 /** The slice of the Direct API the rescan reads stored documents through. */
 interface RescanDirectApi {
   find(args: {
@@ -973,7 +1008,8 @@ export function sharedStyleRoutes(setup: SharedStyleRouteSetup): {
         return readSharedStyleUses(
           req,
           setup.usage(ctx),
-          namedDocumentsReader(ctx)
+          namedDocumentsReader(ctx),
+          namedSingleReader(ctx)
         );
       },
     },

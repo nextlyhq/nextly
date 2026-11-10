@@ -755,6 +755,22 @@ test.describe("the composition exit tests", () => {
       },
     });
     expect(unexposed.status()).toBe(422);
+    // The refusal is for that field, not any 422: one reason, naming `body`,
+    // so a caller can tell which value to drop.
+    const refused = (await unexposed.json()) as {
+      error?: {
+        code?: string;
+        data?: { errors?: { path: string; code: string; message: string }[] };
+      };
+    };
+    expect(refused.error?.code).toBe("BUSINESS_RULE_VIOLATION");
+    expect(refused.error?.data?.errors).toEqual([
+      {
+        path: "action",
+        code: "REFUSED",
+        message: expect.stringContaining(`sets "body"`),
+      },
+    ]);
 
     // Exit test 3's step: the card's definition edited and published through
     // its own route, after a dry run that changes nothing.

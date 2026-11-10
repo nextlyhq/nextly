@@ -460,6 +460,13 @@ export interface BlockKeyboardActionsOptions {
    * gesture that opens its form. Absent, the verb is not offered.
    */
   sharedStyles?: SharedStyleVerbHost;
+  /**
+   * Esc pressed with no block selected, which otherwise does nothing: a host
+   * editing a look on its own leaves it, back to editing blocks.
+   *
+   * @experimental Settles with the Design panel's Block looks group.
+   */
+  onEscapeWithoutSelection?: () => void;
 }
 
 /**
@@ -584,7 +591,11 @@ export function useBlockKeyboardActions({
   onEditComponent,
   components,
   sharedStyles,
+  onEscapeWithoutSelection,
 }: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
+  // Read when the key lands, so a host's newest callback is the one called.
+  const escapeWithoutSelection = React.useRef(onEscapeWithoutSelection);
+  escapeWithoutSelection.current = onEscapeWithoutSelection;
   /*
    * The same rule source the pointer route asks, defaulted the way the insert
    * panel defaults it. Taken as an option rather than resolved here only so a
@@ -1088,7 +1099,10 @@ export function useBlockKeyboardActions({
             typeof document === "undefined" ? undefined : document
           );
           if (outcome !== "navigate-selection") return;
-          if (editorNow.selectedId === null) return;
+          if (editorNow.selectedId === null) {
+            escapeWithoutSelection.current?.();
+            return;
+          }
           // Up a level: the block holding the selection, the same answer
           // "Select parent" gives, or nothing once the selection is at the top.
           editorNow.select(

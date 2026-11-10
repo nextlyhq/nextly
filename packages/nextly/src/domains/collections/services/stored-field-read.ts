@@ -51,6 +51,7 @@ import type {
   PluginStoredValue,
   PluginStoredValueTarget,
 } from "../../../plugins/contributions";
+import { addressableFields } from "../../../shared/addressable-fields";
 import type { EntryWriteContext } from "../../../shared/lib/entry-validation";
 import type { LocalizedFieldRef } from "../../i18n/companion-join";
 import {
@@ -61,7 +62,7 @@ import {
   cachedCompanionReadiness,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
-import { getFieldType } from "../../schema/field-types/field-type-registry";
+import { classifyFieldKind } from "../../schema/services/field-column-descriptor";
 import type { VersionsDbApi } from "../../versions/db-api";
 import {
   draftDocumentFacts,
@@ -158,8 +159,8 @@ function registryRecords(connection: StoredFieldConnection): RegistryRecords {
 export interface FieldScope {
   /** What a refusal says the scope is, as one sentence; empty to say nothing. */
   readonly only: string;
-  /** Whether a field declared with `type` is one this read may answer. */
-  admits(type: string): boolean;
+  /** Whether a field declared as `field` is one this read may answer. */
+  admits(field: FieldDefinition): boolean;
   /**
    * Why a field the scope admits by type must still not be answered, asked of
    * the field's top-level name; `undefined` where nothing stops it.
@@ -178,7 +179,7 @@ export interface StoredEntityFacts {
 function scopeOfType(allowedType: string): FieldScope {
   return {
     only: `Only top-level "${allowedType}" fields, or ones inside named groups, can be read.`,
-    admits: type => type === allowedType,
+    admits: field => field.type === allowedType,
   };
 }
 
@@ -451,7 +452,7 @@ function storedValueOf(
     kind: "value",
     value:
       path.within.length === 0
-        ? decoded(reached.value, path.type)
+        ? decoded(reached.value, path.json)
         : reached.value,
   };
 }
@@ -499,7 +500,8 @@ interface StoredFieldPath {
   readonly column: string;
   /** Empty for a top-level field; the group names after the first, then the field's own. */
   readonly within: readonly string[];
-  readonly type: string;
+  /** Whether the field is stored as JSON, which a column may hold as text. */
+  readonly json: boolean;
 }
 
 /**
@@ -524,12 +526,12 @@ function storedFieldPath(
   const column = names[0] ?? target.field;
   const fields = innermostGroupFields(entity, names.slice(0, -1), refuse);
   const field = fields.find(entry => entry.name === names.at(-1));
-  if (field === undefined || !scope.admits(field.type)) {
+  if (field === undefined || !scope.admits(field)) {
     throw refuse("is not a field of that type");
   }
   const why = scope.refusal?.(entity, column);
   if (why !== undefined) throw refuse(why);
-  return { column, within: names.slice(1), type: field.type };
+  return { column, within: names.slice(1), json: storesJson(field) };
 }
 
 /** A named group: a `group` field that declares fields of its own. */
@@ -537,25 +539,36 @@ type NamedGroup = FieldDefinition & { fields: FieldDefinition[] };
 
 /**
  * The fields of the innermost group `groups` names, walking from the entity's
- * top level; the entity's own fields for a top-level read. Refused with
- * `refuse`'s error where a name is not a named group, or names one kept per
- * language.
+ * top level; the entity's own fields for a top-level read. Each level is read
+ * with its unnamed groups flattened, as they store their fields at the level
+ * they sit in. Refused with `refuse`'s error where a name is not a named
+ * group, or names one kept per language.
  */
 function innermostGroupFields(
   entity: StoredEntity,
   groups: readonly string[],
   refuse: (why: string) => NextlyError
 ): readonly FieldDefinition[] {
-  let fields: readonly FieldDefinition[] = entity.fields;
+  let fields = storedAtLevel(entity.fields);
   for (const [depth, name] of groups.entries()) {
     const group = namedGroupIn(fields, name);
     if (group === undefined) throw refuse("is not inside named groups alone");
     if (groupKeptPerLanguage(entity, group, depth)) {
       throw refuse("is inside a group kept per language");
     }
-    fields = group.fields;
+    fields = storedAtLevel(group.fields);
   }
   return fields;
+}
+
+/**
+ * The fields whose values a level stores, as core's addressable-field walk
+ * answers it: a presentational (unnamed) group's fields are its parent's.
+ */
+function storedAtLevel(
+  fields: readonly FieldDefinition[]
+): readonly FieldDefinition[] {
+  return addressableFields(fields) as unknown as FieldDefinition[];
 }
 
 /** The named group `name` among `fields`, or `undefined` where it is none. */
@@ -997,11 +1010,18 @@ async function pendingWorkingDraft(
  * every read path parses it. Anything that does not parse is returned as stored,
  * for the caller to judge — the same choice the read shape makes.
  */
-function decoded(value: unknown, type: string): unknown {
-  if (typeof value !== "string" || getFieldType(type)?.storage !== "json") {
-    return value;
-  }
+function decoded(value: unknown, json: boolean): unknown {
+  if (typeof value !== "string" || !json) return value;
   return parsedJson(value);
+}
+
+/**
+ * Whether `field` is stored as JSON, as the schema builds its column: a
+ * repeater, a named group, `json`, or a plugin type declaring JSON storage.
+ * Asked of the one classification the DDL is built from.
+ */
+export function storesJson(field: FieldDefinition): boolean {
+  return classifyFieldKind(field, "codeFirst") === "json";
 }
 
 /** `value` parsed as JSON, or as it is where it does not parse. */

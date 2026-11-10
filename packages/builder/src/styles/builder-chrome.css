@@ -125,11 +125,18 @@
  * above it, and the chrome it draws (a Layout's region badge and tag) reads
  * these tokens too. It takes them only when nothing above it declares them,
  * and at zero specificity, so inside the shell it inherits the shell's values
- * untouched and its own rules below still win where they apply.
+ * untouched and its own rules below still win where they apply. The layer the
+ * editor draws over the canvas is the fourth, for the same reason: it is in
+ * the host's document, beside the frame rather than inside it, and the empty
+ * section prompt's plate on it reads these tokens. It takes no part in the
+ * dark picks below: its editing hues follow the page's own scheme
+ * (`.nx-canvas-layer[data-nx-page-scheme]`), and the surface, border and text
+ * tokens here follow the admin's `.dark` through the `--nx-*` they name.
  */
 .nx-builder-tokens,
 .nx-builder-chrome,
-:where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
+:where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)),
+:where(.nx-canvas-layer:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
   /* The frame behind rail, panels and bars. Deliberately not `--nx-background`:
      raised surfaces use that, and the frame must read as a layer behind them. */
   --nx-builder-surface: var(--nx-muted);
@@ -275,7 +282,8 @@
    */
   .nx-builder-tokens,
   .nx-builder-chrome,
-  :where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
+  :where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)),
+  :where(.nx-canvas-layer:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
     --nx-builder-border: var(--nx-foreground);
     --nx-builder-text-muted: var(--nx-foreground);
   }
@@ -1457,6 +1465,106 @@
 .nx-editing-bar__chip[aria-disabled="true"] {
   color: color-mix(in srgb, var(--nx-builder-shared) 55%, transparent);
   cursor: not-allowed;
+}
+
+/*
+ * The inspector while a look is edited on its own: the look's name, then a bar
+ * in the shared colour saying who the edit reaches and the way back, then the
+ * Style controls. A chip is text and a border, as the editing bar's are.
+ */
+.nx-look-inspector__head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding-block-end: 0.75rem;
+  border-block-end: 1px solid var(--nx-border);
+  margin-block-end: 0.75rem;
+}
+
+.nx-look-inspector__name {
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+.nx-look-inspector__kind {
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+.nx-look-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.375rem;
+  padding: 0.625rem;
+  margin-block-end: 0.875rem;
+  border: 1px solid var(--nx-builder-shared);
+  border-radius: 0.625rem;
+  background: color-mix(in srgb, var(--nx-builder-shared) 7%, transparent);
+  font-size: var(--text-xs);
+}
+
+.nx-look-bar__line,
+.nx-look-bar__note {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.nx-look-bar__label,
+.nx-look-bar__reach {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-look-bar__chip {
+  display: inline-block;
+  padding: 1px 0.4375rem;
+  border: 1px solid currentColor;
+  border-radius: 0.3125rem;
+  box-shadow: inset 0 0 0 1px currentColor;
+  color: var(--nx-builder-shared);
+  font-weight: 600;
+}
+
+.nx-look-bar__note {
+  color: var(--nx-foreground);
+}
+
+/* Why the look's values can't be changed, beside the held controls. */
+.nx-look-bar__held {
+  margin: 0;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-look-bar__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.375rem;
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+
+.nx-look-bar__back:hover {
+  background: var(--nx-muted);
+}
+
+.nx-look-bar__back:focus-visible {
+  outline: 2px solid var(--nx-builder-select);
+  outline-offset: 2px;
+}
+
+.nx-look-bar__key {
+  padding: 0 0.25rem;
+  border: 1px solid var(--nx-border);
+  border-block-end-width: 2px;
+  border-radius: 0.25rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
 }
 
 .nx-editing-bar__chip-wrap {
@@ -3836,6 +3944,16 @@
   outline-offset: -2px;
 }
 
+/*
+ * The blocks an edit to the look being edited reaches, while a look is edited
+ * on its own from the Design panel: dashed in the shared colour, outside each
+ * block, as a reach rather than a selection.
+ */
+.nx-canvas-mark[data-mark="look-reach"] {
+  outline: 2px dashed var(--nx-builder-shared);
+  outline-offset: 3px;
+}
+
 .nx-canvas-mark[data-mark="drop-parent"] {
   outline: 2px dashed var(--nx-builder-select);
   outline-offset: 2px;
@@ -6175,8 +6293,31 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /* The words shorten in a narrow container, and the "+" stays whole. */
-.nx-empty-container-appenders__button > svg {
+/*
+ * The words and the "+" sit on a plate of the editor's raised surface, never
+ * on the box's own ground: the box is drawn over the site's page, whose colour
+ * the editor does not choose, and its muted text holds its contrast only
+ * against the editor's own surface, in either theme. Opaque for that reason.
+ */
+.nx-empty-container-appenders__plate {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text-muted);
+}
+.nx-empty-container-appenders__plate > svg {
   flex: none;
+}
+.nx-empty-container-appenders__button:hover
+  .nx-empty-container-appenders__plate,
+.nx-empty-container-appenders__button:focus-visible
+  .nx-empty-container-appenders__plate {
+  color: var(--nx-builder-text);
 }
 
 .nx-empty-container-appenders__words {
@@ -6517,6 +6658,59 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-shared-styles__lock {
   color: var(--nx-muted-foreground);
+}
+
+/* The Block looks group above the shared styles: one heading per block type,
+   then its looks, each drawn as a small block of its type on the row's left.
+   A chosen row (the look the inspector edits) is ringed in the selection
+   colour, as a chosen look tile is. */
+.nx-block-looks__type-head {
+  margin: 0.5rem 0 0.125rem;
+  padding: 0 2px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+.nx-block-looks__type-count {
+  font-weight: 400;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-block-looks__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-block-looks__row {
+  grid-template-columns: 4rem minmax(0, 1fr) auto;
+  gap: 0.625rem;
+  min-height: 2.75rem;
+  border-radius: var(--radius-sm);
+  border-bottom: 0;
+}
+
+.nx-block-looks__row[aria-pressed="true"] {
+  background: var(--nx-muted);
+  box-shadow: inset 0 0 0 1px var(--nx-builder-select);
+}
+
+.nx-block-looks__row:focus-visible {
+  outline: 2px solid var(--nx-builder-select);
+  outline-offset: -2px;
+}
+
+/* The specimen's stage, at the row's size rather than a tile's. */
+.nx-block-looks__specimen .nx-look-tile__stage {
+  block-size: 2.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+}
+
+/* The own look's chip: what it covers is its tooltip and description. */
+.nx-block-looks__default {
+  color: var(--nx-foreground);
 }
 
 /* The note that counts are minimums, under the list's head, and the row
