@@ -151,6 +151,7 @@ function buildNextlyInstance(
     findSingle: directAPI.findSingle.bind(directAPI),
     updateSingle: directAPI.updateSingle.bind(directAPI),
     findSingles: directAPI.findSingles.bind(directAPI),
+    publicSiteSettings: directAPI.publicSiteSettings.bind(directAPI),
 
     // Authentication methods
     login: directAPI.login.bind(directAPI),

@@ -47,6 +47,7 @@ import {
 } from "./list-query";
 import { boundedLimit, surveyDocument } from "./measure-bytes";
 import type { DocumentSurvey } from "./measure-bytes";
+import type { NamedQuerySource } from "./named-query";
 import { canBeRoot, canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
 import {
@@ -261,6 +262,12 @@ export interface ValidationContext {
    * its relation up in the collection {@link bindingEntry} names.
    */
   listFields?: ListFieldSource;
+  /**
+   * The named queries the site registers, for judging a list whose source
+   * is a custom one (`list-query`). Absent, such a list is judged by its
+   * shape alone.
+   */
+  namedQueries?: NamedQuerySource;
 }
 
 /** The validator's own codes, before the binding codes are added. */
@@ -665,12 +672,22 @@ export function validateDocument(
   // work above is. A problem a stored form already held stays a warning, so a
   // list a schema change broke does not make its page unsavable.
   if (!overLimits) {
-    const judgement = schemaJudgement(ctx, survey.limits.maxNodes);
+    const judgement = {
+      ...schemaJudgement(ctx, survey.limits.maxNodes),
+      // A list whose source is a named query, and a condition on its rows,
+      // are judged against the query's declaration.
+      ...(ctx.namedQueries === undefined
+        ? {}
+        : { namedQueries: ctx.namedQueries }),
+    };
     issues.push(
       // As validation issues: the path names the block, so the block's id
       // each judgement also carries is left to the editor that asks for it.
       ...listQueryIssues(envelope.nodes, {
         ...judgement,
+        ...(ctx.namedQueries === undefined
+          ? {}
+          : { namedQueries: ctx.namedQueries }),
         // So a list in a component or a Layout region, which shows on many
         // pages, is refused a split into pages of its own.
         ...(typeof envelope.kind === "string"

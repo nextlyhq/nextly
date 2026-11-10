@@ -1386,6 +1386,8 @@ interface ListView {
   readonly onShowEmpty: (empty: boolean) => void;
   /** The count of the latest ask to fix this list's sort, when it has one. */
   readonly sortFieldAsked: number | undefined;
+  /** Tag the list on the canvas while a new source waits for an input. */
+  readonly onStillShowing: ((words: string | undefined) => void) | undefined;
 }
 
 /** A block's list view, where the editor keeps one. */
@@ -1399,6 +1401,10 @@ function listViewOf(editor: EditorState, nodeId: string): ListView | undefined {
       editor.sortFieldAsked?.id === nodeId
         ? editor.sortFieldAsked.seq
         : undefined,
+    onStillShowing:
+      editor.tagListStillShowing === undefined
+        ? undefined
+        : words => editor.tagListStillShowing?.(nodeId, words),
   };
 }
 
@@ -1407,11 +1413,13 @@ function listGroupView(listView: ListView | undefined): {
   showsEmpty: boolean;
   onShowEmpty: ListView["onShowEmpty"] | undefined;
   sortFieldAsked: number | undefined;
+  onStillShowing: ListView["onStillShowing"];
 } {
   return {
     showsEmpty: listView?.showsEmpty === true,
     onShowEmpty: listView?.onShowEmpty,
     sortFieldAsked: listView?.sortFieldAsked,
+    onStillShowing: listView?.onStillShowing,
   };
 }
 

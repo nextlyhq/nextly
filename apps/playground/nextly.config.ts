@@ -32,6 +32,7 @@ import { Authors } from "./src/collections/authors";
 import { BlockPages } from "./src/collections/block-pages";
 import { BoundEntries } from "./src/collections/bound-entries";
 import { ListStories } from "./src/collections/list-stories";
+import { E2E_NAMED_QUERIES } from "./src/named-queries";
 import { Categories } from "./src/collections/categories";
 import { DevReloadProbe } from "./src/collections/dev-reload-probe";
 import { HistoryNotes } from "./src/collections/history-notes";
@@ -85,6 +86,39 @@ const SeoPages = defineCollection({
   slug: "seo-pages",
   labels: { singular: "SEO page", plural: "SEO pages" },
   fields: [text({ name: "title", label: "Title", required: true })],
+});
+
+/**
+ * The page builder, as one instance, so the site's routes can hand their
+ * pages this site's own named queries (`namedQueriesOf`) and never another
+ * site's served from the same process.
+ */
+export const pageBuilderPlugin = pageBuilder({
+  siteStyle: SITE_STYLE_DEFAULTS,
+  // The browser tests' custom sources, registered by the same switch as
+  // the collections and the Single they read.
+  ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+    ? { namedQueries: [...E2E_NAMED_QUERIES] }
+    : {}),
+  pagePreviewPath: "/{slug}",
+  // Each post is served at `/blog/<its slug>` by the same route as the pages,
+  // drawn with the Posts template once one is published.
+  templates: { addresses: { posts: "/blog" } },
+  // The route that draws the editor's canvas inside this site's layout.
+  canvasPath: "/page-builder-canvas",
+  // The browser suite's stand-in Google Fonts catalogue, so adding a font
+  // there never reaches the real one. Unset everywhere else: the plugin's
+  // defaults (Fontsource and jsDelivr) apply.
+  ...(process.env.NEXTLY_E2E_FONT_CATALOGUE === undefined
+    ? {}
+    : {
+        fonts: {
+          catalogue: {
+            api: process.env.NEXTLY_E2E_FONT_CATALOGUE,
+            files: process.env.NEXTLY_E2E_FONT_CATALOGUE,
+          },
+        },
+      }),
 });
 
 export default defineConfig({
@@ -215,25 +249,7 @@ export default defineConfig({
     // nor discover that `(frontend)/[...slug]` is mounted at the site root, so
     // passing it is the only signal available that a minted link will land.
     // Without it every page-builder share is refused at the click.
-    pageBuilder({
-      siteStyle: SITE_STYLE_DEFAULTS,
-      pagePreviewPath: "/{slug}",
-      // The route that draws the editor's canvas inside this site's layout.
-      canvasPath: "/page-builder-canvas",
-      // The browser suite's stand-in Google Fonts catalogue, so adding a font
-      // there never reaches the real one. Unset everywhere else: the plugin's
-      // defaults (Fontsource and jsDelivr) apply.
-      ...(process.env.NEXTLY_E2E_FONT_CATALOGUE === undefined
-        ? {}
-        : {
-            fonts: {
-              catalogue: {
-                api: process.env.NEXTLY_E2E_FONT_CATALOGUE,
-                files: process.env.NEXTLY_E2E_FONT_CATALOGUE,
-              },
-            },
-          }),
-    }),
+    pageBuilderPlugin,
     // `redirectRelationships` states where each collection's documents are
     // served, for the same reason `pagePreviewPath` above does and in the same
     // syntax: the plugin cannot discover that this app mounts

@@ -40,6 +40,10 @@ The manifest describes what the caller may compose with, read as the caller:
   choose it.
 - **`actions`**: the actions below, each with its `path`, every `kind` it takes and the
   JSON Schema of its `request` body.
+- **`namedQueries`**: the site's [named queries](/docs/page-builder/named-queries), each
+  with its `name`, `label`, `description`, the JSON Schema of the `params` a list may set
+  for it, its `rows` (a collection, or a `key` and `fields`) and whether it counts its
+  `total`. The run function is never included.
 
 Each part says whether the caller could read it. A part whose collection the caller may
 not read answers `readable: false` with no items, and the rest is still answered.
@@ -107,15 +111,15 @@ on the page's collection. A collection with a Draft/Published lifecycle but no w
 drafts saves an edit straight onto the published entry, so there the caller needs
 **publish** too. `action` is one of:
 
-| `kind`                 | Fields                                      | What it does                                                                                                                    |
-| ---------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `insert-pattern`       | `patternId`, `at?`                          | Copies a published pattern's blocks into the page, as the editor's insert panel does.                                           |
-| `place-component`      | `componentId`, `variant?`, `values?`, `at?` | Places a component by reference, with a variant's id and values keyed by exposed field id.                                      |
-| `set-placement-values` | `instanceId`, `values?`, `reset?`           | Sets a placement's values. `{ "$unset": true }` empties a field; `reset` lists fields to restore.                               |
-| `choose-variant`       | `instanceId`, `variant`                     | Chooses a variant by its id, or `null` for the component's defaults.                                                            |
-| `set-layout`           | `layout`, `noHeaderFooter?`                 | Chooses the page's Layout by id, or `null` for the site default. `noHeaderFooter: true` switches it off. Pages collection only. |
-| `set-list-query`       | `listId`, `query`                           | Changes a Collection list's query: `collection`, `relation`, `filters`, `sort`, `limit`, `offset`, `paginate`. See below.       |
-| `set-conditions`       | `nodeId`, `conditions`                      | Sets a block's visibility conditions, or `null` to show it to everyone. See below.                                              |
+| `kind`                 | Fields                                      | What it does                                                                                                                            |
+| ---------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `insert-pattern`       | `patternId`, `at?`                          | Copies a published pattern's blocks into the page, as the editor's insert panel does.                                                   |
+| `place-component`      | `componentId`, `variant?`, `values?`, `at?` | Places a component by reference, with a variant's id and values keyed by exposed field id.                                              |
+| `set-placement-values` | `instanceId`, `values?`, `reset?`           | Sets a placement's values. `{ "$unset": true }` empties a field; `reset` lists fields to restore.                                       |
+| `choose-variant`       | `instanceId`, `variant`                     | Chooses a variant by its id, or `null` for the component's defaults.                                                                    |
+| `set-layout`           | `layout`, `noHeaderFooter?`                 | Chooses the page's Layout by id, or `null` for the site default. `noHeaderFooter: true` switches it off. Pages collection only.         |
+| `set-list-query`       | `listId`, `query`                           | Changes a Collection list's query: `collection`, `relation`, `filters`, `sort`, `limit`, `offset`, `paginate`, `namedQuery`. See below. |
+| `set-conditions`       | `nodeId`, `conditions`                      | Sets a block's visibility conditions, or `null` to show it to everyone. See below.                                                      |
 
 `at` is `{ "index": 2 }` for the page's top level, or `{ "parentId", "slot", "index" }`
 inside a block; without it the block goes at the end of the page. The answer holds the
@@ -140,6 +144,17 @@ field holding several values, a related list nested more than one level deep, an
 into pages the page cannot serve (a second list split into pages, one inside another list,
 one of related entries, one in a component or a Layout region) are refused, in the words the
 editor shows, for example `This list sorts by "rating", which Posts doesn't have. Choose another field.`
+
+`namedQuery` is a custom source: `{ "name", "params" }`, a [named query](/docs/page-builder/named-queries)
+the site registers and a text, number or yes-or-no value for each of its inputs, replaced
+whole rather than merged. It is the list's whole source, so setting it removes
+`collection`, `relation`, `filters` and `sort` in the same write, and a change that sets
+both is refused. Setting `collection` or `relation` removes it. A missing required input,
+a value an input does not take and a query the site does not register are refused, for
+example `Choose a city. Upcoming events needs one to run.` So is `paginate: true` on a list
+whose query is not declared with `total: true`, since its pages are counted from that total.
+A plugin makes the same change
+through the `composition` service's `pageAction`.
 
 `set-conditions` sets the visibility conditions of the block whose id is `nodeId`.
 `conditions` is a list of groups, each a list of `{ "field", "op", "value"? }`: the block
@@ -201,10 +216,12 @@ A template is a builder document of kind `template`, stored in the page builder'
 has one template, whatever its state: a second is refused when it is created, naming the
 first by its title, or by its id to someone who may not read it.
 
-| `kind`             | Fields                                  | Rights on templates         |
-| ------------------ | --------------------------------------- | --------------------------- |
-| `create-template`  | `collection`, and `title` and `publish` | **create**, and **publish** |
-| `publish-template` | `id`                                    | **read** and **publish**    |
+| `kind`                | Fields                                  | Rights on templates         |
+| --------------------- | --------------------------------------- | --------------------------- |
+| `create-template`     | `collection`, and `title` and `publish` | **create**, and **publish** |
+| `publish-template`    | `id`                                    | **read** and **publish**    |
+| `give-entry-design`   | `collection`, `entry`, and `title`      | **create**                  |
+| `remove-entry-design` | `collection`, `entry`                   | **delete**                  |
 
 A template is created as a draft unless `publish` is set, and named after its collection
 unless `title` is given. A collection may have a template when it is content the admin
@@ -213,6 +230,22 @@ builder's own collections may not. A template's collection cannot be changed whi
 collection exists. A refused action answers `409` for a collection that already has a
 template and `422` for one that cannot have one; a dry run answers either as `refusals`.
 The answer holds the `template` as the write stored it.
+
+### An entry's own design
+
+One entry can be drawn with a design of its own instead of its collection's template.
+`give-entry-design` copies the collection's **published** template into a new draft that
+names the entry, so the entry keeps being drawn with the template until its own design
+is published. Later changes to the template don't reach the copy. An entry has at most
+one own design, held by a unique key even when two requests race. The action is refused
+while the collection has no published template, and when the entry already has its own
+design. The entry is read as the caller, so an entry the caller can't read answers `404`.
+`remove-entry-design` deletes it, and the entry is drawn with the template again.
+Deleting an entry deletes its own design in the same transaction.
+
+An own design is a `templates` document whose `collection` is empty and whose `entry`,
+`entryCollection` and `entryId` name the entry it serves; `forkedFrom` is the template
+it was copied from.
 
 ## Other routes with a dry run
 

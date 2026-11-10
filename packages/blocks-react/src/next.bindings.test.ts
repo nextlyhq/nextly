@@ -10,6 +10,7 @@
 import {
   COMPONENT_INSTANCE_TYPE,
   DEFAULT_LIMITS,
+  defineNamedQuery,
   DOCUMENT_FORMAT_VERSION,
   type BindingFieldShape,
   type BlockDocument,
@@ -18,6 +19,7 @@ import type {
   BindingFieldShape as NextlyBindingFieldShape,
   BindingSourceRef,
   PublicSiteSettings,
+  PublicSiteSettingsSource,
   PublicSourceReader,
 } from "nextly/runtime";
 import { createElement, type ReactElement } from "react";
@@ -37,7 +39,9 @@ import {
 // fake's declarations (it hides no field), since no Nextly services are
 // registered in this process for it to read a schema from.
 const runtime = vi.hoisted(() => ({
-  site: null as Record<string, string | null> | null,
+  site: null as PublicSiteSettings | null,
+  /** How often the process's registered instance was read for the site settings. */
+  processSiteReads: 0,
   shapes: new Map<string, unknown>(),
   tags: [] as string[][],
   /** Each cached read's key parts, beside its tags. */
@@ -84,7 +88,14 @@ vi.mock("nextly/runtime", async importOriginal => {
       });
       return actual.cachedFind(() => inCache.run(true, read), options);
     },
-    readPublicSiteSettings: async () => {
+    // The real read when given an instance, so the allowlist judges what the
+    // instance answers; a read given none reaches for the process's
+    // registered instance, which is counted and answers with `runtime.site`.
+    readPublicSiteSettings: async (source?: PublicSiteSettingsSource) => {
+      if (source !== undefined) {
+        return await actual.readPublicSiteSettings(source);
+      }
+      runtime.processSiteReads += 1;
       if (runtime.site === null) throw new Error("no site settings");
       return runtime.site;
     },
@@ -240,6 +251,11 @@ function instance(content: BlockDocument, extras: SiteExtras = {}) {
     findSingle: vi.fn(async (args: { slug: string }) =>
       args.slug === "home" ? { id: "h1", tagline: "From the Single" } : null
     ),
+    // The instance's own site settings: what the test's site has set.
+    publicSiteSettings: vi.fn(async (): Promise<PublicSiteSettings> => {
+      if (runtime.site === null) throw new Error("no site settings");
+      return runtime.site;
+    }),
     media: { findByID: vi.fn(async () => null) },
   };
 }
@@ -269,6 +285,7 @@ function publicReads(nextly: Instance): Record<string, unknown>[] {
 
 beforeEach(() => {
   runtime.site = null;
+  runtime.processSiteReads = 0;
   runtime.shapes = new Map();
   runtime.tags = [];
   runtime.reads = [];
@@ -1025,6 +1042,312 @@ describe("a routed page's bindings", () => {
     expectTypeOf<NextlyBindingFieldShape>().toExtend<BindingFieldShape>();
     expectTypeOf<BindingSourceRef>().toExtend<BlocksFieldShapeRef>();
     expectTypeOf<BlocksFieldShapeRef>().toExtend<BindingSourceRef>();
+  });
+});
+
+describe("a page's site settings, in a process serving several sites", () => {
+  /** An instance of one site, whose own settings name it and set its zone. */
+  function siteInstance(
+    content: BlockDocument,
+    applicationName: string,
+    timezone: string
+  ): Instance {
+    const nextly = instance(content);
+    nextly.publicSiteSettings.mockImplementation(async () => ({
+      applicationName,
+      siteUrl: null,
+      logoUrl: null,
+      timezone,
+    }));
+    return nextly;
+  }
+
+  /** A page showing its site's name and the entry's date-time in the site's zone. */
+  const sitePage = JSON.parse(
+    JSON.stringify({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "name",
+          type: "core/heading",
+          version: 1,
+          props: { text: "Own", level: "h1" },
+          bindings: {
+            text: {
+              fallback: "No name",
+              $bind: "applicationName",
+              source: "site",
+            },
+          },
+        },
+        {
+          id: "when",
+          type: "core/heading",
+          version: 1,
+          props: { text: "Own", level: "h2" },
+          bindings: {
+            text: {
+              fallback: "No time",
+              $bind: "startsAt",
+              format: {
+                type: "date",
+                options: {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  hourCycle: "h23",
+                },
+              },
+            },
+          },
+        },
+      ],
+    })
+  ) as BlockDocument;
+
+  /** A list filtering by a day, which compares days in the site's zone. */
+  const dayList: BlockDocument = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [
+      {
+        id: "list",
+        type: "core/collection-loop",
+        version: 1,
+        props: {
+          collection: "posts",
+          filters: [
+            {
+              field: "publishedAt",
+              op: "greater_than_equal",
+              value: "2026-09-01",
+            },
+          ],
+        },
+      },
+    ],
+  };
+
+  const base = { collections: ["pages"], field: "content", blocks };
+
+  /** The site settings reads made, by their cache keys. */
+  function siteReadKeys(): string[][] {
+    return runtime.reads
+      .filter(read =>
+        nextlySiteSettingsTags().every(tag => read.tags.includes(tag))
+      )
+      .map(read => read.keyParts);
+  }
+
+  beforeEach(() => {
+    // The process has a registered instance with a site of its own, so a
+    // page that reached for it would show that site rather than nothing.
+    runtime.site = {
+      applicationName: "Process site",
+      siteUrl: null,
+      logoUrl: null,
+      timezone: "Asia/Tokyo",
+    };
+  });
+
+  it("each route's page shows its own instance's site name and time zone, never the process's", async () => {
+    const acme = siteInstance(sitePage, "Acme", "Europe/Paris");
+    const globex = siteInstance(sitePage, "Globex", "America/New_York");
+
+    const acmePage = await renderedPage(
+      createBlocksPage,
+      { ...base, cacheScope: "acme" },
+      acme
+    );
+    const globexPage = await renderedPage(
+      createBlocksPage,
+      { ...base, cacheScope: "globex" },
+      globex
+    );
+
+    // 18:30 UTC on 29 March 2026: 20:30 in Paris, 14:30 in New York, and
+    // 03:30 the next day in the process site's Tokyo.
+    expect(acmePage.html).toContain("Acme");
+    expect(acmePage.html).toContain("20:30");
+    expect(acmePage.element.props.bindings?.timeZone).toBe("Europe/Paris");
+    expect(globexPage.html).toContain("Globex");
+    expect(globexPage.html).toContain("14:30");
+    expect(globexPage.element.props.bindings?.timeZone).toBe(
+      "America/New_York"
+    );
+    for (const html of [acmePage.html, globexPage.html]) {
+      expect(html).not.toContain("Process site");
+      expect(html).not.toContain("03:30");
+    }
+    expect(acmePage.html).not.toContain("Globex");
+    expect(globexPage.html).not.toContain("Acme");
+
+    // Read from each route's own instance, and never from the process's.
+    expect(acme.publicSiteSettings).toHaveBeenCalled();
+    expect(globex.publicSiteSettings).toHaveBeenCalled();
+    expect(runtime.processSiteReads).toBe(0);
+    // Cached under each route's own scope, so the two never share an entry.
+    expect(siteReadKeys()).toEqual([
+      ["nextly-public-site-settings", "acme"],
+      ["nextly-public-site-settings", "globex"],
+    ]);
+  });
+
+  it("a list filtering by a day compares days in its own instance's time zone", async () => {
+    const zoneOf = async (nextly: Instance, cacheScope: string) => {
+      const route = createBlocksPage({
+        ...base,
+        cacheScope,
+        nextly: nextly as never,
+      });
+      const element = await throughBoundary<PageRendererProps>(
+        route.ContentPage({ params: { slug: ["about"] } })
+      );
+      return element.props.context?.timeZone;
+    };
+
+    await expect(
+      zoneOf(siteInstance(dayList, "Acme", "Europe/Paris"), "acme")
+    ).resolves.toBe("Europe/Paris");
+    await expect(
+      zoneOf(siteInstance(dayList, "Globex", "America/New_York"), "globex")
+    ).resolves.toBe("America/New_York");
+    expect(runtime.processSiteReads).toBe(0);
+  });
+
+  it("reads the site settings once for a page whose list compares days and whose query asks today", async () => {
+    // A custom source of rows with their own date field, its items hidden
+    // by a condition ordering that date: the list's days need the zone, and
+    // the query's run asks for today in it. One question, asked twice.
+    const soon = defineNamedQuery({
+      name: "events.soon",
+      label: "Events soon",
+      reads: {},
+      rows: {
+        key: "id",
+        fields: [
+          { name: "id", type: "text" },
+          { name: "startsAt", type: "date" },
+        ],
+      },
+      run: () => Promise.resolve({ rows: [{ id: "e1", startsAt: null }] }),
+    });
+    const events = JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          {
+            id: "list",
+            type: "core/collection-loop",
+            version: 1,
+            props: { namedQuery: { name: "events.soon", params: {} } },
+            slots: {
+              children: [
+                {
+                  id: "badge",
+                  type: "core/heading",
+                  version: 1,
+                  props: { text: "Soon", level: "h3" },
+                  visibility: {
+                    conditions: [
+                      [
+                        {
+                          field: "startsAt",
+                          op: "greater_than",
+                          value: "2026-11-01",
+                        },
+                      ],
+                    ],
+                  },
+                },
+              ],
+              empty: [],
+            },
+          },
+        ],
+      })
+    ) as BlockDocument;
+    const route = createBlocksPage({
+      ...base,
+      cacheScope: "acme",
+      namedQueries: {
+        definitionOf: name => (name === soon.name ? soon : undefined),
+      },
+      nextly: siteInstance(events, "Acme", "Europe/Paris") as never,
+    });
+    const element = await throughBoundary<PageRendererProps>(
+      route.ContentPage({ params: { slug: ["about"] } })
+    );
+    // The zone was read, from this instance's settings.
+    expect(element.props.context?.timeZone).toBe("Europe/Paris");
+    const siteReads = runtime.reads.filter(
+      read => read.keyParts[0] === "nextly-public-site-settings"
+    );
+    expect(siteReads).toHaveLength(1);
+  });
+
+  /** A reader of the app's own that forwards no site-settings read. */
+  function readerWithoutSite(
+    content: BlockDocument
+  ): Omit<Instance, "publicSiteSettings"> {
+    const { publicSiteSettings: _dropped, ...rest } = instance(content);
+    return rest;
+  }
+
+  /** The warnings that name a reader's missing site-settings read. */
+  function standInWarnings(warn: { mock: { calls: unknown[][] } }): string[] {
+    return warn.mock.calls
+      .map(([message]) => String(message))
+      .filter(message => message.includes("has no `publicSiteSettings`"));
+  }
+
+  it("a reader of the app's own with no site-settings read shows the process's, and says so once per reader", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const reader = readerWithoutSite(sitePage);
+
+    const first = await renderedPage(
+      createBlocksPage,
+      { ...base, cacheScope: "acme" },
+      reader as Instance
+    );
+    // The process's settings, as a route like this read them before an
+    // instance could be asked: a single-site app's page keeps its site name.
+    expect(first.html).toContain("Process site");
+    expect(first.html).toContain("03:30");
+    expect(runtime.processSiteReads).toBe(1);
+    // Said once, naming the line that makes the route read its own instance.
+    const said = standInWarnings(warn);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain(
+      "publicSiteSettings: async () => (await instance()).publicSiteSettings()"
+    );
+
+    // The same reader again is not said again; another reader is.
+    await renderedPage(
+      createBlocksPage,
+      { ...base, cacheScope: "acme" },
+      reader as Instance
+    );
+    expect(standInWarnings(warn)).toHaveLength(1);
+    await renderedPage(
+      createBlocksPage,
+      { ...base, cacheScope: "globex" },
+      readerWithoutSite(sitePage) as Instance
+    );
+    expect(standInWarnings(warn)).toHaveLength(2);
+  });
+
+  it("a reader that forwards the site-settings read is never warned about", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await renderedPage(
+      createBlocksPage,
+      { ...base, cacheScope: "acme" },
+      siteInstance(sitePage, "Acme", "Europe/Paris")
+    );
+    // The control: the page did read its site settings.
+    expect(siteReadKeys()).toEqual([["nextly-public-site-settings", "acme"]]);
+    expect(standInWarnings(warn)).toEqual([]);
   });
 });
 

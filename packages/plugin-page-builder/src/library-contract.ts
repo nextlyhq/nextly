@@ -31,6 +31,7 @@ import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
 import type { HookWarning } from "nextly/config";
 
 import type { RemovalDryRun } from "./breakpoint-removal/dry-run";
+import type { CspAddition, CspCheck } from "./site-code/csp";
 
 /**
  * The name this plugin registers under, which is also how its routes are
@@ -1332,4 +1333,100 @@ export function variableWhereUsedPath(id: string, page: number): string {
     [VARIABLE_PAGE_PARAM]: String(page),
   });
   return `${VARIABLE_WHERE_USED_ROUTE_PATH}?${params.toString()}`;
+}
+
+/**
+ * Where the site's code is read and changed: `GET` reads it, `POST` checks it
+ * ({@link SiteCodeRequest} with `dryRun`) or saves it. Under the site settings
+ * permission; a save is a signed-in person's alone, never an API key's.
+ *
+ * @experimental
+ */
+export const SITE_CODE_ROUTE_PATH = "/site/code";
+
+/** The site's code as Settings reads it, to edit. */
+export interface SiteCodeRead {
+  /** What was written for the head, as it was saved. */
+  readonly head: string;
+  /** What was written for the end of the body. */
+  readonly body: string;
+  /** The version the read was of, which a save hands back. */
+  readonly version: string | null;
+  /** Whether the site declared its Content Security Policy to the plugin. */
+  readonly policyDeclared: boolean;
+  /**
+   * What each place holds, in plain words, from the stored entries ("A
+   * script from www.googletagmanager.com", "an inline script"): what Settings
+   * shows before the code is opened. Empty for a place with nothing in it.
+   */
+  readonly described: {
+    readonly head: readonly string[];
+    readonly body: readonly string[];
+  };
+  /** When the code was last saved, as an ISO date; `null` before any save. */
+  readonly changedAt: string | null;
+  /** The name of the person who saved it last, when it can be read. */
+  readonly changedBy: string | null;
+}
+
+/**
+ * Checking or saving the site's code. `livePolicy` is the policy the
+ * editor's browser read from the site's own response: advice, checked beside
+ * the declared policy, never trusted to admit anything.
+ */
+export interface SiteCodeRequest {
+  readonly head: string;
+  readonly body: string;
+  readonly dryRun?: boolean;
+  /** The version the code was read at; a save made since refuses this one. */
+  readonly version?: string;
+  /**
+   * The check's `cspKey`: saving code a policy would block is a choice made
+   * after seeing what it blocks, and only for those findings.
+   */
+  readonly acknowledgeCsp?: string;
+  readonly livePolicy?: {
+    readonly policy: string;
+    readonly reportOnly: boolean;
+  };
+}
+
+/** What one place's code came to: why it can't be stored, and what changed. */
+export interface SiteCodeSlotJudged {
+  readonly refusals: readonly string[];
+  readonly notes: readonly string[];
+  /** The elements it holds when it can be stored. */
+  readonly elements: number;
+}
+
+/** One policy the code was checked against: the declared one, or the live one. */
+export interface SiteCodePolicyChecked {
+  readonly source: "declared" | "live";
+  readonly check: CspCheck;
+  /**
+   * What to add to this policy for the code to run, as
+   * `mergeSiteCodeIntoCsp` adds it: per directive, the sources it lacks. A
+   * directive the policy doesn't name yet comes whole, as it must be added.
+   * Empty when nothing is blocked or nothing was checked.
+   */
+  readonly additions: readonly CspAddition[];
+  /**
+   * How many policies the checked header carries, comma-separated: an
+   * addition names which by its `policy`. `0` when no policy was known.
+   */
+  readonly policies: number;
+}
+
+/** What checking the site's code answers, and what a save answers too. */
+export interface SiteCodeChecked {
+  readonly head: SiteCodeSlotJudged;
+  readonly body: SiteCodeSlotJudged;
+  readonly csp: readonly SiteCodePolicyChecked[];
+  /** What `acknowledgeCsp` must be to save despite findings; `null` with none. */
+  readonly cspKey: string | null;
+}
+
+/** What saving the site's code answers: the check, and the version saved. */
+export interface SiteCodeSaved extends SiteCodeChecked {
+  readonly version: string | null;
 }

@@ -28,6 +28,7 @@
 import {
   listFieldKind,
   listPageCount,
+  NAMED_QUERY_TEXT,
   readListQuery,
   safeTimeZone,
   isListDay,
@@ -38,6 +39,7 @@ import {
   type ConditionDayStart,
   type ListFilter,
   type ListFilterOp,
+  type ListNamedQuery,
   type ListQuery,
   type ListRelation,
 } from "@nextlyhq/blocks-engine";
@@ -75,8 +77,14 @@ const READER_OP: Readonly<Record<ListFilterOp, BlocksFilterOp>> = {
  * only: a sort that fell back to id order, or a read that failed.
  */
 export interface ListDiagnostic {
-  readonly kind: "sort-fallback" | "query-failed";
+  /**
+   * A sort that fell back, a read that failed, or (for a named query that
+   * ran) what a visitor's page goes without.
+   */
+  readonly kind: "sort-fallback" | "query-failed" | "query-caution";
   readonly message: string;
+  /** The log reference the message names, which an editor offers to copy. */
+  readonly ref?: string;
 }
 
 /** What a list's read came to: the entries, and anything worth telling. */
@@ -316,6 +324,11 @@ async function relatedIds(
   reads: ListReads
 ): Promise<RelatedIds> {
   if (relation.of === "item") {
+    // A named query's rows are not entries a relation is read from, as the
+    // save refuses; one stored before is drawn empty and its author told.
+    if (ctx.itemQuery !== undefined) {
+      return { problem: NAMED_QUERY_TEXT.nestedRelated };
+    }
     return ctx.item === undefined
       ? {
           problem:
@@ -751,6 +764,39 @@ function listReadBase(
 }
 
 /**
+ * A stored list whose source is a named query, read before it is run: the
+ * query and its inputs as the engine reads them, and the window it is run
+ * with. `undefined` for a list with another source; `blocking` when the
+ * stored source cannot be read as stored (a malformed one, or one beside a
+ * collection), which fails the list rather than reading something else.
+ */
+export function namedListBase(props: unknown):
+  | undefined
+  | { readonly blocking: string }
+  | {
+      readonly named: ListNamedQuery;
+      readonly limit: number;
+      readonly offset: number;
+    } {
+  const { query, problems } = readListQuery(props);
+  const stored = (props as { namedQuery?: unknown } | null)?.namedQuery;
+  if (
+    query.namedQuery === undefined &&
+    (stored === undefined || stored === null)
+  ) {
+    return undefined;
+  }
+  const blocking = blockingProblem(problems);
+  if (blocking !== undefined) return { blocking };
+  if (query.namedQuery === undefined) return undefined;
+  return {
+    named: query.namedQuery,
+    limit: safeLimit((props as { limit?: unknown } | null)?.limit),
+    offset: query.offset ?? 0,
+  };
+}
+
+/**
  * How many entries a list's query matches, and how many of them it shows:
  * those after the skipped ones, up to its limit.
  *
@@ -812,15 +858,37 @@ export async function listEntryCount(
 }
 
 /**
+ * The window page `page` of a list split into pages reads, from 1: `limit`
+ * entries, starting `limit` further on for each page before it, the list's
+ * own offset applied once, before paging. The one rule a collection's read
+ * and a named query's window share, so page `n` of either starts at the
+ * same entry, and the count of pages (`listPageCount`) names exactly the
+ * windows that hold entries.
+ *
+ * @experimental Settles with list pagination.
+ */
+export function listPageWindow(
+  window: { readonly limit: number; readonly offset: number },
+  page: number
+): { readonly limit: number; readonly offset: number } {
+  return page > 1
+    ? { limit: window.limit, offset: window.offset + (page - 1) * window.limit }
+    : window;
+}
+
+/**
  * Whether a list's stored props make a read at all: a collection named, no
  * related source (whose entries are never paged), and nothing stored that
- * stops the read. The one answer the route's count and the render ask
- * before claiming a paginated list's read, so neither spends one the list
- * will not make.
+ * stops the read; or a custom source stored well enough to run. The one
+ * answer the route's count and the render ask before counting a paginated
+ * list's pages, so neither spends a read the list will not make.
  *
  * @experimental Settles with list pagination.
  */
 export function listWillRead(props: unknown): boolean {
+  // A custom source runs its query; one stored badly fails without running.
+  const named = namedListBase(props);
+  if (named !== undefined) return !("blocking" in named);
   const { query, problems } = readListQuery(props);
   return (
     query.collection !== undefined &&
@@ -879,7 +947,9 @@ export async function readList(
   // that knows nothing of pages still reads the right entries. Related
   // entries are never paged: they have no count of pages.
   const paged = page > 1 && query.relation === undefined;
-  const offset = paged ? read.offset + (page - 1) * limit : read.offset;
+  const offset = paged
+    ? listPageWindow({ limit, offset: read.offset }, page).offset
+    : read.offset;
   const base = paged ? { ...first, offset } : first;
   try {
     // A related source's ids first, as a visitor reads them; with none to

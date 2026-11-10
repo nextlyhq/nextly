@@ -374,7 +374,8 @@ function useCanvasRender({
     editor.listsShowingEmpty,
     locale,
     initialDocument,
-    pagedList
+    pagedList,
+    editor.listsStillShowing
   );
   const pageInputs = useMemo(
     () =>
@@ -919,6 +920,9 @@ function sourceHiddenFromVisitors(
   shapes: BlocksFieldShapes,
   ref: BindingSchemaRef
 ): boolean {
+  // A custom source's rows are read as visitors read them and cut to the
+  // fields its query declares, so they are never a source visitors can't see.
+  if ("query" in ref) return false;
   if ("site" in ref || !noPublicFields(shapes, ref)) return false;
   if ("single" in ref) {
     return (bindings.singles?.get(ref.single) ?? null) !== null;
@@ -1004,7 +1008,14 @@ export function useBoundCanvasRender(
       ].filter((tree): tree is BlockDocument => tree !== null),
     [pageTree, regions, canvasRender]
   );
-  const bindings = useCanvasBindings(trees, locale, component);
+  // A custom source's row collection is asked for with the page's own, so
+  // its item bindings draw with that collection's field shapes.
+  const bindings = useCanvasBindings(
+    trees,
+    locale,
+    component,
+    canvasRender.context?.namedQueries
+  );
   const bound = useMemo(
     () => ({ ...canvasRender, bindings }),
     [canvasRender, bindings]

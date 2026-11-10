@@ -4,7 +4,7 @@
  * The canvas's binding sources: asked only for what the page's bindings read,
  * and kept per signed-in person, so no person is ever handed another's.
  */
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import { defineNamedQuery, type BlockDocument } from "@nextlyhq/blocks-engine";
 import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -110,6 +110,54 @@ describe("the canvas's binding sources", () => {
     expect(canvasBindingsRequest([listed], identity, undefined)?.lists).toEqual(
       ["posts"]
     );
+  });
+
+  it("names the collection a custom source's rows are entries of, given the site's queries", () => {
+    // A list whose source is a named query of `posts` entries draws those
+    // entries, so its item bindings need `posts`' shapes, as on the page.
+    const listed: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "list",
+          type: "core/collection-loop",
+          version: 1,
+          props: { namedQuery: { name: "posts.latest", params: {} } },
+          slots: {
+            template: [
+              {
+                id: "t",
+                type: "core/heading",
+                version: 1,
+                props: { text: "Fallback", level: "h2" },
+                bindings: { text: { $bind: "title", source: "item" } },
+              },
+            ],
+          },
+        },
+      ],
+    } as BlockDocument;
+    const latest = defineNamedQuery({
+      name: "posts.latest",
+      label: "Latest posts",
+      reads: { collections: ["posts"] },
+      rows: { collection: "posts" },
+      run: () => Promise.resolve({ rows: [] }),
+    });
+    const namedQueries = {
+      definitionOf: (name: string) =>
+        name === "posts.latest" ? latest : undefined,
+    };
+    expect(
+      canvasBindingsRequest([listed], identity, undefined, false, namedQueries)
+        ?.lists
+    ).toEqual(["posts"]);
+    // Without the site's queries the custom source is no collection's, as
+    // before they are read.
+    expect(
+      canvasBindingsRequest([listed], identity, undefined)?.lists ?? []
+    ).toEqual([]);
   });
 
   it("asks for what a Layout region's bindings read, beside the page's", () => {

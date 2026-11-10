@@ -12,10 +12,14 @@ import {
   checkSiteCodeAgainstCsp,
   cspHash,
   mergeSiteCodeIntoCsp,
+  siteCodePolicyAdditions,
   parseCsp,
   siteCodeFacts,
+  type CspCheck,
   type CspCheckInput,
+  type CspFinding,
 } from "./csp";
+import { SITE_CODE_BOOTSTRAP } from "./bootstrap";
 import type { SiteCodeEntry } from "./rules";
 
 const ORIGIN = "https://acme.example";
@@ -44,7 +48,24 @@ const pixel = (
   child: { tag, attrs: { src, ...more } },
 });
 
-/** The directives that would block `head` and `body` under `policy`. */
+/** Whether a finding is about the loader that starts gated code. */
+const aboutLoader = (message: string): boolean =>
+  message.startsWith("the loader");
+
+/** A check's findings about the entries themselves, the loader's left out. */
+function entryFindingsOf(check: CspCheck): CspFinding[] {
+  if (!check.checked) throw new Error(check.reason);
+  return check.findings.filter(finding => !aboutLoader(finding.message));
+}
+
+/** The loader's hash, as a policy names it. */
+const loaderHash = async (): Promise<string> =>
+  `'${await cspHash(SITE_CODE_BOOTSTRAP)}'`;
+
+/**
+ * The directives that would block `head` and `body` under `policy`, each
+ * entry's own: the loader's block is asserted on its own below.
+ */
 async function blockedBy(
   policy: string,
   head: readonly SiteCodeEntry[],
@@ -56,7 +77,9 @@ async function blockedBy(
     { head, body }
   );
   if (!check.checked) throw new Error(check.reason);
-  return check.findings.map(finding => finding.directive);
+  return check.findings
+    .filter(finding => !aboutLoader(finding.message))
+    .map(finding => finding.directive);
 }
 
 describe("reading a policy", () => {
@@ -123,12 +146,24 @@ describe("inline code", () => {
     expect(await blockedBy(policy, [inline("a()")])).toEqual(["script-src"]);
   });
 
-  it("is blocked when 'strict-dynamic' cancels 'unsafe-inline'", async () => {
-    expect(
-      await blockedBy("script-src 'strict-dynamic' 'unsafe-inline'", [
-        inline("a()"),
-      ])
-    ).toEqual(["script-src"]);
+  it("runs through the loader under 'strict-dynamic', which cancels 'unsafe-inline' for the loader", async () => {
+    const check = await checkSiteCodeAgainstCsp(
+      {
+        policy: "script-src 'strict-dynamic' 'unsafe-inline'",
+        siteOrigin: ORIGIN,
+      },
+      { head: [inline("a()")], body: [] }
+    );
+    // The script the loader builds is trusted through it; the loader itself
+    // is blocked, and that is the one finding.
+    expect(check).toEqual({
+      checked: true,
+      findings: [
+        expect.objectContaining({ slot: "head", index: 0, level: "error" }),
+      ],
+    });
+    if (!check.checked) throw new Error(check.reason);
+    expect(check.findings[0]?.message).toContain(await loaderHash());
   });
 
   it("is judged by the most specific directive, then its fallbacks", async () => {
@@ -174,18 +209,15 @@ describe("what site code loads", () => {
       { policy: "script-src 'self'", siteOrigin: ORIGIN },
       { head: [loaded(GTAG)], body: [] }
     );
-    expect(check).toMatchObject({
-      checked: true,
-      findings: [
-        {
-          slot: "head",
-          index: 0,
-          directive: "script-src",
-          level: "error",
-          message: "https://www.googletagmanager.com is blocked for scripts",
-        },
-      ],
-    });
+    expect(entryFindingsOf(check)).toEqual([
+      {
+        slot: "head",
+        index: 0,
+        directive: "script-src",
+        level: "error",
+        message: "https://www.googletagmanager.com is blocked for scripts",
+      },
+    ]);
   });
 
   it("matches a wildcard host's subdomains, in any case, not the host itself", async () => {
@@ -205,8 +237,7 @@ describe("what site code loads", () => {
         { policy, siteOrigin: ORIGIN },
         { head: urls.map(url => loaded(url)), body: [] }
       );
-      if (!check.checked) throw new Error(check.reason);
-      return check.findings.map(finding => finding.index);
+      return entryFindingsOf(check).map(finding => finding.index);
     };
     expect(
       await blockedIndexes("script-src https://cdn.example/lib/", [
@@ -250,16 +281,20 @@ describe("what site code loads", () => {
     expect(await blockedBy("script-src https:", [loaded(GTAG)])).toEqual([]);
   });
 
-  it("ignores host sources under 'strict-dynamic'", async () => {
+  it("trusts a script the loader builds under 'strict-dynamic', and ignores host sources", async () => {
     const policy =
       "script-src 'strict-dynamic' 'nonce-abc' https://www.googletagmanager.com";
-    expect(await blockedBy(policy, [loaded(GTAG)])).toEqual(["script-src"]);
-    expect(
-      await blockedBy(policy, [loaded(GTAG)], [], { siteNonce: true })
-    ).toEqual([]);
+    // Built by the loader: it runs once the loader does, nonce or not.
+    expect(await blockedBy(policy, [loaded(GTAG)])).toEqual([]);
+    // Written by the page (a preload): the host source is ignored.
+    const preload: SiteCodeEntry = {
+      tag: "link",
+      attrs: { rel: "preload", as: "script", href: GTAG },
+    };
+    expect(await blockedBy(policy, [preload])).toEqual(["script-src"]);
     expect(
       await blockedBy("script-src 'strict-dynamic' 'sha384-abc'", [
-        loaded(GTAG, { integrity: "sha384-abc" }),
+        { ...preload, attrs: { ...preload.attrs, integrity: "sha384-abc" } },
       ])
     ).toEqual([]);
   });
@@ -350,13 +385,11 @@ describe("what site code loads", () => {
 
   it("needs every hash a script's integrity holds", async () => {
     const both = loaded(GTAG, { integrity: "sha256-aaa sha384-bbb" });
+    expect(await blockedBy("script-src 'sha256-aaa'", [both])).toEqual([
+      "script-src",
+    ]);
     expect(
-      await blockedBy("script-src 'strict-dynamic' 'sha256-aaa'", [both])
-    ).toEqual(["script-src"]);
-    expect(
-      await blockedBy("script-src 'strict-dynamic' 'sha256-aaa' 'sha384-bbb'", [
-        both,
-      ])
+      await blockedBy("script-src 'sha256-aaa' 'sha384-bbb'", [both])
     ).toEqual([]);
     // Integrity alone lets a script load where no host is named.
     expect(
@@ -485,7 +518,7 @@ describe("what site code loads", () => {
       { policy: "script-src 'self'", siteOrigin: "http://acme.example" },
       { head: [loaded("https://acme.example/a.js")], body: [] }
     );
-    expect(check).toEqual({ checked: true, findings: [] });
+    expect(entryFindingsOf(check)).toEqual([]);
   });
 
   it("matches a hash in any algorithm case and in base64url", async () => {
@@ -507,15 +540,156 @@ describe("what site code loads", () => {
     ).toEqual(["style-src"]);
   });
 
+  it("reports the loader blocked once, on the first entry it starts", async () => {
+    const check = await checkSiteCodeAgainstCsp(
+      { policy: "script-src 'self'", siteOrigin: ORIGIN },
+      {
+        head: [
+          { tag: "meta", attrs: { name: "a", content: "b" } },
+          inline("a()"),
+          inline("b()"),
+        ],
+        body: [],
+      }
+    );
+    if (!check.checked) throw new Error(check.reason);
+    const loader = check.findings.filter(finding =>
+      aboutLoader(finding.message)
+    );
+    expect(loader).toEqual([
+      expect.objectContaining({
+        slot: "head",
+        index: 1,
+        directive: "script-src",
+      }),
+    ]);
+    expect(loader[0]?.message).toContain(await loaderHash());
+  });
+
+  it("lets the loader run under 'unsafe-inline', its hash or the site's nonce", async () => {
+    const runs = async (policy: string, siteNonce = false) => {
+      const check = await checkSiteCodeAgainstCsp(
+        { policy, siteOrigin: ORIGIN, siteNonce },
+        { head: [inline("a()")], body: [] }
+      );
+      if (!check.checked) throw new Error(check.reason);
+      return !check.findings.some(finding => aboutLoader(finding.message));
+    };
+    expect(await runs("script-src 'unsafe-inline'")).toBe(true);
+    expect(await runs(`script-src ${await loaderHash()}`)).toBe(true);
+    expect(await runs("script-src 'nonce-x'", true)).toBe(true);
+    expect(await runs("script-src 'nonce-x'")).toBe(false);
+  });
+
+  it("reports Trusted Types enforcement once, on the first script it starts", async () => {
+    const check = await checkSiteCodeAgainstCsp(
+      {
+        policy:
+          "script-src 'unsafe-inline'; require-trusted-types-for 'script'",
+        siteOrigin: ORIGIN,
+      },
+      { head: [style("a{}"), inline("a()"), inline("b()")], body: [] }
+    );
+    expect(check).toEqual({
+      checked: true,
+      findings: [
+        expect.objectContaining({
+          slot: "head",
+          index: 1,
+          directive: "require-trusted-types-for",
+        }),
+      ],
+    });
+    // Styles alone are built without a Trusted Types sink.
+    expect(
+      await checkSiteCodeAgainstCsp(
+        { policy: "require-trusted-types-for 'script'", siteOrigin: ORIGIN },
+        { head: [style("a{}")], body: [] }
+      )
+    ).toEqual({ checked: true, findings: [] });
+  });
+
+  it("says nothing of the loader for code it doesn't start", async () => {
+    const check = await checkSiteCodeAgainstCsp(
+      { policy: "script-src 'self'; img-src *", siteOrigin: ORIGIN },
+      { head: [], body: [pixel("img", "https://t.example/p.gif")] }
+    );
+    expect(check).toEqual({ checked: true, findings: [] });
+  });
+
+  it("never lets a nonce allow code whose attributes hold markup", async () => {
+    // CSP refuses a nonce to an element whose attribute holds `<script`.
+    const marked: SiteCodeEntry = {
+      tag: "script",
+      attrs: { "data-template": "<script>" },
+      text: "a()",
+    };
+    expect(
+      await blockedBy("script-src 'nonce-x'", [marked], [], { siteNonce: true })
+    ).toEqual(["script-src"]);
+    expect(
+      await blockedBy("script-src 'nonce-x'", [inline("a()")], [], {
+        siteNonce: true,
+      })
+    ).toEqual([]);
+  });
+
+  it("lets default-src's own sources allow a connection hint", async () => {
+    expect(
+      await blockedBy("default-src https://api.example", [
+        {
+          tag: "link",
+          attrs: { rel: "preconnect", href: "https://api.example" },
+        },
+      ])
+    ).toEqual([]);
+  });
+
+  it("restricts a connection hint only under default-src", async () => {
+    const hint: SiteCodeEntry = {
+      tag: "link",
+      attrs: { rel: "preconnect", href: "https://api.example" },
+    };
+    expect(await blockedBy("img-src 'none'", [hint])).toEqual([]);
+  });
+
+  it("reads a numeric port as a number", async () => {
+    expect(
+      await blockedBy("script-src https://cdn.example:0443", [
+        loaded("https://cdn.example/a.js"),
+      ])
+    ).toEqual([]);
+  });
+
+  it("reads an integrity algorithm in any case", async () => {
+    expect(
+      await blockedBy("script-src 'sha384-abc'", [
+        loaded(GTAG, { integrity: "SHA384-abc" }),
+      ])
+    ).toEqual([]);
+  });
+
+  it("names the hash a blocked inline script needs", async () => {
+    const check = await checkSiteCodeAgainstCsp(
+      { policy: "script-src 'self'", siteOrigin: ORIGIN },
+      { head: [inline("a()")], body: [] }
+    );
+    expect(entryFindingsOf(check)[0]?.message).toContain(
+      `'${await cspHash("a()")}'`
+    );
+  });
+
   it("warns rather than errs under a Report-Only policy", async () => {
     const check = await checkSiteCodeAgainstCsp(
       { policy: "script-src 'self'", reportOnly: true, siteOrigin: ORIGIN },
       { head: [inline("a()")], body: [] }
     );
-    expect(check).toMatchObject({
-      checked: true,
-      findings: [{ level: "warning" }],
-    });
+    // The inline script's block and the loader's, each only a warning.
+    if (!check.checked) throw new Error(check.reason);
+    expect(check.findings.map(finding => finding.level)).toEqual([
+      "warning",
+      "warning",
+    ]);
   });
 });
 
@@ -532,7 +706,11 @@ describe("what site code needs of a policy", () => {
       ],
       ORIGIN
     );
-    expect(facts.hashes.script).toEqual([await cspHash("a()")]);
+    // The inline script's hash, then the loader's, which starts it.
+    expect(facts.hashes.script).toEqual([
+      await cspHash("a()"),
+      await cspHash(SITE_CODE_BOOTSTRAP),
+    ]);
     expect(facts.loads).toEqual([
       { kind: "script", url: GTAG },
       { kind: "script", url: "/js/own.js" },
@@ -551,7 +729,7 @@ describe("adding what site code needs to a policy", () => {
   it("adds the hash and origin to script-src-elem, never to script-src, which workers fall back to", async () => {
     const { facts, hash } = await gtagFacts();
     expect(mergeSiteCodeIntoCsp("script-src 'self' 'sha256-AAAA'", facts)).toBe(
-      `script-src 'self' 'sha256-AAAA'; script-src-elem 'self' 'sha256-AAAA' ${hash} ${GTM}/gtag/js`
+      `script-src 'self' 'sha256-AAAA'; script-src-elem 'self' 'sha256-AAAA' ${hash} ${await loaderHash()} ${GTM}/gtag/js`
     );
   });
 
@@ -565,16 +743,24 @@ describe("adding what site code needs to a policy", () => {
   });
 
   it("leaves a nonce-based, 'strict-dynamic' policy as it is where the site passes its nonce", async () => {
-    const { facts, hash } = await gtagFacts();
+    const { facts } = await gtagFacts();
     const policy = "script-src 'nonce-abc' 'strict-dynamic'";
     expect(mergeSiteCodeIntoCsp(policy, facts, { siteNonce: true })).toBe(
       policy
     );
-    // Without the nonce, the inline setup needs its hash; no host is
-    // honoured under 'strict-dynamic', so none is added for the script.
-    expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(
-      `${policy}; script-src-elem 'nonce-abc' 'strict-dynamic' ${hash}`
+    // Without the nonce only the loader needs its hash: what it builds, the
+    // inline setup and the loaded script alike, is trusted through it.
+    const merged = mergeSiteCodeIntoCsp(policy, facts);
+    expect(merged).toBe(
+      `${policy}; script-src-elem 'nonce-abc' 'strict-dynamic' ${await loaderHash()}`
     );
+    // And the check agrees: nothing is left blocked under the merged policy.
+    expect(
+      await checkSiteCodeAgainstCsp(
+        { policy: merged, siteOrigin: ORIGIN },
+        { head: [loaded(GTAG, { async: "" }), inline("gtag()")], body: [] }
+      )
+    ).toEqual({ checked: true, findings: [] });
   });
 
   it("adds nothing for a load a path-scoped source already allows", async () => {
@@ -583,27 +769,98 @@ describe("adding what site code needs to a policy", () => {
       ORIGIN
     );
     const policy = "script-src https://cdn.example/approved/";
-    expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(policy);
+    // Only the loader's hash is added: the script's own load already passes.
+    expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(
+      `${policy}; script-src-elem https://cdn.example/approved/ ${await loaderHash()}`
+    );
+  });
+
+  it("says what the merge adds: new sources of a named directive, a new directive whole", async () => {
+    const facts = await siteCodeFacts(
+      [loaded("/analytics.js"), pixel("img", "https://t.example/p.gif")],
+      ORIGIN
+    );
+    const policy = "script-src 'self' https://cdn.example; img-src 'self'";
+    // script-src-elem is new, so it comes whole; img-src gains one URL.
+    expect(siteCodePolicyAdditions(policy, facts)).toEqual([
+      {
+        policy: 0,
+        directive: "img-src",
+        sources: ["https://t.example/p.gif"],
+      },
+      {
+        policy: 0,
+        directive: "script-src-elem",
+        sources: ["'self'", "https://cdn.example", await loaderHash()],
+      },
+    ]);
+    // Each of a header's policies is given its own: the second already
+    // allows images from anywhere, so it gains no img-src.
+    expect(
+      siteCodePolicyAdditions(`${policy}, img-src *`, facts).map(
+        ({ policy: which, directive }) => `${which} ${directive}`
+      )
+    ).toEqual(["0 img-src", "0 script-src-elem"]);
+    expect(
+      siteCodePolicyAdditions("default-src * 'unsafe-inline'", facts)
+    ).toEqual([]);
   });
 
   it("adds the one URL a blocked load needs, never its whole host", async () => {
     const facts = await siteCodeFacts([loaded("/analytics.js")], ORIGIN);
     const merged = mergeSiteCodeIntoCsp("default-src 'none'", facts);
     expect(merged).toBe(
-      `default-src 'none'; script-src-elem ${ORIGIN}/analytics.js`
+      `default-src 'none'; script-src-elem ${await loaderHash()} ${ORIGIN}/analytics.js`
     );
     expect(await blockedBy(merged, [loaded("/analytics.js")])).toEqual([]);
   });
 
-  it("adds a script's integrity hashes under 'strict-dynamic'", async () => {
+  it("keeps a preload apart from the script it loads, so its hash is still added", async () => {
+    // The usual order: the page preloads what the loader then builds.
     const facts = await siteCodeFacts(
-      [loaded(GTAG, { integrity: "sha384-abc" })],
+      [
+        {
+          tag: "link",
+          attrs: {
+            rel: "preload",
+            as: "script",
+            href: GTAG,
+            integrity: "sha384-abc",
+          },
+        },
+        // No nonce can reach it, so only being built tells the two apart.
+        loaded(GTAG, { integrity: "sha384-abc", "data-note": "<script>" }),
+      ],
+      ORIGIN
+    );
+    expect(
+      siteCodePolicyAdditions(
+        "script-src 'strict-dynamic' 'nonce-x'",
+        facts
+      ).flatMap(addition => addition.sources)
+    ).toContain("'sha384-abc'");
+  });
+
+  it("adds a preloaded script's integrity hashes under 'strict-dynamic'", async () => {
+    // A preload is written by the page, so no loader vouches for it.
+    const facts = await siteCodeFacts(
+      [
+        {
+          tag: "link",
+          attrs: {
+            rel: "preload",
+            as: "script",
+            href: GTAG,
+            integrity: "sha384-abc",
+          },
+        },
+      ],
       ORIGIN
     );
     expect(
       mergeSiteCodeIntoCsp("script-src 'strict-dynamic' 'nonce-x'", facts)
     ).toBe(
-      "script-src 'strict-dynamic' 'nonce-x'; script-src-elem 'strict-dynamic' 'nonce-x' 'sha384-abc'"
+      `script-src 'strict-dynamic' 'nonce-x'; script-src-elem 'strict-dynamic' 'nonce-x' 'sha384-abc'`
     );
   });
 
@@ -632,10 +889,10 @@ describe("adding what site code needs to a policy", () => {
   it("adds to a directive of the kind's own, never widening default-src", async () => {
     const { facts, hash } = await gtagFacts();
     expect(mergeSiteCodeIntoCsp("default-src 'self'; img-src *", facts)).toBe(
-      `default-src 'self'; img-src *; script-src-elem 'self' ${hash} ${GTM}/gtag/js`
+      `default-src 'self'; img-src *; script-src-elem 'self' ${hash} ${await loaderHash()} ${GTM}/gtag/js`
     );
     expect(mergeSiteCodeIntoCsp("default-src 'none'", facts)).toBe(
-      `default-src 'none'; script-src-elem ${hash} ${GTM}/gtag/js`
+      `default-src 'none'; script-src-elem ${hash} ${await loaderHash()} ${GTM}/gtag/js`
     );
   });
 
@@ -650,7 +907,7 @@ describe("adding what site code needs to a policy", () => {
         facts
       )
     ).toBe(
-      "script-src https://cdn.example, script-src 'none'; script-src-elem https://cdn.example/a.js"
+      `script-src https://cdn.example; script-src-elem https://cdn.example ${await loaderHash()}, script-src 'none'; script-src-elem ${await loaderHash()} https://cdn.example/a.js`
     );
   });
 
@@ -659,7 +916,10 @@ describe("adding what site code needs to a policy", () => {
     const digest = (await cspHash("a()")).slice("sha256-".length);
     const variant = `SHA256-${digest.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
     const policy = `script-src '${variant}'`;
-    expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(policy);
+    // The code's own hash is named already; only the loader's is added.
+    expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(
+      `${policy}; script-src-elem '${variant}' ${await loaderHash()}`
+    );
   });
 
   it("keeps a stylesheet imported and linked as two loads, the import unnonced", async () => {
@@ -678,6 +938,30 @@ describe("adding what site code needs to a policy", () => {
       mergeSiteCodeIntoCsp("style-src 'nonce-x'", facts, { siteNonce: true })
     ).toBe(
       "style-src 'nonce-x'; style-src-elem 'nonce-x' https://fonts.example/a.css"
+    );
+  });
+
+  it("adds the hash of code no nonce can allow, whatever nonce the site passes", async () => {
+    const marked: SiteCodeEntry = {
+      tag: "script",
+      attrs: { "data-template": "<script>" },
+      text: "a()",
+    };
+    const facts = await siteCodeFacts([marked], ORIGIN);
+    expect(
+      mergeSiteCodeIntoCsp("script-src 'nonce-x'", facts, { siteNonce: true })
+    ).toBe(
+      `script-src 'nonce-x'; script-src-elem 'nonce-x' '${await cspHash("a()")}'`
+    );
+  });
+
+  it("adds 'self' for a load from a site served at an IP address", async () => {
+    const facts = await siteCodeFacts(
+      [loaded("/analytics.js")],
+      "https://127.0.0.1"
+    );
+    expect(mergeSiteCodeIntoCsp("default-src 'none'", facts)).toBe(
+      `default-src 'none'; script-src-elem ${await loaderHash()} 'self'`
     );
   });
 
