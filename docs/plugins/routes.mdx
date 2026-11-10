@@ -355,14 +355,24 @@ definePlugin({
           if (claimed.status === "in-progress") {
             return new Response(null, { status: 503 });
           }
+          let completed: boolean;
           try {
             const event = JSON.parse(result.body);
-            // ...
-            await claimed.claim.complete();
+            // ... work that is safe to repeat, keyed on result.deliveryId
+            ({ completed } = await claimed.claim.complete());
           } catch (error) {
             // Give it back, so the sender's retry is processed.
             await claimed.claim.release();
             throw error;
+          }
+          if (!completed) {
+            // The lease ran out and a retry took the claim over: it may be
+            // doing this work again right now, which is why the work must be
+            // safe to repeat. That retry records the outcome; this handler
+            // must not act on it a second time.
+            ctx.logger.warn("An orders webhook outlived its lease", {
+              deliveryId: result.deliveryId,
+            });
           }
           return new Response(null, { status: 204 });
         },
