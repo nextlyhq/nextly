@@ -28,6 +28,71 @@ describe("sanitizeEntryData — nested-document descent", () => {
     expect(data.title).toBe("Hello");
   });
 
+  it("sanitizes text inside a group with no name as it does the same text outside one", () => {
+    // A group with no name only lays fields out: its children are stored at the level it sits in.
+    const data = {
+      outsideText: "<b>a</b>",
+      outsideArea: "<b>b</b>",
+      insideText: "<b>c</b>",
+      insideArea: "<b>d</b>",
+    };
+    sanitizeEntryData(data, [
+      field({ name: "outsideText", type: "text" }),
+      field({ name: "outsideArea", type: "textarea" }),
+      field({
+        type: "group",
+        label: "Layout",
+        fields: [
+          field({ name: "insideText", type: "text" }),
+          field({ name: "insideArea", type: "textarea" }),
+        ],
+      }),
+    ]);
+    expect(data).toEqual({
+      outsideText: "a",
+      outsideArea: "b",
+      insideText: "c",
+      insideArea: "d",
+    });
+  });
+
+  it("sanitizes text in a group with no name inside a named group", () => {
+    const data = { box: { title: "<b>a</b>", note: "<b>b</b>" } };
+    sanitizeEntryData(data, [
+      field({
+        name: "box",
+        type: "group",
+        fields: [
+          field({
+            type: "group",
+            label: "Layout",
+            fields: [
+              field({ name: "title", type: "text" }),
+              field({ name: "note", type: "textarea" }),
+            ],
+          }),
+        ],
+      }),
+    ]);
+    expect(data.box).toEqual({ title: "a", note: "b" });
+  });
+
+  it("sanitizes text in a group with no name inside a field group", async () => {
+    const fields = await attachFieldGroupChildren(
+      [field({ name: "seo", type: "component", component: "seo" })],
+      async () => [
+        field({
+          type: "group",
+          label: "Layout",
+          fields: [field({ name: "title", type: "text" })],
+        }),
+      ]
+    );
+    const data = { seo: { title: "<b>a</b>" } };
+    sanitizeEntryData(data, fields);
+    expect(data.seo.title).toBe("a");
+  });
+
   it("leaves rich text and json alone", () => {
     const data = {
       body: "<p>kept</p>",

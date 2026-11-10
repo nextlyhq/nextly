@@ -17,6 +17,7 @@ import {
 import { readFieldGroupType } from "../../domains/field-groups/storage/field-group-type-key";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { SanitizationConfigInput } from "../../schemas/security-config";
+import { addressableFields } from "../../shared/addressable-fields";
 
 const TEXT_LIKE_FIELDS = new Set(["text", "string", "textarea", "email"]);
 
@@ -176,9 +177,9 @@ export function sanitizeEntryData(
   fields: FieldDefinition[],
   config?: SanitizationConfigInput
 ): void {
-  for (const field of fields) {
-    if (!field.name) continue;
-
+  // The fields stored at this level: a group with no name only lays fields out and keeps its
+  // children here, so its text is read and sanitized like any other at this level, never skipped.
+  for (const field of addressableFields(fields) as FieldDefinition[]) {
     if (SKIP_FIELD_TYPES.has(field.type)) continue;
 
     const value = data[field.name];
