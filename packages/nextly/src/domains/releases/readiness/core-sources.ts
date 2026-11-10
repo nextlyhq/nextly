@@ -21,7 +21,6 @@
  * explained by — are that one source's findings and nothing else.
  *
  * @module domains/releases/readiness/core-sources
- * @experimental
  */
 import { NextlyError } from "../../../errors";
 import type { ReleaseBlockerReason } from "../../../schemas/releases/types";

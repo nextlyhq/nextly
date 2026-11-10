@@ -111,7 +111,7 @@ export interface ReleasesNamespace {
   /**
    * Make a release. `kind` is `release` (the default), or `single` for a
    * document scheduled on its own, which holds exactly one document; it is
-   * fixed once the release exists. `kind` is `@experimental`.
+   * fixed once the release exists.
    */
   create(
     args: {
@@ -140,8 +140,6 @@ export interface ReleasesNamespace {
    * runtime: a caller that cannot see `memberAction` cannot tell which way a
    * release moves the document it just asked about. Each row also carries
    * `memberId`, the membership `removeMember` takes the document out with.
-   *
-   * `tab`, `kind`, `search`, `day` and `page` are `@experimental`.
    */
   find(
     args?: FindReleasesQuery & ReleaseCallerArgs
@@ -155,8 +153,6 @@ export interface ReleasesNamespace {
    * state, window and search `find` takes, and the same answer as its
    * `meta.total`. What a page outside Releases asks, such as "how many need
    * attention?".
-   *
-   * @experimental
    */
   count(args?: ReleaseCountQuery & ReleaseCallerArgs): Promise<number>;
   /**
@@ -168,8 +164,6 @@ export interface ReleasesNamespace {
    * first three in time order; the rest of a day is `find({ day })`. Refused
    * for an unknown zone, a date that does not exist, a `to` before `from`, or
    * a window longer than 42 days.
-   *
-   * @experimental
    */
   calendar(
     args: ReleaseCalendarQuery & ReleaseCallerArgs
@@ -201,8 +195,6 @@ export interface ReleasesNamespace {
    * {@link blockingReasons} with the blocked documents the caller may not
    * read counted by collection in `hidden`, so a release blocked only by
    * documents they cannot see still reads as blocked.
-   *
-   * @experimental
    */
   blockersOf(
     args: { releaseId: string } & ReleaseCallerArgs
@@ -216,8 +208,6 @@ export interface ReleasesNamespace {
    * counted by collection in `hidden`, so the release is ready only when
    * `hard` is empty and no `hidden` entry has a hard problem. An unknown
    * release is refused as not found.
-   *
-   * @experimental
    */
   readiness(
     args: { releaseId: string } & ReleaseCallerArgs
@@ -228,8 +218,6 @@ export interface ReleasesNamespace {
    * holding more documents than a release may now hold comes back
    * `checked: false`, for the single read to check in full. More than fifty
    * ids are refused.
-   *
-   * @experimental
    */
   readinessOf(
     args: { releaseIds: readonly string[] } & ReleaseCallerArgs
@@ -238,8 +226,6 @@ export interface ReleasesNamespace {
    * How many documents each of these releases holds, and how many it puts
    * live and takes down, keyed by release id. Every id asked about is
    * answered, with zeros for a release holding none.
-   *
-   * @experimental
    */
   memberCounts(
     args: { releaseIds: readonly string[] } & ReleaseCallerArgs
@@ -264,8 +250,6 @@ export interface ReleasesNamespace {
    * documents it links to that will not be live at the release's moment, so
    * they can be offered too. Only documents the caller may read are named; the
    * rest are counted in `hiddenCount`.
-   *
-   * @experimental The `unpublishedLinks` field.
    */
   addMember(
     args: { releaseId: string } & AddMemberInput & ReleaseCallerArgs
@@ -282,8 +266,6 @@ export interface ReleasesNamespace {
    * named in `data.problems`. Use it for the linked documents an add
    * offered, too. Answers the release as the step left it and the new
    * members in the order given, each with its `unpublishedLinks`.
-   *
-   * @experimental
    */
   addMembers(
     args: {
@@ -303,8 +285,6 @@ export interface ReleasesNamespace {
    *
    * All of it lands or none of it does: a refusal, or a failure of any
    * write, leaves no release, no document and no schedule behind.
-   *
-   * @experimental
    */
   scheduleDocument(
     args: ScheduleDocumentInput & ReleaseCallerArgs
@@ -314,8 +294,8 @@ export interface ReleasesNamespace {
    *
    * Out of a single-document release that has not run (draft, scheduled or
    * stopped), it cancels that release instead, under the cancel authority
-   * (`publish`), and the release is kept as cancelled. This is
-   * `@experimental`. The answer says which happened: `releaseCancelled` is
+   * (`publish`), and the release is kept as cancelled. The answer says which
+   * happened: `releaseCancelled` is
    * true when the release was cancelled instead of the document removed.
    *
    * `releaseId` is optional but SHOULD be supplied by any caller that knows it —
@@ -338,8 +318,6 @@ export interface ReleasesNamespace {
    * The release's documents as the caller sees them: those they may read in
    * `items`, and the rest counted by collection in `hidden`, with no title,
    * id or field.
-   *
-   * @experimental
    */
   membersOf(
     args: { releaseId: string } & ReleaseCallerArgs
@@ -353,8 +331,6 @@ export interface ReleasesNamespace {
    * action is checked as the document's author, who the release still acts as;
    * a switch that would leave a hard problem is refused as a `CONFLICT` naming
    * the problems in `data.problems`, and the release is left as it was.
-   *
-   * @experimental
    */
   changeMemberAction(
     args: {
@@ -381,16 +357,12 @@ export interface ReleasesNamespace {
    * then stands: `published`, or still `scheduled` if some of it is left for
    * the runner to finish. Refused for a stopped release (fix it and schedule it
    * again) and for a published or cancelled one, which never runs again.
-   *
-   * @experimental
    */
   publishNow(args: { id: string } & ReleaseCallerArgs): Promise<ReleaseRow>;
   /**
    * Rename a release, change its description (`null` clears it), or both,
    * and answer the release as it now reads. Needs `update-content-releases`
    * on a checked call, and works in any state.
-   *
-   * @experimental
    */
   update(
     args: { id: string } & ReleaseDetailsChange & ReleaseCallerArgs
@@ -403,8 +375,6 @@ export interface ReleasesNamespace {
    * stopped (`committed`), published (`published`), or cancelled after being
    * scheduled (`was-scheduled`). A release that is not there is NOT_FOUND.
    * Answers the release as it was when deleted.
-   *
-   * @experimental
    */
   delete(args: { id: string } & ReleaseCallerArgs): Promise<ReleaseRow>;
 }

@@ -12,15 +12,18 @@
 import { Button, Label } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
+import type {
+  BuilderField,
+  FieldCondition,
+} from "@admin/components/features/schema-builder/types";
+import * as Icons from "@admin/components/icons";
+
 import {
   ConditionRow,
   operatorsForType,
   type ConditionSource,
   type ConditionValue,
-} from "@admin/components/field-ui";
-import * as Icons from "@admin/components/icons";
-
-import type { BuilderField, FieldCondition } from "../types";
+} from "../../ConditionRow";
 
 type Props = {
   condition: FieldCondition | undefined;

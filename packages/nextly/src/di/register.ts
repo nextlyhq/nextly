@@ -174,6 +174,10 @@ import { startCompanionReadinessWarmUp } from "../init/warm-companion-readiness"
 import { env } from "../lib/env";
 import type { RateLimitStore } from "../middleware/rate-limit";
 import { maskingServiceLogger } from "../observability/mask-emails";
+import {
+  forgetCapabilityProviders,
+  recordCapabilityProviders,
+} from "../plugins/capabilities";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { warnUndescribedPlugins } from "../plugins/describe-check";
@@ -1276,6 +1280,13 @@ async function registerServicesOnce(
   );
   setInitializedPlugins(
     globalForReg.__nextly_pluginTeardown.map(entry => entry.plugin.name)
+  );
+  // Which of the started plugins provides each capability, for code that asks
+  // a provider at request time: the route helpers ask the page-metadata
+  // provider for every page's head. From the same list, so a plugin that never
+  // ran its `init` is never the one asked.
+  recordCapabilityProviders(
+    globalForReg.__nextly_pluginTeardown.map(entry => entry.plugin)
   );
 
   // ----------------------------------------
@@ -5048,6 +5059,10 @@ function clearActiveHookRegistry(): void {
   // Nothing is initialized in a process whose services have been cleared, and a
   // stale list would let the next reload treat a plugin as started.
   setInitializedPlugins([]);
+  // Nor is any provider known: one left recorded would be asked for pages by
+  // the next instance, through services it no longer has, and an empty record
+  // would tell a route there is none before the next boot says.
+  forgetCapabilityProviders();
   clearPluginDependencies();
 }
 

@@ -1,15 +1,14 @@
 // Why: lock the General tab contract — name input is disabled for system
-// fields (only label is editable), required toggle propagates through
-// onChange.validation.required, and readOnly disables every input. Type-
-// specific editor router is a placeholder in PR 1; it's wired in PR 2
-// when the sheet is mounted by Collection/Single/Component pages.
+// fields (only label is editable) and wherever the surface fixes it, with the
+// reason; the name follows the label only while the field is unsaved; required
+// and width write through onChange; readOnly disables every input.
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 
-import type { BuilderField } from "../../types";
+import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import { GeneralTab } from "../GeneralTab";
 
 const userTextarea: BuilderField = {
@@ -34,16 +33,18 @@ const systemTitle: BuilderField = {
 
 function Controlled(props: {
   initial: BuilderField;
-  siblingNames?: readonly string[];
   readOnly?: boolean;
+  saved?: boolean;
+  nameFixedReason?: string;
   onChange?: (next: BuilderField) => void;
 }) {
   const [field, setField] = useState<BuilderField>(props.initial);
   return (
     <GeneralTab
       field={field}
-      siblingNames={props.siblingNames ?? []}
       readOnly={props.readOnly}
+      saved={props.saved ?? false}
+      nameFixedReason={props.nameFixedReason}
       onChange={next => {
         setField(next);
         props.onChange?.(next);
@@ -79,12 +80,60 @@ describe("GeneralTab", () => {
     expect(last.validation?.required).toBe(true);
   });
 
+  it("disables the name where the surface fixes it, and says why", () => {
+    render(
+      <Controlled
+        initial={userTextarea}
+        nameFixedReason="A user field's name is fixed once it is created."
+      />
+    );
+    const name = screen.getByLabelText(/^name$/i);
+    expect(name).toBeDisabled();
+    expect(name).toHaveAccessibleDescription(
+      /a user field's name is fixed once it is created/i
+    );
+  });
+
+  it("does not follow the label with a name the surface fixes", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const draft: BuilderField = {
+      ...userTextarea,
+      label: "Excerpt",
+      name: "excerpt",
+    };
+    render(
+      <Controlled
+        initial={draft}
+        nameFixedReason="Fixed."
+        onChange={onChange}
+      />
+    );
+    await user.type(screen.getByLabelText(/^label$/i), "s");
+    const last = onChange.mock.lastCall?.[0] as BuilderField;
+    expect(last.name).toBe("excerpt");
+  });
+
+  it("chooses the width from a radio group and writes it to admin.width", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<Controlled initial={userTextarea} onChange={onChange} />);
+    const widths = screen.getByRole("radiogroup", { name: "Width" });
+    expect(widths).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "50%" }));
+    const last = onChange.mock.lastCall?.[0] as BuilderField;
+    expect(last.admin?.width).toBe("50%");
+  });
+
   it("disables every input in readOnly mode", () => {
     render(<Controlled initial={userTextarea} readOnly />);
     expect(screen.getByLabelText(/^name$/i)).toBeDisabled();
     expect(screen.getByLabelText(/^label$/i)).toBeDisabled();
     expect(screen.getByLabelText(/description/i)).toBeDisabled();
     expect(screen.getByRole("switch", { name: /required/i })).toBeDisabled();
+    for (const radio of screen.getAllByRole("radio")) {
+      expect(radio).toBeDisabled();
+    }
   });
 });
 
@@ -165,6 +214,62 @@ describe("GeneralTab -- PR E1 Label-first + Name auto-derive", () => {
     const last = onChange.mock.lastCall?.[0] as BuilderField;
     expect(last.label).toBe("Line Items");
     expect(last.name).toBe("line__item");
+  });
+
+  it("keeps a saved field's name when its label changes, though the name was derived", async () => {
+    // A saved field's name is its column and API key. Its label is only what
+    // editors read, so relabelling "Summary" as "Excerpt" must leave the name
+    // alone even though "summary" is exactly what the old label derived.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const saved: BuilderField = { ...blank, label: "Summary", name: "summary" };
+    render(<Controlled initial={saved} saved onChange={onChange} />);
+    const labelInput = screen.getByLabelText(/^Label$/);
+    await user.clear(labelInput);
+    await user.type(labelInput, "Excerpt");
+    const last = onChange.mock.lastCall?.[0] as BuilderField;
+    expect(last.label).toBe("Excerpt");
+    expect(last.name).toBe("summary");
+  });
+
+  it("lets an unsaved field's derived name follow its label", async () => {
+    // The positive control for the test above: the same edit on a field not
+    // yet saved re-derives the name, so the test above is not passing merely
+    // because nothing derives at all.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const draft: BuilderField = { ...blank, label: "Summary", name: "summary" };
+    render(<Controlled initial={draft} onChange={onChange} />);
+    const labelInput = screen.getByLabelText(/^Label$/);
+    await user.clear(labelInput);
+    await user.type(labelInput, "Excerpt");
+    const last = onChange.mock.lastCall?.[0] as BuilderField;
+    expect(last.name).toBe("excerpt");
+  });
+
+  it("leaves the earlier snake-case rule to a surface whose names are snake case", async () => {
+    // "phone_no_" is what the earlier snake-case rule derived from "phone no.".
+    // On a surface that derives names some other way it was typed by hand, so
+    // a label edit must not take it for derived and replace it.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const kebab = (label: string) =>
+      label
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "");
+    const seeded: BuilderField = {
+      ...blank,
+      label: "phone no.",
+      name: "phone_no_",
+    };
+    render(
+      <GeneralTab field={seeded} deriveName={kebab} onChange={onChange} />
+    );
+    await user.type(screen.getByLabelText(/^Label$/), "!");
+    const last = onChange.mock.lastCall?.[0] as BuilderField;
+    expect(last.name).toBe("phone_no_");
   });
 
   it("stops auto-deriving Name once the user manually edits Name", async () => {

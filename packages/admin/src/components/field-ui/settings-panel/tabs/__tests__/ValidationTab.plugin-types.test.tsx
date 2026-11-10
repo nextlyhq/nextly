@@ -10,7 +10,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { BuilderField } from "../../types";
+import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import { ValidationTab } from "../ValidationTab";
 
 const branding = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));

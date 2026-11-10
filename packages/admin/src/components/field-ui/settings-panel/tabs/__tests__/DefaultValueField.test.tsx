@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 
-import type { BuilderField } from "../../types";
+import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import { DefaultValueField } from "../DefaultValueField";
 
 const baseField = (overrides: Partial<BuilderField> = {}): BuilderField => ({

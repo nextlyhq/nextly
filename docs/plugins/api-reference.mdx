@@ -586,6 +586,58 @@ field, or pass none at all. Note that these options reach type generation but
 are not persisted, so a field read back from the database after boot carries
 none of them.
 
+## Providing page metadata
+
+One plugin can work out the head of every page the site serves: its title, description,
+canonical address, whether search engines may list it, its social card and its language links.
+It declares the `page-metadata` capability and contributes its resolver as the `pageMetadata`
+service:
+
+```ts
+import { definePlugin, type PageMetadataResolver } from "@nextlyhq/plugin-sdk";
+
+const resolver: PageMetadataResolver = {
+  resolve: input => ({
+    title: input.code.title ?? input.derived.title,
+    description: input.code.description ?? input.derived.description,
+    robots: { index: true, follow: true },
+  }),
+  // What the answer depends on beyond the page's own document.
+  tags: () => ["acme-seo:settings"],
+};
+
+export default definePlugin({
+  name: "@acme/nextly-plugin-seo",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.74",
+  provides: ["page-metadata"],
+  contributes: { services: { pageMetadata: () => resolver } },
+});
+```
+
+The route helpers in `nextly/runtime` and `@nextlyhq/blocks-react/next` then ask it for every
+page they serve, with no change to the site's routes. `resolve` is told:
+
+| Field     | What it holds                                                                                                                                |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`    | The address the page was served at, from `/`. Absent for a Single route, which is never told where the app mounts it.                         |
+| `locale`  | The language the route read the page in, when the route states one.                                                                         |
+| `source`  | The document: `{ kind: "entry", collection, entry }` or `{ kind: "single", slug, document }`, as read for this request.                      |
+| `code`    | The title, description and social values the route's own `buildMetadata` or `metadata` set. A route never supplies visibility or the canonical. |
+| `derived` | What the page's content offers, such as the title, description and picture a Page Builder page's blocks show.                               |
+
+It answers a `PageMetadataAnswer`: `title`, `description`, `canonical`, `robots`, `social` and
+`languages`, each optional. The route turns the answer into Next.js `Metadata`. Whatever else the
+route's own metadata set, such as an Open Graph `type`, is kept.
+
+The answer is cached with the page: it expires when the page's document changes, and when any tag
+`tags` names is expired, so a change to the plugin's settings reaches every page without a
+redeploy. If `resolve` throws, the error is logged and the page is served with the route's own
+metadata.
+
+Only one plugin may provide `page-metadata`, and boot refuses a plugin that declares it without a
+`pageMetadata` service. The types are `@experimental`.
+
 ## Secrets
 
 ```ts
