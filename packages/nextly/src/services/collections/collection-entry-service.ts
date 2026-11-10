@@ -53,6 +53,7 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../domains/i18n/localization-source";
+import { resolveLocaleChain } from "../../domains/i18n/resolve-locale";
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import type { RetentionRunner } from "../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
@@ -489,10 +490,46 @@ export class CollectionEntryService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
     /** A grant waiving the collection's read hooks, honoured by the query service. */
     hookExemptRead?: HookExemptRead;
+    /**
+     * Whole-document fallback: where the entry is not found in the requested
+     * language, answer in the first language of its fallback chain that has
+     * it, and say which (`_locale`).
+     */
+    wholeDocumentFallback?: boolean;
   }) {
-    return withRuleLanguage(this.readLanguages(params), () =>
-      this.queryService.getEntry(params)
-    );
+    const read = (locale: string | undefined) => {
+      const inLanguage = { ...params, locale };
+      return withRuleLanguage(this.readLanguages(inLanguage), () =>
+        this.queryService.getEntry(inLanguage)
+      );
+    };
+    const chain = params.wholeDocumentFallback
+      ? resolveLocaleChain(
+          this.localization,
+          params.locale,
+          params.fallbackLocale
+        )
+      : null;
+    if (!chain || chain.length === 0) return read(params.locale);
+    // Each language of the chain in turn, read as a request for that language
+    // alone: its relations, components, field fallback and rules all answer in
+    // it. The first that has the entry answers; a refusal other than not
+    // found ends the read as it is.
+    let answer = await read(chain[0]);
+    for (const [index, locale] of chain.entries()) {
+      if (index > 0) answer = await read(locale);
+      if (answer.success) {
+        return {
+          ...answer,
+          data:
+            answer.data && typeof answer.data === "object"
+              ? { ...answer.data, _locale: locale }
+              : answer.data,
+        };
+      }
+      if (answer.statusCode !== 404) return answer;
+    }
+    return answer;
   }
 
   /**

@@ -151,6 +151,7 @@ export async function findByID<TSlug extends CollectionSlug>(
       // i18n M4: forward the content locale + fallback so localized fields resolve.
       locale: config.locale,
       fallbackLocale: config.fallbackLocale,
+      wholeDocumentFallback: args.wholeDocumentFallback,
       context: config.context,
     });
 

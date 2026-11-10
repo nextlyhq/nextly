@@ -957,6 +957,8 @@ export class CollectionsHandler {
      * read grant, so a super-admin-owned key gets no session bypass.
      */
     authenticatedScope?: AuthenticatedScope;
+    /** Whole-document fallback; see `CollectionEntryService.getEntry`. */
+    wholeDocumentFallback?: boolean;
   }) {
     return this.entryService.getEntry(params);
   }

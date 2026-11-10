@@ -85,7 +85,7 @@ async function setup(): Promise<{ t: TestNextly; id: string }> {
 }
 
 describe("per-locale draft/publish read filter (M6c)", () => {
-  it("public de read does NOT leak the de draft — falls back to the published default (en)", async () => {
+  it("public de read does NOT leak the de draft — de is not published, so the entry is not found in it", async () => {
     const { t, id } = await setup();
     const res = await handlerOf(t).getEntry({
       collectionName: "pages",
@@ -94,9 +94,9 @@ describe("per-locale draft/publish read filter (M6c)", () => {
       status: "published",
       overrideAccess: true,
     });
-    expect(res.data).not.toBeNull();
-    expect(res.data?.heading).toBe("Hello"); // de draft filtered → published en
-    expect(res.data?.heading).not.toBe("Entwurf");
+    // A reader of a language the entry is not published in finds no entry,
+    // and so never the draft that language holds.
+    expect(res.data).toBeNull();
   });
 
   it("admin (status=all) sees the de draft", async () => {

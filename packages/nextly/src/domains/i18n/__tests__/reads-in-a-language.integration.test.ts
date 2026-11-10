@@ -34,7 +34,11 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         localized: true,
         status: true,
         access: { read: () => true },
-        fields: [text({ name: "title" }), text({ name: "slug", unique: true })],
+        fields: [
+          text({ name: "title" }),
+          text({ name: "body" }),
+          text({ name: "slug", unique: true }),
+        ],
       }),
     ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
@@ -100,14 +104,17 @@ describe.each(getConfiguredTestDialects())(
         title: "A en español",
         slug: "hola",
       });
-      const englishOnly = await publishedInEnglish(t, {
+      // Published in Spanish too, with no Spanish slug or body of its own.
+      const englishSlug = await publishedInEnglish(t, {
         title: "B in English",
+        body: "B body",
         slug: "hola",
       });
+      await publishIn(t, englishSlug, "es", { title: "B en español" });
 
-      const read = await readAs(t, englishOnly, "es");
+      const read = await readAs(t, englishSlug, "es");
       // The control: a field that is not unique falls back as it should.
-      expect(read.title).toBe("B in English");
+      expect(read.body).toBe("B body");
       expect(read.slug ?? null).toBeNull();
 
       const found = (await t.nextly.find({
@@ -118,6 +125,69 @@ describe.each(getConfiguredTestDialects())(
       })) as { items: { id: string; slug?: unknown }[] };
       expect(found.items.map(item => item.id)).toEqual([translated]);
       expect(found.items[0]?.slug).toBe("hola");
+    }, 90_000);
+
+    // A document not published in a language is, to a reader of that
+    // language, not there: a get-one answers not found, and a list leaves it
+    // out. A published language and the default are the controls.
+    it("answers not found for a public read in a language the document is not published in", async () => {
+      const t = await boot(dialect);
+      const englishOnly = await publishedInEnglish(t, {
+        title: "B in English",
+        slug: "b",
+      });
+      const both = await publishedInEnglish(t, {
+        title: "A in English",
+        slug: "a",
+      });
+      await publishIn(t, both, "es", { title: "A en español", slug: "a-es" });
+
+      await expect(readAs(t, englishOnly, "es")).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+      expect((await readAs(t, englishOnly, "en")).title).toBe("B in English");
+      expect((await readAs(t, both, "es")).title).toBe("A en español");
+
+      const listed = (await t.nextly.find({
+        collection: DOCS,
+        locale: "es",
+        status: "published",
+      })) as { items: { id: string }[]; meta: { total?: number } };
+      expect(listed.items.map(item => item.id)).toEqual([both]);
+    }, 90_000);
+
+    // Asked for, whole-document fallback answers in the first published
+    // language of the chain and says which; where the requested language is
+    // published, it answers in that one.
+    it("answers in the first published language with whole-document fallback, and says which", async () => {
+      const t = await boot(dialect);
+      const englishOnly = await publishedInEnglish(t, {
+        title: "B in English",
+        slug: "b",
+      });
+      const both = await publishedInEnglish(t, {
+        title: "A in English",
+        slug: "a",
+      });
+      await publishIn(t, both, "es", { title: "A en español", slug: "a-es" });
+
+      const fellBack = (await t.nextly.findByID({
+        collection: DOCS,
+        id: englishOnly,
+        locale: "es",
+        status: "published",
+        wholeDocumentFallback: true,
+      })) as Record<string, unknown>;
+      expect(fellBack).toMatchObject({ title: "B in English", _locale: "en" });
+
+      const own = (await t.nextly.findByID({
+        collection: DOCS,
+        id: both,
+        locale: "es",
+        status: "published",
+        wholeDocumentFallback: true,
+      })) as Record<string, unknown>;
+      expect(own).toMatchObject({ title: "A en español", _locale: "es" });
     }, 90_000);
   }
 );

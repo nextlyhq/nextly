@@ -1654,6 +1654,39 @@ export class CollectionQueryService extends BaseService {
    * preloaded one) and delegates to {@link buildTranslationStatusCondition}. Returns `undefined`
    * for non-localized collections or no-op filters.
    */
+  /**
+   * On a public read in a language, the condition keeping only the documents
+   * published in that language: to a reader of a language a document is not
+   * published in, the document is not there, so a read by id answers not found
+   * and a list and its count leave it out alike. Only where the collection
+   * publishes each language on its own (`companion.hasStatus`); elsewhere a
+   * document's one status is the only publication there is. "Published in a
+   * language" is the language filter's `published` state, so the two cannot
+   * disagree about which documents it names.
+   */
+  private async publishedInLanguageCondition(args: {
+    collectionName: string;
+    statusFilter: ReturnType<typeof resolveStatusFilter>;
+    companion: CompanionSchema | null;
+    localeChain: string[] | null;
+    mainIdColumn: unknown;
+  }): Promise<ReturnType<typeof buildTranslationStatusCondition>> {
+    const requested = args.localeChain?.[0];
+    if (
+      args.statusFilter?.isPublicRead !== true ||
+      args.companion?.hasStatus !== true ||
+      requested === undefined
+    ) {
+      return undefined;
+    }
+    return this.buildTranslationStatusFilterCondition(
+      args.collectionName,
+      { locale: requested, state: "published" },
+      args.mainIdColumn,
+      args.companion
+    );
+  }
+
   private async buildTranslationStatusFilterCondition(
     collectionName: string,
     filter: TranslationStatusFilter,
@@ -2332,6 +2365,14 @@ export class CollectionQueryService extends BaseService {
       ),
     });
     if (releaseCondition) conditions.push(releaseCondition);
+    const inLanguage = await this.publishedInLanguageCondition({
+      collectionName: params.collectionName,
+      statusFilter,
+      companion,
+      localeChain,
+      mainIdColumn: schema.id,
+    });
+    if (inLanguage) conditions.push(inLanguage);
 
     // AFTER the status filter, so localized where/search EXISTS checks
     // constrain by the per-locale status too — a published read must not match
@@ -5167,10 +5208,20 @@ export class CollectionQueryService extends BaseService {
             this.logger
           )
         : undefined;
+      // A public read in a language the entry is not published in finds no
+      // entry, as a list in that language leaves it out.
+      const inLanguageCondition = await this.publishedInLanguageCondition({
+        collectionName: params.collectionName,
+        statusFilter,
+        companion,
+        localeChain,
+        mainIdColumn: schema.id,
+      });
       const whereParts = [
         idCondition,
         lifecycleCondition,
         ruleCondition,
+        inLanguageCondition,
       ].filter(
         (c): c is NonNullable<typeof c> => c !== null && c !== undefined
       );

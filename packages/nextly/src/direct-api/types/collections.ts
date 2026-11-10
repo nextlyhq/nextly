@@ -218,6 +218,17 @@ export interface FindByIDArgs<TSlug extends CollectionSlug = CollectionSlug>
   status?: "published" | "draft" | "all";
 
   /**
+   * Whole-document fallback. A published read in a language the document is
+   * not published in answers not found; with this set it answers in the first
+   * language of the fallback chain the document is published in instead, and
+   * says which in `_locale`. Its relationships, components and field fallback
+   * are read in that language.
+   *
+   * @default false
+   */
+  wholeDocumentFallback?: boolean;
+
+  /**
    * Specific fields to include/exclude.
    */
   select?: Record<string, boolean>;
