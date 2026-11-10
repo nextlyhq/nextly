@@ -17,6 +17,7 @@ import {
   createEditorReader,
   toEditorFind,
   type EditorReaderPerson,
+  type EditorReaderSource,
 } from "../editor-reader";
 import type {
   PublicReaderDeclarations,
@@ -32,7 +33,8 @@ const declarations: PublicReaderDeclarations = {
 };
 
 function source() {
-  const find = vi.fn(async () => ({
+  // Takes the query, so each call's query can be read back from `mock.calls`.
+  const find = vi.fn(async (_query: unknown) => ({
     items: [{ id: "1", title: "Draft post", internalNote: "for the team" }],
     meta: { total: 7 },
   }));
@@ -197,5 +199,88 @@ describe("the canvas's reader", () => {
       user: person.user,
       status: "all",
     });
+  });
+
+  it("reads a Single as the person, its working draft where they may edit it", async () => {
+    // Takes the read, so the call's arguments can be read back from `mock.calls`.
+    const findSingle = vi.fn(async (_read: unknown) => ({
+      id: "s1",
+      headline: "Spring sale (draft)",
+      banner: "b",
+    }));
+    const reader = {
+      find: vi.fn(),
+      findSingle,
+    } as unknown as PublicReaderSource;
+    const single = await createEditorReader(reader, person, {
+      declarations,
+    }).findSingle({ slug: "home", select: ["headline"] });
+    // Only the fields asked for, with its id.
+    expect(single).toEqual({ id: "s1", headline: "Spring sale (draft)" });
+    expect(findSingle.mock.calls[0]?.[0]).toMatchObject({
+      slug: "home",
+      overrideAccess: false,
+      user: person.user,
+      status: "all",
+      draft: true,
+      createIfMissing: false,
+    });
+  });
+
+  it("answers nothing for a Single it may not read, as the public reader does", async () => {
+    const reader = {
+      find: vi.fn(),
+      findSingle: vi.fn(async () => {
+        throw NextlyError.forbidden();
+      }),
+    } as unknown as PublicReaderSource;
+    await expect(
+      createEditorReader(reader, person, { declarations }).findSingle({
+        slug: "home",
+      })
+    ).resolves.toBeNull();
+  });
+
+  it("reads one entry by id as the person, its working draft where they may edit it", async () => {
+    // A list read returns the live row; only the by-id read carries a pending
+    // working draft, so the page's own entry is read through it.
+    const find = vi.fn();
+    const findByID = vi.fn(async (_args: unknown) => ({
+      id: "p1",
+      title: "Spring sale (working draft)",
+      body: "b",
+    }));
+    const reader = { find, findByID } as unknown as EditorReaderSource;
+    const entry = await createEditorReader(reader, person, {
+      declarations,
+    }).findById({ collection: "posts", id: "p1", select: ["title"] });
+    expect(entry).toEqual({ id: "p1", title: "Spring sale (working draft)" });
+    expect(find).not.toHaveBeenCalled();
+    expect(findByID.mock.calls[0]?.[0]).toMatchObject({
+      collection: "posts",
+      id: "p1",
+      // Core loads only the fields asked for, with the id.
+      select: { id: true, title: true },
+      overrideAccess: false,
+      user: person.user,
+      status: "all",
+      draft: true,
+      depth: 0,
+    });
+  });
+
+  it("answers nothing for an entry by id it may not read", async () => {
+    const reader = {
+      find: vi.fn(),
+      findByID: vi.fn(async () => {
+        throw NextlyError.forbidden();
+      }),
+    } as unknown as EditorReaderSource;
+    await expect(
+      createEditorReader(reader, person, { declarations }).findById({
+        collection: "posts",
+        id: "p1",
+      })
+    ).resolves.toBeNull();
   });
 });

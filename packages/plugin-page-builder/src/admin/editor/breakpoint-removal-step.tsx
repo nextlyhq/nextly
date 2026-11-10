@@ -16,6 +16,8 @@ import { Button } from "@nextlyhq/ui";
 import { Check, Loader2, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, type JSX, type Ref } from "react";
 
+import { DESTRUCTIVE_CONFIRM_CLASS } from "../destructive-confirm";
+
 import {
   checkingWords,
   confirmWords,
@@ -238,10 +240,8 @@ function StepBody({
           <Button
             type="button"
             variant="destructive"
-            // A deeper red under the white label in the light theme, where the solid
-            // red holds under 4.5:1; the dark theme's dark label on its solid red
-            // holds already.
-            className="bg-destructive-700 hover:bg-destructive-800 dark:bg-destructive-solid dark:hover:bg-destructive-600"
+            // The deeper red the page builder's destructive confirmations share.
+            className={DESTRUCTIVE_CONFIRM_CLASS}
             disabled={step.sending}
             onClick={removal.remove}
           >

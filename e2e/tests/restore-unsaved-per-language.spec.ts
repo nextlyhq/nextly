@@ -13,7 +13,7 @@
 import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 const AUTHORS = "/admin/api/collections/authors/entries";
 const OFFER = /You have unsaved changes from/;
@@ -32,7 +32,7 @@ async function liveAuthor(page: Page): Promise<string> {
   const id = ((await created.json()) as { item?: { id?: string } }).item?.id;
   if (typeof id !== "string") throw new Error("the new author has no id");
   const spanish = await page.request.patch(`${AUTHORS}/${id}?locale=es`, {
-    data: { jobTitle: "Matemática", status: "published" },
+    data: { jobTitle: "Matemática", status: "published", _overwrite: true },
   });
   expect(spanish.ok(), `publishing Spanish: ${spanish.status()}`).toBe(true);
   return id;
@@ -60,7 +60,7 @@ test.describe("restoring unsaved changes", () => {
     // English: nothing of the Spanish work is offered.
     await gotoAdmin(page, `/collections/authors/${id}`);
     await expect(page.getByLabel("Role / Title")).toHaveValue("Mathematician");
-    await expect(page.getByText(OFFER)).toHaveCount(0);
+    await expect(includingHidden(page).getByText(OFFER)).toHaveCount(0);
 
     // Spanish again: its own unsaved work is offered, and restores there.
     await gotoAdmin(page, `/collections/authors/${id}?locale=es`);

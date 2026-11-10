@@ -71,11 +71,11 @@ export function NotificationBell({
         >
           {/* Muted foreground so the resting bell icon meets contrast; a faint primary alpha did not. */}
           <Bell className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
-          {/* The `-solid` emphasis fill, paired with an on-color ink that flips: `text-destructive-foreground` is white on the light fill and BLACK on the lighter dark-mode fill (6.90:1). One ink cannot clear 4.5:1 on both, which is why the token flips rather than the fill compensating. The LIGHT pairing is 3.84:1 and does NOT clear it: the fill takes the reference red, and that failure is recorded in packages/ui/src/styles/contrast/accepted.ts rather than fixed here. */}
+          {/* In light the fill is the 600 step rather than `bg-destructive-solid`: white on the solid red is 3.84:1 and a count is text, so the deeper step holds 4.6:1. In dark `text-destructive-foreground` is black on the solid red, 6.90:1. */}
           {unread > 0 && (
             <span
               data-testid="notification-bell-badge"
-              className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-sm bg-destructive-solid text-destructive-foreground text-destructive-foreground! text-xs font-bold leading-[18px] text-center"
+              className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-sm bg-destructive-600 dark:bg-destructive-solid text-destructive-foreground text-destructive-foreground! text-xs font-bold leading-[18px] text-center"
             >
               {unread > 9 ? "9+" : String(unread)}
             </span>

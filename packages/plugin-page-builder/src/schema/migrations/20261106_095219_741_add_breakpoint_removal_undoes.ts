@@ -5,3475 +5,3280 @@
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 export default {
-  "name": "20261106_095219_741_add_breakpoint_removal_undoes",
-  "schemaVersion": 8,
-  "checksum": "bd09923df56aa2b4215f555ddfc3248d6fe827ffcde1c8471f9697c86b0e029e",
-  "dialects": {
-    "postgresql": {
-      "up": [
-        "ALTER TABLE \"page_builder__breakpoint_removals\" ADD COLUMN \"undoes\" bpchar(36)",
-        "CREATE INDEX IF NOT EXISTS \"idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv\" ON \"page_builder__breakpoint_removal_fragments\" (\"run_id\", \"document_key\")"
+  name: "20261106_095219_741_add_breakpoint_removal_undoes",
+  schemaVersion: 8,
+  checksum: "bd09923df56aa2b4215f555ddfc3248d6fe827ffcde1c8471f9697c86b0e029e",
+  dialects: {
+    postgresql: {
+      up: [
+        'ALTER TABLE "page_builder__breakpoint_removals" ADD COLUMN "undoes" bpchar(36)',
+        'CREATE INDEX IF NOT EXISTS "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv" ON "page_builder__breakpoint_removal_fragments" ("run_id", "document_key")',
       ],
-      "down": [
-        "DROP INDEX IF EXISTS \"idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv\"",
-        "ALTER TABLE \"page_builder__breakpoint_removals\" DROP COLUMN \"undoes\""
-      ]
+      down: [
+        'DROP INDEX IF EXISTS "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv"',
+        'ALTER TABLE "page_builder__breakpoint_removals" DROP COLUMN "undoes"',
+      ],
     },
-    "mysql": {
-      "up": [
+    mysql: {
+      up: [
         "ALTER TABLE `page_builder__breakpoint_removals` ADD COLUMN `undoes` char(36)",
-        "CREATE INDEX `idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv` ON `page_builder__breakpoint_removal_fragments` (`run_id`, `document_key`)"
+        "CREATE INDEX `idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv` ON `page_builder__breakpoint_removal_fragments` (`run_id`, `document_key`)",
       ],
-      "down": [
+      down: [
         "DROP INDEX `idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv` ON `page_builder__breakpoint_removal_fragments`",
-        "ALTER TABLE `page_builder__breakpoint_removals` DROP COLUMN `undoes`"
-      ]
-    },
-    "sqlite": {
-      "up": [
-        "ALTER TABLE \"page_builder__breakpoint_removals\" ADD COLUMN \"undoes\" text",
-        "CREATE INDEX IF NOT EXISTS \"idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv\" ON \"page_builder__breakpoint_removal_fragments\" (\"run_id\", \"document_key\")"
+        "ALTER TABLE `page_builder__breakpoint_removals` DROP COLUMN `undoes`",
       ],
-      "down": [
-        "DROP INDEX IF EXISTS \"idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv\"",
-        "ALTER TABLE \"page_builder__breakpoint_removals\" DROP COLUMN \"undoes\""
-      ]
-    }
+    },
+    sqlite: {
+      up: [
+        'ALTER TABLE "page_builder__breakpoint_removals" ADD COLUMN "undoes" text',
+        'CREATE INDEX IF NOT EXISTS "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv" ON "page_builder__breakpoint_removal_fragments" ("run_id", "document_key")',
+      ],
+      down: [
+        'DROP INDEX IF EXISTS "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv"',
+        'ALTER TABLE "page_builder__breakpoint_removals" DROP COLUMN "undoes"',
+      ],
+    },
   },
-  "snapshot": {
-    "postgresql": {
-      "tables": [
+  snapshot: {
+    postgresql: {
+      tables: [
         {
-          "name": "page_builder__usage_runs",
-          "columns": [
+          name: "page_builder__usage_runs",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "name",
-              "type": "text",
-              "nullable": false
+              name: "name",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "generation",
-              "type": "text",
-              "nullable": false
+              name: "generation",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "token",
-              "type": "bpchar",
-              "typeModifier": "36",
-              "nullable": false
+              name: "token",
+              type: "bpchar",
+              typeModifier: "36",
+              nullable: false,
             },
             {
-              "name": "dirty",
-              "type": "bool",
-              "nullable": false,
-              "default": "false"
-            }
+              name: "dirty",
+              type: "bool",
+              nullable: false,
+              default: "false",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__usage_runs_name",
-              "columns": [
-                "name"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__usage_runs_name",
+              columns: ["name"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__usage_progress",
-          "columns": [
+          name: "page_builder__usage_progress",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "token",
-              "type": "bpchar",
-              "typeModifier": "36",
-              "nullable": false
+              name: "token",
+              type: "bpchar",
+              typeModifier: "36",
+              nullable: false,
             },
             {
-              "name": "scope_key",
-              "type": "text",
-              "nullable": false
+              name: "scope_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "cursor",
-              "type": "text",
-              "nullable": true
+              name: "cursor",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "done",
-              "type": "bool",
-              "nullable": false,
-              "default": "false"
-            }
+              name: "done",
+              type: "bool",
+              nullable: false,
+              default: "false",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__usage_progress_token_scope_key_0ujeq6m",
-              "columns": [
-                "token",
-                "scope_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__usage_progress_token_scope_key_0ujeq6m",
+              columns: ["token", "scope_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__layout_removals",
-          "columns": [
+          name: "page_builder__layout_removals",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "layout_id",
-              "type": "text",
-              "nullable": false
+              name: "layout_id",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "action",
-              "type": "text",
-              "nullable": false
+              name: "action",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "step",
-              "type": "text",
-              "nullable": false
+              name: "step",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "token",
-              "type": "bpchar",
-              "typeModifier": "36",
-              "nullable": false
+              name: "token",
+              type: "bpchar",
+              typeModifier: "36",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "text",
-              "nullable": true
+              name: "started_by",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "pages_left",
-              "type": "int4",
-              "nullable": true
+              name: "pages_left",
+              type: "int4",
+              nullable: true,
             },
             {
-              "name": "copy",
-              "type": "jsonb",
-              "nullable": true
+              name: "copy",
+              type: "jsonb",
+              nullable: true,
             },
             {
-              "name": "copy_version",
-              "type": "text",
-              "nullable": true
+              name: "copy_version",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "settled_at",
-              "type": "timestamp",
-              "nullable": true
+              name: "settled_at",
+              type: "timestamp",
+              nullable: true,
             },
             {
-              "name": "created_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "now()"
+              name: "created_at",
+              type: "timestamp",
+              nullable: false,
+              default: "now()",
             },
             {
-              "name": "updated_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "now()"
-            }
+              name: "updated_at",
+              type: "timestamp",
+              nullable: false,
+              default: "now()",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__layout_removals_layout_id",
-              "columns": [
-                "layout_id"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__layout_removals_layout_id",
+              columns: ["layout_id"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_deletions",
-          "columns": [
+          name: "page_builder__component_deletions",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "component_id",
-              "type": "text",
-              "nullable": false
+              name: "component_id",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "purpose",
-              "type": "text",
-              "nullable": false
+              name: "purpose",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "text",
-              "nullable": false
+              name: "started_by",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "phase",
-              "type": "text",
-              "nullable": false,
-              "default": "'converting'"
+              name: "phase",
+              type: "text",
+              nullable: false,
+              default: "'converting'",
             },
             {
-              "name": "cursor",
-              "type": "text",
-              "nullable": true
-            }
+              name: "cursor",
+              type: "text",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
-              "columns": [
-                "component_id",
-                "purpose"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
+              columns: ["component_id", "purpose"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_deletion_hosts",
-          "columns": [
+          name: "page_builder__component_deletion_hosts",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "deletion_id",
-              "type": "bpchar",
-              "typeModifier": "36",
-              "nullable": false
+              name: "deletion_id",
+              type: "bpchar",
+              typeModifier: "36",
+              nullable: false,
             },
             {
-              "name": "host_key",
-              "type": "text",
-              "nullable": false
+              name: "host_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "state",
-              "type": "text",
-              "nullable": false
+              name: "state",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "reason",
-              "type": "text",
-              "nullable": true
-            }
+              name: "reason",
+              type: "text",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01",
-              "columns": [
-                "deletion_id",
-                "host_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01",
+              columns: ["deletion_id", "host_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__site_options",
-          "columns": [
+          name: "page_builder__site_options",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "name",
-              "type": "text",
-              "nullable": false
+              name: "name",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "value",
-              "type": "text",
-              "nullable": false
+              name: "value",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "created_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "now()"
+              name: "created_at",
+              type: "timestamp",
+              nullable: false,
+              default: "now()",
             },
             {
-              "name": "updated_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "now()"
-            }
+              name: "updated_at",
+              type: "timestamp",
+              nullable: false,
+              default: "now()",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__site_options_name",
-              "columns": [
-                "name"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__site_options_name",
+              columns: ["name"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__breakpoint_removals",
-          "columns": [
+          name: "page_builder__breakpoint_removals",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "removed_ids",
-              "type": "text",
-              "nullable": false
+              name: "removed_ids",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "before",
-              "type": "text",
-              "nullable": false
+              name: "before",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "text",
-              "nullable": false
+              name: "started_by",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "phase",
-              "type": "text",
-              "nullable": false,
-              "default": "'converting'"
+              name: "phase",
+              type: "text",
+              nullable: false,
+              default: "'converting'",
             },
             {
-              "name": "cursor",
-              "type": "text",
-              "nullable": true
+              name: "cursor",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "open_key",
-              "type": "text",
-              "nullable": true
+              name: "open_key",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "undoes",
-              "type": "bpchar",
-              "typeModifier": "36",
-              "nullable": true
-            }
+              name: "undoes",
+              type: "bpchar",
+              typeModifier: "36",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__breakpoint_removals_open_key",
-              "columns": [
-                "open_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__breakpoint_removals_open_key",
+              columns: ["open_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__breakpoint_removal_fragments",
-          "columns": [
+          name: "page_builder__breakpoint_removal_fragments",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "run_id",
-              "type": "bpchar",
-              "typeModifier": "36",
-              "nullable": false
+              name: "run_id",
+              type: "bpchar",
+              typeModifier: "36",
+              nullable: false,
             },
             {
-              "name": "document_key",
-              "type": "text",
-              "nullable": false
+              name: "document_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "host",
-              "type": "jsonb",
-              "nullable": true
+              name: "host",
+              type: "jsonb",
+              nullable: true,
             },
             {
-              "name": "form",
-              "type": "text",
-              "nullable": false
+              name: "form",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "fragment",
-              "type": "jsonb",
-              "nullable": false
+              name: "fragment",
+              type: "jsonb",
+              nullable: false,
             },
             {
-              "name": "created_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "now()"
+              name: "created_at",
+              type: "timestamp",
+              nullable: false,
+              default: "now()",
             },
             {
-              "name": "updated_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "now()"
-            }
+              name: "updated_at",
+              type: "timestamp",
+              nullable: false,
+              default: "now()",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__breakpoint_removal_fragments_run_id",
-              "columns": [
-                "run_id"
-              ],
-              "unique": false
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id",
+              columns: ["run_id"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__breakpoint_removal_fragments_created_at",
-              "columns": [
-                "created_at"
-              ],
-              "unique": false
+              name: "idx_page_builder__breakpoint_removal_fragments_created_at",
+              columns: ["created_at"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv",
-              "columns": [
-                "run_id",
-                "document_key"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv",
+              columns: ["run_id", "document_key"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__class_usage",
-          "columns": [
+          name: "page_builder__class_usage",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "scope",
-              "type": "text",
-              "nullable": false
+              name: "scope",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "entity",
-              "type": "text",
-              "nullable": false
+              name: "entity",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "entity_key",
-              "type": "text",
-              "nullable": false
+              name: "entity_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "field",
-              "type": "text",
-              "nullable": false
+              name: "field",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "locale",
-              "type": "text",
-              "nullable": false
+              name: "locale",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "variant",
-              "type": "text",
-              "nullable": false
+              name: "variant",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "class_id",
-              "type": "text",
-              "nullable": false
-            }
+              name: "class_id",
+              type: "text",
+              nullable: false,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__class_usage_entity_entity_key_178r965",
-              "columns": [
-                "entity",
-                "entity_key"
-              ],
-              "unique": false
+              name: "idx_page_builder__class_usage_entity_entity_key_178r965",
+              columns: ["entity", "entity_key"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__class_usage_class_id",
-              "columns": [
-                "class_id"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__class_usage_class_id",
+              columns: ["class_id"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_usage",
-          "columns": [
+          name: "page_builder__component_usage",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "scope",
-              "type": "text",
-              "nullable": false
+              name: "scope",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "entity",
-              "type": "text",
-              "nullable": false
+              name: "entity",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "entity_key",
-              "type": "text",
-              "nullable": false
+              name: "entity_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "field",
-              "type": "text",
-              "nullable": false
+              name: "field",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "locale",
-              "type": "text",
-              "nullable": false
+              name: "locale",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "variant",
-              "type": "text",
-              "nullable": false
+              name: "variant",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "kind",
-              "type": "text",
-              "nullable": false
+              name: "kind",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "component_id",
-              "type": "text",
-              "nullable": false
-            }
+              name: "component_id",
+              type: "text",
+              nullable: false,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__component_usage_entity_entity_key_178r965",
-              "columns": [
-                "entity",
-                "entity_key"
-              ],
-              "unique": false
+              name: "idx_page_builder__component_usage_entity_entity_key_178r965",
+              columns: ["entity", "entity_key"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__component_usage_component_id",
-              "columns": [
-                "component_id"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__component_usage_component_id",
+              columns: ["component_id"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
-        }
-      ]
+          foreignKeys: [],
+          checks: [],
+        },
+      ],
     },
-    "mysql": {
-      "tables": [
+    mysql: {
+      tables: [
         {
-          "name": "page_builder__usage_runs",
-          "columns": [
+          name: "page_builder__usage_runs",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "name",
-              "type": "varchar(64)",
-              "nullable": false
+              name: "name",
+              type: "varchar(64)",
+              nullable: false,
             },
             {
-              "name": "generation",
-              "type": "varchar(512)",
-              "nullable": false
+              name: "generation",
+              type: "varchar(512)",
+              nullable: false,
             },
             {
-              "name": "token",
-              "type": "char(36)",
-              "nullable": false
+              name: "token",
+              type: "char(36)",
+              nullable: false,
             },
             {
-              "name": "dirty",
-              "type": "tinyint(1)",
-              "nullable": false,
-              "default": "false"
-            }
+              name: "dirty",
+              type: "tinyint(1)",
+              nullable: false,
+              default: "false",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__usage_runs_name",
-              "columns": [
-                "name"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__usage_runs_name",
+              columns: ["name"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__usage_progress",
-          "columns": [
+          name: "page_builder__usage_progress",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "token",
-              "type": "char(36)",
-              "nullable": false
+              name: "token",
+              type: "char(36)",
+              nullable: false,
             },
             {
-              "name": "scope_key",
-              "type": "varchar(512)",
-              "nullable": false
+              name: "scope_key",
+              type: "varchar(512)",
+              nullable: false,
             },
             {
-              "name": "cursor",
-              "type": "varchar(255)",
-              "nullable": true
+              name: "cursor",
+              type: "varchar(255)",
+              nullable: true,
             },
             {
-              "name": "done",
-              "type": "tinyint(1)",
-              "nullable": false,
-              "default": "false"
-            }
+              name: "done",
+              type: "tinyint(1)",
+              nullable: false,
+              default: "false",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__usage_progress_token_scope_key_0ujeq6m",
-              "columns": [
-                "token",
-                "scope_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__usage_progress_token_scope_key_0ujeq6m",
+              columns: ["token", "scope_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__layout_removals",
-          "columns": [
+          name: "page_builder__layout_removals",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "layout_id",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "layout_id",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "action",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "action",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "step",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "step",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "token",
-              "type": "char(36)",
-              "nullable": false
+              name: "token",
+              type: "char(36)",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "varchar(255)",
-              "nullable": true
+              name: "started_by",
+              type: "varchar(255)",
+              nullable: true,
             },
             {
-              "name": "pages_left",
-              "type": "int",
-              "nullable": true
+              name: "pages_left",
+              type: "int",
+              nullable: true,
             },
             {
-              "name": "copy",
-              "type": "json",
-              "nullable": true
+              name: "copy",
+              type: "json",
+              nullable: true,
             },
             {
-              "name": "copy_version",
-              "type": "varchar(128)",
-              "nullable": true
+              name: "copy_version",
+              type: "varchar(128)",
+              nullable: true,
             },
             {
-              "name": "settled_at",
-              "type": "timestamp",
-              "nullable": true
+              name: "settled_at",
+              type: "timestamp",
+              nullable: true,
             },
             {
-              "name": "created_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "CURRENT_TIMESTAMP"
+              name: "created_at",
+              type: "timestamp",
+              nullable: false,
+              default: "CURRENT_TIMESTAMP",
             },
             {
-              "name": "updated_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "CURRENT_TIMESTAMP"
-            }
+              name: "updated_at",
+              type: "timestamp",
+              nullable: false,
+              default: "CURRENT_TIMESTAMP",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__layout_removals_layout_id",
-              "columns": [
-                "layout_id"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__layout_removals_layout_id",
+              columns: ["layout_id"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_deletions",
-          "columns": [
+          name: "page_builder__component_deletions",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "component_id",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "component_id",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "purpose",
-              "type": "varchar(32)",
-              "nullable": false
+              name: "purpose",
+              type: "varchar(32)",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "started_by",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "phase",
-              "type": "varchar(16)",
-              "nullable": false,
-              "default": "'converting'"
+              name: "phase",
+              type: "varchar(16)",
+              nullable: false,
+              default: "'converting'",
             },
             {
-              "name": "cursor",
-              "type": "varchar(1024)",
-              "nullable": true
-            }
+              name: "cursor",
+              type: "varchar(1024)",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
-              "columns": [
-                "component_id",
-                "purpose"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
+              columns: ["component_id", "purpose"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_deletion_hosts",
-          "columns": [
+          name: "page_builder__component_deletion_hosts",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "deletion_id",
-              "type": "char(36)",
-              "nullable": false
+              name: "deletion_id",
+              type: "char(36)",
+              nullable: false,
             },
             {
-              "name": "host_key",
-              "type": "varchar(512)",
-              "nullable": false
+              name: "host_key",
+              type: "varchar(512)",
+              nullable: false,
             },
             {
-              "name": "state",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "state",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "reason",
-              "type": "varchar(64)",
-              "nullable": true
-            }
+              name: "reason",
+              type: "varchar(64)",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01",
-              "columns": [
-                "deletion_id",
-                "host_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01",
+              columns: ["deletion_id", "host_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__site_options",
-          "columns": [
+          name: "page_builder__site_options",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "name",
-              "type": "varchar(64)",
-              "nullable": false
+              name: "name",
+              type: "varchar(64)",
+              nullable: false,
             },
             {
-              "name": "value",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "value",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "created_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "CURRENT_TIMESTAMP"
+              name: "created_at",
+              type: "timestamp",
+              nullable: false,
+              default: "CURRENT_TIMESTAMP",
             },
             {
-              "name": "updated_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "CURRENT_TIMESTAMP"
-            }
+              name: "updated_at",
+              type: "timestamp",
+              nullable: false,
+              default: "CURRENT_TIMESTAMP",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__site_options_name",
-              "columns": [
-                "name"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__site_options_name",
+              columns: ["name"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__breakpoint_removals",
-          "columns": [
+          name: "page_builder__breakpoint_removals",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "removed_ids",
-              "type": "text",
-              "nullable": false
+              name: "removed_ids",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "before",
-              "type": "text",
-              "nullable": false
+              name: "before",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "started_by",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "phase",
-              "type": "varchar(16)",
-              "nullable": false,
-              "default": "'converting'"
+              name: "phase",
+              type: "varchar(16)",
+              nullable: false,
+              default: "'converting'",
             },
             {
-              "name": "cursor",
-              "type": "varchar(1024)",
-              "nullable": true
+              name: "cursor",
+              type: "varchar(1024)",
+              nullable: true,
             },
             {
-              "name": "open_key",
-              "type": "varchar(16)",
-              "nullable": true
+              name: "open_key",
+              type: "varchar(16)",
+              nullable: true,
             },
             {
-              "name": "undoes",
-              "type": "char(36)",
-              "nullable": true
-            }
+              name: "undoes",
+              type: "char(36)",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__breakpoint_removals_open_key",
-              "columns": [
-                "open_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__breakpoint_removals_open_key",
+              columns: ["open_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__breakpoint_removal_fragments",
-          "columns": [
+          name: "page_builder__breakpoint_removal_fragments",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "run_id",
-              "type": "char(36)",
-              "nullable": false
+              name: "run_id",
+              type: "char(36)",
+              nullable: false,
             },
             {
-              "name": "document_key",
-              "type": "varchar(512)",
-              "nullable": false
+              name: "document_key",
+              type: "varchar(512)",
+              nullable: false,
             },
             {
-              "name": "host",
-              "type": "json",
-              "nullable": true
+              name: "host",
+              type: "json",
+              nullable: true,
             },
             {
-              "name": "form",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "form",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "fragment",
-              "type": "json",
-              "nullable": false
+              name: "fragment",
+              type: "json",
+              nullable: false,
             },
             {
-              "name": "created_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "CURRENT_TIMESTAMP"
+              name: "created_at",
+              type: "timestamp",
+              nullable: false,
+              default: "CURRENT_TIMESTAMP",
             },
             {
-              "name": "updated_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "CURRENT_TIMESTAMP"
-            }
+              name: "updated_at",
+              type: "timestamp",
+              nullable: false,
+              default: "CURRENT_TIMESTAMP",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__breakpoint_removal_fragments_run_id",
-              "columns": [
-                "run_id"
-              ],
-              "unique": false
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id",
+              columns: ["run_id"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__breakpoint_removal_fragments_created_at",
-              "columns": [
-                "created_at"
-              ],
-              "unique": false
+              name: "idx_page_builder__breakpoint_removal_fragments_created_at",
+              columns: ["created_at"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv",
-              "columns": [
-                "run_id",
-                "document_key"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv",
+              columns: ["run_id", "document_key"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__class_usage",
-          "columns": [
+          name: "page_builder__class_usage",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "scope",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "scope",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "entity",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "entity",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "entity_key",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "entity_key",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "field",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "field",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "locale",
-              "type": "varchar(64)",
-              "nullable": false
+              name: "locale",
+              type: "varchar(64)",
+              nullable: false,
             },
             {
-              "name": "variant",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "variant",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "class_id",
-              "type": "varchar(255)",
-              "nullable": false
-            }
+              name: "class_id",
+              type: "varchar(255)",
+              nullable: false,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__class_usage_entity_entity_key_178r965",
-              "columns": [
-                "entity",
-                "entity_key"
-              ],
-              "unique": false
+              name: "idx_page_builder__class_usage_entity_entity_key_178r965",
+              columns: ["entity", "entity_key"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__class_usage_class_id",
-              "columns": [
-                "class_id"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__class_usage_class_id",
+              columns: ["class_id"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_usage",
-          "columns": [
+          name: "page_builder__component_usage",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "scope",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "scope",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "entity",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "entity",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "entity_key",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "entity_key",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "field",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "field",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "locale",
-              "type": "varchar(64)",
-              "nullable": false
+              name: "locale",
+              type: "varchar(64)",
+              nullable: false,
             },
             {
-              "name": "variant",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "variant",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "kind",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "kind",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "component_id",
-              "type": "varchar(512)",
-              "nullable": false
-            }
+              name: "component_id",
+              type: "varchar(512)",
+              nullable: false,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__component_usage_entity_entity_key_178r965",
-              "columns": [
-                "entity",
-                "entity_key"
-              ],
-              "unique": false
+              name: "idx_page_builder__component_usage_entity_entity_key_178r965",
+              columns: ["entity", "entity_key"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__component_usage_component_id",
-              "columns": [
-                "component_id"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__component_usage_component_id",
+              columns: ["component_id"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
-        }
-      ]
+          foreignKeys: [],
+          checks: [],
+        },
+      ],
     },
-    "sqlite": {
-      "tables": [
+    sqlite: {
+      tables: [
         {
-          "name": "page_builder__usage_runs",
-          "columns": [
+          name: "page_builder__usage_runs",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "name",
-              "type": "text",
-              "nullable": false
+              name: "name",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "generation",
-              "type": "text",
-              "nullable": false
+              name: "generation",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "token",
-              "type": "text",
-              "nullable": false
+              name: "token",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "dirty",
-              "type": "integer",
-              "nullable": false,
-              "default": "false"
-            }
+              name: "dirty",
+              type: "integer",
+              nullable: false,
+              default: "false",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__usage_runs_name",
-              "columns": [
-                "name"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__usage_runs_name",
+              columns: ["name"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__usage_progress",
-          "columns": [
+          name: "page_builder__usage_progress",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "token",
-              "type": "text",
-              "nullable": false
+              name: "token",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "scope_key",
-              "type": "text",
-              "nullable": false
+              name: "scope_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "cursor",
-              "type": "text",
-              "nullable": true
+              name: "cursor",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "done",
-              "type": "integer",
-              "nullable": false,
-              "default": "false"
-            }
+              name: "done",
+              type: "integer",
+              nullable: false,
+              default: "false",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__usage_progress_token_scope_key_0ujeq6m",
-              "columns": [
-                "token",
-                "scope_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__usage_progress_token_scope_key_0ujeq6m",
+              columns: ["token", "scope_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__layout_removals",
-          "columns": [
+          name: "page_builder__layout_removals",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "layout_id",
-              "type": "text",
-              "nullable": false
+              name: "layout_id",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "action",
-              "type": "text",
-              "nullable": false
+              name: "action",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "step",
-              "type": "text",
-              "nullable": false
+              name: "step",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "token",
-              "type": "text",
-              "nullable": false
+              name: "token",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "text",
-              "nullable": true
+              name: "started_by",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "pages_left",
-              "type": "integer",
-              "nullable": true
+              name: "pages_left",
+              type: "integer",
+              nullable: true,
             },
             {
-              "name": "copy",
-              "type": "text",
-              "nullable": true
+              name: "copy",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "copy_version",
-              "type": "text",
-              "nullable": true
+              name: "copy_version",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "settled_at",
-              "type": "integer",
-              "nullable": true
+              name: "settled_at",
+              type: "integer",
+              nullable: true,
             },
             {
-              "name": "created_at",
-              "type": "integer",
-              "nullable": false,
-              "default": "(strftime('%s', 'now'))"
+              name: "created_at",
+              type: "integer",
+              nullable: false,
+              default: "(strftime('%s', 'now'))",
             },
             {
-              "name": "updated_at",
-              "type": "integer",
-              "nullable": false,
-              "default": "(strftime('%s', 'now'))"
-            }
+              name: "updated_at",
+              type: "integer",
+              nullable: false,
+              default: "(strftime('%s', 'now'))",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__layout_removals_layout_id",
-              "columns": [
-                "layout_id"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__layout_removals_layout_id",
+              columns: ["layout_id"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_deletions",
-          "columns": [
+          name: "page_builder__component_deletions",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "component_id",
-              "type": "text",
-              "nullable": false
+              name: "component_id",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "purpose",
-              "type": "text",
-              "nullable": false
+              name: "purpose",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "text",
-              "nullable": false
+              name: "started_by",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "phase",
-              "type": "text",
-              "nullable": false,
-              "default": "'converting'"
+              name: "phase",
+              type: "text",
+              nullable: false,
+              default: "'converting'",
             },
             {
-              "name": "cursor",
-              "type": "text",
-              "nullable": true
-            }
+              name: "cursor",
+              type: "text",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
-              "columns": [
-                "component_id",
-                "purpose"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
+              columns: ["component_id", "purpose"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_deletion_hosts",
-          "columns": [
+          name: "page_builder__component_deletion_hosts",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "deletion_id",
-              "type": "text",
-              "nullable": false
+              name: "deletion_id",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "host_key",
-              "type": "text",
-              "nullable": false
+              name: "host_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "state",
-              "type": "text",
-              "nullable": false
+              name: "state",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "reason",
-              "type": "text",
-              "nullable": true
-            }
+              name: "reason",
+              type: "text",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01",
-              "columns": [
-                "deletion_id",
-                "host_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01",
+              columns: ["deletion_id", "host_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__site_options",
-          "columns": [
+          name: "page_builder__site_options",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "name",
-              "type": "text",
-              "nullable": false
+              name: "name",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "value",
-              "type": "text",
-              "nullable": false
+              name: "value",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "created_at",
-              "type": "integer",
-              "nullable": false,
-              "default": "(strftime('%s', 'now'))"
+              name: "created_at",
+              type: "integer",
+              nullable: false,
+              default: "(strftime('%s', 'now'))",
             },
             {
-              "name": "updated_at",
-              "type": "integer",
-              "nullable": false,
-              "default": "(strftime('%s', 'now'))"
-            }
+              name: "updated_at",
+              type: "integer",
+              nullable: false,
+              default: "(strftime('%s', 'now'))",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__site_options_name",
-              "columns": [
-                "name"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__site_options_name",
+              columns: ["name"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__breakpoint_removals",
-          "columns": [
+          name: "page_builder__breakpoint_removals",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "removed_ids",
-              "type": "text",
-              "nullable": false
+              name: "removed_ids",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "before",
-              "type": "text",
-              "nullable": false
+              name: "before",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "text",
-              "nullable": false
+              name: "started_by",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "phase",
-              "type": "text",
-              "nullable": false,
-              "default": "'converting'"
+              name: "phase",
+              type: "text",
+              nullable: false,
+              default: "'converting'",
             },
             {
-              "name": "cursor",
-              "type": "text",
-              "nullable": true
+              name: "cursor",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "open_key",
-              "type": "text",
-              "nullable": true
+              name: "open_key",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "undoes",
-              "type": "text",
-              "nullable": true
-            }
+              name: "undoes",
+              type: "text",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__breakpoint_removals_open_key",
-              "columns": [
-                "open_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__breakpoint_removals_open_key",
+              columns: ["open_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__breakpoint_removal_fragments",
-          "columns": [
+          name: "page_builder__breakpoint_removal_fragments",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "run_id",
-              "type": "text",
-              "nullable": false
+              name: "run_id",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "document_key",
-              "type": "text",
-              "nullable": false
+              name: "document_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "host",
-              "type": "text",
-              "nullable": true
+              name: "host",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "form",
-              "type": "text",
-              "nullable": false
+              name: "form",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "fragment",
-              "type": "text",
-              "nullable": false
+              name: "fragment",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "created_at",
-              "type": "integer",
-              "nullable": false,
-              "default": "(strftime('%s', 'now'))"
+              name: "created_at",
+              type: "integer",
+              nullable: false,
+              default: "(strftime('%s', 'now'))",
             },
             {
-              "name": "updated_at",
-              "type": "integer",
-              "nullable": false,
-              "default": "(strftime('%s', 'now'))"
-            }
+              name: "updated_at",
+              type: "integer",
+              nullable: false,
+              default: "(strftime('%s', 'now'))",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__breakpoint_removal_fragments_run_id",
-              "columns": [
-                "run_id"
-              ],
-              "unique": false
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id",
+              columns: ["run_id"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__breakpoint_removal_fragments_created_at",
-              "columns": [
-                "created_at"
-              ],
-              "unique": false
+              name: "idx_page_builder__breakpoint_removal_fragments_created_at",
+              columns: ["created_at"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv",
-              "columns": [
-                "run_id",
-                "document_key"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv",
+              columns: ["run_id", "document_key"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__class_usage",
-          "columns": [
+          name: "page_builder__class_usage",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "scope",
-              "type": "text",
-              "nullable": false
+              name: "scope",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "entity",
-              "type": "text",
-              "nullable": false
+              name: "entity",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "entity_key",
-              "type": "text",
-              "nullable": false
+              name: "entity_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "field",
-              "type": "text",
-              "nullable": false
+              name: "field",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "locale",
-              "type": "text",
-              "nullable": false
+              name: "locale",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "variant",
-              "type": "text",
-              "nullable": false
+              name: "variant",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "class_id",
-              "type": "text",
-              "nullable": false
-            }
+              name: "class_id",
+              type: "text",
+              nullable: false,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__class_usage_entity_entity_key_178r965",
-              "columns": [
-                "entity",
-                "entity_key"
-              ],
-              "unique": false
+              name: "idx_page_builder__class_usage_entity_entity_key_178r965",
+              columns: ["entity", "entity_key"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__class_usage_class_id",
-              "columns": [
-                "class_id"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__class_usage_class_id",
+              columns: ["class_id"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_usage",
-          "columns": [
+          name: "page_builder__component_usage",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "scope",
-              "type": "text",
-              "nullable": false
+              name: "scope",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "entity",
-              "type": "text",
-              "nullable": false
+              name: "entity",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "entity_key",
-              "type": "text",
-              "nullable": false
+              name: "entity_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "field",
-              "type": "text",
-              "nullable": false
+              name: "field",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "locale",
-              "type": "text",
-              "nullable": false
+              name: "locale",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "variant",
-              "type": "text",
-              "nullable": false
+              name: "variant",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "kind",
-              "type": "text",
-              "nullable": false
+              name: "kind",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "component_id",
-              "type": "text",
-              "nullable": false
-            }
+              name: "component_id",
+              type: "text",
+              nullable: false,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__component_usage_entity_entity_key_178r965",
-              "columns": [
-                "entity",
-                "entity_key"
-              ],
-              "unique": false
+              name: "idx_page_builder__component_usage_entity_entity_key_178r965",
+              columns: ["entity", "entity_key"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__component_usage_component_id",
-              "columns": [
-                "component_id"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__component_usage_component_id",
+              columns: ["component_id"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
-        }
-      ]
-    }
+          foreignKeys: [],
+          checks: [],
+        },
+      ],
+    },
   },
-  "before": {
-    "postgresql": {
-      "tables": [
+  before: {
+    postgresql: {
+      tables: [
         {
-          "name": "page_builder__usage_runs",
-          "columns": [
+          name: "page_builder__usage_runs",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "name",
-              "type": "text",
-              "nullable": false
+              name: "name",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "generation",
-              "type": "text",
-              "nullable": false
+              name: "generation",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "token",
-              "type": "bpchar",
-              "typeModifier": "36",
-              "nullable": false
+              name: "token",
+              type: "bpchar",
+              typeModifier: "36",
+              nullable: false,
             },
             {
-              "name": "dirty",
-              "type": "bool",
-              "nullable": false,
-              "default": "false"
-            }
+              name: "dirty",
+              type: "bool",
+              nullable: false,
+              default: "false",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__usage_runs_name",
-              "columns": [
-                "name"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__usage_runs_name",
+              columns: ["name"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__usage_progress",
-          "columns": [
+          name: "page_builder__usage_progress",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "token",
-              "type": "bpchar",
-              "typeModifier": "36",
-              "nullable": false
+              name: "token",
+              type: "bpchar",
+              typeModifier: "36",
+              nullable: false,
             },
             {
-              "name": "scope_key",
-              "type": "text",
-              "nullable": false
+              name: "scope_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "cursor",
-              "type": "text",
-              "nullable": true
+              name: "cursor",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "done",
-              "type": "bool",
-              "nullable": false,
-              "default": "false"
-            }
+              name: "done",
+              type: "bool",
+              nullable: false,
+              default: "false",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__usage_progress_token_scope_key_0ujeq6m",
-              "columns": [
-                "token",
-                "scope_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__usage_progress_token_scope_key_0ujeq6m",
+              columns: ["token", "scope_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__layout_removals",
-          "columns": [
+          name: "page_builder__layout_removals",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "layout_id",
-              "type": "text",
-              "nullable": false
+              name: "layout_id",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "action",
-              "type": "text",
-              "nullable": false
+              name: "action",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "step",
-              "type": "text",
-              "nullable": false
+              name: "step",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "token",
-              "type": "bpchar",
-              "typeModifier": "36",
-              "nullable": false
+              name: "token",
+              type: "bpchar",
+              typeModifier: "36",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "text",
-              "nullable": true
+              name: "started_by",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "pages_left",
-              "type": "int4",
-              "nullable": true
+              name: "pages_left",
+              type: "int4",
+              nullable: true,
             },
             {
-              "name": "copy",
-              "type": "jsonb",
-              "nullable": true
+              name: "copy",
+              type: "jsonb",
+              nullable: true,
             },
             {
-              "name": "copy_version",
-              "type": "text",
-              "nullable": true
+              name: "copy_version",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "settled_at",
-              "type": "timestamp",
-              "nullable": true
+              name: "settled_at",
+              type: "timestamp",
+              nullable: true,
             },
             {
-              "name": "created_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "now()"
+              name: "created_at",
+              type: "timestamp",
+              nullable: false,
+              default: "now()",
             },
             {
-              "name": "updated_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "now()"
-            }
+              name: "updated_at",
+              type: "timestamp",
+              nullable: false,
+              default: "now()",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__layout_removals_layout_id",
-              "columns": [
-                "layout_id"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__layout_removals_layout_id",
+              columns: ["layout_id"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_deletions",
-          "columns": [
+          name: "page_builder__component_deletions",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "component_id",
-              "type": "text",
-              "nullable": false
+              name: "component_id",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "purpose",
-              "type": "text",
-              "nullable": false
+              name: "purpose",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "text",
-              "nullable": false
+              name: "started_by",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "phase",
-              "type": "text",
-              "nullable": false,
-              "default": "'converting'"
+              name: "phase",
+              type: "text",
+              nullable: false,
+              default: "'converting'",
             },
             {
-              "name": "cursor",
-              "type": "text",
-              "nullable": true
-            }
+              name: "cursor",
+              type: "text",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
-              "columns": [
-                "component_id",
-                "purpose"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
+              columns: ["component_id", "purpose"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_deletion_hosts",
-          "columns": [
+          name: "page_builder__component_deletion_hosts",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "deletion_id",
-              "type": "bpchar",
-              "typeModifier": "36",
-              "nullable": false
+              name: "deletion_id",
+              type: "bpchar",
+              typeModifier: "36",
+              nullable: false,
             },
             {
-              "name": "host_key",
-              "type": "text",
-              "nullable": false
+              name: "host_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "state",
-              "type": "text",
-              "nullable": false
+              name: "state",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "reason",
-              "type": "text",
-              "nullable": true
-            }
+              name: "reason",
+              type: "text",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01",
-              "columns": [
-                "deletion_id",
-                "host_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01",
+              columns: ["deletion_id", "host_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__site_options",
-          "columns": [
+          name: "page_builder__site_options",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "name",
-              "type": "text",
-              "nullable": false
+              name: "name",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "value",
-              "type": "text",
-              "nullable": false
+              name: "value",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "created_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "now()"
+              name: "created_at",
+              type: "timestamp",
+              nullable: false,
+              default: "now()",
             },
             {
-              "name": "updated_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "now()"
-            }
+              name: "updated_at",
+              type: "timestamp",
+              nullable: false,
+              default: "now()",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__site_options_name",
-              "columns": [
-                "name"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__site_options_name",
+              columns: ["name"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__breakpoint_removals",
-          "columns": [
+          name: "page_builder__breakpoint_removals",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "removed_ids",
-              "type": "text",
-              "nullable": false
+              name: "removed_ids",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "before",
-              "type": "text",
-              "nullable": false
+              name: "before",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "text",
-              "nullable": false
+              name: "started_by",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "phase",
-              "type": "text",
-              "nullable": false,
-              "default": "'converting'"
+              name: "phase",
+              type: "text",
+              nullable: false,
+              default: "'converting'",
             },
             {
-              "name": "cursor",
-              "type": "text",
-              "nullable": true
+              name: "cursor",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "open_key",
-              "type": "text",
-              "nullable": true
-            }
+              name: "open_key",
+              type: "text",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__breakpoint_removals_open_key",
-              "columns": [
-                "open_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__breakpoint_removals_open_key",
+              columns: ["open_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__breakpoint_removal_fragments",
-          "columns": [
+          name: "page_builder__breakpoint_removal_fragments",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "run_id",
-              "type": "bpchar",
-              "typeModifier": "36",
-              "nullable": false
+              name: "run_id",
+              type: "bpchar",
+              typeModifier: "36",
+              nullable: false,
             },
             {
-              "name": "document_key",
-              "type": "text",
-              "nullable": false
+              name: "document_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "host",
-              "type": "jsonb",
-              "nullable": true
+              name: "host",
+              type: "jsonb",
+              nullable: true,
             },
             {
-              "name": "form",
-              "type": "text",
-              "nullable": false
+              name: "form",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "fragment",
-              "type": "jsonb",
-              "nullable": false
+              name: "fragment",
+              type: "jsonb",
+              nullable: false,
             },
             {
-              "name": "created_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "now()"
+              name: "created_at",
+              type: "timestamp",
+              nullable: false,
+              default: "now()",
             },
             {
-              "name": "updated_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "now()"
-            }
+              name: "updated_at",
+              type: "timestamp",
+              nullable: false,
+              default: "now()",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__breakpoint_removal_fragments_run_id",
-              "columns": [
-                "run_id"
-              ],
-              "unique": false
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id",
+              columns: ["run_id"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__breakpoint_removal_fragments_created_at",
-              "columns": [
-                "created_at"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__breakpoint_removal_fragments_created_at",
+              columns: ["created_at"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__class_usage",
-          "columns": [
+          name: "page_builder__class_usage",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "scope",
-              "type": "text",
-              "nullable": false
+              name: "scope",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "entity",
-              "type": "text",
-              "nullable": false
+              name: "entity",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "entity_key",
-              "type": "text",
-              "nullable": false
+              name: "entity_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "field",
-              "type": "text",
-              "nullable": false
+              name: "field",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "locale",
-              "type": "text",
-              "nullable": false
+              name: "locale",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "variant",
-              "type": "text",
-              "nullable": false
+              name: "variant",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "class_id",
-              "type": "text",
-              "nullable": false
-            }
+              name: "class_id",
+              type: "text",
+              nullable: false,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__class_usage_entity_entity_key_178r965",
-              "columns": [
-                "entity",
-                "entity_key"
-              ],
-              "unique": false
+              name: "idx_page_builder__class_usage_entity_entity_key_178r965",
+              columns: ["entity", "entity_key"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__class_usage_class_id",
-              "columns": [
-                "class_id"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__class_usage_class_id",
+              columns: ["class_id"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_usage",
-          "columns": [
+          name: "page_builder__component_usage",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "scope",
-              "type": "text",
-              "nullable": false
+              name: "scope",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "entity",
-              "type": "text",
-              "nullable": false
+              name: "entity",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "entity_key",
-              "type": "text",
-              "nullable": false
+              name: "entity_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "field",
-              "type": "text",
-              "nullable": false
+              name: "field",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "locale",
-              "type": "text",
-              "nullable": false
+              name: "locale",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "variant",
-              "type": "text",
-              "nullable": false
+              name: "variant",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "kind",
-              "type": "text",
-              "nullable": false
+              name: "kind",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "component_id",
-              "type": "text",
-              "nullable": false
-            }
+              name: "component_id",
+              type: "text",
+              nullable: false,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__component_usage_entity_entity_key_178r965",
-              "columns": [
-                "entity",
-                "entity_key"
-              ],
-              "unique": false
+              name: "idx_page_builder__component_usage_entity_entity_key_178r965",
+              columns: ["entity", "entity_key"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__component_usage_component_id",
-              "columns": [
-                "component_id"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__component_usage_component_id",
+              columns: ["component_id"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
-        }
-      ]
+          foreignKeys: [],
+          checks: [],
+        },
+      ],
     },
-    "mysql": {
-      "tables": [
+    mysql: {
+      tables: [
         {
-          "name": "page_builder__usage_runs",
-          "columns": [
+          name: "page_builder__usage_runs",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "name",
-              "type": "varchar(64)",
-              "nullable": false
+              name: "name",
+              type: "varchar(64)",
+              nullable: false,
             },
             {
-              "name": "generation",
-              "type": "varchar(512)",
-              "nullable": false
+              name: "generation",
+              type: "varchar(512)",
+              nullable: false,
             },
             {
-              "name": "token",
-              "type": "char(36)",
-              "nullable": false
+              name: "token",
+              type: "char(36)",
+              nullable: false,
             },
             {
-              "name": "dirty",
-              "type": "tinyint(1)",
-              "nullable": false,
-              "default": "false"
-            }
+              name: "dirty",
+              type: "tinyint(1)",
+              nullable: false,
+              default: "false",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__usage_runs_name",
-              "columns": [
-                "name"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__usage_runs_name",
+              columns: ["name"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__usage_progress",
-          "columns": [
+          name: "page_builder__usage_progress",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "token",
-              "type": "char(36)",
-              "nullable": false
+              name: "token",
+              type: "char(36)",
+              nullable: false,
             },
             {
-              "name": "scope_key",
-              "type": "varchar(512)",
-              "nullable": false
+              name: "scope_key",
+              type: "varchar(512)",
+              nullable: false,
             },
             {
-              "name": "cursor",
-              "type": "varchar(255)",
-              "nullable": true
+              name: "cursor",
+              type: "varchar(255)",
+              nullable: true,
             },
             {
-              "name": "done",
-              "type": "tinyint(1)",
-              "nullable": false,
-              "default": "false"
-            }
+              name: "done",
+              type: "tinyint(1)",
+              nullable: false,
+              default: "false",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__usage_progress_token_scope_key_0ujeq6m",
-              "columns": [
-                "token",
-                "scope_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__usage_progress_token_scope_key_0ujeq6m",
+              columns: ["token", "scope_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__layout_removals",
-          "columns": [
+          name: "page_builder__layout_removals",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "layout_id",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "layout_id",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "action",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "action",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "step",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "step",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "token",
-              "type": "char(36)",
-              "nullable": false
+              name: "token",
+              type: "char(36)",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "varchar(255)",
-              "nullable": true
+              name: "started_by",
+              type: "varchar(255)",
+              nullable: true,
             },
             {
-              "name": "pages_left",
-              "type": "int",
-              "nullable": true
+              name: "pages_left",
+              type: "int",
+              nullable: true,
             },
             {
-              "name": "copy",
-              "type": "json",
-              "nullable": true
+              name: "copy",
+              type: "json",
+              nullable: true,
             },
             {
-              "name": "copy_version",
-              "type": "varchar(128)",
-              "nullable": true
+              name: "copy_version",
+              type: "varchar(128)",
+              nullable: true,
             },
             {
-              "name": "settled_at",
-              "type": "timestamp",
-              "nullable": true
+              name: "settled_at",
+              type: "timestamp",
+              nullable: true,
             },
             {
-              "name": "created_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "CURRENT_TIMESTAMP"
+              name: "created_at",
+              type: "timestamp",
+              nullable: false,
+              default: "CURRENT_TIMESTAMP",
             },
             {
-              "name": "updated_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "CURRENT_TIMESTAMP"
-            }
+              name: "updated_at",
+              type: "timestamp",
+              nullable: false,
+              default: "CURRENT_TIMESTAMP",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__layout_removals_layout_id",
-              "columns": [
-                "layout_id"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__layout_removals_layout_id",
+              columns: ["layout_id"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_deletions",
-          "columns": [
+          name: "page_builder__component_deletions",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "component_id",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "component_id",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "purpose",
-              "type": "varchar(32)",
-              "nullable": false
+              name: "purpose",
+              type: "varchar(32)",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "started_by",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "phase",
-              "type": "varchar(16)",
-              "nullable": false,
-              "default": "'converting'"
+              name: "phase",
+              type: "varchar(16)",
+              nullable: false,
+              default: "'converting'",
             },
             {
-              "name": "cursor",
-              "type": "varchar(1024)",
-              "nullable": true
-            }
+              name: "cursor",
+              type: "varchar(1024)",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
-              "columns": [
-                "component_id",
-                "purpose"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
+              columns: ["component_id", "purpose"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_deletion_hosts",
-          "columns": [
+          name: "page_builder__component_deletion_hosts",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "deletion_id",
-              "type": "char(36)",
-              "nullable": false
+              name: "deletion_id",
+              type: "char(36)",
+              nullable: false,
             },
             {
-              "name": "host_key",
-              "type": "varchar(512)",
-              "nullable": false
+              name: "host_key",
+              type: "varchar(512)",
+              nullable: false,
             },
             {
-              "name": "state",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "state",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "reason",
-              "type": "varchar(64)",
-              "nullable": true
-            }
+              name: "reason",
+              type: "varchar(64)",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01",
-              "columns": [
-                "deletion_id",
-                "host_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01",
+              columns: ["deletion_id", "host_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__site_options",
-          "columns": [
+          name: "page_builder__site_options",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "name",
-              "type": "varchar(64)",
-              "nullable": false
+              name: "name",
+              type: "varchar(64)",
+              nullable: false,
             },
             {
-              "name": "value",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "value",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "created_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "CURRENT_TIMESTAMP"
+              name: "created_at",
+              type: "timestamp",
+              nullable: false,
+              default: "CURRENT_TIMESTAMP",
             },
             {
-              "name": "updated_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "CURRENT_TIMESTAMP"
-            }
+              name: "updated_at",
+              type: "timestamp",
+              nullable: false,
+              default: "CURRENT_TIMESTAMP",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__site_options_name",
-              "columns": [
-                "name"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__site_options_name",
+              columns: ["name"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__breakpoint_removals",
-          "columns": [
+          name: "page_builder__breakpoint_removals",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "removed_ids",
-              "type": "text",
-              "nullable": false
+              name: "removed_ids",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "before",
-              "type": "text",
-              "nullable": false
+              name: "before",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "started_by",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "phase",
-              "type": "varchar(16)",
-              "nullable": false,
-              "default": "'converting'"
+              name: "phase",
+              type: "varchar(16)",
+              nullable: false,
+              default: "'converting'",
             },
             {
-              "name": "cursor",
-              "type": "varchar(1024)",
-              "nullable": true
+              name: "cursor",
+              type: "varchar(1024)",
+              nullable: true,
             },
             {
-              "name": "open_key",
-              "type": "varchar(16)",
-              "nullable": true
-            }
+              name: "open_key",
+              type: "varchar(16)",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__breakpoint_removals_open_key",
-              "columns": [
-                "open_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__breakpoint_removals_open_key",
+              columns: ["open_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__breakpoint_removal_fragments",
-          "columns": [
+          name: "page_builder__breakpoint_removal_fragments",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "run_id",
-              "type": "char(36)",
-              "nullable": false
+              name: "run_id",
+              type: "char(36)",
+              nullable: false,
             },
             {
-              "name": "document_key",
-              "type": "varchar(512)",
-              "nullable": false
+              name: "document_key",
+              type: "varchar(512)",
+              nullable: false,
             },
             {
-              "name": "host",
-              "type": "json",
-              "nullable": true
+              name: "host",
+              type: "json",
+              nullable: true,
             },
             {
-              "name": "form",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "form",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "fragment",
-              "type": "json",
-              "nullable": false
+              name: "fragment",
+              type: "json",
+              nullable: false,
             },
             {
-              "name": "created_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "CURRENT_TIMESTAMP"
+              name: "created_at",
+              type: "timestamp",
+              nullable: false,
+              default: "CURRENT_TIMESTAMP",
             },
             {
-              "name": "updated_at",
-              "type": "timestamp",
-              "nullable": false,
-              "default": "CURRENT_TIMESTAMP"
-            }
+              name: "updated_at",
+              type: "timestamp",
+              nullable: false,
+              default: "CURRENT_TIMESTAMP",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__breakpoint_removal_fragments_run_id",
-              "columns": [
-                "run_id"
-              ],
-              "unique": false
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id",
+              columns: ["run_id"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__breakpoint_removal_fragments_created_at",
-              "columns": [
-                "created_at"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__breakpoint_removal_fragments_created_at",
+              columns: ["created_at"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__class_usage",
-          "columns": [
+          name: "page_builder__class_usage",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "scope",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "scope",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "entity",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "entity",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "entity_key",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "entity_key",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "field",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "field",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "locale",
-              "type": "varchar(64)",
-              "nullable": false
+              name: "locale",
+              type: "varchar(64)",
+              nullable: false,
             },
             {
-              "name": "variant",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "variant",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "class_id",
-              "type": "varchar(255)",
-              "nullable": false
-            }
+              name: "class_id",
+              type: "varchar(255)",
+              nullable: false,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__class_usage_entity_entity_key_178r965",
-              "columns": [
-                "entity",
-                "entity_key"
-              ],
-              "unique": false
+              name: "idx_page_builder__class_usage_entity_entity_key_178r965",
+              columns: ["entity", "entity_key"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__class_usage_class_id",
-              "columns": [
-                "class_id"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__class_usage_class_id",
+              columns: ["class_id"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_usage",
-          "columns": [
+          name: "page_builder__component_usage",
+          columns: [
             {
-              "name": "id",
-              "type": "varchar(36)",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "scope",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "scope",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "entity",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "entity",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "entity_key",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "entity_key",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "field",
-              "type": "varchar(255)",
-              "nullable": false
+              name: "field",
+              type: "varchar(255)",
+              nullable: false,
             },
             {
-              "name": "locale",
-              "type": "varchar(64)",
-              "nullable": false
+              name: "locale",
+              type: "varchar(64)",
+              nullable: false,
             },
             {
-              "name": "variant",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "variant",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "kind",
-              "type": "varchar(16)",
-              "nullable": false
+              name: "kind",
+              type: "varchar(16)",
+              nullable: false,
             },
             {
-              "name": "component_id",
-              "type": "varchar(512)",
-              "nullable": false
-            }
+              name: "component_id",
+              type: "varchar(512)",
+              nullable: false,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__component_usage_entity_entity_key_178r965",
-              "columns": [
-                "entity",
-                "entity_key"
-              ],
-              "unique": false
+              name: "idx_page_builder__component_usage_entity_entity_key_178r965",
+              columns: ["entity", "entity_key"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__component_usage_component_id",
-              "columns": [
-                "component_id"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__component_usage_component_id",
+              columns: ["component_id"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
-        }
-      ]
+          foreignKeys: [],
+          checks: [],
+        },
+      ],
     },
-    "sqlite": {
-      "tables": [
+    sqlite: {
+      tables: [
         {
-          "name": "page_builder__usage_runs",
-          "columns": [
+          name: "page_builder__usage_runs",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "name",
-              "type": "text",
-              "nullable": false
+              name: "name",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "generation",
-              "type": "text",
-              "nullable": false
+              name: "generation",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "token",
-              "type": "text",
-              "nullable": false
+              name: "token",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "dirty",
-              "type": "integer",
-              "nullable": false,
-              "default": "false"
-            }
+              name: "dirty",
+              type: "integer",
+              nullable: false,
+              default: "false",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__usage_runs_name",
-              "columns": [
-                "name"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__usage_runs_name",
+              columns: ["name"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__usage_progress",
-          "columns": [
+          name: "page_builder__usage_progress",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "token",
-              "type": "text",
-              "nullable": false
+              name: "token",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "scope_key",
-              "type": "text",
-              "nullable": false
+              name: "scope_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "cursor",
-              "type": "text",
-              "nullable": true
+              name: "cursor",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "done",
-              "type": "integer",
-              "nullable": false,
-              "default": "false"
-            }
+              name: "done",
+              type: "integer",
+              nullable: false,
+              default: "false",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__usage_progress_token_scope_key_0ujeq6m",
-              "columns": [
-                "token",
-                "scope_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__usage_progress_token_scope_key_0ujeq6m",
+              columns: ["token", "scope_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__layout_removals",
-          "columns": [
+          name: "page_builder__layout_removals",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "layout_id",
-              "type": "text",
-              "nullable": false
+              name: "layout_id",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "action",
-              "type": "text",
-              "nullable": false
+              name: "action",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "step",
-              "type": "text",
-              "nullable": false
+              name: "step",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "token",
-              "type": "text",
-              "nullable": false
+              name: "token",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "text",
-              "nullable": true
+              name: "started_by",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "pages_left",
-              "type": "integer",
-              "nullable": true
+              name: "pages_left",
+              type: "integer",
+              nullable: true,
             },
             {
-              "name": "copy",
-              "type": "text",
-              "nullable": true
+              name: "copy",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "copy_version",
-              "type": "text",
-              "nullable": true
+              name: "copy_version",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "settled_at",
-              "type": "integer",
-              "nullable": true
+              name: "settled_at",
+              type: "integer",
+              nullable: true,
             },
             {
-              "name": "created_at",
-              "type": "integer",
-              "nullable": false,
-              "default": "(strftime('%s', 'now'))"
+              name: "created_at",
+              type: "integer",
+              nullable: false,
+              default: "(strftime('%s', 'now'))",
             },
             {
-              "name": "updated_at",
-              "type": "integer",
-              "nullable": false,
-              "default": "(strftime('%s', 'now'))"
-            }
+              name: "updated_at",
+              type: "integer",
+              nullable: false,
+              default: "(strftime('%s', 'now'))",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__layout_removals_layout_id",
-              "columns": [
-                "layout_id"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__layout_removals_layout_id",
+              columns: ["layout_id"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_deletions",
-          "columns": [
+          name: "page_builder__component_deletions",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "component_id",
-              "type": "text",
-              "nullable": false
+              name: "component_id",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "purpose",
-              "type": "text",
-              "nullable": false
+              name: "purpose",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "text",
-              "nullable": false
+              name: "started_by",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "phase",
-              "type": "text",
-              "nullable": false,
-              "default": "'converting'"
+              name: "phase",
+              type: "text",
+              nullable: false,
+              default: "'converting'",
             },
             {
-              "name": "cursor",
-              "type": "text",
-              "nullable": true
-            }
+              name: "cursor",
+              type: "text",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
-              "columns": [
-                "component_id",
-                "purpose"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__component_deletions_component_id_purpo_1mlwby6",
+              columns: ["component_id", "purpose"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_deletion_hosts",
-          "columns": [
+          name: "page_builder__component_deletion_hosts",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "deletion_id",
-              "type": "text",
-              "nullable": false
+              name: "deletion_id",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "host_key",
-              "type": "text",
-              "nullable": false
+              name: "host_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "state",
-              "type": "text",
-              "nullable": false
+              name: "state",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "reason",
-              "type": "text",
-              "nullable": true
-            }
+              name: "reason",
+              type: "text",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01",
-              "columns": [
-                "deletion_id",
-                "host_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__component_deletion_hosts_deletion_id_h_007uo01",
+              columns: ["deletion_id", "host_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__site_options",
-          "columns": [
+          name: "page_builder__site_options",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "name",
-              "type": "text",
-              "nullable": false
+              name: "name",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "value",
-              "type": "text",
-              "nullable": false
+              name: "value",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "created_at",
-              "type": "integer",
-              "nullable": false,
-              "default": "(strftime('%s', 'now'))"
+              name: "created_at",
+              type: "integer",
+              nullable: false,
+              default: "(strftime('%s', 'now'))",
             },
             {
-              "name": "updated_at",
-              "type": "integer",
-              "nullable": false,
-              "default": "(strftime('%s', 'now'))"
-            }
+              name: "updated_at",
+              type: "integer",
+              nullable: false,
+              default: "(strftime('%s', 'now'))",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__site_options_name",
-              "columns": [
-                "name"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__site_options_name",
+              columns: ["name"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__breakpoint_removals",
-          "columns": [
+          name: "page_builder__breakpoint_removals",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "removed_ids",
-              "type": "text",
-              "nullable": false
+              name: "removed_ids",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "before",
-              "type": "text",
-              "nullable": false
+              name: "before",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "started_by",
-              "type": "text",
-              "nullable": false
+              name: "started_by",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "phase",
-              "type": "text",
-              "nullable": false,
-              "default": "'converting'"
+              name: "phase",
+              type: "text",
+              nullable: false,
+              default: "'converting'",
             },
             {
-              "name": "cursor",
-              "type": "text",
-              "nullable": true
+              name: "cursor",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "open_key",
-              "type": "text",
-              "nullable": true
-            }
+              name: "open_key",
+              type: "text",
+              nullable: true,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "uq_page_builder__breakpoint_removals_open_key",
-              "columns": [
-                "open_key"
-              ],
-              "unique": true
-            }
+              name: "uq_page_builder__breakpoint_removals_open_key",
+              columns: ["open_key"],
+              unique: true,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__breakpoint_removal_fragments",
-          "columns": [
+          name: "page_builder__breakpoint_removal_fragments",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "run_id",
-              "type": "text",
-              "nullable": false
+              name: "run_id",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "document_key",
-              "type": "text",
-              "nullable": false
+              name: "document_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "host",
-              "type": "text",
-              "nullable": true
+              name: "host",
+              type: "text",
+              nullable: true,
             },
             {
-              "name": "form",
-              "type": "text",
-              "nullable": false
+              name: "form",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "fragment",
-              "type": "text",
-              "nullable": false
+              name: "fragment",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "created_at",
-              "type": "integer",
-              "nullable": false,
-              "default": "(strftime('%s', 'now'))"
+              name: "created_at",
+              type: "integer",
+              nullable: false,
+              default: "(strftime('%s', 'now'))",
             },
             {
-              "name": "updated_at",
-              "type": "integer",
-              "nullable": false,
-              "default": "(strftime('%s', 'now'))"
-            }
+              name: "updated_at",
+              type: "integer",
+              nullable: false,
+              default: "(strftime('%s', 'now'))",
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__breakpoint_removal_fragments_run_id",
-              "columns": [
-                "run_id"
-              ],
-              "unique": false
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id",
+              columns: ["run_id"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__breakpoint_removal_fragments_created_at",
-              "columns": [
-                "created_at"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__breakpoint_removal_fragments_created_at",
+              columns: ["created_at"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__class_usage",
-          "columns": [
+          name: "page_builder__class_usage",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "scope",
-              "type": "text",
-              "nullable": false
+              name: "scope",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "entity",
-              "type": "text",
-              "nullable": false
+              name: "entity",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "entity_key",
-              "type": "text",
-              "nullable": false
+              name: "entity_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "field",
-              "type": "text",
-              "nullable": false
+              name: "field",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "locale",
-              "type": "text",
-              "nullable": false
+              name: "locale",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "variant",
-              "type": "text",
-              "nullable": false
+              name: "variant",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "class_id",
-              "type": "text",
-              "nullable": false
-            }
+              name: "class_id",
+              type: "text",
+              nullable: false,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__class_usage_entity_entity_key_178r965",
-              "columns": [
-                "entity",
-                "entity_key"
-              ],
-              "unique": false
+              name: "idx_page_builder__class_usage_entity_entity_key_178r965",
+              columns: ["entity", "entity_key"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__class_usage_class_id",
-              "columns": [
-                "class_id"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__class_usage_class_id",
+              columns: ["class_id"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
+          foreignKeys: [],
+          checks: [],
         },
         {
-          "name": "page_builder__component_usage",
-          "columns": [
+          name: "page_builder__component_usage",
+          columns: [
             {
-              "name": "id",
-              "type": "text",
-              "nullable": false,
-              "primaryKey": true
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
             },
             {
-              "name": "scope",
-              "type": "text",
-              "nullable": false
+              name: "scope",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "entity",
-              "type": "text",
-              "nullable": false
+              name: "entity",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "entity_key",
-              "type": "text",
-              "nullable": false
+              name: "entity_key",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "field",
-              "type": "text",
-              "nullable": false
+              name: "field",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "locale",
-              "type": "text",
-              "nullable": false
+              name: "locale",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "variant",
-              "type": "text",
-              "nullable": false
+              name: "variant",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "kind",
-              "type": "text",
-              "nullable": false
+              name: "kind",
+              type: "text",
+              nullable: false,
             },
             {
-              "name": "component_id",
-              "type": "text",
-              "nullable": false
-            }
+              name: "component_id",
+              type: "text",
+              nullable: false,
+            },
           ],
-          "indexes": [
+          indexes: [
             {
-              "name": "idx_page_builder__component_usage_entity_entity_key_178r965",
-              "columns": [
-                "entity",
-                "entity_key"
-              ],
-              "unique": false
+              name: "idx_page_builder__component_usage_entity_entity_key_178r965",
+              columns: ["entity", "entity_key"],
+              unique: false,
             },
             {
-              "name": "idx_page_builder__component_usage_component_id",
-              "columns": [
-                "component_id"
-              ],
-              "unique": false
-            }
+              name: "idx_page_builder__component_usage_component_id",
+              columns: ["component_id"],
+              unique: false,
+            },
           ],
-          "foreignKeys": [],
-          "checks": []
-        }
-      ]
-    }
+          foreignKeys: [],
+          checks: [],
+        },
+      ],
+    },
   },
-  "contributed": {
-    "postgresql": {
-      "tables": []
+  contributed: {
+    postgresql: {
+      tables: [],
     },
-    "mysql": {
-      "tables": []
+    mysql: {
+      tables: [],
     },
-    "sqlite": {
-      "tables": []
-    }
+    sqlite: {
+      tables: [],
+    },
   },
-  "contributedBefore": {
-    "postgresql": {
-      "tables": []
+  contributedBefore: {
+    postgresql: {
+      tables: [],
     },
-    "mysql": {
-      "tables": []
+    mysql: {
+      tables: [],
     },
-    "sqlite": {
-      "tables": []
-    }
-  }
+    sqlite: {
+      tables: [],
+    },
+  },
 } satisfies PluginMigration as PluginMigration;

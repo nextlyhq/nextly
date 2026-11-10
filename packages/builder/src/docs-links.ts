@@ -35,3 +35,9 @@ export const CANVAS_ROUTE_DOCS_HREF: string = `${DOCS_BASE}/page-builder#draw-th
  * finish, so the counting note links here.
  */
 export const BACKGROUND_JOBS_DOCS_HREF: string = `${DOCS_BASE}/jobs#running-the-queue`;
+
+/**
+ * Where the docs explain how site code meets the site's Content Security
+ * Policy: the link beside what Settings says to add to that policy.
+ */
+export const SITE_CODE_POLICY_DOCS_HREF: string = `${DOCS_BASE}/page-builder/site-code#your-content-security-policy`;

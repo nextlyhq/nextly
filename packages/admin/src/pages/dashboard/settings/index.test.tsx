@@ -92,7 +92,8 @@ describe("SettingsGeneralPage's place", () => {
     const { container } = render(<SettingsGeneralPage />);
 
     const block = screen.getByTestId("settings-block");
-    expect(block.nextElementSibling).toBe(pageForm(container));
+    // The block stands in the wrapper that keeps its own form's submit its own.
+    expect(block.parentElement?.nextElementSibling).toBe(pageForm(container));
     expect(JSON.parse(block.textContent ?? "")).toEqual({ userId: SIGNED_IN });
   });
 

@@ -103,6 +103,15 @@ export function documentsToFree(source: string, file: string): string[] {
 export async function freeDocument(api: APIRequestContext, lock: string) {
   const ref = await CLAIMED_DOCUMENTS[lock](api);
   if (ref === null) return;
+  await freeDocumentAt(api, ref, lock);
+}
+
+/** {@link freeDocument} for a document named directly, `what` for the failure. */
+export async function freeDocumentAt(
+  api: APIRequestContext,
+  ref: DocumentRef,
+  what: string
+): Promise<void> {
   const claimed = await api.post("/admin/api/document-lock", {
     data: { ...ref, takeover: true },
   });
@@ -110,7 +119,7 @@ export async function freeDocument(api: APIRequestContext, lock: string) {
   const { item } = (await claimed.json()) as {
     item: { status: string; claimToken?: string };
   };
-  expect(item.status, `taking over the ${lock}`).toBe("acquired");
+  expect(item.status, `taking over the ${what}`).toBe("acquired");
 
   const released = await api.delete("/admin/api/document-lock", {
     data: { ...ref, claimToken: item.claimToken },
@@ -123,7 +132,7 @@ export async function freeDocument(api: APIRequestContext, lock: string) {
   expect(read.ok(), await read.text()).toBe(true);
   expect(
     ((await read.json()) as { holder: unknown }).holder,
-    `the ${lock} is free`
+    `the ${what} is free`
   ).toBeNull();
 }
 

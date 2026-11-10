@@ -3,6 +3,7 @@
  * Supports PostgreSQL, MySQL, and SQLite dialects.
  */
 
+import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   text as mysqlText,
@@ -63,6 +64,7 @@ import type {
 } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
 import { env } from "../../../lib/env";
+import { sqliteTimestamp } from "../../../schemas/_internal/sqlite-timestamp";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import type { ExtensionColumn } from "../../schema/extension/types";
@@ -91,7 +93,6 @@ import {
   buildUserDrizzleColumn,
   contributedColumnsFor,
   contributedSqliteChecks,
-  sqliteTimestampColumns,
 } from "../../schema/services/runtime-schema-generator";
 
 import { componentFieldHasColumn } from "./field-group-utils";
@@ -166,6 +167,16 @@ const TIMESTAMP_DEFAULT: Record<SupportedDialect, string> = {
   mysql: "DEFAULT CURRENT_TIMESTAMP",
   sqlite: "DEFAULT (strftime('%s', 'now'))",
 };
+
+/**
+ * The timestamp DEFAULT's value without its keyword, as a comparison and a
+ * Drizzle `.default()` need it. The CREATE below and the SQLite runtime table
+ * both read it here, so the default a table is created with and the one
+ * drizzle-kit is told about cannot differ.
+ */
+function timestampDefaultValue(dialect: SupportedDialect): string {
+  return TIMESTAMP_DEFAULT[dialect].replace(/^DEFAULT\s+/, "");
+}
 
 /**
  * What `generateRuntimeSchema` needs beyond the fields.
@@ -566,7 +577,16 @@ export class FieldGroupSchemaService {
       _parent_field: sqliteText(STORAGE_FORMAT.columns.parentField).notNull(),
       _order: sqliteInteger(STORAGE_FORMAT.columns.order).default(0),
       [STORAGE_FORMAT.columns.type]: sqliteText(typeColumn),
-      ...sqliteTimestampColumns(),
+      // Stamped by the application as every SQLite timestamp is, and declared
+      // with the DEFAULT the CREATE above writes. Without it drizzle-kit,
+      // comparing this table with the live one, saw a default to add and
+      // rebuilt every field-group table on a push that never touched them.
+      created_at: sqliteTimestamp("created_at").default(
+        sql.raw(timestampDefaultValue("sqlite"))
+      ),
+      updated_at: sqliteTimestamp("updated_at").default(
+        sql.raw(timestampDefaultValue("sqlite"))
+      ),
     };
 
     this.addFieldColumns(columns, fields, contributed);
@@ -693,11 +713,8 @@ export class FieldGroupSchemaService {
    */
   structuralColumnDefaults(): ReadonlyMap<string, string> {
     // The timestamp keyword carries its own `DEFAULT ` prefix in the DDL table; the VALUE is what a
-    // comparison needs, so the prefix is stripped once, here.
-    const timestamp = TIMESTAMP_DEFAULT[this.dialect].replace(
-      /^DEFAULT\s+/,
-      ""
-    );
+    // comparison needs, so the prefix is stripped once, in `timestampDefaultValue`.
+    const timestamp = timestampDefaultValue(this.dialect);
     return new Map([
       [STORAGE_FORMAT.columns.order, "0"],
       ["created_at", timestamp],

@@ -207,9 +207,10 @@ async function composeNotice(
   // says which one is right: reachability is decided after an instance's
   // overrides have chosen a component, under the composition cap, over the tree
   // the repair pass retained. A walk answers before all three, so it names
-  // components a visitor never meets — a gated instance, slot content the
-  // chosen definition discards, an id an override replaced — and misses ones it
-  // does.
+  // components a visitor never meets — slot content the chosen definition
+  // discards, an id an override replaced — and misses ones it does. A
+  // condition-gated instance is composed like any other: it shows wherever
+  // its conditions hold.
   // `overrideAccess` because the question is about the document's lifecycle,
   // not about what this caller may read: an author who cannot read a component
   // still needs to know their page has a hole, and judging it by their

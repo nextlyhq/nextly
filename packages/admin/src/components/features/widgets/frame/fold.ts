@@ -23,6 +23,8 @@ import {
 } from "react";
 
 import { CardGrowContext } from "./grow";
+import { cardBodyHeightPx } from "./measures";
+import { CardHeightContext } from "./tier";
 
 /**
  * How many rows fit, whole: every one when the last ends within `limit`, or else those that end
@@ -57,11 +59,18 @@ function bodyOf(element: Element | null): HTMLElement | null {
  * element marked `data-fold-row`; nothing else in the list is counted. A control drawn in the
  * card's footer (`CardFooterContent`), whose room the frame keeps for every card, takes none of
  * the body's: only one drawn in the body below the rows is reserved for.
+ *
+ * The body is measured at the height its stored rows (`storedRows`) give it, not at the height
+ * it happens to be drawn: a card sized to its content stands shorter than its rows while it is
+ * loading or once fitted, and rows judged against that would fold, hand the card back its full
+ * rows for a frame, and unfold once measured again there. Its stored rows are the most it is
+ * ever drawn at rest, so they decide what fits. A card with no stored rows is measured as drawn.
  */
 function measuredFit(
   list: HTMLElement | null,
   control: HTMLElement | null,
-  total: number
+  total: number,
+  storedRows: number | undefined
 ): number {
   const body = bodyOf(list);
   const rows = list ? [...list.querySelectorAll("[data-fold-row]")] : [];
@@ -72,7 +81,12 @@ function measuredFit(
     control === null || last === undefined || !body.contains(control)
       ? 0
       : control.getBoundingClientRect().bottom - last;
-  return rowsThatFit(bottoms, body.getBoundingClientRect().bottom, reserve);
+  const box = body.getBoundingClientRect();
+  const limit =
+    storedRows === undefined
+      ? box.bottom
+      : box.top + cardBodyHeightPx(storedRows);
+  return rowsThatFit(bottoms, limit, reserve);
 }
 
 export interface RowFold {
@@ -93,6 +107,7 @@ export function useRowFold(total: number): RowFold {
   const listRef = useRef<HTMLDivElement | null>(null);
   const controlRef = useRef<HTMLButtonElement | null>(null);
   const report = useContext(CardGrowContext);
+  const storedRows = useContext(CardHeightContext);
   const [expanded, setExpanded] = useState(false);
   // `undefined` while measuring: every row and the control are drawn, then measured before the
   // paint, so no frame with a cut row is ever shown.
@@ -104,8 +119,8 @@ export function useRowFold(total: number): RowFold {
 
   useLayoutEffect(() => {
     if (expanded || fit !== undefined) return;
-    setFit(measuredFit(listRef.current, controlRef.current, total));
-  }, [expanded, fit, total]);
+    setFit(measuredFit(listRef.current, controlRef.current, total, storedRows));
+  }, [expanded, fit, total, storedRows]);
 
   // Measured again whenever the body changes size: a resize, a band, a width that wraps a row.
   useEffect(() => {
