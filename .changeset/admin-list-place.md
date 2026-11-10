@@ -35,6 +35,6 @@ The entry list now draws what plugins add to it (experimental).
 - Declared columns are drawn after the collection's own, always shown and not offered in the column chooser.
   - A `field` column draws through that field's own cell. It names a field at the collection's top level; one inside a group or repeater is not drawn.
   - A component column draws one cell at a time, each cell behind its own boundary. A click or key on a control inside a cell stays in the cell rather than opening the row's entry.
-- Declared bulk actions are offered in the bar shown while rows are selected, when the action's `visibleWhen` holds for every selected row, and run on the selected rows. Rows can be selected for a declared bulk action even where no built-in bulk action is allowed. An action is held back, saying why, on more rows than one request to its route may name.
+- Declared bulk actions are offered in the bar shown while rows are selected, when the action's `visibleWhen` holds for every selected row, and run on the selected rows. Rows can be selected for a declared bulk action even where no built-in bulk action is allowed. An action that calls its route is held back, saying why, on more rows than one request to the route may name; one that opens a component takes any number.
 - Row and bulk actions share one filter for the collections they're offered on and one way of running.
 - `nextly/config` exports `MAX_ACTION_ROWS` (experimental), the most rows one request to a declared action's route may name.
