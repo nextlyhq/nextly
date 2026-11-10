@@ -238,6 +238,7 @@ import {
 } from "../plugins/services/plugin-services-registry";
 import { assertSettingsPermissionsOwned } from "../plugins/settings-permission";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
+import { assertFieldTypeSettings } from "../plugins/validate-field-type-settings";
 import { setBootedConfig } from "../route-handler/auth-handler";
 import {
   installTagExpiryLedger,
@@ -1178,7 +1179,10 @@ async function registerServicesOnce(
       // Approvals given under an earlier definition of a workflow are withdrawn now the workflows
       // this boot registered are published, unless the definition keeps them. After the migrations,
       // so the review states table is there to read where it exists at all.
-      await withdrawApprovalsUnderEarlierDefinitions(adapter, workflows.values());
+      await withdrawApprovalsUnderEarlierDefinitions(
+        adapter,
+        workflows.values()
+      );
 
       // The stored language list is read before any plugin starts and before registration publishes:
       // until its first read the registry knows no stored languages, and a plugin's `init` writing
@@ -1552,6 +1556,9 @@ function validateBootContributions(
  * boot; fail-fast on collision.
  */
 function registerPluginFieldTypes(plugins: PluginDefinition[]): void {
+  // A type's declared settings are checked before any type is registered, so
+  // a malformed list refuses boot naming the plugin, not a panel control later.
+  assertFieldTypeSettings(plugins);
   clearFieldTypes();
   for (const fieldTypePlugin of plugins) {
     for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {

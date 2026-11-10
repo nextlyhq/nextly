@@ -5,6 +5,8 @@ import type {
   FieldStoragePrimitive,
   FieldSurface,
   FieldTypeCategory,
+  PluginFieldTypeSetting,
+  PluginFieldTypeSettingBase,
 } from "../collections/fields/catalog";
 import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-field";
 import type { JsonValue as JobJsonValue } from "../direct-api/types/jobs";
@@ -258,6 +260,11 @@ export interface PluginEmailTemplate {
 // surface types) so plugin authors keep importing it from the plugin surface.
 export type { FieldSurface };
 
+// Declared in the field catalog, beside the surface and category types, so the
+// admin reads the same shape the plugin writes; re-exported here so plugin
+// authors import it from the plugin surface.
+export type { PluginFieldTypeSetting, PluginFieldTypeSettingBase };
+
 export interface PluginFieldType {
   /** Field type id used as `field.type` (e.g. `"rating"`). Must not collide with a built-in. */
   type: string;
@@ -279,6 +286,14 @@ export interface PluginFieldType {
   icon?: string;
   /** Picker grouping. Defaults to `"Advanced"`. */
   category?: FieldTypeCategory;
+  /**
+   * @experimental The type's own settings, shown in the Schema Builder's
+   * settings panel for every field of the type and stored in the field's
+   * `pluginOptions`. A malformed list refuses boot, naming the plugin, the
+   * type and the setting: a select with no options, a key used twice, or the
+   * reserved keys `type` and `name`.
+   */
+  settings?: readonly PluginFieldTypeSetting[];
   /**
    * Which admin surfaces may offer this type in their field pickers. Omitted
    * means the entry/single editing surface only — a type never auto-appears

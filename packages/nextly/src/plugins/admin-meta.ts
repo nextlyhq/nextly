@@ -9,6 +9,7 @@
 import type {
   FieldStoragePrimitive,
   FieldTypeCategory,
+  PluginFieldTypeSetting,
 } from "../collections/fields/catalog";
 import type { PluginOverride } from "../shared/types/config";
 
@@ -189,6 +190,8 @@ export interface PluginAdminMeta {
     icon?: string;
     category?: FieldTypeCategory;
     surfaces?: readonly FieldSurface[];
+    /** The type's own settings, for the settings panel; checked at boot. */
+    settings?: readonly PluginFieldTypeSetting[];
   }>;
 }
 
@@ -542,6 +545,8 @@ export function buildPluginAdminMeta(
         ...(ft.icon ? { icon: ft.icon } : {}),
         ...(ft.category ? { category: ft.category } : {}),
         ...(ft.surfaces ? { surfaces: ft.surfaces } : {}),
+        // Already refused at boot when malformed, so served as declared.
+        ...(ft.settings ? { settings: ft.settings } : {}),
       }));
     }
 

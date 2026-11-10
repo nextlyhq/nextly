@@ -222,6 +222,42 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
 export type FieldSurface = "entries" | "users" | "forms" | "blocks";
 
 /**
+ * @experimental What every setting a plugin field type declares carries.
+ *
+ * `key` is where the value is stored on a field of the type: inside its
+ * `pluginOptions`, the container the Schema Builder keeps a type's own options
+ * in, so a key never competes with a name the field schema declares. `type`
+ * and `name` are refused, because a field restates them as its own identity.
+ */
+export interface PluginFieldTypeSettingBase {
+  /** Where the value is stored: `pluginOptions[key]`. Letters, digits and `_`, starting with a letter. */
+  key: string;
+  /** The setting's name in the settings panel. */
+  label: string;
+  /** A line under it saying what it does. */
+  help?: string;
+  /**
+   * The tab it is drawn in. `"general"` (the default) draws it first in
+   * General, as one of the settings that make a field this type.
+   */
+  tab?: "general" | "validation" | "display" | "advanced";
+}
+
+/**
+ * @experimental A setting a plugin field type declares, drawn in the shared
+ * settings panel for every field of the type and stored in its
+ * `pluginOptions`. `text` stores a string, `number` a number, `boolean` true
+ * or false, and `select` the `value` of the option chosen.
+ */
+export type PluginFieldTypeSetting =
+  | (PluginFieldTypeSettingBase & { control: "text" | "number" | "boolean" })
+  | (PluginFieldTypeSettingBase & {
+      control: "select";
+      /** The choices, at least one, each `value` once. */
+      options: readonly { label: string; value: string }[];
+    });
+
+/**
  * The surface a plugin field type targets when its author declares none. Shared
  * so the server-side gate and the client-side picker projection never diverge.
  */
