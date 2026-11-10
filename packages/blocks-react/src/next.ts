@@ -50,6 +50,7 @@ import {
   bindingFieldShapes,
   cacheComponentsEnabled,
   cachedFind,
+  contentPageMetadata,
   createContentRoute,
   createPublicContentRoute,
   createPublicReader,
@@ -78,6 +79,7 @@ import type {
   ContentRouteConfig,
   NextlyContentReader,
   NextlySingleReader,
+  PageMetadataValues,
   PublicSiteSettings,
   PublicSiteSettingsSource,
   RenderContext,
@@ -1183,6 +1185,22 @@ export interface DerivedPageSeo extends Omit<BlockSeoContribution, "image"> {
    * so saying nothing is the only honest option.
    */
   canonical?: string;
+}
+
+/**
+ * What a page's blocks offer for its head, as a page-metadata provider takes
+ * it: the title, description and picture. The canonical is left out, since
+ * the provider works out the page's address itself and is never told one by
+ * the content.
+ */
+function metadataValuesOf(derived: DerivedPageSeo): PageMetadataValues {
+  return {
+    ...(derived.title === undefined ? {} : { title: derived.title }),
+    ...(derived.description === undefined
+      ? {}
+      : { description: derived.description }),
+    ...(derived.image === undefined ? {} : { image: { url: derived.image } }),
+  };
 }
 
 /** What each node's bound props hold, by node id, from a page's read. */
@@ -3860,6 +3878,85 @@ function blocksRouteConfig(
     ? { window: listWindow }
     : undefined;
 
+  // One page's derivation, shared by `buildMetadata` and `derivedMetadata`:
+  // the content route asks both of the same entry and context, and the walk
+  // spends reads, so it runs once for the pair.
+  const derivations = new WeakMap<
+    ContentEntry,
+    WeakMap<RenderContext, Promise<DerivedPageSeo>>
+  >();
+  const derivedOf = (
+    entry: ContentEntry,
+    context: RenderContext
+  ): Promise<DerivedPageSeo> => {
+    let byContext = derivations.get(entry);
+    if (byContext === undefined) {
+      byContext = new WeakMap();
+      derivations.set(entry, byContext);
+    }
+    let derivation = byContext.get(context);
+    if (derivation === undefined) {
+      derivation = derivePageSeoOf(entry, context);
+      byContext.set(context, derivation);
+    }
+    return derivation;
+  };
+  /** What the page's blocks say about it, for its head. */
+  async function derivePageSeoOf(
+    entry: ContentEntry,
+    context: RenderContext
+  ): Promise<DerivedPageSeo> {
+    // The page as it is drawn, so its title, description and image
+    // come from the entry's own content where a template draws it.
+    const document = drawnDocumentOf(entry, field, context, config);
+    // Its own budget: metadata generation and the render are separate
+    // invocations, so sharing one counter would let the page's reads
+    // starve the preview image, or the reverse. Shared BETWEEN the two
+    // reads this invocation makes, because they are one page's cost.
+    const budget = createQueryBudget(config.maxQueries ?? DEFAULT_MAX_QUERIES);
+    // The same reads, in the same order, as the render: the
+    // components the page inlines (without them every instance would
+    // be a placeholder, and a page built from components would publish
+    // a title its HTML contradicts), the Layout's regions, then what
+    // the bindings read. The same order spends the budget alike, so a
+    // bound title cannot differ between the page and its metadata.
+    const inputs = await readPageInputs({
+      terms: readTermsOf(config, resolver),
+      sources: routeReadSources({
+        config,
+        entry,
+        context,
+        entrySource,
+        layoutsProvider,
+        window: listWindow,
+        budget,
+      }),
+      document,
+      // Fitted to the components it places, as the render is.
+      fit: fittedFor(entry, field, context, config),
+      entrySource,
+      onIssues: bindingIssueLog(context),
+      regionsOnlyWhenBound: true,
+    });
+    const derived = await derivePageSeo(
+      inputs.document,
+      resolver,
+      mediaResolver(config, readerFor(config), budget, mediaCache).resolve,
+      // A later page of the page's list is its own address, so its
+      // canonical names it rather than the list's first page.
+      listPageSlug(context.slug, context.page),
+      limits,
+      styleContext,
+      config.hostPolicy?.remotePatterns,
+      inputs.definitions,
+      inputs.bindings,
+      context.locale,
+      inputs.page.prepared ?? undefined,
+      bindingIssueLog(context)
+    );
+    return derived;
+  }
+
   return {
     ...routeConfig,
     // The page is tagged for the records its BLOCKS read, not only for the
@@ -3886,62 +3983,15 @@ function blocksRouteConfig(
     // `buildMetadata` the caller passed straight through to the content route.
     ...(metadata
       ? {
-          buildMetadata: async (entry, context) => {
-            // The page as it is drawn, so its title, description and image
-            // come from the entry's own content where a template draws it.
-            const document = drawnDocumentOf(entry, field, context, config);
-            // Its own budget: metadata generation and the render are separate
-            // invocations, so sharing one counter would let the page's reads
-            // starve the preview image, or the reverse. Shared BETWEEN the two
-            // reads this invocation makes, because they are one page's cost.
-            const budget = createQueryBudget(
-              config.maxQueries ?? DEFAULT_MAX_QUERIES
-            );
-            // The same reads, in the same order, as the render: the
-            // components the page inlines (without them every instance would
-            // be a placeholder, and a page built from components would publish
-            // a title its HTML contradicts), the Layout's regions, then what
-            // the bindings read. The same order spends the budget alike, so a
-            // bound title cannot differ between the page and its metadata.
-            const inputs = await readPageInputs({
-              terms: readTermsOf(config, resolver),
-              sources: routeReadSources({
-                config,
-                entry,
-                context,
-                entrySource,
-                layoutsProvider,
-                window: listWindow,
-                budget,
-              }),
-              document,
-              // Fitted to the components it places, as the render is.
-              fit: fittedFor(entry, field, context, config),
-              entrySource,
-              onIssues: bindingIssueLog(context),
-              regionsOnlyWhenBound: true,
-            });
-            const derived = await derivePageSeo(
-              inputs.document,
-              resolver,
-              mediaResolver(config, readerFor(config), budget, mediaCache)
-                .resolve,
-              // A later page of the page's list is its own address, so its
-              // canonical names it rather than the list's first page.
-              listPageSlug(context.slug, context.page),
-              limits,
-              styleContext,
-              config.hostPolicy?.remotePatterns,
-              inputs.definitions,
-              inputs.bindings,
-              context.locale,
-              inputs.page.prepared ?? undefined,
-              bindingIssueLog(context)
-            );
-            return metadata(entry, context, derived);
-          },
+          buildMetadata: async (entry, context) =>
+            metadata(entry, context, await derivedOf(entry, context)),
         }
       : {}),
+    // What the blocks offer for the head, for a plugin that provides page
+    // metadata. The content route asks only where one is started, so a site
+    // without one reads nothing more for it.
+    derivedMetadata: async (entry, context) =>
+      metadataValuesOf(await derivedOf(entry, context)),
     // The route serves the pages of the one list a page splits into pages,
     // counted as the list itself reads: the same provider, language and
     // terms for comparing days, so the route never serves a page the list's
@@ -5154,8 +5204,13 @@ function buildContentRoute(
         params: { slug: segments },
       });
     }
-    return (
-      (await found.route.buildMetadata?.(found.entry, found.context)) ?? {}
+    // Asked as the pages route asks for a page, so an entry served here gets
+    // the page-metadata provider's answer, told the address it was served at.
+    return await contentPageMetadata(
+      found.route,
+      found.entry,
+      found.context,
+      pathOf(segments)
     );
   }
 
