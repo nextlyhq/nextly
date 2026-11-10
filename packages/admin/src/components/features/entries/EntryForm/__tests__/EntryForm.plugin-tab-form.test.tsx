@@ -253,6 +253,26 @@ describe("a plugin's tab on a collection's edit page", () => {
     );
   });
 
+  it("brings the fields up to date when the open tab stops being delivered and Content comes back on its own", async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderEditor();
+    await user.click(screen.getByRole("tab", { name: /^SEO/ }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Search description" }),
+      "Written before it went"
+    );
+
+    // The tab is no longer delivered, while the address still names it.
+    meta.contributions = undefined;
+    rerender(<EntryForm collection={collection} entry={entry} mode="edit" />);
+    expect(new URL(window.location.href).searchParams.get("tab")).toBe(
+      "acme-seo.seo"
+    );
+    expect(screen.getByRole("textbox", { name: "Summary" })).toHaveValue(
+      "Written before it went"
+    );
+  });
+
   it("keeps its count beside the label current while Content is open", async () => {
     const user = userEvent.setup();
     renderEditor();

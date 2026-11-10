@@ -26,7 +26,7 @@
  *
  * @module components/entries/EntryForm/DocumentPlaceTabs
  */
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import type { FieldValues, UseFormReturn } from "react-hook-form";
 
 import {
@@ -50,20 +50,21 @@ export type DocumentTabsForm = Pick<
 /**
  * Brings the content's hidden fields up to date as it is shown again.
  *
- * Only while a plugin's tab is open is a change recorded: by its field's
- * name, or as the whole form when the form is replaced (a save's answer,
- * read back in, names no field). Each recorded value is then set to itself
- * as the content is shown, which tells the fields listening for it and
- * changes nothing else: no field is marked changed, touched or checked.
- * After the content's own effects, which have subscribed again by then.
+ * Driven by the tab the strip actually shows (`onShownTabChange`), not the
+ * one the address names: a tab that stops being delivered while open gives
+ * the content back with the address unchanged. Only while a plugin's tab is
+ * shown is a change recorded: by its field's name, or as the whole form when
+ * the form is replaced (a save's answer, read back in, names no field). As
+ * the content comes back, each recorded value is set to itself, which tells
+ * the fields listening for it and changes nothing else: no field is marked
+ * changed, touched or checked. The strip reports after the content's own
+ * effects, which have subscribed again by then.
  */
 function useContentFieldsCatchUp(
-  form: DocumentTabsForm,
-  contentShown: boolean
-): void {
+  form: DocumentTabsForm
+): (shownTab: string | null) => void {
   const { subscribe, getValues, setValue } = form;
-  const pluginTabOpen = useRef(!contentShown);
-  pluginTabOpen.current = !contentShown;
+  const pluginTabShown = useRef(false);
   const changed = useRef<Set<string> | "all">(new Set());
 
   useEffect(
@@ -71,7 +72,7 @@ function useContentFieldsCatchUp(
       subscribe({
         formState: { values: true },
         callback: ({ name }) => {
-          if (!pluginTabOpen.current || changed.current === "all") return;
+          if (!pluginTabShown.current || changed.current === "all") return;
           if (name === undefined) changed.current = "all";
           else changed.current.add(name);
         },
@@ -79,15 +80,20 @@ function useContentFieldsCatchUp(
     [subscribe]
   );
 
-  useEffect(() => {
-    if (!contentShown) return;
-    const names =
-      changed.current === "all"
-        ? Object.keys(getValues())
-        : Array.from(changed.current);
-    changed.current = new Set();
-    for (const name of names) setValue(name, getValues(name));
-  }, [contentShown, getValues, setValue]);
+  return useCallback(
+    (shownTab: string | null) => {
+      const contentBack = shownTab === null && pluginTabShown.current;
+      pluginTabShown.current = shownTab !== null;
+      if (!contentBack) return;
+      const names =
+        changed.current === "all"
+          ? Object.keys(getValues())
+          : Array.from(changed.current);
+      changed.current = new Set();
+      for (const name of names) setValue(name, getValues(name));
+    },
+    [getValues, setValue]
+  );
 }
 
 export function DocumentPlaceTabs({
@@ -109,9 +115,7 @@ export function DocumentPlaceTabs({
   const { openTab, openTabChange } = useDocumentTabAddress();
   const { control } = form;
   const { readOnly, actionsDisabled } = documentLock;
-  // An address naming a tab not delivered also shows the content; nothing
-  // is recorded then, since no plugin's tab was open to write.
-  useContentFieldsCatchUp(form, openTab === null);
+  const shownTabChange = useContentFieldsCatchUp(form);
   // One object while nothing in it changes, so a tab is not drawn again on
   // every render of the editor around it. Checked against what a document's
   // tab is promised, besides what every place's tab is handed.
@@ -129,6 +133,7 @@ export function DocumentPlaceTabs({
       tabProps={tabProps}
       openTab={openTab}
       onOpenTabChange={openTabChange}
+      onShownTabChange={shownTabChange}
       contentLabel={t("nextly.places.document.content")}
       className={`pt-6 @4xl/content:pt-8 ${DOCUMENT_COLUMN_INSET}`}
     >

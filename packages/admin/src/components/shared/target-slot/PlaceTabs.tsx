@@ -110,6 +110,12 @@ export interface PlaceTabsProps<P extends AdminPlaceId> extends PlaceProps<P> {
   openTab?: string | null;
   /** Told the tab the reader opens, by the same values `openTab` takes. */
   onOpenTabChange?: (tab: string | null) => void;
+  /**
+   * Told the tab on screen whenever it changes, by the same values, once the
+   * change is drawn: also when a shown tab is no longer delivered and the
+   * content comes back on its own, which `openTab` does not say.
+   */
+  onShownTabChange?: (tab: string | null) => void;
   children: ReactNode;
 }
 
@@ -195,6 +201,38 @@ function useShownTab(
   return { shown: ids.includes(wanted) ? wanted : CONTENT_TAB, choose };
 }
 
+/**
+ * The tabs delivered to the place, none while the page's context is `null`:
+ * nothing contributed is drawn until the page knows its ids.
+ */
+function useDeliveredTabs<P extends AdminPlaceId>(
+  place: P,
+  context: PlaceProps<P>["context"],
+  entry: PlaceProps<P>["entry"]
+) {
+  const delivered = usePlaceContributions(place, "tab", { context, entry });
+  if (context === null) return [];
+  return delivered.flatMap(item =>
+    "builtIn" in item || item.kind !== "tab" ? [] : [item]
+  );
+}
+
+/**
+ * Tells the page the tab on screen each time it changes, after it is drawn,
+ * so what the page does with it sees the shown tab's effects already run.
+ * The latest callback is used without the report waiting on its identity.
+ */
+function useShownTabReport(
+  shown: string,
+  onShownTabChange: ((tab: string | null) => void) | undefined
+): void {
+  const report = useRef(onShownTabChange);
+  report.current = onShownTabChange;
+  useEffect(() => {
+    report.current?.(shown === CONTENT_TAB ? null : shown);
+  }, [shown]);
+}
+
 export function PlaceTabs<P extends AdminPlaceId>({
   place,
   context,
@@ -204,21 +242,17 @@ export function PlaceTabs<P extends AdminPlaceId>({
   tabProps,
   openTab,
   onOpenTabChange,
+  onShownTabChange,
   children,
 }: PlaceTabsProps<P>): ReactNode {
-  const delivered = usePlaceContributions(place, "tab", { context, entry });
+  const tabs = useDeliveredTabs(place, context, entry);
   const { badges, setterFor } = useTabBadges();
-  const tabs =
-    context === null
-      ? []
-      : delivered.flatMap(item =>
-          "builtIn" in item || item.kind !== "tab" ? [] : [item]
-        );
   const { shown, choose } = useShownTab(
     tabs.map(tab => tab.id),
     openTab,
     onOpenTabChange
   );
+  useShownTabReport(shown, onShownTabChange);
   return (
     <>
       {context === null || tabs.length === 0 ? null : (
