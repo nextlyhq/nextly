@@ -290,6 +290,7 @@ import type {
   PasswordHasher,
   UserService,
 } from "../services/users/user-service";
+import { assertConfiguredPublicAddresses } from "../domains/public-addresses/distinct-public-addresses";
 import { assertConfiguredAddresses } from "../shared/address-rule";
 import {
   isProductionRuntime,
@@ -1553,6 +1554,12 @@ function validateBootContributions(
     transformedConfig,
     transformedPlugins
   );
+
+  // Fail fast on a public address that breaks the template rule, or two
+  // Singles at one address. Asked of the merged configuration, since a
+  // plugin's types reach it without passing through `defineCollection` or
+  // `defineSingle`, and a plugin must not take a page the site declares.
+  assertConfiguredPublicAddresses(transformedConfig);
 
   // Fail fast on role-bundle collisions. Validation only here; roles are
   // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.
