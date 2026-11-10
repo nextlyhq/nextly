@@ -143,6 +143,7 @@ import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
 import { refusalAnnouncement } from "./move-refusal";
 import type { BuilderOp } from "./op-vocabulary";
 import { usePreviewedCollection } from "./previewed-entry";
+import { withArticle } from "./with-article";
 
 /**
  * Where one tier of the host's library read stands, as the panel says it.
@@ -1804,12 +1805,6 @@ function belongsInsideWording(
       : "Select one first";
   const drag = entry.kind === "block" ? ", or drag this into one." : ".";
   return `Goes inside ${asPermittedList(containers, "or")}. ${select}${drag}`;
-}
-
-/** "an Accordion", "a Card"; a namespace's "any acme block" as it is. */
-function withArticle(label: string): string {
-  if (label.startsWith("any ")) return label;
-  return `${/^[aeiou]/i.test(label) ? "an" : "a"} ${label}`;
 }
 
 /** The block type an entry is named by in a refusal. */

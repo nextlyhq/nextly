@@ -31,10 +31,11 @@ vi.mock("@admin/hooks/useLogout", () => ({
   useLogout: () => () => {},
 }));
 vi.mock("@admin/components/features/notifications", () => ({
-  NotificationBell: () => (
+  NotificationBell: ({ journalOffered }: { journalOffered?: boolean }) => (
     <button
       type="button"
       data-testid="bell"
+      data-journal={String(journalOffered)}
       aria-label="Recent schema changes"
     />
   ),
@@ -113,19 +114,20 @@ describe("DashboardHeader default-button visibility", () => {
     expect(screen.queryByTestId("bell")).not.toBeInTheDocument();
   });
 
-  it("hides the bell where the builder is disabled", () => {
+  it("shows the bell where the builder is disabled, without the schema changes", () => {
+    // Every reader's own notices are in the bell, builder or not; only the
+    // schema-change journal belongs to a workspace that runs the builder.
     mockBranding = { plugins: [], showBuilder: false } as AdminBranding;
     render(<DashboardHeader />);
-    expect(screen.queryByTestId("bell")).not.toBeInTheDocument();
-    // Only the bell is builder-dependent; the rest of the bar is unaffected.
+    expect(screen.getByTestId("bell")).toHaveAttribute("data-journal", "false");
     expect(screen.getByTitle("GitHub Repository")).toBeInTheDocument();
     expect(screen.getByTitle("Documentation")).toBeInTheDocument();
   });
 
-  it("shows the bell where the builder is enabled", () => {
+  it("shows the bell with the schema changes where the builder is enabled", () => {
     mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
     render(<DashboardHeader />);
-    expect(screen.getByTestId("bell")).toBeInTheDocument();
+    expect(screen.getByTestId("bell")).toHaveAttribute("data-journal", "true");
   });
 
   it("keeps the bell while the builder flag is still in flight", () => {
@@ -198,7 +200,16 @@ describe("DashboardHeader while its answers arrive", () => {
   });
 
   it("does not wait on permissions where no bell can be offered", () => {
-    mockBranding = { plugins: [], showBuilder: false } as AdminBranding;
+    // A plugin that hides the bell leaves the rest of the row.
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme/p",
+          collections: [],
+          header: { hide: ["notifications"] },
+        },
+      ],
+    } as AdminBranding;
     mockPermissionsLoading = true;
     render(<DashboardHeader />);
     for (const title of BESIDE_THE_MENU) {

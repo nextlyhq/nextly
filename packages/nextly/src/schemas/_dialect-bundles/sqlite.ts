@@ -30,6 +30,11 @@ export { nextlyDeletedPrincipals } from "../deleted-principals/sqlite";
 // is CREATED, and a table in one but not the other is never made.
 export { nextlyPluginSettings } from "../plugin-settings/sqlite";
 export { nextlyOneTimeSecrets } from "../one-time-secrets/sqlite";
+export { nextlyReceivedWebhooks } from "../received-webhooks/sqlite";
+export {
+  nextlyPluginEvents,
+  nextlyPluginEventDeliveries,
+} from "../plugin-events/sqlite";
 export { nextlyLimitStore } from "../limit-store/sqlite";
 export { nextlyCacheTagExpiries } from "../cache-tag-expiries/sqlite";
 export { nextlySpentChallenges } from "../spent-challenges/sqlite";
