@@ -28,7 +28,6 @@
  * here, so the one body below serves them all.
  *
  * @module domains/notices/notice-email
- * @experimental Until the notices feature is complete.
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
@@ -58,10 +57,10 @@ import {
   type StoredNotice,
 } from "./notices-service";
 
-/** What a notice's email job is given: the notice to copy, by id, and nothing of it. @experimental */
+/** What a notice's email job is given: the notice to copy, by id, and nothing of it. */
 export type NoticeEmailJobInput = { noticeId: string };
 
-/** What a notice's email job reads and sends through. @experimental */
+/** What a notice's email job reads and sends through. */
 export interface NoticeEmailDeps {
   /** The database the notice and its person are read from. */
   db: NoticesDb;
@@ -69,7 +68,7 @@ export interface NoticeEmailDeps {
   email: Pick<EmailService, "isConfigured" | "send"> | null;
 }
 
-/** The email made from one notice. @experimental */
+/** The email made from one notice. */
 export interface NoticeEmailMessage {
   subject: string;
   html: string;
@@ -89,8 +88,6 @@ interface NoticeEmailSubject {
 
 /**
  * One feature's notice email: everything about it that is the feature's own.
- *
- * @experimental
  */
 export interface NoticeEmail {
   /** The job's registered slug, such as `releases:notice-email`. */
@@ -114,8 +111,6 @@ export interface NoticeEmail {
 /**
  * Hand a newly recorded notice's email to the job queue under `slug`, in the
  * notice's own transaction, so the job exists only if the notice does.
- *
- * @experimental
  */
 export async function enqueueNoticeEmail(
   tx: Pick<TransactionContext, "getDrizzle">,
@@ -138,8 +133,6 @@ export async function enqueueNoticeEmail(
 /**
  * The key a notice's email is sent under: the same on every run of its job,
  * and unlike any other notice's.
- *
- * @experimental
  */
 export function noticeEmailKey(
   email: Pick<NoticeEmail, "name">,
@@ -152,8 +145,6 @@ export function noticeEmailKey(
  * A notice's email from its rendered text: the title, the body, any further
  * paragraphs the feature adds, then the link where there is one. The text is
  * the notice's own, so the two never say different things.
- *
- * @experimental
  */
 export function noticeEmailMessage(input: {
   text: NoticeText;
@@ -190,8 +181,6 @@ export function noticeEmailMessage(input: {
  * The job that sends one feature's notice emails. Its dependencies are
  * resolved per run, as the queued email's own job resolves them, so the send
  * service is the one registered when it runs.
- *
- * @experimental
  */
 export function createNoticeEmailJob(
   email: NoticeEmail,
@@ -265,7 +254,6 @@ async function attemptFailure(
  * afresh on every call, so each attempt is judged as it is made.
  *
  * @returns the send's outcome, or `null` when nothing was sent
- * @experimental
  */
 export async function sendNoticeEmail(
   email: NoticeEmail,
