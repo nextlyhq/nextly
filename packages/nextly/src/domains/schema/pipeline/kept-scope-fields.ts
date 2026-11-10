@@ -28,7 +28,7 @@ import { columnsDeclaredBy } from "../services/field-column-descriptor";
 import type { NextlySchemaSnapshot } from "./diff/types";
 import type { DesiredSchema } from "./types";
 import {
-  scopedTypeKey,
+  currentWithheldScopeFields,
   withheldScopeFieldsOf,
   type ScopedKind,
 } from "./withheld-scope-fields";
@@ -131,39 +131,45 @@ export function withKeptScopeFieldsIn(
   };
 }
 
-// What the running site's tables were last built with, per type: a field
-// moving between declared and kept changes no column, so a reload has nothing
-// else to tell it the runtime tables must be built again.
+// What the running site's tables were last built without, per type: the
+// fields its scope held back then. A field moving between declared and kept
+// changes no column, so a reload has nothing else to tell it the type's
+// runtime tables must be built again, nor that its kept column must be
+// relaxed.
 const served = globalThis as unknown as {
-  __nextly_servedKeptScopeFields?: Map<string, string>;
+  __nextly_servedHeldBack?: Map<string, string>;
 };
 
+const namesOf = (fields: readonly FieldConfig[]): string =>
+  fields
+    .flatMap(field =>
+      typeof field.name === "string" ? [field.name.toLowerCase()] : []
+    )
+    .sort()
+    .join(",");
+
 /**
- * Whether `kept` differs from what the running site's tables were last built
- * with for this type. None recorded reads as none kept, as a site starts:
- * its tables are built from the declared fields alone.
+ * The types, by {@link scopedTypeKey}, whose held-back fields differ from what
+ * the running site's tables were last built without: switched off or on since,
+ * whether in the configuration or made in the Schema Builder. None recorded
+ * reads as none held back, as a site starts: its tables are built from the
+ * declared fields alone.
  */
-export function keptScopeFieldsChanged(
-  kind: ScopedKind,
-  slug: string,
-  kept: readonly string[]
-): boolean {
-  const before =
-    served.__nextly_servedKeptScopeFields?.get(scopedTypeKey(kind, slug)) ?? "";
-  return before !== [...kept].sort().join(",");
+export function heldBackChanges(): string[] {
+  const now = currentWithheldScopeFields();
+  const before = served.__nextly_servedHeldBack ?? new Map<string, string>();
+  return [...new Set([...now.keys(), ...before.keys()])].filter(
+    key => (before.get(key) ?? "") !== namesOf(now.get(key) ?? [])
+  );
 }
 
-/** Records that the running site's tables for this type were built with `kept`. */
-export function noteKeptScopeFieldsServed(
-  kind: ScopedKind,
-  slug: string,
-  kept: readonly string[]
-): void {
-  served.__nextly_servedKeptScopeFields ??= new Map();
-  served.__nextly_servedKeptScopeFields.set(
-    scopedTypeKey(kind, slug),
-    [...kept].sort().join(",")
-  );
+/** Records that the running site's tables for `keys` were built without what is held back now. */
+export function noteHeldBackServed(keys: readonly string[]): void {
+  const now = currentWithheldScopeFields();
+  served.__nextly_servedHeldBack ??= new Map();
+  for (const key of keys) {
+    served.__nextly_servedHeldBack.set(key, namesOf(now.get(key) ?? []));
+  }
 }
 
 /**

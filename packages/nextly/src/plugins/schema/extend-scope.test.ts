@@ -401,3 +401,44 @@ describe("extend with a scope — what a switched-off type would have had", () =
     publishWithheldScopeFields(new Map());
   });
 });
+
+describe("extend with a scope — what a switched-off type would have had, transformed", () => {
+  it("holds back a field as the plugin's own transform left it", async () => {
+    const { withheldScopeFieldsOf, publishWithheldScopeFields } = await import(
+      "../../domains/schema/pipeline/withheld-scope-fields"
+    );
+    // The plugin renames the field it adds, so its column is `seo_data`.
+    const rename = <T extends { fields?: readonly FieldConfig[] }>(entity: T) =>
+      ({
+        ...entity,
+        fields: (entity.fields ?? []).map(f =>
+          (f as { name?: string }).name === "seo"
+            ? ({ ...f, name: "seo_data" } as FieldConfig)
+            : f
+        ),
+      }) as T;
+    const seo = plugin("@t/seo", {
+      extend: [
+        { target: { ...EVERY, except: ["pages"] }, fields: [field("seo")] },
+      ],
+      transforms: [
+        { target: "posts", kind: "collection", transform: rename },
+        { target: "pages", kind: "collection", transform: rename },
+      ],
+    });
+
+    const { config } = applyPluginSchemaContributionsDeferred(siteConfig(), [
+      seo,
+    ]);
+    expect(fieldNames(find(config.collections, "posts"))).toEqual([
+      "title",
+      "seo_data",
+    ]);
+    expect(
+      withheldScopeFieldsOf("collection", "pages").map(
+        f => (f as { name?: string }).name
+      )
+    ).toEqual(["seo_data"]);
+    publishWithheldScopeFields(new Map());
+  });
+});

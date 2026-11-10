@@ -57,13 +57,18 @@ vi.mock("../../cli/utils/config-loader", async importOriginal => ({
  * plugins' schema folded in by the same function the CLI and the boot use.
  */
 function configWith(
-  declared: Pick<NextlyServiceConfig, "collections" | "singles">,
+  declared: Pick<NextlyServiceConfig, "collections" | "singles"> & {
+    localization?: Parameters<typeof defineConfig>[0]["localization"];
+  },
   plugins: PluginDefinition[]
 ): void {
   const base = defineConfig({
     collections: declared.collections,
     singles: declared.singles,
     plugins,
+    ...(declared.localization === undefined
+      ? {}
+      : { localization: declared.localization }),
   });
   const folded = applyPluginSchemaContributionsDeferred(
     base as unknown as NextlyServiceConfig,
@@ -349,12 +354,87 @@ describe.each(getConfiguredTestDialects())(
       expect((await read())?.seo_title).toBe("Kept");
     }, 240_000);
 
+    it("keeps a translated type's values, hidden, while it is switched off in development", async () => {
+      database = await openDatabase(dialect);
+      const adapter = database.adapter;
+      vi.stubEnv("NODE_ENV", "development");
+      const localization = { locales: ["en", "es"], defaultLocale: "en" };
+      const translatedPages = defineCollection({
+        slug: "es_pages",
+        localized: true,
+        fields: [text({ name: "title", localized: true })],
+      });
+      const translatedSeo = (except?: string[]): PluginDefinition => ({
+        ...seoPlugin,
+        contributes: {
+          extend: [
+            {
+              target: {
+                every: ["collection", "single"],
+                ...(except === undefined ? {} : { except }),
+              },
+              fields: [{ ...text({ name: "seo_title" }), localized: true }],
+            },
+          ],
+        },
+      });
+      const site = { collections: [posts, translatedPages], localization };
+      current = await createTestNextly({
+        adapter: adapter as never,
+        collections: [posts, translatedPages],
+        localization,
+        plugins: [translatedSeo()],
+      });
+      configWith(site, [translatedSeo()]);
+      await reloadNextlyConfig();
+      const created = await current.nextly.create({
+        collection: "es_pages" as never,
+        data: { title: "Saved", seo_title: "Kept" } as never,
+      });
+      const id = (created.item as { id: string }).id;
+      const read = async () =>
+        (await current?.nextly.findByID({
+          collection: "es_pages" as never,
+          id,
+        } as never)) as Record<string, unknown> | null;
+      expect((await read())?.seo_title).toBe("Kept");
+
+      configWith(site, [translatedSeo(["es_pages"])]);
+      await reloadNextlyConfig();
+      expect(await columnsOf(current, "dc_es_pages_locales")).toContain(
+        "seo_title"
+      );
+      const hidden = await read();
+      expect(hidden?.title).toBe("Saved");
+      expect(hidden).not.toHaveProperty("seo_title");
+
+      configWith(site, [translatedSeo()]);
+      await reloadNextlyConfig();
+      expect((await read())?.seo_title).toBe("Kept");
+    }, 240_000);
+
     it("keeps a Builder type's column and values, hidden, while it is switched off in development", async () => {
       database = await openDatabase(dialect);
       const adapter = database.adapter;
       await createTestNextly({
         adapter: adapter as never,
         collections: [posts],
+      });
+      // The plugin's field is required, so its column takes no row without a
+      // value while the type is on.
+      const requiredSeo = (except?: string[]): PluginDefinition => ({
+        ...seoPlugin,
+        contributes: {
+          extend: [
+            {
+              target: {
+                every: ["collection", "single"],
+                ...(except === undefined ? {} : { except }),
+              },
+              fields: [text({ name: "seo_title", required: true })],
+            },
+          ],
+        },
       });
       await seedBuilderCollection(adapter as never, {
         slug: "es_cases",
@@ -365,9 +445,9 @@ describe.each(getConfiguredTestDialects())(
       current = await createTestNextly({
         adapter: adapter as never,
         collections: [posts],
-        plugins: [seoEverywhere],
+        plugins: [requiredSeo()],
       });
-      configWith({ collections: [posts] }, [seoEverywhere]);
+      configWith({ collections: [posts] }, [requiredSeo()]);
       await reloadNextlyConfig();
       expect(await columnsOf(current, "dc_es_cases")).toContain("seo_title");
       const created = await current.nextly.create({
@@ -382,17 +462,6 @@ describe.each(getConfiguredTestDialects())(
         } as never)) as Record<string, unknown> | null;
       expect((await read())?.seo_title).toBe("Kept");
 
-      const offForCases: PluginDefinition = {
-        ...seoPlugin,
-        contributes: {
-          extend: [
-            {
-              target: { every: ["collection", "single"], except: ["es_cases"] },
-              fields: [text({ name: "seo_title" })],
-            },
-          ],
-        },
-      };
       // A Builder type takes a plugin's fields when the site starts, so the
       // site restarts with the type switched off.
       const restart = async (plugin: PluginDefinition) => {
@@ -405,11 +474,16 @@ describe.each(getConfiguredTestDialects())(
         });
         await reloadNextlyConfig();
       };
-      await restart(offForCases);
+      await restart(requiredSeo(["es_cases"]));
       expect(await columnsOf(current, "dc_es_cases")).toContain("seo_title");
       expect(await read()).not.toHaveProperty("seo_title");
+      // An entry saved while the type is off has no value for the field.
+      await current.nextly.create({
+        collection: "es_cases" as never,
+        data: { summary: "Written while off" } as never,
+      });
 
-      await restart(seoEverywhere);
+      await restart(requiredSeo());
       expect((await read())?.seo_title).toBe("Kept");
     }, 240_000);
 

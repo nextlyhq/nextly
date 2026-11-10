@@ -76,8 +76,8 @@ import type {
 } from "../domains/schema/pipeline/diff/types";
 import {
   columnsByTable,
-  keptScopeFieldsChanged,
-  noteKeptScopeFieldsServed,
+  heldBackChanges,
+  noteHeldBackServed,
   keptScopeFields,
 } from "../domains/schema/pipeline/kept-scope-fields";
 import { RealPreCleanupExecutor } from "../domains/schema/pipeline/pre-cleanup/executor";
@@ -113,7 +113,6 @@ import type {
 import {
   currentWithheldScopeFields,
   publishWithheldScopeFields,
-  scopedTypeKey,
 } from "../domains/schema/pipeline/withheld-scope-fields";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
@@ -2291,28 +2290,12 @@ async function applyReloadHolding(
   let hasChanges = startsAsChange(extensionSchemaChanged, leaving.entries);
   // A plugin's field held back from a type switched off keeps its column
   // while the database has it, as the apply keeps it: judged here the same
-  // way, so this gate and the apply see the same table, and a field moving
-  // between declared and kept, which changes no column, still rebuilds the
-  // type's runtime tables (`kept-scope-fields.ts`).
+  // way, so this gate and the apply see the same table (`kept-scope-fields.ts`).
   const liveColumns = columnsByTable(liveSnapshot);
-  const keptByType = new Map<
-    string,
-    { kind: "collection" | "single"; slug: string; names: string[] }
-  >();
   const keptFor = (
     kind: "collection" | "single",
     entry: DesiredCollection | DesiredSingle
-  ) => {
-    const kept = keptScopeFields(kind, entry, liveColumns);
-    const names = kept.map(field => field.name);
-    keptByType.set(scopedTypeKey(kind, entry.slug), {
-      kind,
-      slug: entry.slug,
-      names,
-    });
-    if (keptScopeFieldsChanged(kind, entry.slug, names)) hasChanges = true;
-    return kept;
-  };
+  ) => keptScopeFields(kind, entry, liveColumns);
   // The rows a development start held, once this reload takes them (`recordRegistryHistory`), so a
   // refused apply can hold them again.
   const held: { atStart?: RecordedAtStart } = {};
@@ -2514,6 +2497,13 @@ async function applyReloadHolding(
     resolve,
     adapter,
   });
+
+  // A type switched off or on for a plugin's scope since its runtime tables
+  // were built: in the configuration or made in the Schema Builder, whose
+  // entities join the apply below. Its kept column may need relaxing, and its
+  // tables building again, which no column diff above shows.
+  const heldBackChanged = heldBackChanges();
+  if (heldBackChanged.length > 0) hasChanges = true;
 
   // A relation switched between storage shapes is a change to apply even where the gate above
   // saw none: SQLite keeps every shape as text, and a translated relation's column is on its
@@ -3314,9 +3304,7 @@ async function applyReloadHolding(
     // The types' tables are now built from their declared fields, with the
     // kept ones left out: recorded, so the next reload rebuilds them again
     // only when a field moves between the two.
-    for (const { kind, slug, names } of keptByType.values()) {
-      noteKeptScopeFieldsServed(kind, slug, names);
-    }
+    noteHeldBackServed(heldBackChanged);
 
     // Signal all connected browser tabs to reload so they immediately
     // reflect the updated schema without a manual F5.
