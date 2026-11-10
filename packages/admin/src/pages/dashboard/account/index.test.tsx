@@ -114,7 +114,8 @@ describe("the account page", () => {
 
     const form = await profileForm();
     const block = screen.getByTestId("account-block");
-    expect(form.nextElementSibling).toBe(block);
+    // The block stands in the wrapper that keeps its own form's submit its own.
+    expect(form.nextElementSibling).toBe(block.parentElement);
     expect(JSON.parse(block.textContent ?? "")).toEqual({ userId: "u1" });
     const tabs = within(screen.getByRole("tablist"))
       .getAllByRole("tab")
@@ -169,14 +170,19 @@ describe("the account page", () => {
 
   it("offers the avatar picker only to a reader of media, who can open it", async () => {
     // The picker lists the media library, which a person without
-    // `read-media` is refused: they are shown their avatar, not a control
-    // that would fail.
+    // `read-media` is refused: they are not offered a picker that would fail,
+    // and can still remove the avatar they have.
     state.held = [];
+    state.me = { ...state.me, image: "https://cdn.example.com/ada.png" };
     const { unmount } = render(<AccountPage />);
     await screen.findByLabelText("Name");
     expect(
       screen.getByRole("button", { name: "Change avatar" })
     ).toBeDisabled();
+    // Removing their own avatar reads nothing from the library, so it stays.
+    expect(
+      screen.getByRole("button", { name: "Remove avatar" })
+    ).not.toBeDisabled();
     unmount();
 
     state.held = ["read-media"];

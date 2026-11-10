@@ -34,7 +34,8 @@ export default function AccountPage(): ReactElement {
   const { user, isLoading, error } = useDashboardUser();
   const profile = useAccountProfile(user);
   // The avatar is picked from the media library, which only a reader of media
-  // can open; anyone else is shown theirs without the control that would fail.
+  // can open; anyone else is not offered the picker that would fail, and can
+  // still remove the avatar they have.
   const { hasPermission } = useCurrentUserPermissions();
   const mayPickAvatar = hasPermission("read-media");
 
@@ -95,7 +96,8 @@ export default function AccountPage(): ReactElement {
                     value={profile.image}
                     onChange={profile.setImage}
                     fullName={profile.name || user.name}
-                    disabled={profile.saving || !mayPickAvatar}
+                    disabled={profile.saving}
+                    pickerDisabled={!mayPickAvatar}
                     className="border border-border"
                     // As the user edit page draws it: text-primary on the
                     // primary tint reads in both modes.

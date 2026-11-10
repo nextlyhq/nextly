@@ -117,4 +117,27 @@ describe("AvatarUploader", () => {
       screen.getByRole("button", { name: /remove avatar/i })
     ).toBeDisabled();
   });
+
+  it("with only the picker disabled, still lets an avatar be removed", async () => {
+    // For someone who cannot open the media library: no picker, but removing
+    // their own avatar reads nothing from the library.
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <AvatarUploader
+        value="https://cdn/x.png"
+        onChange={onChange}
+        fullName="Jane"
+        pickerDisabled
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: /change avatar/i })
+    ).toBeDisabled();
+    const remove = screen.getByRole("button", { name: /remove avatar/i });
+    expect(remove).not.toBeDisabled();
+    await user.click(remove);
+    expect(onChange).toHaveBeenCalledWith("");
+  });
 });
