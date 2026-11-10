@@ -77,6 +77,7 @@ import {
 } from "../../schema/utils/backfill-default";
 import { quoteExpressionSqlDefault } from "../../schema/utils/sql-literal";
 
+import type { CollectionTables } from "./collection-tables";
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
 
 /** A field-group field renamed with no column of its own: its instances move with it. */
@@ -769,11 +770,14 @@ export class DynamicCollectionSchemaService {
    * diff spells them. With `refuse` (the default) the same impossible pairs
    * are refused; a caller only reading what an existing relationship already
    * is passes `false`, as `relationOnDelete` is read for a stored definition.
+   * `targetTables` is the registry's table for each collection, so a key to a renamed target
+   * references the table it kept (see {@link targetTableOf}).
    */
   relationshipForeignKey(
     tableName: string,
     field: FieldDefinition,
-    refuse = true
+    refuse = true,
+    targetTables?: CollectionTables
   ): ForeignKeySpec | null {
     if (field.type !== "relationship" || !field.options?.target) return null;
     // A relationship holding a list keeps its ids in a JSON column: no single column can reference
@@ -792,8 +796,7 @@ export class DynamicCollectionSchemaService {
     return {
       name: this.relationshipKeyName(tableName, column),
       columns: [column],
-      // The table the target was created under: a hyphen in its address is an underscore in the table.
-      referencesTable: getTableName(field.options.target),
+      referencesTable: this.targetTableOf(field.options.target, targetTables),
       referencesColumns: ["id"],
       // Through the SQL spelling and back, so an action the mapping does not
       // know falls back exactly as the rendered constraint does.
@@ -814,6 +817,19 @@ export class DynamicCollectionSchemaService {
    */
   private relationshipKeyName(tableName: string, column: string): string {
     return foreignKeyNameForColumns(tableName, [column]);
+  }
+
+  /**
+   * The table a relationship's target is stored in: the one the registry records for it, where
+   * the caller read them, since a renamed collection keeps the table it was created under while
+   * relationships name its new slug. Otherwise the table its slug spells, where every collection
+   * not yet renamed is: a hyphen in its address is an underscore in the table.
+   */
+  private targetTableOf(
+    target: string,
+    targetTables?: CollectionTables
+  ): string {
+    return targetTables?.get(target) ?? getTableName(target);
   }
 
   /**
@@ -1001,6 +1017,8 @@ export class DynamicCollectionSchemaService {
       associationRename?: AssociationRename;
       fieldGroupTableNames?: ReadonlyMap<string, string>;
       junctionFields?: { old: FieldDefinition[]; new: FieldDefinition[] };
+      /** The registry's table for each collection, which a junction's key to its target references. */
+      targetTables?: CollectionTables;
     }
   ): string[] {
     // The association moves only when no column is renamed, as the file decides it.
@@ -1013,7 +1031,8 @@ export class DynamicCollectionSchemaService {
       ...this.junctionLifecycle(
         tableName,
         options?.junctionFields?.old ?? oldFields,
-        options?.junctionFields?.new ?? newFields
+        options?.junctionFields?.new ?? newFields,
+        options?.targetTables
       ),
     ];
   }
@@ -1184,6 +1203,8 @@ export class DynamicCollectionSchemaService {
        * stay in lockstep for a UI-created localized collection.
        */
       localized?: boolean;
+      /** The registry's table for each collection, which a relationship's key references. */
+      targetTables?: CollectionTables;
     }
   ): string {
     // Refuse an unusable decimal shape before any of it becomes SQL.
@@ -1242,7 +1263,12 @@ export class DynamicCollectionSchemaService {
         // it: the same description the push pipeline's desired schema reads,
         // so the key a table is created with and the key a later push expects
         // are one key.
-        const fk = this.relationshipForeignKey(tableName, f);
+        const fk = this.relationshipForeignKey(
+          tableName,
+          f,
+          true,
+          _options?.targetTables
+        );
         if (fk !== null) {
           constraints.push(
             `  CONSTRAINT ${this.quoteIdentifier(fk.name)} FOREIGN KEY (${this.quoteIdentifier(fk.columns[0])}) REFERENCES ${this.quoteIdentifier(fk.referencesTable)}(${this.quoteIdentifier(fk.referencesColumns[0])}) ON DELETE ${this.mapOnDeleteAction(fk.onDelete)} ON UPDATE ${this.mapOnUpdateAction(fk.onUpdate)}`
@@ -1331,7 +1357,11 @@ ${allColumnDefs.join(",\n")}
     // Generate many-to-many junction tables
     fields.forEach(f => {
       if (usesJunctionTable(f) && f.options?.target) {
-        const junctionTableSQL = this.generateJunctionTable(tableName, f);
+        const junctionTableSQL = this.generateJunctionTable(
+          tableName,
+          f,
+          _options?.targetTables
+        );
         junctionTables.push(junctionTableSQL);
       }
     });
@@ -1574,6 +1604,12 @@ ${allColumnDefs.join(",\n")}
        * caller that can rebuild the table once these statements have run applies it there.
        */
       onSqliteNullability?: (column: string, required: boolean) => void;
+      /**
+       * The registry's table for each collection, which a relationship's key references: a
+       * renamed target keeps the table it was created under. Undefined spells each target's table
+       * from its slug, as before any collection could be renamed.
+       */
+      targetTables?: CollectionTables;
     }
   ): string {
     // The added columns become SQL here too, so the same refusal applies.
@@ -1798,8 +1834,13 @@ ${allColumnDefs.join(",\n")}
         if (this.dialect !== "sqlite") {
           // The relationship's key as `relationshipForeignKey` describes it, the one answer the
           // CREATE also takes: none for a many-to-many, or for a relationship holding a list,
-          // whose JSON column no key to one row can hold.
-          const fk = this.relationshipForeignKey(tableName, field);
+          // whose JSON column no key to one row can hold; to the table a renamed target kept.
+          const fk = this.relationshipForeignKey(
+            tableName,
+            field,
+            true,
+            options?.targetTables
+          );
           if (fk !== null) {
             statements.push(
               `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD CONSTRAINT ${this.quoteIdentifier(fk.name)} FOREIGN KEY (${this.quoteIdentifier(addColName)}) REFERENCES ${this.quoteIdentifier(fk.referencesTable)}(${this.quoteIdentifier("id")}) ON DELETE ${this.mapOnDeleteAction(fk.onDelete)} ON UPDATE ${this.mapOnUpdateAction(fk.onUpdate)};`
@@ -2031,7 +2072,8 @@ ${allColumnDefs.join(",\n")}
         toSnakeCase(field.name),
         previous,
         field,
-        options?.foreignKeysByColumn
+        options?.foreignKeysByColumn,
+        options?.targetTables
       );
       (change.emitAfterColumnWork
         ? fkActionsAfterColumns
@@ -2231,7 +2273,8 @@ ${allColumnDefs.join(",\n")}
       ...this.junctionLifecycle(
         tableName,
         options?.junctionFields?.old ?? oldFields,
-        options?.junctionFields?.new ?? newFields
+        options?.junctionFields?.new ?? newFields,
+        options?.targetTables
       )
     );
 
@@ -2301,7 +2344,8 @@ ${allColumnDefs.join(",\n")}
     columnName: string,
     oldField: FieldDefinition,
     newField: FieldDefinition,
-    liveForeignKeys?: ReadonlyMap<string, readonly string[]>
+    liveForeignKeys?: ReadonlyMap<string, readonly string[]>,
+    targetTables?: CollectionTables
   ): ReferentialActionChange {
     if (newField.type !== "relationship") return NO_REFERENTIAL_ACTION_CHANGE;
     const target = newField.options?.target;
@@ -2373,8 +2417,7 @@ ${allColumnDefs.join(",\n")}
       tableName,
       constraintName: this.relationshipKeyName(tableName, columnName),
       columnName,
-      // The table the target was created under: a hyphen in its address is an underscore in the table.
-      referencesTable: getTableName(target),
+      referencesTable: this.targetTableOf(target, targetTables),
       referencesColumn: "id",
       fromOnDelete: from.onDelete,
       fromOnUpdate: from.onUpdate,
@@ -2918,9 +2961,10 @@ ${allColumnDefs.join(",\n")}
    */
   generateJunctionTable(
     sourceTableName: string,
-    field: FieldDefinition
+    field: FieldDefinition,
+    targetTables?: CollectionTables
   ): string {
-    const j = this.junctionShape(sourceTableName, field);
+    const j = this.junctionShape(sourceTableName, field, targetTables);
     const q = (name: string) => this.quoteIdentifier(name);
     const idType = this.dialect === "mysql" ? "varchar(36)" : "text";
 
@@ -2980,7 +3024,8 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
    */
   junctionShape(
     sourceTableName: string,
-    field: FieldDefinition
+    field: FieldDefinition,
+    targetTables?: CollectionTables
   ): JunctionShape {
     const table = this.junctionTableNameFor(sourceTableName, field);
     const targetCollection = field.options?.target ?? "";
@@ -2991,8 +3036,9 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
       sourceCollection,
       targetCollection,
       sourceTable: sourceTableName,
-      // The table the target was created under: a hyphen in its address is an underscore in the table.
-      targetTable: getTableName(targetCollection),
+      // The table the target is stored in, which a renamed target kept (see `targetTableOf`). The
+      // junction's own name and columns stay spelled from the slug, as its reads and writes spell them.
+      targetTable: this.targetTableOf(targetCollection, targetTables),
       sourceColumn: `${sourceCollection}_id`,
       targetColumn: `${targetCollection}_id`,
       fkSource: `fk_${table}_${sourceCollection}`,
@@ -3162,11 +3208,17 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
   junctionLifecycle(
     tableName: string,
     oldFields: FieldDefinition[],
-    newFields: FieldDefinition[]
+    newFields: FieldDefinition[],
+    targetTables?: CollectionTables
   ): string[] {
-    const before = this.junctionTables(tableName, oldFields);
-    const after = this.junctionTables(tableName, newFields);
-    const carries = this.junctionCarries(tableName, oldFields, newFields);
+    const before = this.junctionTables(tableName, oldFields, targetTables);
+    const after = this.junctionTables(tableName, newFields, targetTables);
+    const carries = this.junctionCarries(
+      tableName,
+      oldFields,
+      newFields,
+      targetTables
+    );
     this.refuseJunctionMoves(carries, before, after);
     const moved = carries.filter(({ from, to }) => from.table !== to.table);
     return [
@@ -3178,12 +3230,18 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
       ...carries.flatMap(({ from, to }) =>
         this.renameJunctionStatements(from, to)
       ),
-      ...this.junctionActionChanges(tableName, oldFields, newFields),
+      ...this.junctionActionChanges(
+        tableName,
+        oldFields,
+        newFields,
+        targetTables
+      ),
       ...this.junctionCreates(
         tableName,
         before,
         after,
-        new Set(moved.map(m => m.to.table))
+        new Set(moved.map(m => m.to.table)),
+        targetTables
       ),
     ];
   }
@@ -3209,7 +3267,8 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
   private junctionActionChanges(
     tableName: string,
     oldFields: FieldDefinition[],
-    newFields: FieldDefinition[]
+    newFields: FieldDefinition[],
+    targetTables?: CollectionTables
   ): string[] {
     const out: string[] = [];
     // Narrowed once, into a local, as the plain path does: the refusal below
@@ -3218,7 +3277,8 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
     for (const { field: next, from, to } of this.junctionPairs(
       tableName,
       oldFields,
-      newFields
+      newFields,
+      targetTables
     )) {
       if (from.onDelete === to.onDelete && from.onUpdate === to.onUpdate) {
         continue;
@@ -3319,11 +3379,12 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
   /** Every junction table a field list names, by name. */
   private junctionTables(
     tableName: string,
-    fields: FieldDefinition[]
+    fields: FieldDefinition[],
+    targetTables?: CollectionTables
   ): Map<string, JunctionTable> {
     const tables = new Map<string, JunctionTable>();
     for (const field of fields.filter(usesJunctionTable)) {
-      const shape = this.junctionShape(tableName, field);
+      const shape = this.junctionShape(tableName, field, targetTables);
       const known = tables.get(shape.table);
       if (known) known.fields.push(field);
       else tables.set(shape.table, { shape, fields: [field] });
@@ -3341,12 +3402,13 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
   private junctionCarries(
     tableName: string,
     oldFields: FieldDefinition[],
-    newFields: FieldDefinition[]
+    newFields: FieldDefinition[],
+    targetTables?: CollectionTables
   ): Array<{ from: JunctionShape; to: JunctionShape }> {
     // A carry is a pair whose TABLE moves, plus any detected rename — a rename
     // is carried whether or not its table name happened to move, because an
     // explicit `junctionTable` can hold the name still while the field changes.
-    return this.junctionPairs(tableName, oldFields, newFields)
+    return this.junctionPairs(tableName, oldFields, newFields, targetTables)
       .filter(pair => pair.renamed || pair.from.table !== pair.to.table)
       .map(({ from, to }) => ({ from, to }));
   }
@@ -3365,7 +3427,8 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
   private junctionPairs(
     tableName: string,
     oldFields: FieldDefinition[],
-    newFields: FieldDefinition[]
+    newFields: FieldDefinition[],
+    targetTables?: CollectionTables
   ): Array<{
     field: FieldDefinition;
     from: JunctionShape;
@@ -3379,8 +3442,8 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
       return [
         {
           field: next,
-          from: this.junctionShape(tableName, field),
-          to: this.junctionShape(tableName, next),
+          from: this.junctionShape(tableName, field, targetTables),
+          to: this.junctionShape(tableName, next, targetTables),
           renamed: false,
         },
       ];
@@ -3389,8 +3452,8 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
     if (renamed) {
       pairs.push({
         field: renamed.to,
-        from: this.junctionShape(tableName, renamed.from),
-        to: this.junctionShape(tableName, renamed.to),
+        from: this.junctionShape(tableName, renamed.from, targetTables),
+        to: this.junctionShape(tableName, renamed.to, targetTables),
         renamed: true,
       });
     }
@@ -3537,7 +3600,8 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
     tableName: string,
     before: Map<string, JunctionTable>,
     after: Map<string, JunctionTable>,
-    carriedTo: Set<string>
+    carriedTo: Set<string>,
+    targetTables?: CollectionTables
   ): string[] {
     return [...after.values()]
       .filter(({ shape }) => !carriedTo.has(shape.table))
@@ -3545,7 +3609,9 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
         const previous = before.get(shape.table);
         return !previous || !sameJunctionColumns(previous.shape, shape);
       })
-      .map(({ fields }) => this.generateJunctionTable(tableName, fields[0]));
+      .map(({ fields }) =>
+        this.generateJunctionTable(tableName, fields[0], targetTables)
+      );
   }
 
   /**

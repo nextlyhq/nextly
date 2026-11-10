@@ -31,7 +31,11 @@ export {
   slugToPath,
 } from "./slug-param";
 
-export { createContentRoute, createPublicContentRoute } from "./content-route";
+export {
+  contentPageMetadata,
+  createContentRoute,
+  createPublicContentRoute,
+} from "./content-route";
 export type {
   ContentRoute,
   StaticContentRoute,

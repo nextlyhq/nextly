@@ -178,6 +178,10 @@ import { startCompanionReadinessWarmUp } from "../init/warm-companion-readiness"
 import { env } from "../lib/env";
 import type { RateLimitStore } from "../middleware/rate-limit";
 import { maskingServiceLogger } from "../observability/mask-emails";
+import {
+  forgetCapabilityProviders,
+  recordCapabilityProviders,
+} from "../plugins/capabilities";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { warnUndescribedPlugins } from "../plugins/describe-check";
@@ -1280,6 +1284,13 @@ async function registerServicesOnce(
   );
   setInitializedPlugins(
     globalForReg.__nextly_pluginTeardown.map(entry => entry.plugin.name)
+  );
+  // Which of the started plugins provides each capability, for code that asks
+  // a provider at request time: the route helpers ask the page-metadata
+  // provider for every page's head. From the same list, so a plugin that never
+  // ran its `init` is never the one asked.
+  recordCapabilityProviders(
+    globalForReg.__nextly_pluginTeardown.map(entry => entry.plugin)
   );
 
   // ----------------------------------------
@@ -2949,13 +2960,6 @@ export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
     config.plugins ?? [],
     { coreVersion: getCoreVersion(), consent: pluginConsent }
   );
-  for (const warning of unmatchedConsentWarnings(
-    resolvedPlugins,
-    pluginConsent
-  )) {
-    // Masked as every line the services write is (`resolvedLogger`).
-    maskingServiceLogger(config.logger ?? consoleLogger).warn(warning);
-  }
   const resolvedConfig = setupTransformerInput(config, resolvedPlugins);
 
   // ----------------------------------------
@@ -2992,11 +2996,25 @@ export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
   // The published hook-point map is rewritten by the same call, and the
   // boot's schema folding receives this list, so a transformer-added plugin's
   // collections and singles fold exactly like a declared plugin's.
-  return resolveTransformedPlugins(setupConfig, {
+  const transformed = resolveTransformedPlugins(setupConfig, {
     coreVersion: getCoreVersion(),
     consent: pluginConsent,
     declared: preSetup,
   });
+  // The unmatched-consent warnings are judged against the FINAL list — the
+  // configuration that actually runs and receives the grants. Judged on the
+  // pre-transform list, a `setup` transformer removing a listed plugin
+  // emitted no stale-grant warning (the name still matched there), and one
+  // adding an ordinary plugin under a listed name emitted a false one (the
+  // name matched nothing yet).
+  for (const warning of unmatchedConsentWarnings(
+    transformed.config.plugins,
+    pluginConsent
+  )) {
+    // Masked as every line the services write is (`resolvedLogger`).
+    maskingServiceLogger(config.logger ?? consoleLogger).warn(warning);
+  }
+  return transformed;
 }
 
 // eslint-disable-next-line @typescript-eslint/require-await
@@ -5083,6 +5101,10 @@ function clearActiveHookRegistry(): void {
   // Nothing is initialized in a process whose services have been cleared, and a
   // stale list would let the next reload treat a plugin as started.
   setInitializedPlugins([]);
+  // Nor is any provider known: one left recorded would be asked for pages by
+  // the next instance, through services it no longer has, and an empty record
+  // would tell a route there is none before the next boot says.
+  forgetCapabilityProviders();
   clearPluginDependencies();
 }
 

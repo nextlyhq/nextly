@@ -20,7 +20,7 @@ import type { NextlyServiceConfig } from "../di/register";
 import { buildPluginAdminMeta } from "./admin-meta";
 import { collectCustomPermissions } from "./permissions/collect-permissions";
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
-import type { PluginConsent } from "./plugin-consent";
+import { isLoginCapable, type PluginConsent } from "./plugin-consent";
 import type { PluginDefinition } from "./plugin-context";
 import { collectPrincipalKinds } from "./principals/registry";
 import { resolvePlugins } from "./resolve";
@@ -81,7 +81,10 @@ function manifestSummary(plugin: PluginDefinition): PluginInfo["manifest"] {
   return {
     outbound: capabilities.net?.outbound ?? [],
     rawSql: capabilities.db?.rawSql === true,
-    completesLogins: capabilities.auth?.login === true,
+    // The consent's own login-capable predicate: a determineUser hook makes
+    // the plugin a login finisher too, and `nextly plugins info` must show
+    // the operator what the boot actually grants.
+    completesLogins: isLoginCapable(plugin),
     secrets: capabilities.secrets ?? [],
     provides: plugin.provides ?? [],
     requires: plugin.requires ?? {},

@@ -1282,8 +1282,6 @@ function relatedRowSnapshotKey(
  * caller asking what a document links to gets the documents a read would
  * populate, and no others. Empty for a field with no target, and for a value
  * that names none.
- *
- * @experimental
  */
 export function relationshipTargetsOf(
   field: FieldDefinition,

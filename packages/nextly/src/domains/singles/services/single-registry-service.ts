@@ -774,9 +774,18 @@ export class SingleRegistryService extends BaseRegistryService<
     const documentTable = (await this.adapter.listTables()).includes(
       fetched.tableName
     );
+    // The new address is judged again inside the schema lock `renameEntity` holds for the rename.
+    // `updateSingle` judged it before, which refuses early without work but cannot see a collection
+    // or Single that takes the same snake_case form in between; judged here, it does, and one that
+    // tries while the rename holds the lock is refused.
     const row = await renameEntity(this.adapter, {
       dialect: this.dialect,
       move: { kind: "single", from, to },
+      judgeTarget: () =>
+        assertGlobalResourceSlugAvailable(this.adapter, to, {
+          currentResourceType: "single",
+          currentResourceId: fetched.id,
+        }),
       writeRegistry: async tx => {
         const written = await tx.updateCount(
           this.registryTableName,

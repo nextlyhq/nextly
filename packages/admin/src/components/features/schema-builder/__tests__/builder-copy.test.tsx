@@ -60,8 +60,8 @@ import { BuilderSchemaChangeDialogs } from "../BuilderSchemaChangeDialogs";
 import { BuilderSettingsModal } from "../BuilderSettingsModal";
 import { BuilderToolbar } from "../BuilderToolbar";
 import type { BuilderConfig, BuilderKind } from "../builder-config";
-import { FieldEditorSheet } from "../FieldEditorSheet";
 import { BuilderFieldPicker } from "../BuilderFieldPicker";
+import { BuilderFieldSettings } from "../BuilderFieldSettings";
 import { FIELD_TYPES_CATALOG } from "../field-picker-modal/field-types-catalog";
 import type { BuilderField, SchemaChangeConfirmation } from "../types";
 
@@ -333,22 +333,26 @@ const review = (
 
 const sheet = (
   name: string,
-  props: Partial<ComponentProps<typeof FieldEditorSheet>> & {
+  props: {
     field: BuilderField;
+    /** A field just added, not yet saved; saved otherwise. */
+    mode?: "create" | "edit";
+    readOnly?: boolean;
   },
   then?: Surface["then"]
 ): Surface => ({
   name,
   ui: (
-    <FieldEditorSheet
-      open
-      mode="edit"
+    <BuilderFieldSettings
       kind="collection"
-      siblingFields={[]}
-      onCancel={() => {}}
-      onApply={() => {}}
-      onDelete={() => {}}
-      {...props}
+      fields={[props.field]}
+      fieldId={props.field.id}
+      savedFieldIds={new Set(props.mode === "create" ? [] : [props.field.id])}
+      readOnly={props.readOnly ?? false}
+      docked={false}
+      onFieldChange={() => {}}
+      onFieldDelete={() => {}}
+      onClose={() => {}}
     />
   ),
   then,
@@ -433,6 +437,7 @@ const SURFACES: readonly Surface[] = [
   sheet("field sheet, general", { field: field({}) }),
   sheet("field sheet, validation", { field: field({}) }, tab("Validation")),
   sheet("field sheet, display", { field: field({}) }, tab("Display")),
+  sheet("field sheet, conditions", { field: field({}) }, tab("Conditions")),
   sheet("field sheet, advanced", { field: field({}) }, tab("Advanced")),
   sheet("field sheet, new field", { field: field({}), mode: "create" }),
   sheet("field sheet, read-only", { field: field({}), readOnly: true }),

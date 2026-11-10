@@ -45,10 +45,14 @@ const MAX_SHOWN = 200;
  * value is cut short.
  */
 function printable(value: string): string {
-  // `\p{Cc}` is exactly U+0000-U+001F and U+007F-U+009F, named by Unicode
-  // category rather than as a range of literal control characters.
-  const line = value
-    .replace(/\p{Cc}+/gu, " ")
+  // C0 controls (newline and ESC among them), DEL and the C1 controls, each
+  // compared by code point.
+  const isControl = (code: number): boolean =>
+    code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+  const line = Array.from(value, char =>
+    isControl(char.codePointAt(0) ?? 0) ? " " : char
+  )
+    .join("")
     .replace(/ {2,}/g, " ")
     .trim();
   return line.length > MAX_SHOWN ? `${line.slice(0, MAX_SHOWN - 1)}…` : line;
