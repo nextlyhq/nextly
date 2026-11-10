@@ -25,6 +25,7 @@ import {
   settleTransitions,
 } from "./support/axe-scan.mjs";
 import { LOCK } from "./support/locks";
+import { createEntry } from "./support/runtime-collection";
 import { test } from "./support/test";
 
 // Shares the dashboard with other specs; see support/locks.ts.
@@ -675,6 +676,63 @@ for (const theme of ["light", "dark"] as Theme[]) {
     await scan(page, "New menu open");
     await page.keyboard.press("Escape");
     await expect(menu).toBeHidden();
+  });
+}
+
+for (const theme of ["light", "dark"] as Theme[]) {
+  test(`a notification count and Team activity's initials pass axe (${theme})`, async ({
+    page,
+  }) => {
+    // More than nine unread changes, so the bell's badge says "9+": axe holds two characters to
+    // the full ratio and sets a one-character count aside.
+    await page.route("**/admin/api/schema/journal**", async route => {
+      try {
+        const at = new Date().toISOString();
+        await route.fulfill({
+          json: {
+            hasMore: false,
+            rows: Array.from({ length: 12 }, (_, index) => ({
+              id: `journal-${index}`,
+              source: "ui",
+              status: "success",
+              scope: { kind: "global" },
+              summary: { added: 1, removed: 0, renamed: 0, changed: 0 },
+              startedAt: at,
+              endedAt: at,
+              durationMs: 1,
+              errorCode: null,
+              errorMessage: null,
+            })),
+          },
+        });
+      } catch {
+        // The page closed while answering.
+      }
+    });
+    await page.addInitScript(() =>
+      localStorage.setItem(
+        "nextly:journal:lastSeen",
+        "2000-01-01T00:00:00.000Z"
+      )
+    );
+    // Something recent to list, so the initials are drawn at all.
+    const tag = `${theme}-${Date.now()}`;
+    await createEntry(page.request, "posts", {
+      title: `Activity ${tag}`,
+      slug: `activity-${tag}`,
+    });
+
+    await dashboardAtRest(page, theme);
+    await expect(page.getByTestId("notification-bell-badge")).toHaveText("9+");
+    // The row for the entry just written, so the header's own avatar can't stand in.
+    await expect(
+      page
+        .locator("li")
+        .filter({ hasText: `Activity ${tag}` })
+        .locator('[data-slot="avatar-fallback"]')
+        .first()
+    ).toBeVisible();
+    await scan(page, "the bell's count and Team activity's initials");
   });
 }
 

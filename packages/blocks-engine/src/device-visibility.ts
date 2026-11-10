@@ -356,3 +356,53 @@ export function revealDeviceHidden(
   });
   return changed ? { ...document, nodes } : document;
 }
+
+/**
+ * The document with every block's visibility conditions lifted, for an
+ * editor canvas that draws each conditioned block so the author can see and
+ * select it, marked as conditional, whoever the page would show it to.
+ *
+ * Editor-only by construction, as {@link revealDeviceHidden} is: a new
+ * document for a surface to draw, never stored. A block's devices stay, so
+ * per-device hiding reads on the canvas as it always has. The same document
+ * when no block holds conditions.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export function revealConditioned(document: BlockDocument): BlockDocument {
+  let changed = false;
+  const nodes = mapForest(document.nodes, (node: BlockNode) => {
+    const lifted = liftedVisibility(node.visibility);
+    if (lifted === node.visibility) return node;
+    changed = true;
+    const { visibility: _previous, ...rest } = node;
+    return lifted === undefined ? rest : { ...rest, visibility: lifted };
+  });
+  return changed ? { ...document, nodes } : document;
+}
+
+/**
+ * A visibility with its conditions and placement gates removed: the same
+ * value when it holds neither, `undefined` when nothing is left. A visibility
+ * nothing can read keeps nothing, since it can't be split into devices to
+ * keep and conditions to lift.
+ */
+function liftedVisibility(
+  visibility: BlockNode["visibility"]
+): BlockNode["visibility"] {
+  if (visibility === undefined || visibility === null) return visibility;
+  if (!isPlainRecord(visibility)) return undefined;
+  if (!hasConditionKeys(visibility)) return visibility;
+  const { conditions: _conditions, within: _within, ...kept } = visibility;
+  return Object.keys(kept).length === 0 ? undefined : kept;
+}
+
+/** Whether a visibility holds conditions or placement gates to lift. */
+function hasConditionKeys(
+  visibility: Readonly<Record<string, unknown>>
+): boolean {
+  return (
+    Object.hasOwn(visibility, "conditions") ||
+    Object.hasOwn(visibility, "within")
+  );
+}

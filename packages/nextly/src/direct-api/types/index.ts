@@ -92,6 +92,7 @@ export type {
   UploadMediaArgs,
   FindMediaArgs,
   FindMediaByIDArgs,
+  FindMediaByIDsArgs,
   UpdateMediaArgs,
   DeleteMediaArgs,
   BulkDeleteMediaArgs,

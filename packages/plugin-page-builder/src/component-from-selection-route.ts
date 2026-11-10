@@ -105,6 +105,7 @@ import {
   type StoredPageAddress,
 } from "./library-contract";
 import { readingAsUser } from "./library-route";
+import { carryingTemplateTarget } from "./templates/template-target";
 
 /** The status a new component is created with. */
 const CREATED_STATUS = "published";
@@ -384,7 +385,7 @@ async function convertStored(
     // Throwing rolls the create back with the transaction.
     if (plan.problem !== undefined)
       throw planRefusal(plan, "component-from-selection");
-    const rev = await requireUnchangedPage(
+    const read = await requireUnchangedPage(
       () => args.reads.page(args.page.address, ctx),
       args.page.document
     );
@@ -397,7 +398,14 @@ async function convertStored(
       tx,
       address.collection,
       address.id,
-      withVersionFrom({ [address.field]: converted }, rev),
+      // A template's collection with it, read with the page, so the write is
+      // judged against it inside this transaction.
+      carryingTemplateTarget(
+        ctx.self,
+        address.collection,
+        read.templateTarget,
+        withVersionFrom({ [address.field]: converted }, read.rev)
+      ),
       asCaller(ctx, address.locale)
     );
     return { id, plan };

@@ -737,12 +737,26 @@ jobs:
       # install skips everything: reporting one defect four ways, all of them
       # misleadingly, is the opposite of what this job was just changed to do.
       # `Test` is deliberately not among them - see the note on that step.
+      # The packages first, then the playground's production build on a database
+      # prepared the way the generated build script prepares one: `next build`
+      # prerenders pages that start Nextly (`<SiteCode>` in the root layout), and
+      # a production start refuses a plugin no `nextly plugins install` has
+      # recorded on that database. The database is the step's own, named here,
+      # so the build does not depend on an `.env` some earlier step left behind.
       - name: Build
         id: build
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: pnpm turbo build --filter='./packages/*' --filter='./apps/*'
+        run: |
+          pnpm turbo build --filter='./packages/*'
+          pnpm --filter playground exec nextly migrate
+          pnpm --filter playground exec nextly plugins install --all
+          pnpm turbo build --filter='./apps/*'
         env:
           TURBO_CACHE_DIR: .turbo
+          DB_DIALECT: sqlite
+          DATABASE_URL: file:${{ runner.temp }}/playground-build.db
+          NEXTLY_SECRET: ci-build-check-secret-not-a-real-deployment-key
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
 
       # `./e2e` is named explicitly: it is a workspace member but sits under
       # neither glob, being neither something we publish nor something we run.
@@ -2556,11 +2570,17 @@ jobs:
         if: steps.decide.outputs.inert != 'true'
         run: pnpm turbo build --filter='./packages/*'
 
+      # Empty of content, not of schema: a production start refuses a plugin no
+      # `nextly plugins install` has recorded, and `<SiteCode>` in the root
+      # layout starts Nextly while `next build` prerenders `/_not-found`.
       - name: Build on an empty database
         if: steps.decide.outputs.inert != 'true'
         env:
           DATABASE_URL: file:${{ runner.temp }}/cache-components-empty.db
-        run: pnpm --filter playground exec next build
+        run: |
+          pnpm --filter playground exec nextly migrate
+          pnpm --filter playground exec nextly plugins install --all
+          pnpm --filter playground exec next build
 
       # `--debug-prerender` prerenders as development does, where the admin
       # layout boots nextly to check its generated component map: request work
@@ -2570,7 +2590,10 @@ jobs:
         if: steps.decide.outputs.inert != 'true'
         env:
           DATABASE_URL: file:${{ runner.temp }}/cache-components-debug.db
-        run: pnpm --filter playground exec next build --debug-prerender
+        run: |
+          pnpm --filter playground exec nextly migrate
+          pnpm --filter playground exec nextly plugins install --all
+          pnpm --filter playground exec next build --debug-prerender
 
       - name: Build on seeded content
         if: steps.decide.outputs.inert != 'true'
@@ -2787,7 +2810,7 @@ jobs:
           LAST_TESTED_SHA: ${{ steps.newer.outputs.last-tested-sha }}
           SCOPE_TITLE: Scaffold build scope
           INERT_PATHS: "."
-          ALWAYS_RUN_PATHS: '^(templates/(base|blank|blog)/|packages/create-nextly-app/|\.github/workflows/scaffold-build\.yml$)'
+          ALWAYS_RUN_PATHS: '^(templates/(base|blank|blog)/|packages/create-nextly-app/|\.github/workflows/scaffold-build\.yml$|\.github/actions/serve-workspace-packages/)'
         run: node scripts/change-scope.mjs
 
   scaffold-build:

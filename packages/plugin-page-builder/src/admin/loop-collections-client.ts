@@ -14,13 +14,17 @@
  *
  * @module admin/loop-collections-client
  */
-import { isListFieldKind } from "@nextlyhq/blocks-engine";
+import {
+  isListFieldKind,
+  STORAGE_PRIMITIVE_AS_FIELD_TYPE,
+  type FieldStoragePrimitive,
+} from "@nextlyhq/blocks-engine";
 import { readPluginRoute } from "@nextlyhq/plugin-sdk/admin";
 
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 // The CONTRACT, not the route: the route reads the server's registry.
 import {
-  LOOP_COLLECTIONS_ROUTE_PATH,
+  loopCollectionsPath,
   type LoopCollectionItem,
   type LoopCollectionsResponse,
   type LoopFieldOption,
@@ -38,20 +42,36 @@ const UNEXPLAINED = "Collections could not be listed. Try again.";
  * Resolves with what the route returned, each item kept only when it is the
  * shape the contract promises, and REJECTS when the route refused or failed,
  * so the controls fall back to typing rather than showing an empty menu as
- * though the site had no collections.
+ * though the site had no collections. `locale` is the language being edited,
+ * absent for the default.
  */
-export async function listLoopCollections(): Promise<
-  readonly LoopCollectionItem[]
-> {
+export async function listLoopCollections(
+  locale?: string
+): Promise<readonly LoopCollectionItem[]> {
   const body = await readPluginRoute<LoopCollectionsResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: LOOP_COLLECTIONS_ROUTE_PATH,
+    // In the language being edited, so the fields offered are the ones a
+    // save in that language takes.
+    path: loopCollectionsPath(locale),
   });
+  const collections = loopCollectionsOf(body);
+  if (collections === undefined) throw new Error(UNEXPLAINED);
+  return collections;
+}
+
+/**
+ * The collections a loop collections answer lists, each kept only when it is
+ * the shape the contract promises; `undefined` where the answer is not a list
+ * of collections at all, which a caller says rather than showing none.
+ */
+export function loopCollectionsOf(
+  body: unknown
+): readonly LoopCollectionItem[] | undefined {
   const items =
     typeof body === "object" && body !== null
       ? (body as Partial<LoopCollectionsResponse>).items
       : undefined;
-  if (!Array.isArray(items)) throw new Error(UNEXPLAINED);
+  if (!Array.isArray(items)) return undefined;
   return items.flatMap((item: unknown) => {
     const collection = collectionOf(item);
     return collection === undefined ? [] : [collection];
@@ -133,9 +153,10 @@ function readableOf(value: unknown): LoopReadableField | undefined {
   if (typeof record?.name !== "string" || typeof record.type !== "string") {
     return undefined;
   }
-  const { relationTo } = record;
+  const { relationTo, storage } = record;
   return {
     name: record.name,
+    ...(typeof record.label === "string" ? { label: record.label } : {}),
     type: record.type,
     ...(record.hasMany === true ? { hasMany: true as const } : {}),
     ...(typeof relationTo === "string" ||
@@ -143,7 +164,18 @@ function readableOf(value: unknown): LoopReadableField | undefined {
       relationTo.every(each => typeof each === "string"))
       ? { relationTo: relationTo as string | readonly string[] }
       : {}),
+    // Both decide a field's kind for a list, as the save reads them.
+    ...(record.timeOnly === true ? { timeOnly: true as const } : {}),
+    ...(isStoragePrimitive(storage) ? { storage } : {}),
   };
+}
+
+/** Whether a value names a storage primitive the engine maps to a field type. */
+function isStoragePrimitive(value: unknown): value is FieldStoragePrimitive {
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(STORAGE_PRIMITIVE_AS_FIELD_TYPE, value)
+  );
 }
 
 /** One related source, or `undefined` for an entry of another shape. */

@@ -308,6 +308,7 @@ export function toPersistedAdmin(admin: CollectionConfig["admin"]) {
     defaultColumns: admin.defaultColumns,
     isPlugin: admin.isPlugin,
     disableCreate: admin.disableCreate,
+    disableDelete: admin.disableDelete,
     // Sidebar placement. Both are read by `DynamicCollectionNav`, which takes its collections
     // from the persisted registry — so omitting them here meant a code-first collection could
     // set them, type-check, and still sort by the default.

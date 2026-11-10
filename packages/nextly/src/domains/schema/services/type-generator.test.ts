@@ -61,7 +61,7 @@ describe("TypeGenerator — a non-required field is a nullable column", () => {
     // the create input is still derived by `Omit` and so still inherits the
     // `?`, which is what keeps the field omittable.
     expect(code).toMatch(
-      /export type \w+CreateInput = Omit<\w+, "id" \| "createdAt" \| "updatedAt">;/
+      /export type \w+CreateInput = Omit<\w+, "id" \| "_rev" \| "createdAt" \| "updatedAt">;/
     );
   });
 });

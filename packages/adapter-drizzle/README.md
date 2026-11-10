@@ -38,7 +38,9 @@ Case-insensitive matches (`contains`, `ICONTAINS`, `ILIKE`) call a Nextly SQL fu
 
 ```ts
 import { registerSqliteFoldCase } from "@nextlyhq/adapter-drizzle/text-match";
+import Database from "better-sqlite3";
 
+const db = new Database("app.db");
 registerSqliteFoldCase(db); // a better-sqlite3 Database, or anything with the same `function` method
 ```
 

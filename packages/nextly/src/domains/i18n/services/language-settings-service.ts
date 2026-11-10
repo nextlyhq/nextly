@@ -15,11 +15,6 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
-import {
-  buildCollectionRevalidationIntent,
-  buildSingleRevalidationIntent,
-  readRevalidateConfig,
-} from "../../../revalidation/intent-builders";
 import type {
   CacheRevalidator,
   RevalidateConfig,
@@ -28,6 +23,7 @@ import { LANGUAGES_TABLE } from "../../../schemas/languages/table-name";
 import type { LanguageDirection } from "../../../schemas/languages/types";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { Logger } from "../../../shared/types/index";
+import { flushEveryContentScope } from "../../flush-content-change";
 import { fallbackCodes, IMPLICIT_LANGUAGE } from "../config/stored-languages";
 import {
   countPendingChangesIn,
@@ -209,27 +205,13 @@ export class LanguageSettingsService {
   }
 
   /**
-   * Flushes the cache tags of every collection and Single, as one intent: the tags their writes
-   * flush, the configured `revalidate.tags` included, through the same intent builders, and none
-   * for one whose `revalidate.disable` opts it out. A read made without a locale is cached under
-   * those tags alone, so it is resolved again in the new default.
+   * Flushes the cache tags of every collection and Single (`flushEveryContentScope`). A read
+   * made without a locale is cached under those tags alone, so it is resolved again in the new
+   * default.
    */
   private async flushContentCache(): Promise<void> {
-    const revalidator = this.contentCache?.revalidator();
-    if (!this.contentCache || !revalidator) return;
-    const { collections, singles } = await this.contentCache.content();
-    const intents = [
-      ...collections.map(c =>
-        buildCollectionRevalidationIntent(c.slug, readRevalidateConfig(c))
-      ),
-      ...singles.map(s =>
-        buildSingleRevalidationIntent(s.slug, readRevalidateConfig(s))
-      ),
-    ];
-    const tags = new Set(intents.flatMap(intent => intent?.tags ?? []));
-    // A site with nothing to flush issues no revalidation, which some backends log as an error.
-    if (tags.size === 0) return;
-    await revalidator.flush([{ tags: [...tags] }]);
+    if (!this.contentCache) return;
+    await flushEveryContentScope(this.contentCache);
   }
 
   /**

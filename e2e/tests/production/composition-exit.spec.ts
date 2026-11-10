@@ -8,6 +8,7 @@ import {
 import { pressSave } from "../canvas/editor-driver";
 import { gotoAdmin } from "../support/admin";
 import { test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 /**
  * The page builder's composition exit tests, against a PRODUCTION build.
@@ -33,8 +34,6 @@ import { test } from "../support/visible";
  * @module tests/production/composition-exit
  */
 
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
-
 const API = "/admin/api";
 const PLUGIN = `${API}/plugins/@nextlyhq/plugin-page-builder`;
 const INSTANCE = "nextly/component-instance";
@@ -55,19 +54,6 @@ interface BlockNodeJson {
   props: Json;
   slots?: Record<string, BlockNodeJson[]>;
   origin?: unknown;
-}
-
-/** Sign in through the real form; dev auto-login is blocked here. */
-async function signIn(page: Page): Promise<APIRequestContext> {
-  await page.goto("/admin");
-  await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-  // By role, not label: "Show password" also matches a password label.
-  await page
-    .getByRole("textbox", { name: /password/i })
-    .fill(DEV_USER.password);
-  await page.getByRole("button", { name: /sign in|log in/i }).click();
-  await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
-  return page.request;
 }
 
 /**
@@ -397,7 +383,7 @@ test.describe("the composition exit tests", () => {
     // Served, published: both copies drawn, and no two elements share an id.
     await itemOf(
       await api.patch(`${API}/collections/pages/entries/${target}`, {
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       }),
       "publishing the page"
     );
@@ -466,6 +452,7 @@ test.describe("the composition exit tests", () => {
         data: {
           content: cardDefinition(`Card title ${STAMP}`, v2),
           status: "published",
+          _overwrite: true,
         },
       }),
       "publishing the card"
@@ -755,6 +742,22 @@ test.describe("the composition exit tests", () => {
       },
     });
     expect(unexposed.status()).toBe(422);
+    // The refusal is for that field, not any 422: one reason, naming `body`,
+    // so a caller can tell which value to drop.
+    const refused = (await unexposed.json()) as {
+      error?: {
+        code?: string;
+        data?: { errors?: { path: string; code: string; message: string }[] };
+      };
+    };
+    expect(refused.error?.code).toBe("BUSINESS_RULE_VIOLATION");
+    expect(refused.error?.data?.errors).toEqual([
+      {
+        path: "action",
+        code: "REFUSED",
+        message: expect.stringContaining(`sets "body"`),
+      },
+    ]);
 
     // Exit test 3's step: the card's definition edited and published through
     // its own route, after a dry run that changes nothing.
@@ -802,9 +805,16 @@ test.describe("the composition exit tests", () => {
       { kind: "set-layout", layout, noHeaderFooter: true },
       { publish: true }
     );
+    // A page read right after a write can be served its previous entry once.
+    await expect
+      .poll(
+        async () =>
+          (await served(page.request, `/site/through-the-api-${STAMP}`)).drawn,
+        { timeout: 30_000 }
+      )
+      .not.toContain(`API header ${STAMP}`);
     const bare = await served(page.request, `/site/through-the-api-${STAMP}`);
     expect(bare.drawn).toContain(`Set through the API ${STAMP}`);
-    expect(bare.drawn).not.toContain(`API header ${STAMP}`);
 
     // Making a Layout the site's default, as a dry run: answered, and the
     // default is as it was.

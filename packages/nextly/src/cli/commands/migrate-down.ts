@@ -31,7 +31,10 @@ import {
   pluginOfLedgerRow,
   scopeLedgerRows,
 } from "../../domains/schema/events/ledger-scope";
-import { standingsByFilename } from "../../domains/schema/events/migration-state";
+import {
+  removedOnPurpose,
+  standingsByFilename,
+} from "../../domains/schema/events/migration-state";
 import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
 import {
   SchemaEventsRepository,
@@ -108,7 +111,7 @@ import {
 import { compareMigrationBaseNames } from "../utils/migration-discovery";
 
 import { commandRun } from "./command-run";
-import { refuseUnresolvedAppAttempts } from "./migrate";
+import { assertAppHistoryHolds, migrateExitCode } from "./migrate";
 import {
   pluginModuleDown,
   recordRollbackFailed,
@@ -418,13 +421,22 @@ export interface MigrateDownCoreDeps {
    */
   readEventTriggers?: () => Promise<readonly string[]>;
   /**
-   * Refuses while an app migration has an unresolved attempt that may have
-   * stopped part-way (`refuseUnresolvedAppAttempts`), its own down section's
-   * included. Asked under the lock before the plan, for the app's stream
-   * only: a plugin's history keeps its own rules. The command supplies it;
-   * absent, a caller with no migrations folder of the app's, nothing is read.
+   * The app history checks every command that rolls back app migrations
+   * makes before its first write (`assertAppHistoryHolds`): an applied
+   * migration the folder lacks (exit 3), an unresolved attempt, its own down
+   * section's included, and an applied file edited since it ran (exit 2).
+   * Asked under the lock before the plan, for the app's stream only: a
+   * plugin's history keeps its own rules. `recordChecksums` is false for a
+   * dry run, which writes nothing. The command supplies it; absent, a caller
+   * with no migrations folder of the app's, nothing is read.
    */
-  refuseUnresolvedAttempts?: () => Promise<void>;
+  checkAppHistory?: (args: { recordChecksums: boolean }) => Promise<void>;
+  /**
+   * The app migrations whose file's removal `migrate:resolve --removed`
+   * recorded: such a migration stays applied, and a rollback reaching it while
+   * its file is absent is refused by name (`refuseRemovedTargets`).
+   */
+  removedFiles?: () => Promise<ReadonlySet<string>>;
   /**
    * Whether a person is at a terminal to be asked before a DOWN loses data.
    * Absent reads as no, so a rollback without consent is refused rather than
@@ -799,7 +811,10 @@ async function planAndGuard(
     agreed === undefined
   );
   if (targets.length === 0) return { planned: [], agreement: new Set() };
-  const planned = await planRollback(targets, deps, reads);
+  const planned = refuseRemovedTargets(
+    await planRollback(targets, deps, reads),
+    (await deps.removedFiles?.()) ?? new Set()
+  );
   if (deps.options.dryRun) return { planned, agreement: new Set() };
 
   // Guards — evaluated up front for every target, before executing anything.
@@ -899,6 +914,14 @@ interface GuardedPlan {
 export async function migrateDownCore(
   deps: MigrateDownCoreDeps
 ): Promise<MigrateDownResult> {
+  // Before the plan, which reads each target's down section: a build lacking
+  // an applied file stops on the history (exit 3), not on the read of the
+  // file it lacks. Read-only here; asked again under the lock. A dry run
+  // reports the refusal after its plan instead.
+  if (!deps.options.dryRun) {
+    const refused = await refusalOfHistory(deps, false);
+    if (refused !== undefined) throw refused;
+  }
   const guarded = await planAndGuard(deps);
   const planned = guarded.planned;
   const lockOptions = {
@@ -918,13 +941,13 @@ export async function migrateDownCore(
     if (
       !deps.options.dryRun &&
       deps.options.plugin === undefined &&
-      deps.refuseUnresolvedAttempts !== undefined
+      deps.checkAppHistory !== undefined
     ) {
       await deps.withLock(
         lockAdapter(deps),
         deps.dialect,
         async () => {
-          const unresolved = await refusalOfUnresolvedAttempts(deps);
+          const unresolved = await refusalOfHistory(deps, true);
           if (unresolved !== undefined) throw unresolved;
         },
         lockOptions
@@ -960,9 +983,10 @@ export async function migrateDownCore(
     deps.dialect,
     async () => {
       // Before the plan and the first write, from the ledger as it stands
-      // once the lock is held: a DOWN retried over its own stopped attempt
-      // would run statements that already ran.
-      const unresolved = await refusalOfUnresolvedAttempts(deps);
+      // once the lock is held: an older build rolling back a history it does
+      // not hold, an edited down section, or a DOWN retried over its own
+      // stopped attempt, which would run statements that already ran.
+      const unresolved = await refusalOfHistory(deps, true);
       if (unresolved !== undefined) throw unresolved;
       // Planned again under the lock, from the database as it stands now; see `planAndGuard`.
       const held = { ...deps, ...(await deps.readOwners?.()) };
@@ -985,12 +1009,10 @@ export async function migrateDownCore(
 
 /** A dry run's line for the unresolved-attempt refusal a real run would make. */
 async function reportUnresolvedRefusal(
-  deps: Pick<
-    MigrateDownCoreDeps,
-    "options" | "refuseUnresolvedAttempts" | "logger"
-  >
+  deps: Pick<MigrateDownCoreDeps, "options" | "checkAppHistory" | "logger">
 ): Promise<void> {
-  const unresolved = await refusalOfUnresolvedAttempts(deps);
+  // Read-only: a dry run records no checksum.
+  const unresolved = await refusalOfHistory(deps, false);
   if (unresolved === undefined) return;
   deps.logger.info(
     `✖ a real run would be refused: ${describeError(unresolved, { context: false })}`
@@ -998,19 +1020,43 @@ async function reportUnresolvedRefusal(
 }
 
 /**
- * The unresolved-attempt refusal, or undefined: a real run throws it under the
- * lock, a dry run reports it. Never for a plugin's stream (`--plugin`).
+ * The app history checks' refusal (`checkAppHistory`), or undefined: a real
+ * run throws it under the lock, a dry run reports it. Never for a plugin's
+ * stream (`--plugin`).
  */
-async function refusalOfUnresolvedAttempts(
-  deps: Pick<MigrateDownCoreDeps, "options" | "refuseUnresolvedAttempts">
+async function refusalOfHistory(
+  deps: Pick<MigrateDownCoreDeps, "options" | "checkAppHistory">,
+  recordChecksums: boolean
 ): Promise<Error | undefined> {
   if (deps.options.plugin !== undefined) return undefined;
   try {
-    await deps.refuseUnresolvedAttempts?.();
+    await deps.checkAppHistory?.({ recordChecksums });
     return undefined;
   } catch (refusal) {
     return asError(refusal);
   }
+}
+
+/**
+ * A target whose file is absent because its removal was recorded on purpose
+ * (`removedFiles`) has no DOWN to run: it is refused by name, rather than
+ * with the read error its absent file gives.
+ */
+function refuseRemovedTargets(
+  planned: PlannedDown[],
+  removed: ReadonlySet<string>
+): PlannedDown[] {
+  return planned.map(p =>
+    p.unreadable !== undefined && removed.has(p.filename)
+      ? {
+          ...p,
+          unreadable: NextlyError.invalidInput({
+            message: `\`${p.filename}\` is recorded as removed from the migrations folder on purpose, so \`nextly migrate:down\` cannot roll it back while its file is absent. Put the file back as it was, and the rollback runs its down section.`,
+            logContext: { filename: p.filename, reason: "down-file-removed" },
+          }),
+        }
+      : p
+  );
 }
 
 // ============================================================================
@@ -1310,15 +1356,21 @@ export async function runMigrateDown(
       withLock: withMigrateLock,
       ...(plugin === undefined
         ? {
-            refuseUnresolvedAttempts: () =>
-              refuseUnresolvedAppAttempts({
+            checkAppHistory: ({ recordChecksums }) =>
+              assertAppHistoryHolds({
                 adapter,
                 db,
                 dialect,
                 migrationsDir,
                 logger,
                 command: "nextly migrate:down",
+                recordChecksums,
               }),
+            removedFiles: async () =>
+              removedOnPurpose(
+                await repo.listFileApplies(),
+                await repo.listFileRemovals()
+              ),
           }
         : {}),
       interactive: canPrompt(),
@@ -1349,7 +1401,8 @@ export async function migrateDownAction(
   try {
     await runMigrateDown(resolvedOptions, context);
   } catch (error) {
-    exitWithError(context.logger, error);
+    // Exit 2 for an edited applied file, 3 for one the folder lacks.
+    exitWithError(context.logger, error, migrateExitCode(error));
   }
 }
 

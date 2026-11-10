@@ -25,7 +25,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, relationship, text } from "nextly/config";
+import { defineCollection, number, relationship, text } from "nextly/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -92,6 +92,8 @@ describe.each(getConfiguredTestDialects())(
                 relationTo: ARTICLES,
                 hasMany: true,
               }),
+              relationship({ name: "lead", relationTo: ARTICLES }),
+              number({ name: "rank" }),
             ],
           }),
           defineCollection({
@@ -221,6 +223,59 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("splits a list into pages, and back to one page given null", async () => {
+      const t = await boot();
+      const id = await homePage(t);
+      const { cookie } = await holding(t, AUTHOR);
+      const at = { collection: "pages", id };
+
+      const on = await change(cookie, at, { paginate: true, limit: 12 });
+      expect(on.status).toBe(200);
+      expect((await storedList(t, "pages", id))?.props).toEqual({
+        collection: CATS,
+        paginate: true,
+        limit: 12,
+      });
+
+      const off = await change(cookie, at, { paginate: null });
+      expect(off.status).toBe(200);
+      expect((await storedList(t, "pages", id))?.props).toEqual({
+        collection: CATS,
+        limit: 12,
+      });
+    });
+
+    it("refuses a second list split into pages, naming the first, and writes nothing", async () => {
+      const t = await boot();
+      const id = await homePage(
+        t,
+        {
+          ...list("first", { collection: CATS, paginate: true }),
+          name: "Latest",
+        },
+        list("list", { collection: CATS })
+      );
+      const { cookie } = await holding(t, AUTHOR);
+      const at = { collection: "pages", id };
+
+      const dry = await change(
+        cookie,
+        at,
+        { paginate: true },
+        { dryRun: true }
+      );
+      expect(dry.status).toBe(200);
+      expect((dry.body.item as PageActionResult).refusals.join("\n")).toContain(
+        'Only one list on a page can be split into pages, and "Latest" already is.'
+      );
+
+      const applied = await change(cookie, at, { paginate: true });
+      expect(applied.status).toBe(422);
+      expect((await storedList(t, "pages", id))?.props).toEqual({
+        collection: CATS,
+      });
+    });
+
     it.each<[string, ListQueryChange, string]>([
       [
         "an offset of -1",
@@ -253,6 +308,12 @@ describe.each(getConfiguredTestDialects())(
         "a filter on a relation holding several entries",
         { filters: [{ field: "featured", op: "in", value: ["x"] }] },
         "cannot filter by such a field",
+      ],
+      ["a sort on a related entry", { sort: "lead" }, "links to another entry"],
+      [
+        "a number filter compared with text",
+        { filters: [{ field: "rank", op: "equals", value: "5" }] },
+        'which holds a number, with "5"',
       ],
     ])(
       "refuses %s: the dry run says so, and the apply writes nothing",

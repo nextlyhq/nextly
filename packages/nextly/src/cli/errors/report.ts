@@ -88,22 +88,24 @@ export function printCliError(
 export function exitWithError(
   logger: Pick<Logger, "getOptions">,
   error: unknown,
-  status: 1 | 2 = 1
+  status: 1 | 2 | 3 = 1
 ): never {
   printCliError(logger, error);
   return process.exit(status);
 }
 
 /**
- * Prints `error` in the error shape and sets the exit code to 1, letting the process end on its
- * own: for a command whose pending output or handles must finish before it exits.
+ * Prints `error` in the error shape and sets the exit code (1 unless `status` says otherwise),
+ * letting the process end on its own: for a command whose pending output or handles must finish
+ * before it exits.
  */
 export function failWithError(
   logger: Pick<Logger, "getOptions">,
-  error: unknown
+  error: unknown,
+  status: 1 | 2 | 3 = 1
 ): void {
   printCliError(logger, error);
-  process.exitCode = 1;
+  process.exitCode = status;
 }
 
 /**

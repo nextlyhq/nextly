@@ -415,6 +415,69 @@ describe("the Site tab's breakpoints section", () => {
     expect(screen.queryByRole("button", { name: "Remove Mobile" })).toBeNull();
   });
 
+  it("opens on a host's request made while the set was still loading", () => {
+    // The host asks (a refused undo's Edit breakpoints) while its read
+    // refetches: the request waits for the set, rather than being spent on
+    // a render that could not open the editor.
+    const { rerender } = render(
+      <BreakpointManager
+        value={defined()}
+        onSave={vi.fn()}
+        status="ready"
+        editRequest={0}
+      />
+    );
+    rerender(
+      <BreakpointManager
+        value={defined()}
+        onSave={vi.fn()}
+        status="loading"
+        editRequest={1}
+      />
+    );
+    expect(editorShown()).toBe(false);
+    rerender(
+      <BreakpointManager
+        value={defined()}
+        onSave={vi.fn()}
+        status="ready"
+        editRequest={1}
+      />
+    );
+    expect(editorShown()).toBe(true);
+  });
+
+  it("does not keep a request made while editing is held", () => {
+    const { rerender } = render(
+      <BreakpointManager
+        value={defined()}
+        onSave={vi.fn()}
+        status="ready"
+        editRequest={0}
+        blocked="Wait for the removal."
+      />
+    );
+    rerender(
+      <BreakpointManager
+        value={defined()}
+        onSave={vi.fn()}
+        status="ready"
+        editRequest={1}
+        blocked="Wait for the removal."
+      />
+    );
+    rerender(
+      <BreakpointManager
+        value={defined()}
+        onSave={vi.fn()}
+        status="ready"
+        editRequest={1}
+      />
+    );
+    // Once the hold lifts, nothing opens by itself.
+    expect(editorShown()).toBe(false);
+  });
+
   it("cannot be edited while the host says why not, and says it", () => {
     render(
       <BreakpointManager

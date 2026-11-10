@@ -79,8 +79,16 @@ interface LabelScrubRowValue {
 
 const LabelScrubContext = React.createContext<LabelScrubRowValue | null>(null);
 
-/** What the label spreads while its field can be dragged. */
+/**
+ * What the label spreads while its field can be dragged.
+ *
+ * `data-slot` is cleared because the admin gives every `[data-slot="label"]`
+ * a pointer cursor marked important, which would hide the resize cursor that
+ * says the label drags. The element stays the field's `<label>`, so its
+ * association with the input and its accessible name are unchanged.
+ */
 export interface LabelScrubProps {
+  readonly "data-slot": undefined;
   readonly "data-scrub": "" | "active";
   readonly onPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
   readonly onClickCapture: (event: React.MouseEvent<HTMLElement>) => void;
@@ -225,6 +233,7 @@ function useLabelScrubSlot(subject: string): LabelScrubRowValue {
     slot,
     labelProps: enabled
       ? {
+          "data-slot": undefined,
           "data-scrub": dragging ? "active" : "",
           onPointerDown,
           onClickCapture: event => {

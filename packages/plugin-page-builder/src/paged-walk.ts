@@ -63,3 +63,13 @@ export async function walkPages(args: {
       `with more reported; the rest were not read.`
   );
 }
+
+/** The id a page of rows ended on, which the next page starts after. */
+export function lastIdOf(items: readonly unknown[]): string | undefined {
+  const last = items.at(-1);
+  const id =
+    typeof last === "object" && last !== null
+      ? (last as { id?: unknown }).id
+      : undefined;
+  return typeof id === "string" ? id : undefined;
+}

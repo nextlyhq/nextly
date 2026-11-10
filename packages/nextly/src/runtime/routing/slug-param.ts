@@ -78,3 +78,78 @@ export function slugToStaticParam(value: unknown): { slug: string[] } | null {
   if (segments.join("/") !== value) return null;
   return { slug: segments };
 }
+
+/**
+ * The segment a paginated list's later pages sit under: page 2 of the list
+ * at `/news` is served at `/news/page/2`.
+ *
+ * Here, in the leaf, because three readers must agree on it: the route that
+ * serves those pages, the renderer that links to them, and whatever records
+ * which addresses a list holds. One spelled `"page"` and another `"p"` would
+ * each be internally consistent and link to pages the other never serves.
+ *
+ * @experimental Settles with list pagination.
+ */
+export const LIST_PAGE_SEGMENT = "page";
+
+/** A page number as an address writes it: a whole number from 1, no sign, no leading zero. */
+const LIST_PAGE_NUMBER = /^[1-9]\d*$/;
+
+/**
+ * The page number a path segment names, or null when it names none.
+ *
+ * Only one spelling per number is a page, so a page has one address: `02`,
+ * `+2`, `2.0` and `0` are not pages, and the route answers them as not found
+ * rather than serving a duplicate of `/page/2`. Any number held exactly
+ * is a page number, so every page a list's count names has an address; a
+ * run of digits too long to hold exactly is none.
+ *
+ * @experimental Settles with list pagination.
+ */
+export function listPageNumber(segment: string): number | null {
+  if (!LIST_PAGE_NUMBER.test(segment)) return null;
+  const page = Number(segment);
+  return Number.isSafeInteger(page) ? page : null;
+}
+
+/**
+ * The address a path is a later page of, and the segment naming the page, or
+ * null when the path does not end in `page/<segment>`.
+ *
+ * `news/page/2` is page `"2"` of `news`, and `page/2` is page `"2"` of the
+ * home page (`""`). The page segment comes back as written, so a caller can
+ * tell `1` (the list's own address, under a second spelling) from `02` (no
+ * page at all) with {@link listPageNumber}.
+ *
+ * @experimental Settles with list pagination.
+ */
+export function listPageOf(
+  slug: string
+): { readonly base: string; readonly segment: string } | null {
+  const segments = slug.split("/");
+  if (segments.length < 2) return null;
+  if (segments.at(-2) !== LIST_PAGE_SEGMENT) return null;
+  return {
+    base: segments.slice(0, -2).join("/"),
+    segment: segments.at(-1) ?? "",
+  };
+}
+
+/**
+ * The path a stored slug is served at, each segment percent-encoded, or null
+ * where the route serves none: `""` is `/`, `about/team` is `/about/team`.
+ *
+ * Derived from {@link slugToStaticParam}, the route's own answer, so a link,
+ * a canonical or a redirect never names a path the route does not serve.
+ * Encoded per segment because Next hands the route DECODED segments while
+ * the request used their encoded form: `faq?all` written raw reads as a path
+ * and a query.
+ *
+ * @experimental Settles with list pagination.
+ */
+export function slugToPath(value: unknown): string | null {
+  const param = slugToStaticParam(value);
+  if (param === null) return null;
+  if (param.slug.length === 0) return "/";
+  return `/${param.slug.map(encodeURIComponent).join("/")}`;
+}

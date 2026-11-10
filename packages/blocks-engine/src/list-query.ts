@@ -26,6 +26,11 @@
  *   (`of: "entry"`) or of the item the list sits in (`of: "item"`), named
  *   by its field. `collection` then names the related collection, so what
  *   the list's children bind to is checked as for any list.
+ * - `namedQuery`: a custom source, `{ name, params }`: a query a developer
+ *   registered in code, and a typed literal for each of its inputs. It is
+ *   the list's whole source, so `collection`, `relation`, `filters` and
+ *   `sort` are absent beside it: a reader that predates it then sees a list
+ *   with no source, never an unfiltered collection.
  *
  * Which fields a list may name is a question about the schema and about who
  * may read it, so it is asked of a {@link ListFieldSource} the caller
@@ -37,12 +42,57 @@
  */
 import type { BindingFieldShape } from "./binding-rules";
 import { bindingKindOf } from "./binding-vocabulary";
-import type { BlockDocument } from "./document";
+import { isCalendarDay } from "./calendar-day";
+import type { BlockDocument, BlockNode } from "./document";
+import { isTopLevelFieldName } from "./field-name";
+import { withHeldSeverity } from "./held-findings";
 import { describeValue, pointer } from "./issue-text";
+import {
+  isNamedQueryName,
+  isNamedQueryParamKey,
+  judgeNamedParams,
+  NAMED_QUERY_MAX_PARAMS,
+  NAMED_QUERY_TEXT,
+  NAMED_QUERY_TEXT_MAX,
+  type NamedQueryDeclaration,
+  type NamedQueryParamValue,
+  type NamedQuerySource,
+} from "./named-query";
 import { isPlainRecord } from "./plain-record";
+import { locateNode } from "./tree";
 
 /** The block a list query belongs to. */
 export const COLLECTION_LIST_TYPE = "core/collection-loop";
+
+/**
+ * The slot a list draws once per entry, with that entry as the item. Its
+ * other slot, the empty state, is drawn with no entry of its own, so a list
+ * inside it has the item around the outer list, as the renderer draws it.
+ */
+export const LIST_ENTRY_SLOT = "children";
+
+/**
+ * The list whose entry is the item where `id` sits, nearest first: the list
+ * whose per-entry slot holds it, at any depth, passing over a list it sits
+ * in the empty state of. `undefined` outside every list's entries. The one
+ * answer, as {@link listQueryIssues} judges a related list's outer item, for
+ * an editor offering related sources where the block sits.
+ */
+export function outerListOf(
+  nodes: BlockNode[],
+  id: string
+): BlockNode | undefined {
+  let at = locateNode(nodes, id);
+  // Bounded by the document's depth: each step moves one parent out.
+  while (at?.parent !== undefined) {
+    const parent = at.parent;
+    if (parent.type === COLLECTION_LIST_TYPE && at.slot === LIST_ENTRY_SLOT) {
+      return parent;
+    }
+    at = locateNode(nodes, parent.id);
+  }
+  return undefined;
+}
 
 /**
  * The operators a filter row may use, as the Direct API spells them. Closed:
@@ -96,15 +146,39 @@ export const LIST_LIMIT_MAX = 100;
 export const LIST_MAX_FILTERS = 20;
 export const LIST_MAX_VALUES = 100;
 
+/**
+ * How many keys one list sorts by, and how many characters its stored sort
+ * holds: room for every key naming a field as long as a database column may
+ * be (63 characters), with the separators, and more. Every reader of a sort
+ * holds it to these, the save and a request for a list's entries alike, so
+ * none takes a sort another refuses, and none is handed one without bound.
+ */
+export const LIST_MAX_SORT_KEYS = 20;
+export const LIST_MAX_SORT_LENGTH = 2000;
+
+/** A list's custom source: a registered query's name and its inputs. */
+export interface ListNamedQuery {
+  readonly name: string;
+  /** One literal per input set; an empty optional input is absent. */
+  readonly params: Readonly<Record<string, NamedQueryParamValue>>;
+}
+
 /** A list's query as stored, each part present only when it was stored well. */
 export interface ListQuery {
   /** The collection read, trimmed; absent when none is named. */
   readonly collection?: string;
   readonly relation?: ListRelation;
+  /** A custom source, in place of a collection. */
+  readonly namedQuery?: ListNamedQuery;
   readonly filters: readonly ListFilter[];
   readonly sort: readonly ListSortKey[];
   readonly limit?: number;
   readonly offset?: number;
+  /**
+   * Present, and true, when the list is split into pages, each served at
+   * its own address (`/news/page/2`); absent when it shows one page.
+   */
+  readonly paginate?: true;
 }
 
 /** The props a stored list query is read from. */
@@ -114,7 +188,9 @@ export type ListQueryProp =
   | "filters"
   | "sort"
   | "limit"
-  | "offset";
+  | "offset"
+  | "namedQuery"
+  | "paginate";
 
 /** Why part of a stored list query could not be read. */
 export interface ListQueryProblem {
@@ -129,7 +205,10 @@ export type ListShapeCode =
   | "list-offset-invalid"
   | "list-filter-invalid"
   | "list-sort-invalid"
-  | "list-relation-invalid";
+  | "list-relation-invalid"
+  | "list-named-query-invalid"
+  | "list-source-conflict"
+  | "list-paginate-invalid";
 
 /** The codes a list is refused with when judged against the schema. */
 export type ListFieldCode =
@@ -139,11 +218,29 @@ export type ListFieldCode =
   | "list-field-unfilterable"
   | "list-filter-unsuited"
   | "list-relation-unsuitable"
-  | "list-too-deep";
+  | "list-relation-no-entry"
+  | "list-too-deep"
+  | "list-named-query-unknown"
+  | "list-named-query-param-missing"
+  | "list-named-query-param-invalid"
+  | "list-named-query-param-unknown"
+  | "list-named-query-reads-hidden"
+  | "list-named-query-rows-hidden"
+  | "list-named-query-uncounted";
+
+/**
+ * The codes a split into pages is refused with, by where the list sits: a
+ * page has one list that pages, and it must be one that can.
+ */
+export type ListPageCode =
+  | "list-paginate-twice"
+  | "list-paginate-nested"
+  | "list-paginate-related"
+  | "list-paginate-shared";
 
 /** Every code a list query is judged with, each described for authors. */
 export const LIST_ISSUE_CODES: {
-  readonly [Code in ListShapeCode | ListFieldCode]: string;
+  readonly [Code in ListShapeCode | ListFieldCode | ListPageCode]: string;
 } = {
   "list-limit-invalid":
     "A list's number of items is not a whole number from 1 to 100.",
@@ -159,28 +256,51 @@ export const LIST_ISSUE_CODES: {
   "list-field-protected":
     "A list filters or sorts by a field visitors may not see.",
   "list-field-unsortable":
-    "A list sorts by a field that holds more than one value.",
+    "A list sorts by a field it cannot order by: one holding more than one value, a relation, or no one value to compare.",
   "list-field-unfilterable":
-    "A list filters by a field that holds more than one value.",
+    "A list filters by a field it cannot compare: one holding more than one value, or no one value to compare.",
   "list-filter-unsuited":
     "A list's filter compares a field with an operator or a value its kind does not take.",
   "list-relation-unsuitable":
     "A list's related source is not a to-many relation to its collection.",
+  "list-relation-no-entry":
+    "A list shows related entries of the page's entry on a page that is not an entry of a collection.",
   "list-too-deep":
     "A list shows related entries of a list that already shows related entries.",
+  "list-named-query-invalid":
+    "A list's custom source is not a query's name and a record of input values.",
+  "list-source-conflict":
+    "A list's custom source sits beside a collection, related entries, filters or sort.",
+  "list-named-query-unknown":
+    "A list's custom source names a query this site does not register.",
+  "list-named-query-param-missing":
+    "A list's custom source leaves out an input its query needs.",
+  "list-named-query-param-invalid":
+    "A list's custom source holds an input value its query does not take.",
+  "list-named-query-param-unknown":
+    "A list's custom source holds an input its query no longer declares.",
+  "list-named-query-reads-hidden":
+    "A list's custom source reads a collection visitors cannot read.",
+  "list-named-query-rows-hidden":
+    "A list's custom source lists entries of a collection visitors cannot read.",
+  "list-named-query-uncounted":
+    "A list split into pages has a custom source that does not count its entries.",
+  "list-paginate-invalid":
+    "A list's split into pages is not stored as on or off.",
+  "list-paginate-twice": "More than one list on a page is split into pages.",
+  "list-paginate-nested": "A list split into pages sits inside another list.",
+  "list-paginate-related":
+    "A list split into pages shows related entries, which have no count of pages.",
+  "list-paginate-shared":
+    "A list split into pages sits in a component or a Layout region, which shows on many pages.",
 };
 
-/** A field name as a list may write it: no paths, operators or quoting. */
-const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-/** A calendar day, as a date filter stores it. */
-const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
-
-/** Whether a value is a field name a list may write. */
-function isFieldName(value: unknown): value is string {
-  return (
-    typeof value === "string" && FIELD_NAME.test(value) && value !== "__proto__"
-  );
+/**
+ * Whether a value is a field name a list or a condition may write: one
+ * top-level field, no paths, operators or quoting.
+ */
+export function isListFieldName(value: unknown): value is string {
+  return isTopLevelFieldName(value);
 }
 
 /** Whether `op` is one of the closed set. */
@@ -196,16 +316,19 @@ export function isListFilterOp(op: unknown): op is ListFilterOp {
  * stores the day an author picked, and the reader compares whole days.
  */
 export function isListDay(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const match = DAY.exec(value);
-  if (match === null) return false;
-  const [year, month, day] = [match[1], match[2], match[3]].map(Number);
-  const date = new Date(Date.UTC(year ?? 0, (month ?? 1) - 1, day ?? 1));
-  return (
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() + 1 === month &&
-    date.getUTCDate() === day
-  );
+  return isCalendarDay(value);
+}
+
+/**
+ * The day after a `YYYY-MM-DD` day, for comparing whole days: "after the 1st"
+ * is "from the start of the 2nd". A list's day filter and a condition on a
+ * day read it alike.
+ */
+export function listDayAfter(day: string): string {
+  const [year, month, date] = day.split("-").map(Number);
+  return new Date(Date.UTC(year ?? 0, (month ?? 1) - 1, (date ?? 1) + 1))
+    .toISOString()
+    .slice(0, 10);
 }
 
 function isScalar(value: unknown): value is ListFilterScalar {
@@ -293,7 +416,7 @@ function readFilter(
       `holds ${extra.map(key => `"${describeValue(key)}"`).join(", ")}, which a filter row does not take`
     );
   }
-  if (!isFieldName(row.field)) {
+  if (!isListFieldName(row.field)) {
     return problem(`names "${describeValue(row.field)}", which is not a field`);
   }
   if (!isListFilterOp(row.op)) {
@@ -316,36 +439,43 @@ function readFilter(
 
 /**
  * The stored sort read as keys: split on commas, each trimmed, empty ones
- * skipped, as the reader that orders the rows splits and skips them.
+ * skipped, as the reader that orders the rows splits and skips them, and
+ * held to {@link LIST_MAX_SORT_LENGTH} and {@link LIST_MAX_SORT_KEYS}.
  */
 function readSort(
   value: unknown
 ): { keys: ListSortKey[] } | { problem: ListQueryProblem } {
   if (value === undefined || value === null) return { keys: [] };
-  const problem = (message: string) => ({
-    problem: {
-      prop: "sort" as const,
-      code: "list-sort-invalid" as const,
-      message,
-    },
-  });
-  if (typeof value !== "string") {
-    return problem("The sort is not text naming fields, such as -date,title.");
+  const read =
+    typeof value === "string"
+      ? sortKeysIn(value)
+      : "The sort is not text naming fields, such as -date,title.";
+  return typeof read === "string"
+    ? { problem: { prop: "sort", code: "list-sort-invalid", message: read } }
+    : { keys: read };
+}
+
+/** A stored sort string's keys, or why it is not a sort a list stores. */
+function sortKeysIn(stored: string): ListSortKey[] | string {
+  // Bounded before it is split, so no reader splits a sort without bound.
+  if (stored.length > LIST_MAX_SORT_LENGTH) {
+    return `A list's sort holds at most ${String(LIST_MAX_SORT_LENGTH)} characters; this one holds ${String(stored.length)}.`;
   }
   const keys: ListSortKey[] = [];
-  for (const part of value.split(",")) {
+  for (const part of stored.split(",")) {
     const text = part.trim();
     if (text === "") continue;
     const descending = text.startsWith("-");
     const field = (descending ? text.slice(1) : text).trim();
-    if (!isFieldName(field)) {
-      return problem(
-        `The sort names "${describeValue(text)}", which is not a field name, such as -date.`
-      );
+    if (!isListFieldName(field)) {
+      return `The sort names "${describeValue(text)}", which is not a field name, such as -date.`;
     }
     keys.push({ field, descending });
   }
-  return { keys };
+  if (keys.length > LIST_MAX_SORT_KEYS) {
+    return `A list sorts by at most ${String(LIST_MAX_SORT_KEYS)} fields; this one sorts by ${String(keys.length)}.`;
+  }
+  return keys;
 }
 
 /**
@@ -398,7 +528,7 @@ function readRelation(
       `The related source is of "${describeValue(value.of)}", which is neither "entry" nor "item".`
     );
   }
-  if (!isFieldName(value.field)) {
+  if (!isListFieldName(value.field)) {
     return problem(
       `The related source names "${describeValue(value.field)}", which is not a field.`
     );
@@ -409,6 +539,114 @@ function readRelation(
     );
   }
   return { of: value.of, field: value.field };
+}
+
+/** A problem with a list's custom source. */
+function namedProblem(message: string): ListQueryProblem {
+  return { prop: "namedQuery", code: "list-named-query-invalid", message };
+}
+
+/** Why one stored input is not a literal a list may hold, or nothing. */
+function storedParamProblem(key: string, value: unknown): string | undefined {
+  if (!isNamedQueryParamKey(key)) {
+    return `The custom source holds an input named "${describeValue(key)}", which is not an input's key.`;
+  }
+  if (
+    typeof value !== "string" &&
+    typeof value !== "boolean" &&
+    !(typeof value === "number" && Number.isFinite(value))
+  ) {
+    return `Input "${key}" holds ${describeValue(value)}, which is not a text, number or yes-or-no value.`;
+  }
+  if (typeof value === "string" && value.length > NAMED_QUERY_TEXT_MAX) {
+    return `Input "${key}" holds more than ${String(NAMED_QUERY_TEXT_MAX)} characters.`;
+  }
+  return undefined;
+}
+
+/** A stored custom source's inputs, or why they are not a record of literals. */
+function readNamedParams(
+  value: unknown
+): Record<string, NamedQueryParamValue> | ListQueryProblem {
+  if (value === undefined || value === null) return {};
+  if (!isPlainRecord(value)) {
+    return namedProblem(
+      "The custom source's inputs are not a record of values."
+    );
+  }
+  const keys = Object.keys(value);
+  if (keys.length > NAMED_QUERY_MAX_PARAMS) {
+    return namedProblem(
+      `A custom source holds at most ${String(NAMED_QUERY_MAX_PARAMS)} inputs; this one holds ${String(keys.length)}.`
+    );
+  }
+  const params: Record<string, NamedQueryParamValue> = {};
+  for (const key of keys) {
+    const problem = storedParamProblem(key, value[key]);
+    if (problem !== undefined) return namedProblem(problem);
+    params[key] = value[key] as NamedQueryParamValue;
+  }
+  return params;
+}
+
+/** A stored custom source read, or why it could not be. */
+function readNamedQuery(
+  value: unknown
+): ListNamedQuery | ListQueryProblem | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (
+    !isPlainRecord(value) ||
+    Object.keys(value).some(key => key !== "name" && key !== "params")
+  ) {
+    return namedProblem("The custom source is not { name, params }.");
+  }
+  if (!isNamedQueryName(value.name)) {
+    return namedProblem(
+      `The custom source names "${describeValue(value.name)}", which is not a query name.`
+    );
+  }
+  const params = readNamedParams(value.params);
+  return isProblem(params) ? params : { name: value.name, params };
+}
+
+/**
+ * Why a stored custom source sits beside another source, or nothing. Empty
+ * filters and an empty sort name nothing, so they do not count.
+ */
+/**
+ * Whether a list's props name a source besides a custom one: a collection,
+ * related entries, filters or a sort. Empty filters, an empty sort and a
+ * blank collection name nothing, as `readListQuery` reads them. The one
+ * answer the save and a write that sets a custom source both ask.
+ */
+export function namesListSource(
+  record: Readonly<Record<string, unknown>>
+): boolean {
+  const stored = (value: unknown) => value !== undefined && value !== null;
+  const filters = record.filters;
+  const sort = record.sort;
+  return (
+    collectionOf(record.collection) !== undefined ||
+    stored(record.relation) ||
+    (Array.isArray(filters) ? filters.length > 0 : stored(filters)) ||
+    (typeof sort === "string" ? sort.trim() !== "" : stored(sort))
+  );
+}
+
+function sourceConflict(
+  record: Readonly<Record<string, unknown>>
+): ListQueryProblem | undefined {
+  if (record.namedQuery === undefined || record.namedQuery === null) {
+    return undefined;
+  }
+  return namesListSource(record)
+    ? {
+        prop: "namedQuery",
+        code: "list-source-conflict",
+        message:
+          "This list's source is a custom source, so it can't also name a collection, related entries, filters or sort.",
+      }
+    : undefined;
 }
 
 function isProblem(value: unknown): value is ListQueryProblem {
@@ -510,27 +748,192 @@ export function readListQuery(props: unknown): {
     message: stored =>
       `The number of entries to skip is ${stored}. Skip a whole number of entries, 0 or more.`,
   });
+  const paginate = readPaginate(record.paginate);
   const filters = readFilters(record.filters);
   const sorted = readSort(record.sort);
   const relation = readRelation(record.relation, collection);
+  const named = readNamedQuery(record.namedQuery);
   const problems = [
     limit.problem,
     offset.problem,
+    paginate.problem,
     ...filters.problems,
     "problem" in sorted ? sorted.problem : undefined,
     isProblem(relation) ? relation : undefined,
+    isProblem(named) ? named : undefined,
+    sourceConflict(record),
   ].filter((problem): problem is ListQueryProblem => problem !== undefined);
   return {
     query: {
       ...(collection === undefined ? {} : { collection }),
       ...(relation === undefined || isProblem(relation) ? {} : { relation }),
+      ...(named === undefined || isProblem(named) ? {} : { namedQuery: named }),
       filters: filters.filters,
       sort: "keys" in sorted ? sorted.keys : [],
       ...(limit.value === undefined ? {} : { limit: limit.value }),
       ...(offset.value === undefined ? {} : { offset: offset.value }),
+      ...(paginate.value === true ? { paginate: true as const } : {}),
     },
     problems,
   };
+}
+
+/**
+ * The stored split into pages: on when `true`, off when absent or `false`,
+ * which a switch turned off stores.
+ */
+function readPaginate(value: unknown): {
+  value?: true;
+  problem?: ListQueryProblem;
+} {
+  if (value === undefined || value === false) return {};
+  if (value === true) return { value: true };
+  return {
+    problem: {
+      prop: "paginate",
+      code: "list-paginate-invalid",
+      message: `Split into pages is ${describeValue(value)}. Turn it on or off.`,
+    },
+  };
+}
+
+/**
+ * How many pages a list split into pages has: the entries after the skipped
+ * ones, `limit` to a page, and never fewer than one, which shows the list's
+ * empty state when nothing is left. The one count the route, the renderer's
+ * links and the editor share, so none of them names a page the others do not.
+ */
+export function listPageCount(
+  matching: number,
+  offset: number,
+  limit: number
+): number {
+  const left = Math.max(0, matching - offset);
+  return Math.max(1, Math.ceil(left / Math.max(1, limit)));
+}
+
+/**
+ * The ids of the nodes inside a list, in any of its slots: what it draws per
+ * entry and its empty state alike. Bounded by `maxNodes`.
+ */
+function idsInsideLists(
+  nodes: readonly unknown[],
+  maxNodes: number
+): Set<string> {
+  const inside = new Set<string>();
+  const stack: { node: unknown; listed: boolean }[] = [...nodes]
+    .reverse()
+    .map(node => ({ node, listed: false }));
+  let left = maxNodes;
+  for (let visit = stack.pop(); visit !== undefined; visit = stack.pop()) {
+    if (left <= 0) break;
+    left -= 1;
+    const { node } = visit;
+    if (!isPlainRecord(node)) continue;
+    if (visit.listed && typeof node.id === "string") inside.add(node.id);
+    const listed = visit.listed || node.type === COLLECTION_LIST_TYPE;
+    const slots = node.slots;
+    if (!isPlainRecord(slots)) continue;
+    for (const name of Object.keys(slots).reverse()) {
+      const children = slots[name];
+      if (!Array.isArray(children)) continue;
+      for (let index = children.length - 1; index >= 0; index -= 1) {
+        stack.push({ node: children[index], listed });
+      }
+    }
+  }
+  return inside;
+}
+
+/** The list on a page that is split into pages, as its node holds it. */
+export interface PaginatedList {
+  readonly id: string;
+  /** The author's name for the list, when it has one. */
+  readonly name?: string;
+  readonly props: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * The list a page's address pages, or undefined when none is split into
+ * pages: the first, in document order, of the lists split into pages that
+ * are not inside another list and read a collection rather than related
+ * entries. Every other list split into pages is one validation refuses, and
+ * one that reaches the renderer anyway shows its first page alone.
+ *
+ * Bounded by `maxNodes`, and reading only plain records, because a stored
+ * document is whatever the database returned.
+ *
+ * `propsOf` reads a list's props in place of the ones it stores, so a caller
+ * that fills a list's bindings judges it as drawn: a list whose split into
+ * pages is bound to an entry's value pages where that value is true, and the
+ * answer carries the props as read. Every other node is walked as stored.
+ */
+export function paginatedList(
+  nodes: readonly unknown[],
+  maxNodes: number = Number.MAX_SAFE_INTEGER,
+  propsOf: (list: Readonly<Record<string, unknown>>) => unknown = list =>
+    list.props
+): PaginatedList | undefined {
+  const stack: unknown[] = [...nodes].reverse();
+  let left = maxNodes;
+  for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
+    if (left <= 0) return undefined;
+    left -= 1;
+    if (!isPlainRecord(node)) continue;
+    if (node.type === COLLECTION_LIST_TYPE) {
+      const props = propsOf(node);
+      const { query } = readListQuery(props);
+      if (
+        query.paginate === true &&
+        query.relation === undefined &&
+        typeof node.id === "string"
+      ) {
+        return {
+          id: node.id,
+          ...(typeof node.name === "string" && node.name.trim() !== ""
+            ? { name: node.name.trim() }
+            : {}),
+          props: isPlainRecord(props) ? props : {},
+        };
+      }
+    }
+    // Nothing inside a list pages: what it draws per entry repeats once per
+    // outer entry, and its empty state is drawn only when it has none, so
+    // neither is always on the page its address serves.
+    if (node.type === COLLECTION_LIST_TYPE) continue;
+    const slots = node.slots;
+    if (!isPlainRecord(slots)) continue;
+    for (const name of Object.keys(slots).reverse()) {
+      const children = slots[name];
+      if (Array.isArray(children)) {
+        for (let index = children.length - 1; index >= 0; index -= 1) {
+          stack.push(children[index]);
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The list a page's address may page, judged from the stored document
+ * alone: the one {@link paginatedList} finds, taking a list whose split into
+ * pages is bound to the entry as split, since only a page's binding pass
+ * settles whether it is. A page with none pages nothing whatever its entry
+ * holds; one with a bound split may. What a caller that cannot run the
+ * binding pass (a save, the route before it reads anything) asks.
+ *
+ * @experimental Settles with list pagination.
+ */
+export function mayPaginateList(
+  nodes: readonly unknown[],
+  maxNodes: number = Number.MAX_SAFE_INTEGER
+): PaginatedList | undefined {
+  return paginatedList(nodes, maxNodes, list =>
+    isPlainRecord(list.bindings) && "paginate" in list.bindings
+      ? { ...(isPlainRecord(list.props) ? list.props : {}), paginate: true }
+      : list.props
+  );
 }
 
 /** The fields of one collection, as a list's filters and sort are judged. */
@@ -561,8 +964,21 @@ export interface ListFieldSource {
 export interface ListQueryJudgement {
   /** The schema; absent, lists are judged by their shape and nesting only. */
   readonly fields?: ListFieldSource;
-  /** The collection of the entry the page shows, for an `entry` relation. */
-  readonly entryCollection?: string;
+  /**
+   * The collection of the entry the page shows, for an `entry` relation.
+   * `null` when the page is known to be no collection's entry (a Single's),
+   * whose renderer has no entry to read a relation of, so such a list is
+   * refused; absent when the page is not known, and such a list is judged by
+   * its shape alone.
+   */
+  readonly entryCollection?: string | null;
+  /**
+   * The named queries the site registers, for a list whose source is one.
+   * Absent, such a list is judged by its shape alone; given, its name and
+   * inputs are judged against the query's declaration, and, with
+   * {@link fields}, whether visitors can read what it lists.
+   */
+  readonly namedQueries?: NamedQuerySource;
   /**
    * The document's stored forms. A problem one of them already holds, on the
    * same block, is a warning rather than an error: a list stored before a
@@ -572,13 +988,19 @@ export interface ListQueryJudgement {
   readonly stored?: readonly BlockDocument[];
   /** How many nodes to visit at most, as the rest of validation is bounded. */
   readonly maxNodes?: number;
+  /**
+   * What the document is (`page`, `component`, `region`, …). A component
+   * or a Layout region shows on many pages, so no list in one may be split
+   * into pages; absent, where its lists sit is not judged.
+   */
+  readonly documentKind?: string;
 }
 
 /** One finding about a list, before its severity is decided. */
 interface Finding {
   readonly path: string;
   readonly nodeId: string;
-  readonly code: ListShapeCode | ListFieldCode;
+  readonly code: ListShapeCode | ListFieldCode | ListPageCode;
   readonly message: string;
 }
 
@@ -632,7 +1054,9 @@ function namedFieldFinding(
   const uses = named.use === "filter" ? "filters by" : "sorts by";
   const judged = readableField(named.field, fields, { uses, collection });
   if (!("shape" in judged)) return judged;
-  if (judged.shape.hasMany !== true) return undefined;
+  if (judged.shape.hasMany !== true) {
+    return kindFinding(named, listFieldKind(judged.shape));
+  }
   // A field holding several values has no one value to order by, and its
   // operators read it as one value, so `in` on a has-many relation matches
   // nothing on any database rather than "includes any of".
@@ -645,6 +1069,38 @@ function namedFieldFinding(
         code: "list-field-unfilterable",
         message: `This list filters by "${named.field}", which holds more than one value. A list cannot filter by such a field yet.`,
       };
+}
+
+/**
+ * The finding about a field of one value a list names, by its kind: the
+ * editor offers a filter only on a field with a kind (`listFieldKind`) and a
+ * sort only on a sortable one (`listKindSortable`), and the save holds every
+ * other writer to the same offer. Without it, a sort on a relation or a
+ * filter on a time of day saves, and the reader refuses it or compares a
+ * stored form no author chose.
+ */
+function kindFinding(
+  named: { readonly field: string; readonly use: "filter" | "sort" },
+  kind: ListFieldKind | undefined
+): { code: ListFieldCode; message: string } | undefined {
+  if (kind === undefined) {
+    return named.use === "sort"
+      ? {
+          code: "list-field-unsortable",
+          message: `This list sorts by "${named.field}", which holds a value a list cannot order by, such as a time of day, rich text or media. Choose another field.`,
+        }
+      : {
+          code: "list-field-unfilterable",
+          message: `This list filters by "${named.field}", which holds a value a list cannot compare, such as a time of day, rich text or media. Choose another field.`,
+        };
+  }
+  if (named.use === "sort" && !listKindSortable(kind)) {
+    return {
+      code: "list-field-unsortable",
+      message: `This list sorts by "${named.field}", which links to another entry, so it has no order an author could mean. Choose another field.`,
+    };
+  }
+  return undefined;
 }
 
 /** The judgement of the fields a list filters and sorts by. */
@@ -826,9 +1282,14 @@ const KIND_VALUE_RULES: Readonly<
     fits: isListDay,
     need: { holds: "a date", choose: "a day, written YYYY-MM-DD" },
   },
+  // Every operator but `exists` compares the number with the value, so
+  // each takes a number (a list of them for membership): text or a yes or
+  // no is compared, or refused, differently by each database.
   number: {
-    applies: ordersValues,
-    fits: value => typeof value === "number",
+    applies: op => op !== "exists",
+    fits: value =>
+      typeof value === "number" ||
+      (Array.isArray(value) && value.every(each => typeof each === "number")),
     need: { holds: "a number", choose: "a number" },
   },
   boolean: {
@@ -851,6 +1312,16 @@ function kindValueNeed(
 }
 
 /**
+ * A stored value as a finding names it: text quoted, so the text "5" is not
+ * read as the number 5.
+ */
+function valueWords(value: unknown): string {
+  return typeof value === "string"
+    ? `"${describeValue(value)}"`
+    : describeValue(value);
+}
+
+/**
  * Why a filter row does not suit its field's kind, or nothing when it does:
  * an operator the kind does not take, or a value of the wrong sort for it.
  * Without this, a day-shaped value on a text field would be read as a date
@@ -868,7 +1339,7 @@ function kindProblem(
   const need = kindValueNeed(kind, row.op, row.value);
   return need === undefined
     ? undefined
-    : `${where}, which holds ${need.holds}, with ${describeValue(row.value)}. Choose ${need.choose}.`;
+    : `${where}, which holds ${need.holds}, with ${valueWords(row.value)}. Choose ${need.choose}.`;
 }
 
 /**
@@ -916,21 +1387,42 @@ function relationSource(
   relation: ListRelation,
   outer: EnclosingList | undefined,
   judgement: ListQueryJudgement
-): { collection: string | undefined } | { problem: string; deep: boolean } {
+):
+  | { collection: string | undefined }
+  | {
+      problem: string;
+      code:
+        | "list-relation-invalid"
+        | "list-too-deep"
+        | "list-relation-no-entry";
+    } {
   if (relation.of === "entry") {
+    if (judgement.entryCollection === null) {
+      return {
+        problem:
+          "This page isn't an entry in a collection, so it has no related entries to show. Choose a collection.",
+        code: "list-relation-no-entry",
+      };
+    }
     return { collection: judgement.entryCollection };
   }
   if (outer === undefined) {
     return {
       problem:
         "This list shows related entries of the outer item, but it is not inside another list. Choose a collection, or move this list into a list.",
-      deep: false,
+      code: "list-relation-invalid",
+    };
+  }
+  if (outer.query.namedQuery !== undefined) {
+    return {
+      problem: NAMED_QUERY_TEXT.nestedRelated,
+      code: "list-relation-invalid",
     };
   }
   if (outer.query.relation !== undefined) {
     return {
       problem: `Too deep for a related field. This list is inside a list that already shows each ${outer.query.relation.of === "entry" ? "entry's" : "item's"} ${outer.query.relation.field}, and related entries go one level deep. Choose a collection, or move this list out of that list.`,
-      deep: true,
+      code: "list-too-deep",
     };
   }
   return { collection: outer.query.collection };
@@ -986,7 +1478,7 @@ function relationFindings(
       {
         path: at("relation"),
         nodeId,
-        code: source.deep ? "list-too-deep" : "list-relation-invalid",
+        code: source.code,
         message: source.problem,
       },
     ];
@@ -1018,12 +1510,257 @@ function relationFindings(
       ];
 }
 
+/** A query's collection by the name authors read it by, its slug standing in. */
+function collectionWords(
+  judgement: ListQueryJudgement,
+  collection: string
+): string {
+  return judgement.fields?.fieldsOf(collection)?.label ?? collection;
+}
+
+/**
+ * Whether visitors can read nothing of a collection, as far as the schema
+ * says: `false` when its fields are not known.
+ */
+function unreadable(
+  judgement: ListQueryJudgement,
+  collection: string
+): boolean {
+  const fields = judgement.fields?.fieldsOf(collection);
+  return fields !== undefined && fields.readable.length === 0;
+}
+
+/** The fields every entry keeps, which say nothing about what is hidden. */
+const ENTRY_KEPT: ReadonlySet<string> = new Set([
+  "id",
+  "createdAt",
+  "updatedAt",
+]);
+
+/**
+ * One collection a named query reads that visitors can read nothing of: its
+ * name as authors read it, and the fields it declares, which a published
+ * page's rows go without.
+ *
+ * @experimental
+ */
+export interface NamedQueryHiddenRead {
+  readonly collection: string;
+  readonly label: string;
+  /** Its declared fields, the id and timestamps left out; none when unknown. */
+  readonly fields: readonly string[];
+}
+
+/**
+ * The schema a list's items bind against: the collection their entries are
+ * of, where they are a collection's entries (an ordinary list's collection,
+ * or a named query whose rows are that collection's entries); else the named
+ * query's own declared rows; else none known. The one rule the render, the
+ * save and the report of bindings to fix all read an item binding by.
+ *
+ * @experimental
+ */
+export function listItemRef(rows: {
+  readonly collection?: string | undefined;
+  readonly query?: string | undefined;
+}): { readonly collection: string } | { readonly query: string } | undefined {
+  if (typeof rows.collection === "string" && rows.collection !== "") {
+    return { collection: rows.collection };
+  }
+  return typeof rows.query === "string" ? { query: rows.query } : undefined;
+}
+
+/**
+ * The collections a named query declares it reads, other than the one its
+ * rows are entries of, that visitors can read nothing of, as far as `fields`
+ * knows: the one answer the save's warning, the editor's inspector and its
+ * canvas share. A collection `fields` does not know is left out.
+ *
+ * @experimental
+ */
+export function namedQueryHiddenReads(
+  declaration: NamedQueryDeclaration,
+  fields: ListFieldSource
+): NamedQueryHiddenRead[] {
+  const rows = declaration.rows;
+  const rowsCollection = "collection" in rows ? rows.collection : undefined;
+  const hidden: NamedQueryHiddenRead[] = [];
+  for (const read of declaration.reads.collections ?? []) {
+    if (read === rowsCollection) continue;
+    const known = fields.fieldsOf(read);
+    if (known === undefined || known.readable.length > 0) continue;
+    hidden.push({
+      collection: read,
+      label: known.label ?? read,
+      fields: [...known.declared].filter(name => !ENTRY_KEPT.has(name)),
+    });
+  }
+  return hidden;
+}
+
+/**
+ * The judgement of a list's custom source against its query's declaration:
+ * a name nothing registers, each input missing, not fitting or no longer
+ * declared, a list split into pages whose query does not count its rows,
+ * and, where the schema is known, a query whose rows visitors can never read
+ * or that reads a collection they cannot.
+ */
+function namedFindings(
+  query: ListQuery,
+  judgement: ListQueryJudgement,
+  at: (prop: ListQueryProp) => string,
+  nodeId: string
+): Finding[] {
+  const named = query.namedQuery;
+  const source = judgement.namedQueries;
+  if (named === undefined || source === undefined) return [];
+  const declaration = source.declarationOf(named.name);
+  if (declaration === undefined) {
+    return [
+      {
+        path: at("namedQuery"),
+        nodeId,
+        code: "list-named-query-unknown",
+        message: NAMED_QUERY_TEXT.unknown(named.name),
+      },
+    ];
+  }
+  const inputAt = (key: string) =>
+    pointer(pointer(at("namedQuery"), "params"), key);
+  const judged = judgeNamedParams(declaration, named.params);
+  const found: Finding[] = [
+    ...judged.problems.map(problem => ({
+      path: inputAt(problem.param),
+      nodeId,
+      code:
+        problem.kind === "missing"
+          ? ("list-named-query-param-missing" as const)
+          : ("list-named-query-param-invalid" as const),
+      message: problem.message,
+    })),
+    ...judged.unknown.map(key => ({
+      path: inputAt(key),
+      nodeId,
+      code: "list-named-query-param-unknown" as const,
+      message: NAMED_QUERY_TEXT.paramUnknown(declaration.label, key),
+    })),
+  ];
+  // A list split into pages counts its pages from its query's total, so a
+  // query declared without one gives the route nothing to count by. Judged
+  // here, against the declaration, so the save, the editor and the API all
+  // refuse it with the same words.
+  if (query.paginate === true && declaration.total !== true) {
+    found.push({
+      path: at("paginate"),
+      nodeId,
+      code: "list-named-query-uncounted",
+      message: NAMED_QUERY_TEXT.uncounted(declaration.label),
+    });
+  }
+  const rows = declaration.rows;
+  const rowsCollection = "collection" in rows ? rows.collection : undefined;
+  if (rowsCollection !== undefined && unreadable(judgement, rowsCollection)) {
+    found.push({
+      path: at("namedQuery"),
+      nodeId,
+      code: "list-named-query-rows-hidden",
+      message: NAMED_QUERY_TEXT.rowsHidden(
+        declaration.label,
+        collectionWords(judgement, rowsCollection)
+      ),
+    });
+  }
+  const hidden =
+    judgement.fields === undefined
+      ? []
+      : namedQueryHiddenReads(declaration, judgement.fields);
+  for (const read of hidden) {
+    found.push({
+      path: at("namedQuery"),
+      nodeId,
+      code: "list-named-query-reads-hidden",
+      message: NAMED_QUERY_TEXT.readsHidden(read.label, read.fields),
+    });
+  }
+  return found;
+}
+
+/** Where each kind of shared document shows, for the words of a refusal. */
+const SHOWN_ON_MANY: Readonly<Record<string, string>> = {
+  component:
+    "This list is in a component, which can be placed on many pages, so it can't be split into pages.",
+  region:
+    "This list is in a Layout region, which shows on every page using the Layout, so it can't be split into pages.",
+};
+
+/**
+ * Why a list split into pages may not be: it sits where nothing has an
+ * address of its own, it has no count of pages, or another list on the page
+ * already pages. `paging` is the one list the page's address pages.
+ */
+function pageFindings(
+  query: ListQuery,
+  outer: EnclosingList | undefined,
+  judgement: ListQueryJudgement,
+  paging: PageOwner,
+  at: (prop: ListQueryProp) => string,
+  nodeId: string
+): Finding[] {
+  if (query.paginate !== true) return [];
+  const refused = (code: ListPageCode, message: string): Finding[] => [
+    { path: at("paginate"), nodeId, code, message },
+  ];
+  const shared =
+    judgement.documentKind === undefined
+      ? undefined
+      : SHOWN_ON_MANY[judgement.documentKind];
+  if (shared !== undefined) {
+    return refused(
+      "list-paginate-shared",
+      `${shared} Turn off Split into pages.`
+    );
+  }
+  // Inside another list in any slot: drawn once per outer entry, or, in its
+  // empty state, only when the outer list has none.
+  if (outer !== undefined || paging.insideLists.has(nodeId)) {
+    return refused(
+      "list-paginate-nested",
+      "This list is split into pages, but it sits inside another list, which repeats it for each entry with no address of its own. Turn off Split into pages, or move this list out of that list."
+    );
+  }
+  if (query.relation !== undefined) {
+    return refused(
+      "list-paginate-related",
+      "This list shows related entries, which can't be split into pages. Show a collection instead, or turn off Split into pages."
+    );
+  }
+  const owner = paging.list;
+  if (owner !== undefined && owner.id !== nodeId) {
+    const other =
+      owner.name === undefined
+        ? "another list on this page"
+        : `"${owner.name}"`;
+    return refused(
+      "list-paginate-twice",
+      `Only one list on a page can be split into pages, and ${other} already is. Turn off Split into pages on one of them.`
+    );
+  }
+  return [];
+}
+
+/** The list a page's address pages, and the nodes no address can page. */
+interface PageOwner {
+  readonly list: PaginatedList | undefined;
+  readonly insideLists: ReadonlySet<string>;
+}
+
 /** Everything found about one list node. */
 function findingsFor(
   node: Readonly<Record<string, unknown>>,
   path: string,
   outer: EnclosingList | undefined,
-  judgement: ListQueryJudgement
+  judgement: ListQueryJudgement,
+  paging: PageOwner
 ): { findings: Finding[]; list: EnclosingList } {
   const { query, problems } = readListQuery(node.props);
   const at = (prop: ListQueryProp) => pointer(`${path}/props`, prop);
@@ -1035,6 +1772,8 @@ function findingsFor(
     message: problem.message,
   }));
   findings.push(...relationFindings(query, outer, judgement, at, nodeId));
+  findings.push(...namedFindings(query, judgement, at, nodeId));
+  findings.push(...pageFindings(query, outer, judgement, paging, at, nodeId));
   const fields =
     query.collection === undefined || judgement.fields === undefined
       ? undefined
@@ -1053,6 +1792,43 @@ interface Visit {
   readonly outer: EnclosingList | undefined;
 }
 
+/** Push a slot's children onto the walk's stack, first child on top. */
+function pushChildren(
+  stack: Visit[],
+  list: readonly unknown[],
+  base: string,
+  outer: EnclosingList | undefined
+): void {
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    stack.push({ node: list[index], path: pointer(base, index), outer });
+  }
+}
+
+/**
+ * Push each slot of a visited node, with the list whose entry is the item
+ * there: `entryScope` (the node's own list, when it is one) in the slot a
+ * list draws per entry, and the list around the node everywhere else, since
+ * a list's other slots are drawn with the item around the list itself.
+ */
+function pushSlots(
+  stack: Visit[],
+  visit: Visit & { readonly node: Readonly<Record<string, unknown>> },
+  entryScope: EnclosingList | undefined
+): void {
+  const slots = visit.node.slots;
+  if (!isPlainRecord(slots)) return;
+  for (const name of Object.keys(slots).reverse()) {
+    const children = slots[name];
+    if (!Array.isArray(children)) continue;
+    pushChildren(
+      stack,
+      children,
+      pointer(`${visit.path}/slots`, name),
+      name === LIST_ENTRY_SLOT ? entryScope : visit.outer
+    );
+  }
+}
+
 /**
  * Every finding about the lists in a forest, in document order. Iterative,
  * bounded by `maxNodes`, and reading only plain records, because a stored
@@ -1064,47 +1840,28 @@ function walkFindings(
 ): Finding[] {
   const findings: Finding[] = [];
   const budget = { left: judgement.maxNodes ?? Number.MAX_SAFE_INTEGER };
-  const stack: Visit[] = [];
-  const pushChildren = (
-    list: readonly unknown[],
-    base: string,
-    outer: EnclosingList | undefined
-  ) => {
-    for (let index = list.length - 1; index >= 0; index -= 1) {
-      stack.push({
-        node: list[index],
-        path: pointer(base, index),
-        outer,
-      });
-    }
+  // The one list the page's address pages, as the route and renderer find
+  // it, so every other list split into pages is judged against that one.
+  const paging: PageOwner = {
+    list: paginatedList(nodes, budget.left),
+    insideLists: idsInsideLists(nodes, budget.left),
   };
-  pushChildren(nodes, "/nodes", undefined);
+  const stack: Visit[] = [];
+  pushChildren(stack, nodes, "/nodes", undefined);
   for (let visit = stack.pop(); visit !== undefined; visit = stack.pop()) {
     if (budget.left <= 0) break;
     budget.left -= 1;
     const { node, path } = visit;
     if (!isPlainRecord(node)) continue;
-    let outer = visit.outer;
+    let entryScope = visit.outer;
     if (node.type === COLLECTION_LIST_TYPE) {
-      const judged = findingsFor(node, path, outer, judgement);
+      const judged = findingsFor(node, path, visit.outer, judgement, paging);
       findings.push(...judged.findings);
-      outer = judged.list;
+      entryScope = judged.list;
     }
-    const slots = node.slots;
-    if (!isPlainRecord(slots)) continue;
-    for (const name of Object.keys(slots).reverse()) {
-      const children = slots[name];
-      if (Array.isArray(children)) {
-        pushChildren(children, pointer(`${path}/slots`, name), outer);
-      }
-    }
+    pushSlots(stack, { ...visit, node }, entryScope);
   }
   return findings;
-}
-
-/** What makes two findings the same problem on the same block. */
-function signature(finding: Finding): string {
-  return `${finding.nodeId}\u0000${finding.code}\u0000${finding.message}`;
 }
 
 /**
@@ -1116,7 +1873,11 @@ function signature(finding: Finding): string {
  * collection does not have, one the public may not read, a list-valued sort
  * key, and a related source that is not a to-many relation to the list's
  * collection. Each is an error, except one a stored form already held on
- * the same block, which is a warning.
+ * the same block, which is a warning. A custom source's name and inputs are
+ * judged when `judgement.namedQueries` is given, and so is whether its query
+ * counts its rows where the list is split into pages; an input the query no
+ * longer takes, and a declared read visitors cannot read, are always
+ * warnings.
  */
 export function listQueryIssues(
   nodes: readonly unknown[],
@@ -1125,29 +1886,35 @@ export function listQueryIssues(
   readonly path: string;
   /** The list block the issue is about, so an editor shows it on that block. */
   readonly nodeId: string;
-  readonly code: ListShapeCode | ListFieldCode;
+  readonly code: ListShapeCode | ListFieldCode | ListPageCode;
   readonly message: string;
   readonly severity: "error" | "warning";
 }[] {
-  const findings = walkFindings(nodes, judgement);
-  if (findings.length === 0) return [];
-  const held = new Set(
-    (judgement.stored ?? []).flatMap(form =>
-      isPlainRecord(form) && Array.isArray(form.nodes)
-        ? walkFindings(form.nodes, judgement).map(signature)
-        : []
-    )
+  // An input the query no longer takes and a read visitors cannot read are
+  // warnings whatever the stored forms hold.
+  return withHeldSeverity(
+    walkFindings(nodes, judgement),
+    judgement.stored,
+    forest => walkFindings(forest, judgement)
+  ).map(issue =>
+    ALWAYS_WARNINGS.has(issue.code) ? { ...issue, severity: "warning" } : issue
   );
-  return findings.map(finding => ({
-    path: finding.path,
-    nodeId: finding.nodeId,
-    code: finding.code,
-    message: finding.message,
-    severity: held.has(signature(finding)) ? "warning" : "error",
-  }));
 }
 
-/** The codes only a schema can decide, so a caller judging twice can tell them apart. */
+/**
+ * The codes that are warnings whatever the stored forms hold: an input the
+ * query no longer takes, which is left out, and a declared read visitors
+ * cannot read. In neither has the author done anything a save should refuse.
+ */
+const ALWAYS_WARNINGS: ReadonlySet<string> = new Set<ListFieldCode>([
+  "list-named-query-param-unknown",
+  "list-named-query-reads-hidden",
+]);
+
+/**
+ * The codes only the schema or the page's host can decide, so a caller
+ * judging twice can tell them apart.
+ */
 export const LIST_FIELD_CODES: ReadonlySet<string> = new Set<ListFieldCode>([
   "list-field-unknown",
   "list-field-protected",
@@ -1155,4 +1922,12 @@ export const LIST_FIELD_CODES: ReadonlySet<string> = new Set<ListFieldCode>([
   "list-field-unfilterable",
   "list-filter-unsuited",
   "list-relation-unsuitable",
+  "list-relation-no-entry",
+  "list-named-query-unknown",
+  "list-named-query-param-missing",
+  "list-named-query-param-invalid",
+  "list-named-query-param-unknown",
+  "list-named-query-reads-hidden",
+  "list-named-query-rows-hidden",
+  "list-named-query-uncounted",
 ]);

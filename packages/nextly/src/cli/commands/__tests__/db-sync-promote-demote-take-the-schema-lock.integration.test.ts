@@ -134,7 +134,8 @@ describe.each(LOCK_DIALECTS)(
 
     function promote(
       confirm: (code: string) => Promise<boolean> = async () => true,
-      lockWaitMs = 1_000
+      lockWaitMs = 1_000,
+      templateAddress?: (slug: string) => Promise<string | null>
     ) {
       return promoteCollection({
         slug: BUILT,
@@ -144,6 +145,7 @@ describe.each(LOCK_DIALECTS)(
         adapter,
         confirm,
         lockWaitMs,
+        ...(templateAddress === undefined ? {} : { templateAddress }),
       });
     }
 
@@ -247,6 +249,31 @@ describe.each(LOCK_DIALECTS)(
       );
       expect((error as NextlyError).logContext?.command).toBe(
         "nextly db:sync --promote"
+      );
+      expect(await state()).toEqual(before);
+    }, 90_000);
+
+    it("refuses a promote whose template address changed while the prompt was open", async () => {
+      // The address the page builder's template stores, moved in the admin
+      // while the operator read the preview that declared the old one.
+      let stored = "/old";
+      let before: Awaited<ReturnType<typeof state>> | undefined;
+      const error = await promote(
+        async code => {
+          expect(code).toContain('"/old"');
+          stored = "/new";
+          before = await state();
+          return true;
+        },
+        1_000,
+        async () => stored
+      ).then(
+        () => undefined,
+        (e: unknown) => e
+      );
+      expectPlanChanged(error);
+      expect((error as NextlyError).publicMessage).toBe(
+        `${BUILT}'s template address changed after you confirmed; nothing was changed; run the command again`
       );
       expect(await state()).toEqual(before);
     }, 90_000);

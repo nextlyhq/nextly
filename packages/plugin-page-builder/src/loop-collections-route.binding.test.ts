@@ -78,9 +78,10 @@ describe("the loop collections route", () => {
       ["read", "posts"],
       ["read", "orders"],
     ]);
-    // Asked of the public for the listed collection only, by its slug.
+    // Asked of the public for the listed collection only, by its slug, in
+    // every language when none is asked.
     expect(runtime.bindingFieldShapes.mock.calls).toEqual([
-      [{ collection: "posts" }],
+      [{ collection: "posts" }, {}],
     ]);
     const body = (await response.json()) as {
       items: { slug: string; fields: { name: string }[] }[];
@@ -90,6 +91,20 @@ describe("the loop collections route", () => {
       "title",
       "createdAt",
       "updatedAt",
+    ]);
+  });
+
+  it("asks the public in the language the editor asks in, as a save in it judges", async () => {
+    const ctx = contextAs(async (_action, slug) => slug === "posts");
+    const response = await loopCollectionsRoute().handler(
+      new Request(
+        `http://nextly.test/plugins/x${LOOP_COLLECTIONS_ROUTE_PATH}?locale=fr`
+      ),
+      ctx as unknown as PluginRouteContext
+    );
+    expect(response.status).toBe(200);
+    expect(runtime.bindingFieldShapes.mock.calls).toEqual([
+      [{ collection: "posts" }, { locale: "fr" }],
     ]);
   });
 });
