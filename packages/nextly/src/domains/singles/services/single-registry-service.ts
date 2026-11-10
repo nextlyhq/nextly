@@ -56,6 +56,7 @@ import {
 } from "../../entity-rename/rename-entity";
 import { flushContentChange } from "../../flush-content-change";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
@@ -774,34 +775,54 @@ export class SingleRegistryService extends BaseRegistryService<
     const documentTable = (await this.adapter.listTables()).includes(
       fetched.tableName
     );
-    const row = await renameEntity(this.adapter, {
-      dialect: this.dialect,
-      move: { kind: "single", from, to },
-      writeRegistry: async tx => {
-        const written = await tx.updateCount(
-          this.registryTableName,
-          { ...updateData, slug: to },
-          {
-            and: [
-              { column: "slug", op: "=", value: from },
-              { column: "id", op: "=", value: fetched.id },
-            ],
-          }
-        );
-        if (written === 0) return null;
-        if (documentTable) {
-          await tx.update(
-            fetched.tableName,
-            { slug: to },
-            this.whereEq("slug", from)
-          );
-        }
-        return tx.selectOne<DynamicSingleRecord>(this.registryTableName, {
-          where: this.whereEq("slug", to),
-        });
+    // The new address is judged again, and the rename written, under one hold of the schema
+    // lock. `updateSingle` judged it before taking the lock, which refuses early without work but
+    // cannot see a collection or Single that takes the same snake_case form in between; judged
+    // here, it does, and one that tries while this holds the lock is refused. `renameEntity`
+    // takes the same lock again, which nests.
+    const row = await withSchemaChangeExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: `rename single "${from}" to "${to}"`,
+        // A rename writes rows and no DDL, as `renameEntity` says of itself.
+        issuesDdl: false,
       },
-      logger: this.logger,
-    });
+      async () => {
+        await assertGlobalResourceSlugAvailable(this.adapter, to, {
+          currentResourceType: "single",
+          currentResourceId: fetched.id,
+        });
+        return renameEntity(this.adapter, {
+          dialect: this.dialect,
+          move: { kind: "single", from, to },
+          writeRegistry: async tx => {
+            const written = await tx.updateCount(
+              this.registryTableName,
+              { ...updateData, slug: to },
+              {
+                and: [
+                  { column: "slug", op: "=", value: from },
+                  { column: "id", op: "=", value: fetched.id },
+                ],
+              }
+            );
+            if (written === 0) return null;
+            if (documentTable) {
+              await tx.update(
+                fetched.tableName,
+                { slug: to },
+                this.whereEq("slug", from)
+              );
+            }
+            return tx.selectOne<DynamicSingleRecord>(this.registryTableName, {
+              where: this.whereEq("slug", to),
+            });
+          },
+          logger: this.logger,
+        });
+      }
+    );
     return row ? [row] : [];
   }
 
