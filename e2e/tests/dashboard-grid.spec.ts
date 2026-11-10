@@ -257,7 +257,7 @@ async function sizeDashboard(page: Page, target: number): Promise<void> {
 
 /**
  * The sizes a Width or Height submenu offers, read from each choice's test id (`card-width-6`)
- * rather than its text: a width is named by its share of the row ("½") with its columns beneath,
+ * rather than its text: a width is named by its share of the row ("50%") with its columns beneath,
  * so the text is no number to read.
  */
 async function valuesOf(choices: Locator): Promise<number[]> {

@@ -85,10 +85,11 @@ test("adds Over time for a collection from its add step, with the period and wid
   // Each chip as a reader presses it, then its radio is the one checked.
   await step.getByTestId("add-panel-period").getByText("Last 90 days").click();
   await expect(step.getByRole("radio", { name: "Last 90 days" })).toBeChecked();
-  await step.getByTestId("add-panel-width").getByText("Full").click();
-  await expect(
-    step.getByRole("radio", { name: "Full width, 12 columns" })
-  ).toBeChecked();
+  await step
+    .getByTestId("add-panel-width")
+    .getByText("100%", { exact: true })
+    .click();
+  await expect(step.getByRole("radio", { name: "100% width" })).toBeChecked();
   // The card previewed as it will be added, with the collection's own data.
   await expect(step.getByTestId("settings-preview")).toBeVisible();
   await step.getByRole("button", { name: "Add to dashboard" }).click();

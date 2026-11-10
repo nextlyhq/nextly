@@ -249,10 +249,10 @@ describe("opening", () => {
     expect(tile).toHaveAccessibleDescription(
       "How many entries a collection gained over a range."
     );
-    expect(tile).toHaveTextContent("⅓ to Full width");
+    expect(tile).toHaveTextContent("33% to 100% wide");
     expect(
       screen.getByRole("button", { name: "Add SEO score" })
-    ).toHaveTextContent("¼ width");
+    ).toHaveTextContent("25% wide");
   });
 
   it("draws a tile's preview with the widget's own view from its declared case, a sketch without one", async () => {
@@ -566,17 +566,18 @@ describe("the add step", () => {
     expect(
       within(period).getByRole("radio", { name: "30 days" })
     ).toBeChecked();
-    // Widths within its sizes only: from a third to full.
+    // Widths within its sizes only: from 33% to 100%, 75% among them.
     const width = within(step).getByRole("group", { name: "Width" });
     expect(
       within(width)
         .getAllByRole("radio")
         .map(radio => radio.getAttribute("aria-label"))
     ).toEqual([
-      "Third width, 4 columns",
-      "Half width, 6 columns",
-      "Two thirds width, 8 columns",
-      "Full width, 12 columns",
+      "33% width",
+      "50% width",
+      "66% width",
+      "75% width",
+      "100% width",
     ]);
     // The card previewed as it will be added.
     expect(within(step).getByTestId("settings-preview")).toBeInTheDocument();
@@ -603,9 +604,7 @@ describe("the add step", () => {
     // The control: the default width and full width draw the card at different widths.
     expect(cardOuterWidth(6, 1200)).not.toBe(cardOuterWidth(12, 1200));
     expect(preview().style.width).toBe(`${cardOuterWidth(6, 1200)}px`);
-    await user.click(
-      within(step).getByRole("radio", { name: "Full width, 12 columns" })
-    );
+    await user.click(within(step).getByRole("radio", { name: "100% width" }));
     expect(preview().style.width).toBe(`${cardOuterWidth(12, 1200)}px`);
   });
 
@@ -619,9 +618,7 @@ describe("the add step", () => {
       "posts"
     );
     await user.click(within(step).getByRole("radio", { name: "90 days" }));
-    await user.click(
-      within(step).getByRole("radio", { name: "Full width, 12 columns" })
-    );
+    await user.click(within(step).getByRole("radio", { name: "100% width" }));
     await user.click(
       within(step).getByRole("button", { name: "Add to dashboard" })
     );

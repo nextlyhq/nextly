@@ -40,7 +40,7 @@ export function CustomizingFence({
  *
  * The card's size label and menu sit over the header's right end, outside the
  * fence, so the header reserves their space and its title truncates before
- * them rather than running underneath. Sized for the widest label, "12×12".
+ * them rather than running underneath. Sized for the widest label, "100%".
  */
 export function CardControlsSpace(): JSX.Element {
   return <span aria-hidden className="block h-7 w-16" />;

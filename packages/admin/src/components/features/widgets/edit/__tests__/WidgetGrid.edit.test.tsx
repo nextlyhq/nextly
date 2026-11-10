@@ -409,7 +409,7 @@ describe("entering customise mode", () => {
     expect(menuButton("Widget core/a")).toHaveClass("size-7");
   });
 
-  it("shows each card's size beside its menu, in columns by rows", async () => {
+  it("shows each card's size beside its menu, as its share of the row", async () => {
     layoutResponse = layout([
       { id: "p1", widgetId: "core/a", w: 6, h: 3 },
       { id: "p2", widgetId: "core/b", w: 3, h: 4 },
@@ -418,8 +418,8 @@ describe("entering customise mode", () => {
     await beginEditing();
     const labels = screen.getAllByTestId("card-size-label");
     expect(labels.map(label => label.textContent)).toEqual([
-      "6×36 columns by 3 rows",
-      "3×43 columns by 4 rows",
+      "50%50% wide by 3 rows",
+      "25%25% wide by 4 rows",
     ]);
   });
 
@@ -517,7 +517,7 @@ describe("choosing a size", () => {
     layoutResponse = layout([{ id: "p1", widgetId: "core/a", w: 6, h: 3 }]);
   });
 
-  it("lists the common widths within the widget's bounds and its ends, the current one checked", async () => {
+  it("lists the named widths within the widget's bounds and its ends, the current one checked", async () => {
     renderGrid();
     const user = await beginEditing();
 
@@ -525,16 +525,16 @@ describe("choosing a size", () => {
     const items = within(widths).getAllByRole("menuitemradio");
     // 🔴 Never past the bounds: no 3 below the minimum, no 12 above the maximum.
     expect(items.map(i => i.getAttribute("aria-label"))).toEqual([
-      "Third width, 4 columns",
-      "Half width, 6 columns",
-      "Two thirds width, 8 columns",
+      "33% width",
+      "50% width",
+      "66% width",
     ]);
     const half = within(widths).getByRole("menuitemradio", {
-      name: "Half width, 6 columns",
+      name: "50% width",
     });
     expect(half).toHaveAttribute("aria-checked", "true");
-    // Drawn as the design names it: the share, and the columns beneath.
-    expect(within(half).getByText("½")).toBeInTheDocument();
+    // Drawn as the design names it: the percent, and the columns beneath.
+    expect(within(half).getByText("50%")).toBeInTheDocument();
     expect(within(half).getByText("6 columns")).toBeInTheDocument();
   });
 
@@ -574,18 +574,18 @@ describe("choosing a size", () => {
     const widths = await openSizes(user, "Widget core/a");
     // By keyboard: jsdom has no geometry, so a simulated pointer crossing from
     // the submenu's trigger into it reads as leaving, and Radix closes it.
-    within(widths)
-      .getByRole("menuitemradio", { name: "Third width, 4 columns" })
-      .focus();
+    within(widths).getByRole("menuitemradio", { name: "33% width" }).focus();
     await user.keyboard("{Enter}");
 
     expect(screen.getByTestId("widget-cell-core/a")).toHaveClass(
       "@min-[1024px]/dashboard:col-span-4"
     );
     expect(live()).toHaveTextContent(
-      "Widget core/a set to 4 columns by 3 rows."
+      "Widget core/a set to 33% wide by 3 rows."
     );
-    expect(screen.getByTestId("card-size-label")).toHaveTextContent("4×3");
+    expect(screen.getByTestId("card-size-label")).toHaveTextContent(
+      "33%33% wide by 3 rows"
+    );
     // Nothing written until Save.
     expect(api.put).not.toHaveBeenCalled();
     await user.click(screen.getByTestId("dashboard-edit-save"));
@@ -605,7 +605,7 @@ describe("choosing a size", () => {
       "span 4 / span 4"
     );
     expect(live()).toHaveTextContent(
-      "Widget core/a set to 6 columns by 4 rows."
+      "Widget core/a set to 50% wide by 4 rows."
     );
     await user.click(screen.getByTestId("dashboard-edit-save"));
     await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
@@ -623,7 +623,7 @@ describe("choosing a size", () => {
     const widths = await openSizes(user, "Widget core/a");
     expect(
       within(widths).getByRole("menuitemradio", {
-        name: "Two thirds width, 8 columns",
+        name: "66% width",
       })
     ).toHaveAttribute("aria-checked", "true");
     await user.keyboard("{Escape}");
@@ -1705,25 +1705,25 @@ describe("at one column", () => {
         .getAllByRole("menuitemradio")
         .map(item => item.getAttribute("aria-label"))
     ).toEqual([
-      "Third width, 4 columns",
-      "Half width, 6 columns",
-      "Two thirds width, 8 columns",
+      "33% width",
+      "50% width",
+      "66% width",
       "2 rows",
       "3 rows",
       "4 rows",
     ]);
     expect(
-      within(menu).getByRole("menuitemradio", { name: "Half width, 6 columns" })
+      within(menu).getByRole("menuitemradio", { name: "50% width" })
     ).toHaveAttribute("aria-checked", "true");
 
-    within(menu)
-      .getByRole("menuitemradio", { name: "Third width, 4 columns" })
-      .focus();
+    within(menu).getByRole("menuitemradio", { name: "33% width" }).focus();
     await user.keyboard("{Enter}");
     expect(live()).toHaveTextContent(
-      "Widget core/a set to 4 columns by 3 rows."
+      "Widget core/a set to 33% wide by 3 rows."
     );
-    expect(screen.getByTestId("card-size-label")).toHaveTextContent("4×3");
+    expect(screen.getByTestId("card-size-label")).toHaveTextContent(
+      "33%33% wide by 3 rows"
+    );
   });
 
   it("keeps the drag library's sensors the same size while the dashboard narrows to one column", async () => {
