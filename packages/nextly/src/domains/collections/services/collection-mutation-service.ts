@@ -146,6 +146,7 @@ import {
   validateEntryData,
   type EntryWriteContext,
   type ValidationIssue,
+  type ValidatableField,
 } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
@@ -20392,15 +20393,50 @@ export class CollectionMutationService extends BaseService {
         // those a denied rule kept from storage ride exempt from the
         // whole-number floor, as the gate judged the assembled document. The
         // caller's own are judged like any write's, for the entry gate judged
-        // the document that goes live, not this write's patch alone.
+        // the document that goes live, not this write's patch alone. What a
+        // hook left DIFFERENT from the row's own snapshot is this write's
+        // production, judged like the container walk judges one — the value
+        // the hook changed, never the stored children it did not.
         const callerComponents: Record<string, unknown> = {};
         const restoredComponents: Record<string, unknown> = {};
+        const restoredHookIssues: ValidationIssue[] = [];
         for (const name of Object.keys(componentFieldData)) {
           if (publishes && !alreadyLive && storedPaths.has(name)) {
             restoredComponents[name] = componentFieldData[name];
+            if (
+              !isDeepStrictEqual(
+                componentFieldData[name],
+                storedValues.get(name)
+              )
+            ) {
+              const field = fields.find(candidate => candidate.name === name);
+              if (field) {
+                restoredHookIssues.push(
+                  ...hookChangedWholeNumberIssues(
+                    { [name]: componentFieldData[name] },
+                    [field] as ValidatableField[],
+                    "",
+                    await containedComponentResolver(
+                      fields as unknown as FieldConfig[],
+                      async componentSlug =>
+                        (await this.fieldGroupDataService?.getComponentFields(
+                          componentSlug,
+                          tx.getDrizzle()
+                        )) ?? null,
+                      true
+                    ),
+                    storedPaths,
+                    storedValues
+                  )
+                );
+              }
+            }
           } else {
             callerComponents[name] = componentFieldData[name];
           }
+        }
+        if (restoredHookIssues.length > 0) {
+          throw NextlyError.validation({ errors: restoredHookIssues });
         }
         const componentSave = {
           parentId: entryId,

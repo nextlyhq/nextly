@@ -129,7 +129,13 @@ describe.each(getConfiguredTestDialects())(
                 name: "meta",
                 fields: [number({ name: "rating" })],
               }),
-              fieldGroup({ name: "dial", component: "wnf_dial" }),
+              // Readable by anyone, writable by none: the restore tests
+              // below put the stored instance back for a denied writer.
+              fieldGroup({
+                name: "dial",
+                component: "wnf_dial",
+                access: { read: () => true, update: () => false },
+              }),
               group({
                 name: "locked",
                 fields: [
@@ -169,6 +175,7 @@ describe.each(getConfiguredTestDialects())(
         fractionTheTopLevelValue(data);
         fractionTheNestedGroupValue(data);
         fractionTheRestoredDeniedValue(data);
+        fractionTheRestoredComponentValue(data);
         return data;
       });
 
@@ -232,6 +239,25 @@ describe.each(getConfiguredTestDialects())(
       const meta = data.meta as Record<string, unknown> | undefined;
       if (meta && meta.rating === 2) {
         meta.rating = 2.5;
+      }
+    }
+
+    /**
+     * The hook's transform of a restored denied component: the restore has
+     * already put the row's own instance back under `dial` when the hooks
+     * run; the hook mutates its whole-number child in place. What the hook
+     * leaves there is this write's production, judged like any caller's
+     * value.
+     */
+    function fractionTheRestoredComponentValue(
+      data: Record<string, unknown>
+    ): void {
+      if (data.title !== "hookrestored-dial") {
+        return;
+      }
+      const dial = data.dial as Record<string, unknown> | undefined;
+      if (dial && dial.tally === 2) {
+        dial.tally = 2.5;
       }
     }
 
@@ -681,6 +707,77 @@ describe.each(getConfiguredTestDialects())(
         )
       );
       expectFractionRefusal(refusal, "quantity");
+    });
+
+    it("a hook cannot smuggle a fraction through a restored denied component", async () => {
+      // The writer is denied the component whole, and a hook stands by to
+      // mutate whatever sits under it. Two lanes, one answer: the pooled
+      // write hands the component save the caller's object and the save's
+      // own deny-restore answers with the row's instance; the bulk write's
+      // field gate strips the denied component before the hooks run, so the
+      // hook meets nothing under it. Whichever object the hook reached, the
+      // row's own whole value is what goes live — and the publish pass
+      // compares what it carries against the restore's snapshot, so a
+      // changed restored instance would be judged like a caller's, never
+      // exempted merely for being restored.
+      await userWhoMay(handle!, "dial-editor", "read", [SLUG]);
+      await grantTo(handle!, "dial-editor", "update", [SLUG]);
+      await grantTo(handle!, "dial-editor", "publish", [SLUG]);
+      const entry = (await collections.createEntry(
+        SLUG,
+        { title: "hookrestored-dial-seed", dial: { tally: 2 } },
+        CONTEXT
+      )) as unknown as Record<string, unknown>;
+      const deniedWriter = {
+        overrideAccess: false,
+        user: {
+          id: "dial-editor",
+          email: "dial-editor@example.test",
+          role: "",
+          permissions: [],
+        },
+      };
+
+      // The pooled lane: the hook mutates the caller's object in place; the
+      // component save's deny-restore replaces it with the row's own.
+      const pooled = await collections.updateEntry(
+        SLUG,
+        entry.id as string,
+        {
+          title: "hookrestored-dial",
+          dial: { tally: 2 },
+          status: "published",
+          _overwrite: true,
+        },
+        deniedWriter
+      );
+      expect(
+        (pooled as Record<string, unknown>).status ?? "published"
+      ).toBeTruthy();
+
+      // The bulk lane: the denied component never reaches the hooks; the
+      // row's own instance rides.
+      const bulk = await collections.updateMany(
+        SLUG,
+        [
+          {
+            id: entry.id as string,
+            data: {
+              title: "hookrestored-dial",
+              dial: { tally: 2 },
+              _overwrite: true,
+            },
+          },
+        ],
+        deniedWriter
+      );
+      expect(bulk.failed).toBe(0);
+
+      // The row's own whole value is what the publish carried: the hook's
+      // fraction reached no column on any dialect.
+      const stored = await readEntry(entry.id as string);
+      expect(stored.status).toBe("published");
+      expect((stored.dial as Record<string, unknown>).tally).toBe(2);
     });
 
     it("a hook that changes a restored denied value is judged like a caller's", async () => {
