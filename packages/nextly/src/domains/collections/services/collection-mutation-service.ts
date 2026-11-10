@@ -471,9 +471,12 @@ export { isWriteIntegrityFailure };
 
 /**
  * Emit a post-commit `collection.<slug>.<action>` event (D8/D51). Observe-only,
- * best-effort: fired after the operation's transaction has committed and its
- * after* hooks have run, and wrapped so a missing/erroring bus can never break
- * the mutation. Use a hook (in-transaction) to modify/abort; use this to react.
+ * best-effort: fired once the write's transaction has committed, before the
+ * after* hooks that run after that commit, and wrapped so a missing/erroring
+ * bus can never break the mutation. A write made on a caller's transaction
+ * holds it for that transaction's commit (`announceAtCommit`); its after*
+ * hooks run inline, before the commit, so there they come first. Use a hook
+ * (in-transaction) to modify/abort; use this to react.
  */
 function emitCollectionEvent(
   action: "created" | "updated" | "deleted",
@@ -8045,6 +8048,16 @@ export class CollectionMutationService extends BaseService {
       // SQLite transaction they wait for its commit and never run for a row it
       // rolls back; see `afterCommitOver` for what they are handed.
       await this.afterCommitOver(entry, async committed => {
+        // Post-commit reaction event (D8/D51), first: it announces the commit,
+        // so no after-hook comes between the two. A copy, so a hook that
+        // changes the row it is handed does not change the event's payload.
+        emitCollectionEvent(
+          "created",
+          params.collectionName,
+          { ...committed },
+          params.user
+        );
+
         // Execute afterCreate hooks (code-registered)
         // Hooks run after database insert completes (for side effects)
         const afterContext = this.hookService.buildHookContext({
@@ -8074,14 +8087,6 @@ export class CollectionMutationService extends BaseService {
             sharedContext,
             req: requestFacts,
           })
-        );
-
-        // Post-commit reaction event (D8/D51).
-        emitCollectionEvent(
-          "created",
-          params.collectionName,
-          committed,
-          params.user
         );
 
         // D69: a document created directly as `published` is a publish event too.
@@ -10509,6 +10514,29 @@ export class CollectionMutationService extends BaseService {
           });
         }
 
+        // emit the post-commit "updated" reaction event so cache
+        // revalidation / webhooks fire, matching a single-locale publish. Before
+        // the update hooks below, as every write announces its commit: the row
+        // is read as the publish committed it. Best-effort: a reaction failure
+        // must not fail the already-committed publish.
+        try {
+          const [updated] = await this.db
+            .select()
+            .from(schema)
+            .where(eq(schema.id, params.entryId))
+            .limit(1);
+          if (updated) {
+            emitCollectionEvent(
+              "updated",
+              params.collectionName,
+              updated as Record<string, unknown>,
+              params.user
+            );
+          }
+        } catch {
+          // Reaction/event emission is non-critical; the publish already committed.
+        }
+
         // The update hooks this move runs once it is durable: the
         // collection's code-registered and stored `afterUpdate` hooks, then
         // the fields' `afterChange`, sharing the context its before hooks
@@ -10579,27 +10607,6 @@ export class CollectionMutationService extends BaseService {
             user: params.user,
             only: run.touched,
           });
-        }
-
-        // emit the post-commit "updated" reaction event so cache
-        // revalidation / webhooks fire, matching a single-locale publish. Best-effort: a
-        // reaction failure must not fail the already-committed publish.
-        try {
-          const [updated] = await this.db
-            .select()
-            .from(schema)
-            .where(eq(schema.id, params.entryId))
-            .limit(1);
-          if (updated) {
-            emitCollectionEvent(
-              "updated",
-              params.collectionName,
-              updated as Record<string, unknown>,
-              params.user
-            );
-          }
-        } catch {
-          // Reaction/event emission is non-critical; the publish already committed.
         }
       });
 
@@ -16179,6 +16186,19 @@ export class CollectionMutationService extends BaseService {
       // payload is the stored row as committed, for the same reason.
       const updatedAtCommit = { ...(updated as Record<string, unknown>) };
       await this.afterCommitOver(responseSource, async committed => {
+        // Post-commit reaction event (D8/D51), first, as on create. Skipped for
+        // a pure draft edit: the live document did not change, so no cache
+        // reaction is owed — mirroring the outbox `entry.updated` event, which
+        // is already suppressed above.
+        if (!workingDraftDocument) {
+          emitCollectionEvent(
+            "updated",
+            params.collectionName,
+            updatedAtCommit,
+            params.user
+          );
+        }
+
         // Execute afterUpdate hooks (code-registered)
         // Hooks run after database update completes (for side effects)
         const afterContext = this.hookService.buildHookContext({
@@ -16215,18 +16235,6 @@ export class CollectionMutationService extends BaseService {
             req: requestFacts,
           })
         );
-
-        // Post-commit reaction event (D8/D51). Skipped for a pure draft edit: the
-        // live document did not change, so no cache reaction is owed — mirroring
-        // the outbox `entry.updated` event, which is already suppressed above.
-        if (!workingDraftDocument) {
-          emitCollectionEvent(
-            "updated",
-            params.collectionName,
-            updatedAtCommit,
-            params.user
-          );
-        }
 
         // D69 document-level status events. Status is a user-defined field;
         // emit only when a `status` field value actually changed on update.
@@ -18367,6 +18375,15 @@ export class CollectionMutationService extends BaseService {
       // After the removal is durable: inside an enclosing SQLite transaction,
       // once it commits, and never for a deletion it rolls back.
       await this.afterCommit(async () => {
+        // Post-commit reaction event (D8/D51), first, as on create. A copy, so
+        // a hook that changes the row it is handed does not change the event.
+        emitCollectionEvent(
+          "deleted",
+          params.collectionName,
+          { ...deleted },
+          params.user
+        );
+
         // Execute afterDelete hooks (code-registered)
         // Hooks run after deletion completes (for cleanup)
         const afterContext = this.hookService.buildHookContext({
@@ -18396,14 +18413,6 @@ export class CollectionMutationService extends BaseService {
             sharedContext,
             req: requestFacts,
           })
-        );
-
-        // Post-commit reaction event (D8/D51).
-        emitCollectionEvent(
-          "deleted",
-          params.collectionName,
-          deleted,
-          params.user
         );
       });
 
@@ -18988,6 +18997,15 @@ export class CollectionMutationService extends BaseService {
         context: sharedContext,
       });
 
+      // The collection event, held for the caller's commit. Announced whether
+      // or not hooks run: it is not a hook, as the outbox event is not.
+      await this.announceAtCommit(
+        "created",
+        params.collectionName,
+        entry as Record<string, unknown>,
+        params.user
+      );
+
       // Execute afterCreate hooks (unless skipped)
       if (options.runHooks) {
         // Execute afterCreate hooks (code-registered)
@@ -19179,6 +19197,32 @@ export class CollectionMutationService extends BaseService {
           entryId,
         })),
       })
+    );
+  }
+
+  /**
+   * Announce a write made on a caller's transaction once that transaction
+   * commits, as a write that opens its own transaction announces itself: the
+   * event is held until the outermost transaction the calling flow is inside
+   * commits, and dropped when it, or a savepoint this write ran in, rolls back.
+   * The after-hooks of these paths run inline, inside that transaction, so
+   * they come before the event here.
+   *
+   * Called once the write itself is done (its row, outbox event and
+   * in-transaction handlers), so the event goes with exactly the rows the
+   * outbox event goes with. The row is copied now: what the write does to it
+   * afterwards (the response's parsing and redaction) is not what subscribers
+   * are handed.
+   */
+  private announceAtCommit(
+    action: "created" | "updated" | "deleted",
+    collectionName: string,
+    row: Record<string, unknown>,
+    user: unknown
+  ): Promise<void> {
+    const committed = { ...row };
+    return this.afterCommit(() =>
+      emitCollectionEvent(action, collectionName, committed, user)
     );
   }
 
@@ -20565,6 +20609,18 @@ export class CollectionMutationService extends BaseService {
         context: sharedContext,
       });
 
+      // The collection event, held for the caller's commit, as on create.
+      // Skipped for a held draft edit, which leaves the live row unchanged, as
+      // a write that opens its own transaction skips it.
+      if (!workingDraftDocument) {
+        await this.announceAtCommit(
+          "updated",
+          params.collectionName,
+          updated as Record<string, unknown>,
+          params.user
+        );
+      }
+
       // Execute afterUpdate hooks (unless skipped)
       if (options.runHooks) {
         // Execute afterUpdate hooks (code-registered)
@@ -21102,6 +21158,14 @@ export class CollectionMutationService extends BaseService {
       deleteNeedsRollback = false;
       // False when the collection opted out — nothing to drain post-commit.
       eventRecorded = deleteRecorded;
+      // The collection event, held for the caller's commit, as on create: the
+      // row as it stood before the delete, which the after-hooks are handed.
+      await this.announceAtCommit(
+        "deleted",
+        params.collectionName,
+        entry,
+        params.user
+      );
 
       // The tags this delete invalidates, collected by the batch caller and
       // flushed once the shared transaction commits. Slug read from the assembled
