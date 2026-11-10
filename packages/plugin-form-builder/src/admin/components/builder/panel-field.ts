@@ -6,12 +6,12 @@
  * message `validation.message`, a dropdown's multiple choice `hasMany`) and
  * has no place for the rest (a text area's rows, a file's accepted types, a
  * field's show-or-hide logic). The settings it has a place for are moved
- * across; everything else travels unchanged in `pluginOptions.form`, where
- * the forms surface's own controls read and write it. A plugin field type's
- * declared settings are the panel's other `pluginOptions` keys, and are kept
- * on the form field as its own `pluginOptions`. So a field the panel did
- * not change comes back exactly as it went in, and nothing a form stores is
- * lost by being edited.
+ * across; everything else travels unchanged under a key of this module's
+ * own (a symbol, so no setting a plugin declares can be mistaken for it),
+ * where the forms surface's own controls read and write it. A plugin field
+ * type's declared settings are `pluginOptions`, on the form field as in the
+ * panel. So a field the panel did not change comes back exactly as it went
+ * in, and nothing a form stores is lost by being edited.
  *
  * @module admin/components/builder/panel-field
  */
@@ -33,11 +33,19 @@ interface FormOnly extends Bag {
   admin?: Bag;
 }
 
-/** Where the form-only settings travel inside the panel's field. */
-const FORM_ONLY = "form";
+/**
+ * Where the form-only settings travel on the panel's field. A symbol rather
+ * than a named key: the panel copies a field by spreading it, which keeps a
+ * symbol-keyed property, and no key a plugin declares can equal it.
+ */
+const FORM_ONLY: unique symbol = Symbol("form builder: form-only settings");
+
+/** The panel's field, carrying the form-only settings. */
+type PanelField = FieldSettingsField & { [FORM_ONLY]?: FormOnly };
 
 type Width = NonNullable<FieldSettingsField["admin"]>["width"];
-type Scalar = string | number | boolean | null;
+/** A default the panel's default editor can show and set. */
+type PanelDefault = string | number | boolean;
 
 /** The object with its undefined entries left out. */
 function defined<T extends Bag>(bag: T): Partial<T> {
@@ -51,9 +59,8 @@ function present(bag: Bag, had: boolean): Bag | undefined {
   return had || Object.keys(bag).length > 0 ? bag : undefined;
 }
 
-function isScalar(value: unknown): value is Scalar {
+function isPanelDefault(value: unknown): value is PanelDefault {
   return (
-    value === null ||
     typeof value === "string" ||
     typeof value === "number" ||
     typeof value === "boolean"
@@ -107,15 +114,16 @@ export function toPanelField(
     ...own,
     validation: validation === undefined ? undefined : validationRest,
     admin: admin === undefined ? undefined : adminRest,
-    // A default the panel cannot hold (a dropdown's several choices) stays
-    // with the form's own settings rather than being bent into one.
+    // A default the panel cannot hold (a dropdown's several choices, a
+    // plugin field's null) stays with the form's own settings rather than
+    // being bent into one, or read as no default.
     defaultValue:
-      defaultValue === undefined || isScalar(defaultValue)
+      defaultValue === undefined || isPanelDefault(defaultValue)
         ? undefined
         : defaultValue,
   });
 
-  return {
+  const panel: PanelField = {
     id,
     type,
     name,
@@ -123,7 +131,10 @@ export function toPanelField(
     ...defined({
       options,
       hasMany: allowMultiple,
-      defaultValue: isScalar(defaultValue) ? defaultValue : undefined,
+      defaultValue: isPanelDefault(defaultValue) ? defaultValue : undefined,
+      // A plugin field type's declared settings, where the panel's controls
+      // for them read and write.
+      pluginOptions,
     }),
     admin: defined({ placeholder, description: helpText, width }),
     validation: defined({
@@ -135,21 +146,18 @@ export function toPanelField(
       pattern,
       message: errorMessage,
     }),
-    // The plugin's declared settings beside the form-only ones, where the
-    // panel's declared-settings controls read and write them.
-    pluginOptions: { ...pluginOptions, [FORM_ONLY]: formOnly },
+    [FORM_ONLY]: formOnly,
   };
+  return panel;
 }
 
 /** The form-only settings a panel field carries. */
 export function formOnlyOf(field: FieldSettingsField): FormOnly {
-  const bag = field.pluginOptions?.[FORM_ONLY];
-  return bag !== null && typeof bag === "object" ? (bag as FormOnly) : {};
+  return (field as PanelField)[FORM_ONLY] ?? {};
 }
 
 /** The form field the panel's field describes. */
 export function fromPanelField(field: FieldSettingsField): AnyFormField {
-  const { [FORM_ONLY]: _formOnly, ...declared } = field.pluginOptions ?? {};
   const {
     validation: validationRest,
     admin: adminRest,
@@ -192,7 +200,7 @@ export function fromPanelField(field: FieldSettingsField): AnyFormField {
       defaultValue: formDefaultValue(field, formDefault),
       validation,
       admin,
-      pluginOptions: Object.keys(declared).length > 0 ? declared : undefined,
+      pluginOptions: field.pluginOptions,
     }),
   };
 }

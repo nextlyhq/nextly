@@ -22,7 +22,7 @@ const conditionalLogic = {
   enabled: true,
   action: "hide" as const,
   operator: "OR" as const,
-  conditions: [{ field: "other", operator: "equals" as const, value: "x" }],
+  conditions: [{ field: "other", comparison: "equals" as const, value: "x" }],
 };
 
 const common = {
@@ -222,10 +222,37 @@ describe("the panel's spelling of a form's settings", () => {
       ...rating,
       pluginOptions: { ...rating.pluginOptions, max: 10 },
     });
-    expect(next).toMatchObject({ pluginOptions: { max: 10, shape: "heart" } });
     expect(
       (next as { pluginOptions?: Record<string, unknown> }).pluginOptions
-    ).not.toHaveProperty("form");
+    ).toStrictEqual({ max: 10, shape: "heart" });
+  });
+
+  it("keeps a plugin setting named like the form's own settings", () => {
+    // Any key a plugin declares is its own, `form` included.
+    const field = {
+      ...EVERY_TYPE[13]!,
+      pluginOptions: { form: "compact" },
+    } as AnyFormField;
+    const panel = toPanelField(field, "f-13");
+    expect(panel.pluginOptions).toStrictEqual({ form: "compact" });
+    expect(fromPanelField({ ...panel, label: "Rating" })).toStrictEqual({
+      ...field,
+      label: "Rating",
+    });
+  });
+
+  it("keeps a plugin field's null default through an edit", () => {
+    const field = {
+      type: "star-rating",
+      name: "rating",
+      label: "Rating",
+      defaultValue: null,
+    } as AnyFormField;
+    const panel = toPanelField(field, "f-1");
+    expect(fromPanelField({ ...panel, label: "Stars" })).toStrictEqual({
+      ...field,
+      label: "Stars",
+    });
   });
 
   it("stores a several-choice dropdown's default as a list", () => {

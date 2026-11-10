@@ -21,7 +21,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import type { AnyFormField } from "../../../../types";
+import type { AnyFormField, FormNotification } from "../../../../types";
 import { FormBuilderView } from "../../../FormBuilderView";
 import { SAVED_TYPE_REASON } from "../forms-field-surface";
 
@@ -57,14 +57,31 @@ const DETAILS: AnyFormField = {
     enabled: true,
     action: "show",
     operator: "AND",
-    conditions: [{ field: "topic", operator: "equals", value: "other" }],
+    conditions: [{ field: "topic", comparison: "equals", value: "other" }],
   },
 };
 
 const EMAIL: AnyFormField = { type: "email", name: "email", label: "Email" };
 
+/** A notification that refers to two of the fields. */
+const TEAM: FormNotification = {
+  id: "n1",
+  name: "Team",
+  enabled: true,
+  recipientType: "static",
+  to: "team@example.com",
+  cc: [],
+  bcc: [],
+  replyTo: "{{email}}",
+  condition: { field: "topic", comparison: "equals", value: "sales" },
+  templateSlug: "forms-submission",
+};
+
 /** The builder on a saved form, answering its settings read with `config`. */
-function view(config: Record<string, unknown> = {}) {
+function view(
+  config: Record<string, unknown> = {},
+  notifications: FormNotification[] = []
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn(() =>
@@ -88,6 +105,7 @@ function view(config: Record<string, unknown> = {}) {
             name: "Contact",
             slug: "contact",
             fields: [EMAIL, TOPIC, DETAILS],
+            notifications,
           }}
           onSave={onSave}
         />
@@ -99,6 +117,10 @@ function view(config: Record<string, unknown> = {}) {
     /** The fields the last save sent. */
     saved: () =>
       (onSave.mock.lastCall?.[0] as { fields: AnyFormField[] }).fields,
+    /** The notifications the last save sent. */
+    savedNotifications: () =>
+      (onSave.mock.lastCall?.[0] as { notifications: FormNotification[] })
+        .notifications,
   };
 }
 
@@ -273,6 +295,55 @@ describe("the Form Builder on the shared picker and panel", () => {
       name: "field",
       label: "電話番号",
     });
+  });
+
+  it("moves what refers to a field with its new name, typed through an empty one", async () => {
+    const { user, saved, savedNotifications } = view({}, [TEAM]);
+    // Clear, then type: the rename passes through the empty name.
+    await open(user, "Topic");
+    const name = () => screen.getByRole("textbox", { name: "Name" });
+    await user.clear(name());
+    await user.type(name(), "subject");
+    await open(user, "Email");
+    await user.clear(name());
+    await user.type(name(), "contact_email");
+
+    await save(user);
+    const details = saved().find(field => field.label === "Details");
+    expect(details?.conditionalLogic?.conditions).toEqual([
+      { field: "subject", comparison: "equals", value: "other" },
+    ]);
+    expect(savedNotifications()[0]).toMatchObject({
+      replyTo: "{{contact_email}}",
+      condition: { field: "subject" },
+    });
+  });
+
+  it("keeps a name unique when a label edit gives one already used", async () => {
+    const { user, saved } = view();
+    await user.click(await screen.findByRole("button", { name: "Add field" }));
+    const picker = screen.getByRole("dialog");
+    await user.type(
+      within(picker).getByRole("combobox", { name: "Search field types" }),
+      "text{Enter}"
+    );
+    await user.type(
+      within(picker).getByRole("textbox", { name: "Label" }),
+      "Notes"
+    );
+    await user.click(within(picker).getByRole("button", { name: "Add field" }));
+
+    // An unsaved field's name follows its label, here onto Topic's.
+    const label = screen.getByRole("textbox", { name: "Label" });
+    await user.clear(label);
+    await user.type(label, "Topic");
+    expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue(
+      "topic_2"
+    );
+
+    await save(user);
+    const names = saved().map(field => field.name);
+    expect(new Set(names).size).toBe(names.length);
   });
 
   it("refuses to delete a field another field's condition refers to", async () => {

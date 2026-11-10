@@ -70,7 +70,10 @@ import {
 
 import type { AnyFormField } from "../../../types";
 import { buildFieldReferenceMap } from "../../../utils/field-references";
-import { useFormBuilder } from "../../context/FormBuilderContext";
+import {
+  generateFieldName,
+  useFormBuilder,
+} from "../../context/FormBuilderContext";
 
 import { FORMS_FIELD_SURFACE, formFieldName } from "./forms-field-surface";
 import { fromPanelField, toPanelField } from "./panel-field";
@@ -383,21 +386,44 @@ export function FieldCards({
     return key;
   }, []);
 
+  // The name a card's field had before its Name was cleared: a rename that
+  // clears the input first passes through the empty name, and the references
+  // to the field still use the name it had, so they move from that one.
+  const clearedFromRef = useRef(new Map<string, string>());
+
   const handleChange = useCallback(
     (field: AnyFormField, next: FieldSettingsField) => {
-      const updated = fromPanelField(next);
-      // Move the card's key to the field's incoming name before the state
-      // update re-renders the list, so the renamed field keeps its card.
+      let updated = fromPanelField(next);
+      const key = cardKeyFor(field.name);
       if (updated.name !== field.name) {
-        const key = cardKeysRef.current.get(field.name);
-        if (key !== undefined) {
-          cardKeysRef.current.delete(field.name);
-          cardKeysRef.current.set(updated.name, key);
+        // A name is the key its answers are stored under, so two fields never
+        // share one: a rename onto another field's name, typed or following a
+        // label, is made unique the way the picker makes a new name unique.
+        const others = fields.filter(f => f !== field).map(f => f.name);
+        if (updated.name !== "" && others.includes(updated.name)) {
+          updated = {
+            ...updated,
+            name: generateFieldName(updated.name, others),
+          };
         }
+        // Move the card's key to the field's incoming name before the state
+        // update re-renders the list, so the renamed field keeps its card.
+        cardKeysRef.current.delete(field.name);
+        cardKeysRef.current.set(updated.name, key);
       }
-      replaceField(field.name, updated);
+      // The name the rest of the form refers to the field by.
+      const referencedAs =
+        field.name !== "" ? field.name : clearedFromRef.current.get(key);
+      if (updated.name === "") {
+        if (referencedAs !== undefined) {
+          clearedFromRef.current.set(key, referencedAs);
+        }
+      } else {
+        clearedFromRef.current.delete(key);
+      }
+      replaceField(field.name, updated, referencedAs);
     },
-    [replaceField]
+    [fields, cardKeyFor, replaceField]
   );
 
   const sensors = useSensors(

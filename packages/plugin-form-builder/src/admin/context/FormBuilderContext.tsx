@@ -31,6 +31,10 @@ import type {
   FormSettings,
 } from "../../types";
 import {
+  renameInFieldConditions,
+  renameInNotifications,
+} from "../../utils/field-references";
+import {
   DEFAULT_FORM_SETTINGS,
   normalizeFormSettings,
 } from "../../utils/form-settings";
@@ -93,8 +97,14 @@ export interface FormBuilderActions {
   /**
    * Replace a field by name with the whole of its next definition, so a
    * setting the next one leaves out is gone rather than kept from before.
+   * Given `referencesFrom`, the name other fields' conditions and the
+   * notifications know the field by, those references move to its new name.
    */
-  replaceField: (fieldName: string, next: AnyFormField) => void;
+  replaceField: (
+    fieldName: string,
+    next: AnyFormField,
+    referencesFrom?: string
+  ) => void;
   /** Delete a field by name */
   deleteField: (fieldName: string) => void;
   /** Move a field from one index to another */
@@ -418,8 +428,22 @@ export function FormBuilderProvider({
   );
 
   const replaceField = useCallback(
-    (fieldName: string, next: AnyFormField) => {
-      setFieldsState(prev => prev.map(f => (f.name === fieldName ? next : f)));
+    (fieldName: string, next: AnyFormField, referencesFrom?: string) => {
+      const moves =
+        referencesFrom !== undefined &&
+        next.name !== "" &&
+        next.name !== referencesFrom;
+      setFieldsState(prev => {
+        const replaced = prev.map(f => (f.name === fieldName ? next : f));
+        return moves
+          ? renameInFieldConditions(replaced, referencesFrom, next.name)
+          : replaced;
+      });
+      if (moves) {
+        setNotifications(prev =>
+          renameInNotifications(prev, referencesFrom, next.name)
+        );
+      }
       followRename(fieldName, next.name);
       setIsDirty(true);
     },
