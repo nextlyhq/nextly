@@ -16,7 +16,6 @@
  * Pure, so its rules are tested without a database.
  *
  * @module domains/releases/release-batch-plan
- * @experimental
  */
 import { NextlyError } from "../../errors";
 import {
@@ -30,8 +29,6 @@ import { isKnownTimeZone } from "./release-calendar";
 /**
  * A document as a batch names it: which one, and what the release does to
  * it.
- *
- * @experimental
  */
 export interface BatchMember {
   scopeKind: "collection" | "single";
@@ -45,8 +42,6 @@ export interface BatchMember {
  * A linked document the caller accepted, going live with the document it is
  * linked from. It names no action: a linked document is offered only to go
  * live, so that is what it does.
- *
- * @experimental
  */
 export type LinkedDocument = Omit<BatchMember, "action">;
 
@@ -59,8 +54,6 @@ export type LinkedDocument = Omit<BatchMember, "action">;
  * - `existing`: with an existing ordinary release that is a draft or
  *   scheduled, at that release's time.
  * - `new`: in a new release named `title`, a draft for its time to be set.
- *
- * @experimental
  */
 export type DocumentScheduleTarget =
   | { into: "own"; title: string; at: Date; timezone: string }
@@ -70,8 +63,6 @@ export type DocumentScheduleTarget =
 /**
  * A document to schedule in one step, with the linked documents accepted
  * with it, and the way it goes out.
- *
- * @experimental
  */
 export type ScheduleDocumentInput = {
   document: BatchMember;
@@ -85,8 +76,6 @@ const DOCUMENT_SCHEDULE_PATHS = ["own", "existing", "new"] as const;
  * What scheduling a document will write: its documents, the document first,
  * and the release they go into, either an existing one or one to create
  * (and, on its own, to schedule).
- *
- * @experimental
  */
 export interface DocumentSchedulePlan {
   /** Each with its language as stored: `null`, the whole document. */
@@ -124,8 +113,6 @@ function documentKey(member: BatchMember): string {
  * what the caller chose. More documents than a release may hold can never
  * fit, so that is said before anything is read, and how many fit in the
  * release as it stands is said under its lock, at the write.
- *
- * @experimental
  */
 export function planMemberBatch<M extends BatchMember>(
   members: readonly M[]
@@ -240,8 +227,6 @@ function assertBatchMember(
  * its own, the document's release is a single-document one unless linked
  * documents go with it, when it is an ordinary release holding all of them:
  * a single-document release holds exactly one.
- *
- * @experimental
  */
 export function planDocumentSchedule(
   input: ScheduleDocumentInput

@@ -87,8 +87,13 @@ export type { DocumentViewProps } from "@nextlyhq/admin";
  *   place (`kind: "sidebarSection"`): the place's `context` and `entry`, as
  *   every contributed component receives them, and on a collection entry's
  *   page also every field of `DocumentPanelSectionProps`.
+ * - `DocumentTabProps`: a tab declared at an edit page's place
+ *   (`kind: "tab"`): the place's `context` and `entry`, `setBadge` to show a
+ *   count beside the tab's label, the document form's `control` to read what
+ *   the author typed and write values the bar's Save stores, and
+ *   `documentLock`. Handed on a saved entry, a new one and a Single alike.
  *
- * Both are drawn inside the document's editor, so `useDocumentLocale()` names
+ * All are drawn inside the document's editor, so `useDocumentLocale()` names
  * the language being edited — the one a replaced Unpublish acts on — and
  * `useDocumentActions()` answers for the same document.
  *
@@ -111,6 +116,7 @@ export type {
   DocumentActionReplacementProps,
   DocumentChangeResult,
   DocumentPanelSectionProps,
+  DocumentTabProps,
   SidebarSectionProps,
 } from "@nextlyhq/admin";
 
@@ -646,6 +652,26 @@ export { useSuppressAdminChrome } from "@nextlyhq/admin";
 export type { AdminChromeLayer } from "@nextlyhq/admin";
 
 /**
+ * The live values of the document being edited (@experimental), for any
+ * component a plugin draws inside the editor: a block, a side panel section
+ * or a tab, on an entry, a new one or a Single. A place's `entry` prop is the
+ * document as it was read; these are the document as it is being typed.
+ *
+ * - `useDocumentValues(paths)`: the named fields by their dot paths
+ *   (`"seo.title"`), drawing again only when one of them changes.
+ * - `useDocumentField(path)`: one field's value, whether it may be written
+ *   now, and `set(next)`, which writes as the author typing would and marks the
+ *   document changed, or writes nothing and answers `false` while the
+ *   document's content is held. `set(null)` returns a field to automatic.
+ *
+ * Both read the editor's own form, never the nearest form context, so a
+ * plugin component with a form of its own still reads the document. Both
+ * answer `null` outside a document editor.
+ */
+export { useDocumentField, useDocumentValues } from "@nextlyhq/admin";
+export type { DocumentField } from "@nextlyhq/admin";
+
+/**
  * Draw the contributions sent to an admin place (@experimental): blocks with
  * `TargetSlot`, tabs with `PlaceTabs`, in the order the server sent them and
  * each behind its own error boundary, as core's pages draw theirs.
@@ -657,11 +683,18 @@ export type { AdminChromeLayer } from "@nextlyhq/admin";
  * page does not know its ids yet; nothing contributed is drawn until it does.
  * A plugin's place has no built-in parts, so the page draws its own content
  * beside the slot.
+ *
+ * A contributed tab receives `PlaceTabProps`: the place's `context` and
+ * `entry`, and `setBadge`, which shows a count beside the tab's label
+ * (`PlaceTabBadge`) or none with `null`. A tab stays mounted while another is
+ * open, so its count stays current and what it holds is kept.
  */
 export { PlaceTabs, TargetSlot } from "@nextlyhq/admin";
 export type {
   PlaceContributionProps,
   PlaceProps,
+  PlaceTabBadge,
+  PlaceTabProps,
   PlaceTabsProps,
   TargetSlotProps,
 } from "@nextlyhq/admin";
@@ -771,6 +804,38 @@ export type {
   FieldPickerChoice,
   FieldGroupOption,
   FieldTypeDescription,
+} from "@nextlyhq/admin";
+
+/**
+ * The shared field settings panel (@experimental): the one panel every surface
+ * uses to add and edit a field, the same for a field just added and one that
+ * already existed. Five tabs (General, Validation, Display, Conditions,
+ * Advanced), with the settings that make the field its type first in General,
+ * and every setting it shows kept in the definition. Each change reaches your
+ * `onChange` at once with the whole field, so there is no Apply step: your
+ * surface stores it, and the panel writes nothing.
+ *
+ * Your surface configures it with `FieldSettingsSurface`: the `surface` whose
+ * plugin types it names, `deriveName` (a name follows its label until the
+ * field is saved), the settings it `fixed` and why (shown beside them), its
+ * `extraSettings` by tab, and its `conditions`. Pass `saved` for a field your
+ * surface has saved, `ancestors` for where it sits (its API path is shown, such
+ * as `authors[].social[].url`), and `siblings` for the fields its condition may
+ * read.
+ * - `FieldTypeSettings` is what a type shows of its own settings: its
+ *   `defining` settings, first in General, and the rest by tab.
+ * Experimental until every built-in surface uses it.
+ */
+export { FieldSettingsPanel } from "@nextlyhq/admin";
+export type {
+  FieldSettingsControlProps,
+  FieldSettingsField,
+  FieldSettingsPanelProps,
+  FieldSettingsSurface,
+  FieldSettingsSurfaceControlProps,
+  FieldSettingsTab,
+  FieldTypeSettings,
+  FixedFieldSetting,
 } from "@nextlyhq/admin";
 
 /**

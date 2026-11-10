@@ -771,6 +771,49 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       ).toEqual({ kind: "value", value: { said: "row" } });
     });
 
+    // Under `experimental.perLanguageStorage` the same field of the same unlocalized collection
+    // is kept per language, so the read goes where the write put it.
+    it("reads a flagged field of an unlocalized collection per language when the site keeps every one so", async () => {
+      const plugin = definePlugin({
+        name: "@test/stored-read-per-language",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: { fieldTypes: [probe, other] },
+      });
+      current = await createTestNextly({
+        dialect,
+        perLanguageStorage: true,
+        plugins: [plugin],
+        collections: [
+          {
+            slug: "flagged",
+            fields: [{ name: "body", type: "probe", localized: true }],
+          } as unknown as CollectionConfig,
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const id = await created(current, "flagged", { body: { said: "en" } });
+      await current.nextly.update({
+        collection: "flagged",
+        id,
+        locale: "de",
+        data: { body: { said: "de" }, _overwrite: true },
+        overrideAccess: true,
+      } as never);
+      const read = languagesReader(current, "probe");
+      const at = (locale: string) =>
+        read({
+          collection: "flagged",
+          id,
+          field: "body",
+          form: "published",
+          locale,
+        } as never);
+
+      expect(await at("de")).toEqual({ kind: "value", value: { said: "de" } });
+      expect(await at("en")).toEqual({ kind: "value", value: { said: "en" } });
+    });
+
     it("refuses a field inside a group kept per language, by name", async () => {
       const t = await bootLanguages(dialect);
       const read = languagesReader(t, "probe");

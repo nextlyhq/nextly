@@ -19,6 +19,10 @@ import { DynamicCollectionSchemaService } from "../../../dynamic-collections/ser
 import { FieldGroupSchemaService } from "../../../field-groups/services/field-group-schema-service";
 import { UserExtSchemaService } from "../../../users/services/user-ext-schema-service";
 import { deriveCompanionSpec } from "../../../i18n/migration/derive-companion-spec";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../../i18n/per-language-storage";
 import { buildCompanionCreateOnlySql } from "../../../i18n/migration/generate-up";
 import { typesDiffer } from "../../pipeline/diff/declared-size";
 import { introspectLiveColumns } from "../../pipeline/diff/introspect-live";
@@ -562,6 +566,60 @@ describe.each(getConfiguredTestDialects())(
         companion.tables[0]?.columns.map(c => c.name.toLowerCase())
       ).toContain("headline");
       expect(await find([localized])).toEqual([]);
+    });
+
+    // Under `experimental.perLanguageStorage` an entity that is not marked translatable keeps its
+    // translatable fields in its translation table all the same, so that is where they are looked for.
+    it("looks for an untranslated entity's translatable column in its translation table under the setting", async () => {
+      const fields = [
+        f({ name: "summary", type: "number" }),
+        f({ name: "headline", type: "text" }),
+      ];
+      // Laid out as the setting lays it out: the main table without the translatable field, and
+      // the translation table holding it.
+      const main = new DynamicCollectionSchemaService(
+        undefined,
+        dialect
+      ).generateMigrationSQL(LOCALIZED, fields, { localized: true });
+      for (const statement of statements(main)) await run(statement);
+      const spec = deriveCompanionSpec({
+        slug: "rc-localized",
+        kind: "collection",
+        dbName: LOCALIZED,
+        fields,
+        dialect,
+        builtBy: "collection",
+        defaultLocale: "en",
+        collectionLocalized: true,
+      });
+      if (spec === null) throw new Error("the fixture translates no field");
+      for (const statement of statements(buildCompanionCreateOnlySql(spec))) {
+        await run(statement);
+      }
+      const untranslated: RepairEntity = {
+        ...entity(
+          {
+            kind: "collection",
+            slug: "rc-localized",
+            table: LOCALIZED,
+            origin: "collection",
+          },
+          fields
+        ),
+        applied: {
+          fields,
+          localized: false,
+          origin: "collection",
+          source: "snapshot",
+        },
+        configured: { fields, localized: false, origin: "collection" },
+      };
+      setPerLanguageStorage(true);
+      try {
+        expect(await find([untranslated])).toEqual([]);
+      } finally {
+        _resetPerLanguageStorage();
+      }
     });
 
     it("reports a table awaiting its first migration as pending, never as not migrated", async () => {

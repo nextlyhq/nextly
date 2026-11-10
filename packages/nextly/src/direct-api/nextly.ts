@@ -288,7 +288,7 @@ export class Nextly implements NextlyContext {
   public readonly apiKeys: ApiKeysNamespace;
   public readonly jobs: JobsNamespace;
   public readonly releases: ReleasesNamespace;
-  /** @experimental A person's own notices. */
+  /** A person's own notices. */
   public readonly notices: NoticesNamespace;
   /** @experimental A subject's content events: a document's or a release's. */
   public readonly contentEvents: ContentEventsNamespace;

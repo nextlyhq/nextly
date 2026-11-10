@@ -59,6 +59,7 @@ import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
+import { relationSwitches } from "./companion-shape-switches";
 import { withoutCopyOnlyRebuilds, type LiveTable } from "./copy-only-rebuilds";
 import {
   canEmitWithoutDrizzleKit,
@@ -129,10 +130,16 @@ import type {
   RenameCandidate,
   RenameDetector,
 } from "./pushschema-pipeline-interfaces";
+import { withRecordedShapes } from "./recorded-shapes";
 import { builtByFor } from "./registered-collections";
 import { refuseNotNullOverNulls } from "./required-column-gate";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
 import { withRetainedSizesColumn } from "./retained-core-columns";
+import {
+  refuseSeveralReferencesForOne,
+  refuseSwitchesWithRename,
+  refuseTargetSwitchesOverValues,
+} from "./several-references-refusal";
 import {
   sqliteRebuiltTables,
   untrackedConstraintCounts,
@@ -802,7 +809,23 @@ export class PushSchemaPipeline {
       const { snapshot: snapshotBeforeRenames, fieldGroupTypeColumns } =
         buildDesiredSnapshot({ desired, dialect, liveSnapshot, extensions });
 
-      const allOperations = diffSnapshots(liveSnapshot, snapshotBeforeRenames);
+      // The live columns given the shape each relation's recorded field stored: a switch the
+      // column's type does not show is planned from it (`withRecordedShapes`).
+      //
+      // A translated relation's switch, planned on its companion from the same rule, joins the
+      // operations here, so the confirmation, the refusals and the apply read one set, as the
+      // preview does (`relationSwitches`).
+      const liveWithShapes = withRecordedShapes(liveSnapshot, desired);
+      const diffed = diffSnapshots(liveWithShapes, snapshotBeforeRenames);
+      const switches = await relationSwitches({
+        db,
+        dialect,
+        desired,
+        live: liveSnapshot,
+        desiredSnapshot: snapshotBeforeRenames,
+        planned: diffed,
+      });
+      const allOperations = [...diffed, ...switches.ops];
 
       // A UI save owns only the entity being edited. An operation targeting a code-first or
       // plugin-owned table is dropped here, BEFORE anything reads the operation set, because those
@@ -952,6 +975,32 @@ export class PushSchemaPipeline {
         dispatchResult,
         resolvedOps
       );
+      // A relationship switched to or from naming several target collections, while a row holds a
+      // value no conversion can carry across; then one switched from many related entries to one,
+      // while a row holds several.
+      // A translated relation's companion is among these (`relationSwitches`), its rows counted
+      // with the main tables'.
+      // A relation renamed and switched at once: the rename carries its values to the new name as
+      // they are, which the switch's conversion, planned for one name, never reaches.
+      refuseSwitchesWithRename({
+        desired: args.desired,
+        operations: resolvedOps,
+        previous: liveWithShapes,
+        next: snapshotBeforeRenames,
+      });
+      await refuseTargetSwitchesOverValues({
+        db: args.db,
+        dialect: args.dialect,
+        desired: args.desired,
+        operations: resolvedOps,
+      });
+      await refuseSeveralReferencesForOne({
+        db: args.db,
+        dialect: args.dialect,
+        desired: args.desired,
+        live: { tables: [...liveSnapshot.tables, ...switches.tables] },
+        operations: resolvedOps,
+      });
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       //

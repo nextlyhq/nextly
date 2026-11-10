@@ -35,6 +35,8 @@ const runtime = vi.hoisted(() => ({
   // serving one entry another's design.
   designCache: null as Map<string, Promise<unknown>> | null,
   events: [] as string[],
+  // The address each page's head was asked for, as the runtime was told it.
+  metadataPaths: [] as string[],
 }));
 vi.mock("nextly/runtime", async importOriginal => {
   const actual = await importOriginal<typeof import("nextly/runtime")>();
@@ -61,6 +63,12 @@ vi.mock("nextly/runtime", async importOriginal => {
         return cached;
       }
       return actual.cachedFind(read, options);
+    },
+    contentPageMetadata: (
+      ...args: Parameters<typeof actual.contentPageMetadata>
+    ) => {
+      runtime.metadataPaths.push(args[3]);
+      return actual.contentPageMetadata(...args);
     },
     readPublicSiteSettings: async () => {
       throw new Error("no site settings");
@@ -239,6 +247,7 @@ beforeEach(() => {
   runtime.events = [];
   runtime.keys = [];
   runtime.designCache = null;
+  runtime.metadataPaths = [];
 });
 
 afterEach(() => {
@@ -351,9 +360,10 @@ describe("the content route", () => {
         await expect(
           route.ContentPage({ params: { slug: ["blog", "hello"] } })
         ).rejects.toMatchObject(NOT_FOUND);
-        expect(
-          await route.generateMetadata({ params: { slug: ["blog", "hello"] } })
-        ).toEqual({});
+        // The head answers not found too, so a crawler gets a 404.
+        await expect(
+          route.generateMetadata({ params: { slug: ["blog", "hello"] } })
+        ).rejects.toMatchObject(NOT_FOUND);
       }
     );
 
@@ -403,9 +413,18 @@ describe("the content route", () => {
     expect(
       await route.generateMetadata({ params: { slug: ["blog", "hello"] } })
     ).toEqual({ title: "Hello world | Blog" });
-    expect(
-      await route.generateMetadata({ params: { slug: ["blog", "none"] } })
-    ).toEqual({});
+    // An address nothing holds: the head answers not found, as the page does.
+    await expect(
+      route.generateMetadata({ params: { slug: ["blog", "none"] } })
+    ).rejects.toMatchObject(NOT_FOUND);
+  });
+
+  it("asks for an entry's head through the runtime, at the address it was served", async () => {
+    // So a plugin that provides page metadata answers an entry served here
+    // exactly as it answers a page the pages route serves.
+    const route = createContentPage(config());
+    await route.generateMetadata({ params: { slug: ["blog", "hello"] } });
+    expect(runtime.metadataPaths).toEqual(["/blog/hello"]);
   });
 
   it("serves a page's draft where the pages route's gate grants it, since a draft holds no address", async () => {

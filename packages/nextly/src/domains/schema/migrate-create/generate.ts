@@ -77,6 +77,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
   buildDesiredTableFromFields,
@@ -96,6 +97,7 @@ import { operationsToJudge } from "../pipeline/moved-to-companion";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
+import { refuseSwitchesWithRename } from "../pipeline/several-references-refusal";
 import { generateStatements } from "../pipeline/sql-templates/index";
 import { sqliteTableRebuildStatements } from "../pipeline/sql-templates/sqlite-rebuild";
 
@@ -517,6 +519,13 @@ export async function generateMigration(
       args.dialect,
       previousSnapshot
     );
+    // A relation renamed and switched between storage shapes at once is refused, as the apply
+    // refuses it: the rename carries its values to the new name in the shape they had.
+    refuseSwitchesWithRename({
+      operations,
+      previous: previousSnapshot,
+      next: desiredSnapshot,
+    });
   }
   if (operations.length === 0 && !hasCompanions && !hasSettingsChanges) {
     return null;
@@ -581,6 +590,19 @@ export async function generateMigration(
   );
   sqlStatements.push(...rows.up);
   downSqlStatements.push(...rows.down);
+
+  // 7c. A translated relation whose shape changed keeps its values on the entity's companion,
+  //     which the diff above does not reach: its guards lead the file, before any DDL, and its
+  //     conversions follow (`migrationCompanionSwitches`).
+  const companionSwitches = migrationCompanionSwitches({
+    entities,
+    previous: previous === null ? null : previous.data.entities,
+    dialect: args.dialect,
+  });
+  sqlStatements.unshift(...companionSwitches.up.guards);
+  sqlStatements.push(...companionSwitches.up.rest);
+  downSqlStatements.unshift(...companionSwitches.down.guards);
+  downSqlStatements.push(...companionSwitches.down.rest);
 
   /*
    * 8. Compose file content + write both files.
@@ -1254,7 +1276,8 @@ function planTranslatedUniqueMigrations(
       dialect,
       defaultLocale,
       collectionLocalized: true,
-      status: c.status === true,
+      // A per-language `_status` only where each language publishes on its own.
+      status: publishesPerLanguage(c),
     };
     // With no field translated now, the companion is still addressed when the previous snapshot
     // recorded per-language unique indexes on it: the last such field to leave translation takes
@@ -1465,7 +1488,8 @@ function addsEntryFor(
     tableName: c.tableName,
     dialect,
     defaultLocale,
-    status: c.status === true,
+    // A per-language `_status` only where each language publishes on its own.
+    status: publishesPerLanguage(c),
     recorded: translated.filter(f => !isAdded(f)),
     added,
   });
@@ -1547,8 +1571,10 @@ function planFieldsLeavingTranslation(
           // A rollback recreates default-language rows with the main row's publishing state, when
           // both have one: Draft/Published on before this change, so the companion has `_status`,
           // and still on after it, so the main table still has `status` when the rollback runs.
+          // Only where each language publishes on its own: an untranslated entity kept per
+          // language under the setting publishes as a document, and its companion has no `_status`.
           status:
-            c.status === true &&
+            publishesPerLanguage(c) &&
             previousSnapshot.tables
               .find(t => t.name === c.tableName)
               ?.columns.some(col => col.name === "status") === true,
@@ -1905,8 +1931,11 @@ function planFieldsJoiningTranslation(
             columns: joining.map(j => j.column),
             // A default-language row created for an entry takes its publishing state, when the
             // main table and the companion both have one before this change.
+            // Only where each language publishes on its own: an untranslated entity kept per
+            // language under the setting publishes as a document, and its companion has no
+            // `_status`.
             status:
-              c.status === true &&
+              publishesPerLanguage(c) &&
               prevMain?.columns.some(col => col.name === "status") === true,
           },
           builtBy: "codeFirst",

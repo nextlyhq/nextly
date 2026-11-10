@@ -18,7 +18,6 @@
  * and field by field, by each field's own key.
  *
  * @module domains/collections/release-links
- * @experimental
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
@@ -61,8 +60,6 @@ import {
  * `data` is the walk's own copy, and `keys` names each object in it that
  * holds a link field, so a field's key is that object and the field's name:
  * unique in the document whatever its path.
- *
- * @experimental
  */
 export interface ScannedDocument {
   kind: "collection" | "single";
@@ -128,8 +125,6 @@ function eachReference(
  *
  * `enriched` are the schema's fields with their components' schemas, as the
  * walk reads them.
- *
- * @experimental
  */
 export function linksInDocument(
   enriched: readonly FieldConfig[],
@@ -199,8 +194,6 @@ function copiedWithOrigins(
  * as it was scanned. A field the rules removed, anywhere, is not among them.
  * Rules that cannot be evaluated show no field at all; a rule that could not
  * run, for want of a database connection, ends the request instead.
- *
- * @experimental
  */
 export async function linkFieldKeysVisibleIn(
   scanned: ScannedDocument,
@@ -375,8 +368,6 @@ async function publishedEntries(
 /**
  * The reads the releases domain's link check asks, bound to one adapter.
  * Each scanned link list carries its {@link ScannedDocument}.
- *
- * @experimental
  */
 export function releaseLinkReads(adapter: DrizzleAdapter): ReleaseLinkReads {
   return {
@@ -410,8 +401,6 @@ export function releaseLinkReads(adapter: DrizzleAdapter): ReleaseLinkReads {
  * For each of these scanned documents, by `id`, the keys of the link fields
  * a reader may view ({@link linkFieldKeysVisibleIn}), judged on the scanned
  * document itself. A scan this module did not make shows no field.
- *
- * @experimental
  */
 export async function linkFieldKeysVisibleTo(
   scans: ReadonlyArray<{ id: string; scanned: ScannedLinks }>,
