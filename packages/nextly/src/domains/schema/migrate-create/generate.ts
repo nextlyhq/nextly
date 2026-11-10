@@ -327,6 +327,29 @@ function operationTableName(op: Operation): string {
 }
 
 /**
+ * `declared` with the fields a plugin's scope holds back from a type switched
+ * off, kept while `previous` has their columns. Planned from the declared
+ * fields alone, a companion planner dropped a translated kept field's unique
+ * index when its type was switched off, and added its column again when it
+ * was switched on.
+ */
+function withKeptScopeFieldsOf(
+  declared: GenerateArgs,
+  previous: NextlySchemaSnapshot | undefined
+): GenerateArgs {
+  const kept = columnsByTable(previous ?? EMPTY_SNAPSHOT);
+  return {
+    ...declared,
+    collections: declared.collections.map(entity =>
+      withKeptScopeFields("collection", entity, kept)
+    ),
+    singles: declared.singles.map(entity =>
+      withKeptScopeFields("single", entity, kept)
+    ),
+  };
+}
+
+/**
  * Run the migrate:create orchestration. Returns null if no operations
  * remain (config matches latest snapshot; the CLI exits 0 for that).
  */
@@ -341,21 +364,9 @@ export async function generateMigration(
   // 1. Load previous state.
   const previous = await loadLatestSnapshot(metaDir);
 
-  // The entities with the fields a plugin's scope holds back from a type
-  // switched off, kept while the previous snapshot has their columns. Taken
-  // once, here, so the table diff and every companion planner below see the
-  // same fields: planned from the declared ones alone, a translated kept
-  // field's companion column was added again when the type was switched on.
-  const kept = columnsByTable(previous?.data.snapshot ?? EMPTY_SNAPSHOT);
-  const args: GenerateArgs = {
-    ...declared,
-    collections: declared.collections.map(entity =>
-      withKeptScopeFields("collection", entity, kept)
-    ),
-    singles: declared.singles.map(entity =>
-      withKeptScopeFields("single", entity, kept)
-    ),
-  };
+  // Taken once, here, so the table diff and every companion planner below
+  // see the same fields (`withKeptScopeFieldsOf`).
+  const args = withKeptScopeFieldsOf(declared, previous?.data.snapshot);
 
   // 2. Build desired snapshot from config. Localized collections omit their
   //    translatable columns here (they live in the companion `_locales` table).
