@@ -2193,7 +2193,7 @@ export async function migrateCore(
  *
  * A database with no ledger yet has no attempt to refuse on.
  */
-async function refuseUnresolvedAppAttempts(args: {
+export async function refuseUnresolvedAppAttempts(args: {
   adapter: CLIDatabaseAdapter;
   db: unknown;
   dialect: SupportedDialect;

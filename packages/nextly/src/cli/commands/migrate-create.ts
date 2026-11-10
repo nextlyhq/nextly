@@ -437,7 +437,10 @@ export async function runMigrateCreate(
 
   // The inputs every app migration is generated from, read and checked as
   // the server reads them for a Schema Builder save (`appMigrationInputs`).
-  // A refusal from those checks is what a dry run reports and exits 0 on.
+  // A dry run reports a refusal of the plan and exits 0. A real run throws
+  // that refusal on, for the command's handler to print; anything else (a
+  // definition that cannot be read, a removed collection something still
+  // depends on) ends the run here, printed in the error shape.
   let inputs: Awaited<ReturnType<typeof appMigrationInputs>>;
   try {
     inputs = await appMigrationInputs({
@@ -451,9 +454,10 @@ export async function runMigrateCreate(
       logger,
     });
   } catch (error) {
-    stopOnPlanError(error, logger, options.dryRun, () =>
-      exitWithError(logger, error)
-    );
+    stopOnPlanError(error, logger, options.dryRun, () => {
+      if (dryRunRefusalOf(error) !== undefined) throw error;
+      exitWithError(logger, error);
+    });
   }
   const {
     collections,
