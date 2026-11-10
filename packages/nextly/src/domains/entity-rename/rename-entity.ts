@@ -34,6 +34,10 @@ import {
   slugKeyedTablesPresent,
   type EntitySlugMove,
 } from "./move-entity-slug";
+import {
+  moveRelationshipTargets,
+  refuseUnmovableTargets,
+} from "./relationship-targets";
 
 /**
  * Write the registry row with `writeRegistry` and move every declared table
@@ -78,10 +82,15 @@ export async function renameEntity<T>(
       const present = await slugKeyedTablesPresent(adapter);
       return writingPermissions(getDialectTables(dialect).permissions, () =>
         adapter.transaction(async tx => {
-          await refuseManyToManyLinks(tx, move);
+          await refuseManyToManyLinks(tx, move, present);
+          // What the stored relationships point at, refused before anything is written.
+          await refuseUnmovableTargets(tx, move, present);
           const row = await writeRegistry(tx);
           if (row === null) return null;
           await moveEntitySlug(tx, { dialect, present, move });
+          // Read after the registry row is written, so a collection relating to itself is
+          // pointed at its new slug too.
+          await moveRelationshipTargets(tx, move, present);
           return row;
         })
       );
