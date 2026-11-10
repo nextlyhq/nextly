@@ -39,6 +39,7 @@ import {
   fieldsWithLeavingSettingsDeferred,
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
+import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
@@ -521,6 +522,12 @@ export const COMPONENTS_METHODS: Record<
           if (!wasLocalized && isLocalized) {
             assertLocalizationConfigured("component", slug);
           }
+          // Where the field group's translatable values live, before and after this save: per language
+          // when it is translated, or always under `experimental.perLanguageStorage`, where turning
+          // translation on or off moves nothing. Every step below that lays out or moves values reads
+          // these; the registry keeps the field group's own flag.
+          const wasStored = storesPerLanguage({ localized: wasLocalized });
+          const isStored = storesPerLanguage({ localized: isLocalized });
 
           const currentVersion = component.schemaVersion ?? 1;
           // Reject a stale UI save before any DDL runs so two admins editing the
@@ -543,8 +550,8 @@ export const COMPONENTS_METHODS: Record<
               oldFields: (component.fields ??
                 []) as unknown as FieldDefinition[],
               newFields: fields as unknown as FieldDefinition[],
-              wasLocalized,
-              isLocalized,
+              wasLocalized: wasStored,
+              isLocalized: isStored,
               dialect: adapter.dialect,
               builtBy: "fieldGroup",
             }
@@ -565,8 +572,8 @@ export const COMPONENTS_METHODS: Record<
             kind: "fieldGroup",
             oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
             newFields: fields as unknown as FieldDefinition[],
-            wasLocalized,
-            isLocalized,
+            wasLocalized: wasStored,
+            isLocalized: isStored,
             // This apply's push refuses a main-table column drop the admin did not confirm.
             mainDropsConfirmed: true,
           });
@@ -594,8 +601,8 @@ export const COMPONENTS_METHODS: Record<
           const settingsDeferred = fieldsWithLeavingSettingsDeferred({
             oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
             newFields: fields as unknown as FieldDefinition[],
-            wasLocalized,
-            isLocalized,
+            wasLocalized: wasStored,
+            isLocalized: isStored,
             renamed: companionRename,
           });
 
@@ -632,9 +639,8 @@ export const COMPONENTS_METHODS: Record<
             tableName,
             oldFields: component.fields as unknown as FieldDefinition[],
             newFields: fields as unknown as FieldDefinition[],
-            localized: isLocalized,
-            wasLocalized:
-              (component as { localized?: boolean }).localized === true,
+            localized: isStored,
+            wasLocalized: wasStored,
             adapter,
             renamed: companionRename ?? undefined,
             // The settings the first push left off, once the shared columns hold the default
@@ -755,7 +761,7 @@ export const COMPONENTS_METHODS: Record<
             tableName,
             fields as FieldConfig[],
             componentTypeColumn,
-            isLocalized
+            isStored
           );
 
           // Reached only when the registry write landed, or when it raised and the row was found
@@ -868,8 +874,8 @@ export const COMPONENTS_METHODS: Record<
           // The cost that argues for `false` elsewhere does not apply here. Collections take that
           // shape outside development because they record a migration FILE and must keep working
           // for a role holding DML but no DDL. This is builder surface — refused in production
-          // unless `showBuilder` is explicitly on — so a deployment that can reach it is one that
-          // already accepts schema changes from a browser, and creating a one-time lock table is
+          // whatever `showBuilder` says — so a server that can reach it is one that already
+          // accepts schema changes from a browser, and creating a one-time lock table is
           // strictly less than what it has already permitted.
           issuesDdl: true,
         },
