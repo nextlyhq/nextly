@@ -39,6 +39,12 @@ import { reconcileBuilderContributions } from "../../plugins/schema/reconcile-bu
 export interface KeptColumn {
   table: string;
   column: string;
+  /**
+   * The indexes on its table that cover it, read from the live tables. SQLite
+   * drops neither a column an index covers nor the index with it, so the
+   * prune drops these first there.
+   */
+  indexes?: string[];
 }
 
 /** A type as the registry records it, with the fields it declares now. */
@@ -81,7 +87,14 @@ export async function liveKeptColumns(
     companionTableOf(type.tableName),
   ]);
   const live = await introspectLiveSnapshot(db, dialect, tables);
-  return keptColumnsOf(types, columnsByTable(live, dialect));
+  return keptColumnsOf(types, columnsByTable(live, dialect)).map(kept => ({
+    ...kept,
+    indexes: (
+      live.tables.find(table => table.name === kept.table)?.indexes ?? []
+    )
+      .filter(index => index.columns.includes(kept.column))
+      .map(index => index.name),
+  }));
 }
 
 /** A registry row, as the registries list them. */
@@ -205,20 +218,29 @@ export async function keptColumnsFor(args: {
   migrationsDir: string;
   adapter: Pick<DrizzleAdapter, "getDrizzle">;
   dialect: SupportedDialect;
-  /** The site's types with the fields they declare now (`currentTypes`). */
-  types: readonly RegisteredType[];
+  /**
+   * The site's types with the fields they declare now (`currentTypes`), read
+   * again each time the kept columns are: the prune plans once to ask, and
+   * again under the schema lock, where a field claimed in between must cancel
+   * the drop the consent agreed to.
+   */
+  types: () => Promise<readonly RegisteredType[]>;
 }): Promise<KeptColumnsByMode> {
-  const { types } = args;
   const latest = await loadLatestSnapshot(
     resolve(args.cwd ?? process.cwd(), args.migrationsDir, "meta")
   );
   if (latest === null) {
     return {
-      live: () =>
-        liveKeptColumns(args.adapter.getDrizzle(), args.dialect, types),
+      live: async () =>
+        liveKeptColumns(
+          args.adapter.getDrizzle(),
+          args.dialect,
+          await args.types()
+        ),
       inMigration: [],
     };
   }
+  const types = await args.types();
   // On a type's own table only. A migration never drops a translations
   // table's column, here as for any field that leaves a type: the table is
   // only ever added to. So a kept translated column is not listed as one the

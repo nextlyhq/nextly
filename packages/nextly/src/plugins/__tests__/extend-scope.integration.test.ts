@@ -614,18 +614,34 @@ describe.each(getConfiguredTestDialects())(
       database = await openDatabase(dialect);
       const adapter = database.adapter;
       vi.stubEnv("NODE_ENV", "development");
+      // Unique, so its column has an index: SQLite drops neither a column an
+      // index covers nor the index with it.
+      const uniqueSeo = (except?: string[]): PluginDefinition => ({
+        ...seoPlugin,
+        contributes: {
+          extend: [
+            {
+              target: {
+                every: ["collection", "single"],
+                ...(except === undefined ? {} : { except }),
+              },
+              fields: [{ ...text({ name: "seo_title" }), unique: true }],
+            },
+          ],
+        },
+      });
       current = await createTestNextly({
         adapter: adapter as never,
         collections: [posts, pages],
-        plugins: [seoEverywhere],
+        plugins: [uniqueSeo()],
       });
-      configWith({ collections: [posts, pages] }, [seoEverywhere]);
+      configWith({ collections: [posts, pages] }, [uniqueSeo()]);
       await reloadNextlyConfig();
       await current.nextly.create({
         collection: "es_pages" as never,
         data: { title: "Saved", seo_title: "Kept" } as never,
       });
-      configWith({ collections: [posts, pages] }, [seoPlugin]);
+      configWith({ collections: [posts, pages] }, [uniqueSeo(["es_pages"])]);
       await reloadNextlyConfig();
 
       // A site that applies its schema directly: the prune lists the kept

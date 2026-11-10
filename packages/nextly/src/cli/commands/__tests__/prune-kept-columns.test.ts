@@ -51,7 +51,7 @@ const args = () => ({
   migrationsDir: "./migrations",
   adapter: { getDrizzle: () => ({}) as never },
   dialect: "sqlite" as const,
-  types: [pages],
+  types: async () => [pages],
 });
 
 /** The registry's rows: each still lists `seo`, as before the site restarts. */
@@ -115,6 +115,22 @@ describe("currentTypes", () => {
 });
 
 describe("keptColumnsFor", () => {
+  it("reads the site's types again each time it plans, as the prune does under its lock", async () => {
+    let reads = 0;
+    const kept = await keptColumnsFor({
+      ...args(),
+      types: async () => {
+        reads += 1;
+        return [pages];
+      },
+    });
+    // Each plan reads the tables too, which this stub database cannot answer.
+    await kept.live?.().catch(() => undefined);
+    await kept.live?.().catch(() => undefined);
+
+    expect(reads).toBe(2);
+  });
+
   it("reads the tables when the site keeps no migration files", async () => {
     const kept = await keptColumnsFor(args());
 

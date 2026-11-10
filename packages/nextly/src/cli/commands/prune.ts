@@ -407,6 +407,26 @@ async function dropPlanned(
   const q = dialect === "mysql" ? "`" : '"';
   const cascade = dialect !== "sqlite" && dialect !== "mysql" ? " CASCADE" : "";
 
+  // The kept columns first, so a column that cannot be dropped stops the prune
+  // before any table goes. A type's own table stays, with only the column the
+  // site no longer keeps taken from it. SQLite drops neither a column an index
+  // covers nor the index with it, so those indexes go first there; PostgreSQL
+  // and MySQL take them with the column.
+  const droppedColumns: string[] = [];
+  for (const kept of plan.keptColumns) {
+    if (dialect === "sqlite") {
+      for (const index of kept.indexes ?? []) {
+        await args.adapter.executeQuery(
+          `DROP INDEX IF EXISTS ${q}${index}${q}`
+        );
+      }
+    }
+    await args.adapter.executeQuery(
+      `ALTER TABLE ${q}${kept.table}${q} DROP COLUMN ${q}${kept.column}${q}`
+    );
+    droppedColumns.push(columnName(kept));
+  }
+
   const dropped: string[] = [];
   for (const orphan of orphans) {
     // Companion first — it holds an FK to `<main>.id`, so the main-table drop below would
@@ -440,16 +460,6 @@ async function dropPlanned(
       tableName: companionMainTable(companion),
     });
     droppedCompanions.push(companion);
-  }
-
-  // The kept columns last: no orphan's table holds one, and a type's own table
-  // stays, with only the column the site no longer keeps taken from it.
-  const droppedColumns: string[] = [];
-  for (const kept of plan.keptColumns) {
-    await args.adapter.executeQuery(
-      `ALTER TABLE ${q}${kept.table}${q} DROP COLUMN ${q}${kept.column}${q}`
-    );
-    droppedColumns.push(columnName(kept));
   }
 
   return {
@@ -620,14 +630,15 @@ export async function runPruneCommand(
       migrationsDir: configResult.config.db.migrationsDir,
       adapter: drizzleAdapter,
       dialect,
-      types: await currentTypes({
-        configured: configuredTypes(configResult.config),
-        deferredExtends: configResult.deferredExtends ?? [],
-        registries: {
-          collections: registry,
-          singles: new SingleRegistryService(drizzleAdapter, logger),
-        },
-      }),
+      types: () =>
+        currentTypes({
+          configured: configuredTypes(configResult.config),
+          deferredExtends: configResult.deferredExtends ?? [],
+          registries: {
+            collections: registry,
+            singles: new SingleRegistryService(drizzleAdapter, logger),
+          },
+        }),
     });
     const result = await runPrune({
       keptColumns: kept.live,
