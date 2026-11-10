@@ -14,6 +14,12 @@
  * by a failure signs in once more. A spec keeps the real form where the form is
  * its subject (`exit-demo`), or where its server is another one (`component-map`).
  *
+ * A cached session goes stale during a long run: its access token ends, and
+ * while a context that opened with it can refresh, the cookies of that refresh
+ * never reach this cache, so the next context would open with an expired token
+ * and a refresh token already spent. Each is therefore replaced before then
+ * (`./session-lifetime`).
+ *
  * @module tests/support/production-sign-in
  */
 import { readFileSync, rmSync } from "node:fs";
@@ -28,28 +34,27 @@ import {
 
 import {
   createSignedInUser,
+  signInAgain,
   superAdminRoleId,
   uniqueTag,
+  type SignedInUser,
   type StorageState,
 } from "./accounts";
-import {
-  signIn as signInSeededUser,
-  SESSION_MAX_AGE_MS,
-  STORAGE_STATE,
-} from "./session.mjs";
+import { sessionNeedsRenewal } from "./session-lifetime";
+import { signIn as signInSeededUser, STORAGE_STATE } from "./session.mjs";
 import { test } from "./visible";
 
-/** The seeded user's session in this worker, by server, and when it was made. */
-const seeded = new Map<
-  string,
-  { admin: Promise<APIRequestContext>; at: number }
->();
+/** The seeded user's API in this worker, by server. */
+const seeded = new Map<string, Promise<APIRequestContext>>();
 
 /** The seeded user's API, signed in once a worker and renewed before it expires. */
-function seededAdmin(server: string): Promise<APIRequestContext> {
-  const held = seeded.get(server);
-  if (held !== undefined && Date.now() - held.at <= SESSION_MAX_AGE_MS) {
-    return held.admin;
+async function seededAdmin(server: string): Promise<APIRequestContext> {
+  const held = await seeded.get(server)?.catch(() => undefined);
+  if (
+    held !== undefined &&
+    !sessionNeedsRenewal((await held.storageState()).cookies, Date.now())
+  ) {
+    return held;
   }
   const admin = (async () => {
     // A file of this worker's own: the stored file is the main suite's.
@@ -64,33 +69,48 @@ function seededAdmin(server: string): Promise<APIRequestContext> {
       rmSync(file, { force: true });
     }
   })();
-  seeded.set(server, { admin, at: Date.now() });
+  seeded.set(server, admin);
   // A failed sign-in is not kept, so the next file asks again.
   admin.catch(() => seeded.delete(server));
   return admin;
 }
 
 /** Each file's account in this worker, by file and retry. */
-const fileAccounts = new Map<string, Promise<StorageState>>();
+const fileAccounts = new Map<string, Promise<SignedInUser>>();
 
-function accountOf(server: string, file: string, retry: number) {
-  const key = `${file}#${retry}`;
+/** The file's account, made the first time its file asks. */
+function accountOf(server: string, key: string): Promise<SignedInUser> {
   let made = fileAccounts.get(key);
   if (made === undefined) {
     made = (async () => {
       const admin = await seededAdmin(server);
-      const { storageState } = await createSignedInUser(admin, server, {
+      return createSignedInUser(admin, server, {
         email: `production-spec-${uniqueTag()}@nextly.local`,
         name: "Spec Author",
         roleIds: [await superAdminRoleId(admin)],
       });
-      return storageState;
     })();
     fileAccounts.set(key, made);
     // A failed sign-in is not kept, so the next test asks again.
     made.catch(() => fileAccounts.delete(key));
   }
   return made;
+}
+
+/** The file's session, signed in again before its access token runs out. */
+async function sessionOf(
+  server: string,
+  file: string,
+  retry: number
+): Promise<StorageState> {
+  const key = `${file}#${retry}`;
+  const account = await accountOf(server, key);
+  if (!sessionNeedsRenewal(account.storageState.cookies, Date.now())) {
+    return account.storageState;
+  }
+  const storageState = await signInAgain(server, account.email);
+  fileAccounts.set(key, Promise.resolve({ ...account, storageState }));
+  return storageState;
 }
 
 /**
@@ -105,7 +125,7 @@ export async function signIn(page: Page): Promise<APIRequestContext> {
   if (server === undefined) {
     throw new Error("The production suite configures no baseURL.");
   }
-  const { cookies } = await accountOf(server, info.file, info.retry);
+  const { cookies } = await sessionOf(server, info.file, info.retry);
   await page.context().addCookies(cookies);
   await page.goto("/admin");
   await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
