@@ -21,6 +21,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // `pipeline/__tests__/preview.test.ts`. F8 PR 7's cross-dialect
 // integration matrix exercises the new preview/apply paths end-to-end
 // against real PG/MySQL/SQLite.
+import { emitDdl } from "../../../domains/schema/pipeline/ddl-emitter";
+import { buildDesiredTableFromFields } from "../../../domains/schema/pipeline/diff/build-from-fields";
 import { generateRuntimeSchema } from "../../../domains/schema/services/runtime-schema-generator";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { SchemaRegistry } from "../../schema-registry";
@@ -47,6 +49,23 @@ const canConnect = async (): Promise<boolean> => {
   }
 };
 
+/** The products collection's fields, for both its table and its runtime schema. */
+const PRODUCT_FIELDS: readonly FieldDefinition[] = [
+  { name: "title", type: "text", required: true },
+  // A price holds fractions, so it is stored exactly: a number field is an
+  // integer column unless it says otherwise.
+  { name: "price", type: "number", dbType: "decimal" },
+  { name: "is_active", type: "checkbox" },
+  { name: "metadata", type: "json" },
+];
+
+/** The posts collection's fields, for both its table and its runtime schema. */
+const POST_FIELDS: readonly FieldDefinition[] = [
+  { name: "title", type: "text", required: true },
+  { name: "body", type: "textarea" },
+  { name: "status", type: "select" },
+];
+
 describe("Schema Push Integration (Real PostgreSQL)", async () => {
   const isAvailable = await canConnect();
   if (!isAvailable) {
@@ -64,39 +83,29 @@ describe("Schema Push Integration (Real PostgreSQL)", async () => {
     pool = new Pool({ connectionString: TEST_DB_URL });
     db = drizzle({ client: pool });
 
-    // Create test tables via raw SQL (bypassing pushSchema TTY limitation)
-    // This simulates what pushSchema would do, letting us test CRUD via Drizzle API.
-    // `created_by` is included because it is a system owner column injected into
-    // every collection table's runtime schema, so the fixture must carry it or the
-    // Drizzle CRUD (which selects/inserts it) would reference a missing column.
-    await pool.query(`
-      DROP TABLE IF EXISTS "dc_int_products" CASCADE;
-      CREATE TABLE "dc_int_products" (
-        "id" text PRIMARY KEY,
-        "title" text NOT NULL,
-        "slug" text NOT NULL,
-        "price" double precision,
-        "is_active" boolean,
-        "metadata" jsonb,
-        "created_at" timestamp DEFAULT now(),
-        "updated_at" timestamp DEFAULT now(),
-        "created_by" text
+    // Created by the code that creates a real collection table: its fields in,
+    // a `TableSpec` out, DDL emitted for PostgreSQL. The runtime schema the CRUD
+    // below runs through injects system columns beside the fields (`created_by`,
+    // the change-stamp columns), and a hand-written CREATE TABLE fell behind them
+    // each time one was added.
+    for (const [tableName, fields] of [
+      ["dc_int_products", PRODUCT_FIELDS],
+      ["dc_int_posts", POST_FIELDS],
+    ] as const) {
+      await pool.query(`DROP TABLE IF EXISTS "${tableName}" CASCADE`);
+      const spec = buildDesiredTableFromFields(
+        tableName,
+        [...fields],
+        "postgresql",
+        { builtBy: "collection" }
       );
-    `);
-
-    await pool.query(`
-      DROP TABLE IF EXISTS "dc_int_posts" CASCADE;
-      CREATE TABLE "dc_int_posts" (
-        "id" text PRIMARY KEY,
-        "title" text NOT NULL,
-        "slug" text NOT NULL,
-        "body" text,
-        "status" text DEFAULT 'draft',
-        "created_at" timestamp DEFAULT now(),
-        "updated_at" timestamp DEFAULT now(),
-        "created_by" text
-      );
-    `);
+      for (const statement of emitDdl(
+        [{ type: "add_table", table: spec }],
+        "postgresql"
+      )) {
+        await pool.query(statement);
+      }
+    }
   });
 
   afterAll(async () => {
@@ -131,27 +140,15 @@ describe("Schema Push Integration (Real PostgreSQL)", async () => {
   });
 
   describe("CRUD via Drizzle query API against real database", () => {
-    // Generate the Drizzle table object matching our test table
-    const productFields: FieldDefinition[] = [
-      { name: "title", type: "text", required: true },
-      { name: "price", type: "number" },
-      { name: "is_active", type: "checkbox" },
-      { name: "metadata", type: "json" },
-    ];
+    // The Drizzle table objects for the tables created from the same fields.
     const { table: productsTable } = generateRuntimeSchema(
       "dc_int_products",
-      productFields,
+      [...PRODUCT_FIELDS],
       "postgresql"
     );
-
-    const postFields: FieldDefinition[] = [
-      { name: "title", type: "text", required: true },
-      { name: "body", type: "textarea" },
-      { name: "status", type: "select" },
-    ];
     const { table: postsTable } = generateRuntimeSchema(
       "dc_int_posts",
-      postFields,
+      [...POST_FIELDS],
       "postgresql"
     );
 
