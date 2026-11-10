@@ -161,6 +161,15 @@ export interface ValidateEntryOptions {
    */
   storedProvenancePaths?: ReadonlySet<string>;
   /**
+   * A loose document whose number fields are JSON rather than a typed
+   * column — block props, form submissions, anything a plugin holds by this
+   * validator's public entry point — where a fraction is as legal as a whole
+   * and no column decides. The whole-number floor binds integer columns
+   * alone, so it is not asked here. Absent on an entry's own document, whose
+   * number fields store in typed columns the floor speaks for.
+   */
+  fractionalNumberStorage?: boolean;
+  /**
    * The entry write being validated, for the field types that judge a value
    * against stored rows. Absent where no entry write is behind the validation,
    * and then no type is handed one.
@@ -877,8 +886,11 @@ async function validateFieldValue(
         // PostgreSQL answers a 500, and SQLite stores a value the schema
         // never declared. On an assembled-from-storage document the caller's
         // own values were already judged at their patch gate, and the stored
-        // ones were carried by nobody, so they ride unchanged.
+        // ones were carried by nobody, so they ride unchanged. Not asked at
+        // all on a loose JSON document, whose numbers have no column to
+        // speak for them.
         if (
+          !options.fractionalNumberStorage &&
           !fieldJudgesFractions(field) &&
           !options.assembledFromStorage &&
           !isStoredProvenancePath(p, options.storedProvenancePaths) &&
