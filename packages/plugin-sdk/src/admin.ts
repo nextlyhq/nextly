@@ -774,6 +774,38 @@ export type {
 } from "@nextlyhq/admin";
 
 /**
+ * The shared field settings panel (@experimental): the one panel every surface
+ * uses to add and edit a field, the same for a field just added and one that
+ * already existed. Five tabs (General, Validation, Display, Conditions,
+ * Advanced), with the settings that make the field its type first in General,
+ * and every setting it shows kept in the definition. Each change reaches your
+ * `onChange` at once with the whole field, so there is no Apply step: your
+ * surface stores it, and the panel writes nothing.
+ *
+ * Your surface configures it with `FieldSettingsSurface`: the `surface` whose
+ * plugin types it names, `deriveName` (a name follows its label until the
+ * field is saved), the settings it `fixed` and why (shown beside them), its
+ * `extraSettings` by tab, and its `conditions`. Pass `saved` for a field your
+ * surface has saved, `ancestors` for where it sits (its API path is shown, such
+ * as `authors[].social[].url`), and `siblings` for the fields its condition may
+ * read.
+ * - `FieldTypeSettings` is what a type shows of its own settings: its
+ *   `defining` settings, first in General, and the rest by tab.
+ * Experimental until every built-in surface uses it.
+ */
+export { FieldSettingsPanel } from "@nextlyhq/admin";
+export type {
+  FieldSettingsControlProps,
+  FieldSettingsField,
+  FieldSettingsPanelProps,
+  FieldSettingsSurface,
+  FieldSettingsSurfaceControlProps,
+  FieldSettingsTab,
+  FieldTypeSettings,
+  FixedFieldSetting,
+} from "@nextlyhq/admin";
+
+/**
  * @experimental Upload a file into the media library, as the admin's own
  * dropzone does.
  *

@@ -12,6 +12,12 @@ import type { ComponentType, ReactNode } from "react";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
+/**
+ * The field the panel edits: a field definition as the admin holds it, with
+ * the id that tells it apart from its siblings while it is edited.
+ */
+export type FieldSettingsField = BuilderField;
+
 /** The panel's tabs, in the order they are shown. */
 export type FieldSettingsTab =
   | "general"
@@ -22,10 +28,10 @@ export type FieldSettingsTab =
 
 /** What a settings control is given: the field, and where its changes go. */
 export interface FieldSettingsControlProps {
-  field: BuilderField;
+  field: FieldSettingsField;
   /** True when nothing may be changed; the control still shows its values. */
   readOnly: boolean;
-  onChange: (next: BuilderField) => void;
+  onChange: (next: FieldSettingsField) => void;
 }
 
 /**
@@ -35,7 +41,7 @@ export interface FieldSettingsControlProps {
  */
 export interface FieldSettingsSurfaceControlProps
   extends FieldSettingsControlProps {
-  ancestors: readonly BuilderField[];
+  ancestors: readonly FieldSettingsField[];
 }
 
 /**
@@ -86,11 +92,11 @@ export interface FieldSettingsSurface {
 
 export interface FieldSettingsPanelProps {
   surface: FieldSettingsSurface;
-  field: BuilderField;
+  field: FieldSettingsField;
   /** The containers the field sits in, outermost first; empty at the top. */
-  ancestors: readonly BuilderField[];
+  ancestors: readonly FieldSettingsField[];
   /** The other fields beside it, which its conditions may name. */
-  siblings: readonly BuilderField[];
+  siblings: readonly FieldSettingsField[];
   /**
    * Whether the field has been saved on this surface. A saved field's name no
    * longer follows its label, and what the surface fixes once saved is fixed.
@@ -99,7 +105,7 @@ export interface FieldSettingsPanelProps {
   /** Show every setting without letting any change. */
   readOnly?: boolean;
   /** Called with the whole field after each change, at once. */
-  onChange: (next: BuilderField) => void;
+  onChange: (next: FieldSettingsField) => void;
   /** Closes the panel; a close button is shown only when it is given. */
   onClose?: () => void;
   /** The host's own actions, drawn in the header (Delete, say). */

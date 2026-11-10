@@ -27,6 +27,7 @@ import {
   Sheet,
   SheetContent,
   SheetDescription,
+  SheetFooter,
   SheetTitle,
 } from "@nextlyhq/ui";
 import type { JSX } from "react";
@@ -166,7 +167,17 @@ export function BuilderFieldSettings({
             <SheetDescription className="sr-only">
               {`Settings of the ${fieldTitle} field.`}
             </SheetDescription>
-            {panel}
+            <div className="flex min-h-0 flex-1 flex-col">{panel}</div>
+            {/* Within thumb reach on a phone, and saying why there is no
+                Apply: every change is already in the draft. */}
+            <SheetFooter className="items-center gap-2 border-t border-border p-4 sm:justify-between">
+              <p className="text-xs text-muted-foreground">
+                Each change is kept as you make it.
+              </p>
+              <Button type="button" variant="outline" onClick={onClose}>
+                Close
+              </Button>
+            </SheetFooter>
           </SheetContent>
         </Sheet>
       )}

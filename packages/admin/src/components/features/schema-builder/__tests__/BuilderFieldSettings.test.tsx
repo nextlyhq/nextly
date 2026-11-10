@@ -1,19 +1,20 @@
-// Why: shell tests lock the off-canvas contract — 4 tabs render, the footer
-// shows [Cancel] [Apply] only, the confirming action last (Delete moved to the header as a trash icon
-// for non-system, non-readOnly fields in edit mode), and readOnly mode
-// swaps the footer to a single Close button. Tab content rendering is
-// covered separately in each tab's own test.
+// Why: the Schema Builder's host for the shared settings panel. It finds the
+// field wherever it sits, hands every change to the Builder's draft at once
+// (no Apply, no Cancel), lets a name follow its label only until the field has
+// been saved, adds the Builder's own Advanced settings, asks before deleting,
+// and shows a code-first entity or a plugin's field read-only. The panel's own
+// promises are pinned in field-ui/__tests__/SettingsPanel.test.tsx.
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
 
-import { FieldEditorSheet } from "../FieldEditorSheet";
+import { BuilderFieldSettings } from "../BuilderFieldSettings";
 import type { BuilderField } from "../types";
 
-// The installed plugins the sheet sees, so a test can contribute a field type
-// the way /admin-meta does. Empty by default, which is what the other tests
-// in this file render with.
+// The installed plugins the panel sees, so a test can contribute a field type
+// the way /admin-meta does. Empty by default.
 const branding = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 
 vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
@@ -23,336 +24,237 @@ vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
   useBranding: () => branding.current,
 }));
 
-const userField: BuilderField = {
+const excerpt: BuilderField = {
   id: "f-1",
-  name: "excerpt",
-  label: "Excerpt",
+  name: "summary",
+  label: "Summary",
   type: "textarea",
   isSystem: false,
   validation: {},
   admin: { width: "100%" },
 };
 
-const systemField: BuilderField = {
+const systemTitle: BuilderField = {
   id: "system_title",
   name: "title",
   label: "Title",
   type: "text",
   isSystem: true,
   validation: { required: true },
-  admin: { width: "100%" },
 };
 
-describe("FieldEditorSheet — shell", () => {
-  it("renders all four tabs", () => {
-    render(
-      <FieldEditorSheet
-        open
-        mode="edit"
-        kind="collection"
-        field={userField}
-        siblingFields={[]}
-        onCancel={vi.fn()}
-        onApply={vi.fn()}
-        onDelete={vi.fn()}
-      />
-    );
-    // PR E1 (2026-05-03): renamed "Admin" -> "Display" per feedback
-    // Section 4. The tab `value` stays "admin" so this assertion uses
-    // the visible label, not the value.
-    for (const name of ["General", "Validation", "Display", "Advanced"]) {
-      expect(screen.getByRole("tab", { name })).toBeInTheDocument();
-    }
-  });
+const caption: BuilderField = {
+  id: "f-caption",
+  name: "caption",
+  label: "Caption",
+  type: "text",
+};
 
-  it("renders Apply and Cancel buttons in default (editable) mode", () => {
-    render(
-      <FieldEditorSheet
-        open
-        mode="edit"
-        kind="collection"
-        field={userField}
-        siblingFields={[]}
-        onCancel={vi.fn()}
-        onApply={vi.fn()}
-        onDelete={vi.fn()}
-      />
-    );
+const slides: BuilderField = {
+  id: "f-slides",
+  name: "slides",
+  label: "Slides",
+  type: "repeater",
+  fields: [caption],
+};
+
+/** Holds the fields as the Builder's draft does, recording each update. */
+function Builder({
+  initial,
+  fieldId,
+  saved = [],
+  readOnly = false,
+  onUpdate = () => {},
+  onDelete = () => {},
+}: {
+  initial: BuilderField[];
+  fieldId: string;
+  saved?: string[];
+  readOnly?: boolean;
+  onUpdate?: (next: BuilderField) => void;
+  onDelete?: (id: string) => void;
+}) {
+  const [fields, setFields] = useState(initial);
+  return (
+    <BuilderFieldSettings
+      kind="collection"
+      fields={fields}
+      fieldId={fieldId}
+      savedFieldIds={new Set(saved)}
+      readOnly={readOnly}
+      onFieldChange={next => {
+        onUpdate(next);
+        setFields(all => all.map(f => (f.id === next.id ? next : f)));
+      }}
+      onFieldDelete={onDelete}
+      onClose={() => {}}
+    />
+  );
+}
+
+describe("BuilderFieldSettings", () => {
+  it("opens on a field nested in repeating rows, with its API path", () => {
+    render(<Builder initial={[slides]} fieldId="f-caption" />);
     expect(
-      screen.getByRole("button", { name: /^cancel$/i })
+      screen.getByRole("heading", { name: "Caption" })
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /^apply$/i })
-    ).toBeInTheDocument();
+    expect(screen.getByText("slides[].caption")).toBeInTheDocument();
   });
 
-  it("hides Delete for system fields", () => {
+  it("renders nothing for a field that is gone", () => {
+    const { container } = render(
+      <Builder initial={[excerpt]} fieldId="f-missing" />
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("hands each edit to the Builder at once, with no Apply or Cancel", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    render(<Builder initial={[excerpt]} fieldId="f-1" onUpdate={onUpdate} />);
+    expect(
+      screen.queryByRole("button", { name: /^(apply|cancel|add field)$/i })
+    ).toBeNull();
+
+    await user.click(screen.getByRole("switch", { name: "Required" }));
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(onUpdate.mock.lastCall?.[0].validation?.required).toBe(true);
+  });
+
+  it("keeps a saved field's name when its label changes", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
     render(
-      <FieldEditorSheet
-        open
-        mode="edit"
-        kind="collection"
-        field={systemField}
-        siblingFields={[]}
-        onCancel={vi.fn()}
-        onApply={vi.fn()}
-        onDelete={vi.fn()}
+      <Builder
+        initial={[excerpt]}
+        fieldId="f-1"
+        saved={["f-1"]}
+        onUpdate={onUpdate}
       />
     );
-    expect(
-      screen.queryByRole("button", { name: /delete field/i })
-    ).not.toBeInTheDocument();
+    const label = screen.getByLabelText(/^Label$/);
+    await user.clear(label);
+    await user.type(label, "Excerpt");
+    expect(onUpdate.mock.lastCall?.[0]).toMatchObject({
+      label: "Excerpt",
+      name: "summary",
+    });
   });
 
-  it("shows Delete for user fields", () => {
+  it("lets a field added since the last save follow its label", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
     render(
-      <FieldEditorSheet
-        open
-        mode="edit"
-        kind="collection"
-        field={userField}
-        siblingFields={[]}
-        onCancel={vi.fn()}
-        onApply={vi.fn()}
-        onDelete={vi.fn()}
+      <Builder
+        initial={[excerpt]}
+        fieldId="f-1"
+        saved={[]}
+        onUpdate={onUpdate}
       />
     );
-    expect(
-      screen.getByRole("button", { name: /delete field/i })
-    ).toBeInTheDocument();
+    const label = screen.getByLabelText(/^Label$/);
+    await user.clear(label);
+    await user.type(label, "Excerpt");
+    expect(onUpdate.mock.lastCall?.[0]).toMatchObject({
+      label: "Excerpt",
+      name: "excerpt",
+    });
   });
 
-  it("swaps the footer to a single Close button in readOnly mode", () => {
-    render(
-      <FieldEditorSheet
-        open
-        mode="edit"
-        kind="collection"
-        field={userField}
-        siblingFields={[]}
-        readOnly
-        onCancel={vi.fn()}
-        onApply={vi.fn()}
-        onDelete={vi.fn()}
-      />
-    );
-    expect(
-      screen.getByRole("button", { name: /^close$/i })
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /^apply$/i })
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /delete field/i })
-    ).not.toBeInTheDocument();
-  });
-
-  it("opens a confirm dialog before firing onDelete from the header trash icon", async () => {
+  it("asks before deleting, and deletes only once confirmed", async () => {
     const user = userEvent.setup();
     const onDelete = vi.fn();
-    render(
-      <FieldEditorSheet
-        open
-        mode="edit"
-        kind="collection"
-        field={userField}
-        siblingFields={[]}
-        onCancel={vi.fn()}
-        onApply={vi.fn()}
-        onDelete={onDelete}
-      />
-    );
-    // Click trash icon in header — opens confirm, does NOT fire onDelete yet
+    render(<Builder initial={[excerpt]} fieldId="f-1" onDelete={onDelete} />);
+
     await user.click(screen.getByRole("button", { name: /delete field/i }));
+    const confirm = within(screen.getByRole("alertdialog"));
+    expect(confirm.getByText(/summary/i)).toBeInTheDocument();
+    await user.click(confirm.getByRole("button", { name: /cancel/i }));
     expect(onDelete).not.toHaveBeenCalled();
-    // Confirm dialog appears with the destructive CTA
-    expect(
-      screen.getByRole("alertdialog", { name: /delete this field\?/i })
-    ).toBeInTheDocument();
-    // Confirm fires onDelete
-    await user.click(screen.getByRole("button", { name: /^delete field$/i }));
-    expect(onDelete).toHaveBeenCalledTimes(1);
-  });
 
-  it("does not fire onDelete when the user cancels the confirm dialog", async () => {
-    const user = userEvent.setup();
-    const onDelete = vi.fn();
-    render(
-      <FieldEditorSheet
-        open
-        mode="edit"
-        kind="collection"
-        field={userField}
-        siblingFields={[]}
-        onCancel={vi.fn()}
-        onApply={vi.fn()}
-        onDelete={onDelete}
-      />
-    );
     await user.click(screen.getByRole("button", { name: /delete field/i }));
-    // Cancel the AlertDialog (different button than the sheet footer's Cancel)
-    const dialog = screen.getByRole("alertdialog");
-    await user.click(within(dialog).getByRole("button", { name: /^cancel$/i }));
-    expect(onDelete).not.toHaveBeenCalled();
+    await user.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: /delete field/i,
+      })
+    );
+    expect(onDelete).toHaveBeenCalledWith("f-1");
   });
 
-  it("invokes onApply with the current draft when Apply is clicked", async () => {
+  it("offers no delete for a system field", () => {
+    render(<Builder initial={[systemTitle]} fieldId="system_title" />);
+    expect(screen.queryByRole("button", { name: /delete field/i })).toBeNull();
+    expect(screen.getByLabelText(/^Name$/)).toBeDisabled();
+  });
+
+  it("shows a code-first entity's field read-only, with no delete", () => {
+    render(<Builder initial={[excerpt]} fieldId="f-1" readOnly />);
+    expect(screen.getByLabelText(/^Label$/)).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /delete field/i })).toBeNull();
+  });
+
+  it("shows a plugin's locked field read-only", () => {
+    render(
+      <Builder
+        initial={[{ ...excerpt, source: "plugin", owner: "seo", locked: true }]}
+        fieldId="f-1"
+      />
+    );
+    expect(screen.getByLabelText(/^Label$/)).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /delete field/i })).toBeNull();
+  });
+
+  it("adds Unique and Localized to Advanced, Unique held inside repeating rows", async () => {
     const user = userEvent.setup();
-    const onApply = vi.fn();
-    render(
-      <FieldEditorSheet
-        open
-        mode="edit"
-        kind="collection"
-        field={userField}
-        siblingFields={[]}
-        onCancel={vi.fn()}
-        onApply={onApply}
-        onDelete={vi.fn()}
-      />
-    );
-    await user.click(screen.getByRole("button", { name: /^apply$/i }));
-    expect(onApply).toHaveBeenCalledWith(userField);
+    render(<Builder initial={[slides]} fieldId="f-caption" />);
+    await user.click(screen.getByRole("tab", { name: "Advanced" }));
+    expect(screen.getByRole("switch", { name: "Unique" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Localized" })).toBeEnabled();
   });
-});
 
-describe("FieldEditorSheet -- isInsideRepeatingAncestor prop (PR E3)", () => {
-  it("forwards the prop to AdvancedTab so unique is disabled", async () => {
+  it("leaves Unique open at the top level", async () => {
     const user = userEvent.setup();
-    render(
-      <FieldEditorSheet
-        open
-        mode="edit"
-        kind="collection"
-        field={userField}
-        siblingFields={[]}
-        isInsideRepeatingAncestor
-        onCancel={vi.fn()}
-        onApply={vi.fn()}
-        onDelete={vi.fn()}
-      />
-    );
-    await user.click(screen.getByRole("tab", { name: /advanced/i }));
-    expect(screen.getByRole("switch", { name: /^unique$/i })).toBeDisabled();
+    render(<Builder initial={[excerpt]} fieldId="f-1" />);
+    await user.click(screen.getByRole("tab", { name: "Advanced" }));
+    expect(screen.getByRole("switch", { name: "Unique" })).toBeEnabled();
   });
 
-  it("leaves unique enabled when the prop is omitted", async () => {
-    const user = userEvent.setup();
-    render(
-      <FieldEditorSheet
-        open
-        mode="edit"
-        kind="collection"
-        field={userField}
-        siblingFields={[]}
-        onCancel={vi.fn()}
-        onApply={vi.fn()}
-        onDelete={vi.fn()}
-      />
-    );
-    await user.click(screen.getByRole("tab", { name: /advanced/i }));
-    expect(
-      screen.getByRole("switch", { name: /^unique$/i })
-    ).not.toBeDisabled();
-  });
+  // The header names the field's type the way the picker that created it did,
+  // not by the internal id that stored data uses.
+  describe("type name", () => {
+    const headerType = () =>
+      screen.getByText("Type:").parentElement?.textContent;
 
-  // The footer puts Cancel before the confirming action (Add field / Apply),
-  // the one order every Builder dialog and panel uses, and is drawn by the
-  // shared sheet footer, right-aligned like the dialogs' footers. These two
-  // tests lock that contract so swapping the buttons back breaks loudly.
-  it("renders Cancel before the Add field button in DOM order in create mode", () => {
-    render(
-      <FieldEditorSheet
-        open
-        mode="create"
-        kind="collection"
-        field={userField}
-        siblingFields={[]}
-        onCancel={vi.fn()}
-        onApply={vi.fn()}
-        onDelete={vi.fn()}
-      />
-    );
-    const addBtn = screen.getByRole("button", { name: /^add field$/i });
-    const cancelBtn = screen.getByRole("button", { name: /^cancel$/i });
-    // compareDocumentPosition returns DOCUMENT_POSITION_FOLLOWING (0x04) when
-    // the add field button comes AFTER the cancel button in the DOM.
-    expect(
-      cancelBtn.compareDocumentPosition(addBtn) &
-        Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
-  });
+    it("shows the plain type name", () => {
+      render(
+        <Builder initial={[{ ...excerpt, type: "richText" }]} fieldId="f-1" />
+      );
+      expect(headerType()).toBe("Type: Rich text");
+    });
 
-  it("uses justify-end on the footer container, as the dialogs' footers do", () => {
-    render(
-      <FieldEditorSheet
-        open
-        mode="edit"
-        kind="collection"
-        field={userField}
-        siblingFields={[]}
-        onCancel={vi.fn()}
-        onApply={vi.fn()}
-        onDelete={vi.fn()}
-      />
-    );
-    const cancelBtn = screen.getByRole("button", { name: /^cancel$/i });
-    // Footer is the closest <div> ancestor of the Cancel button.
-    const footer = cancelBtn.closest("div");
-    expect(footer).not.toBeNull();
-    expect(footer!.className).toMatch(/justify-end/);
-    expect(footer!.className).not.toMatch(/justify-start/);
-  });
-});
-
-// The header names the field's type the way the picker that created it did,
-// not by the internal id that stored data uses.
-describe("FieldEditorSheet -- header type name", () => {
-  const headerType = () => screen.getByText("Type:").parentElement?.textContent;
-
-  it("the header shows the plain type name", () => {
-    branding.current = {};
-    render(
-      <FieldEditorSheet
-        open
-        mode="edit"
-        kind="collection"
-        field={{ ...userField, type: "richText" }}
-        siblingFields={[]}
-        onCancel={vi.fn()}
-        onApply={vi.fn()}
-        onDelete={vi.fn()}
-      />
-    );
-    expect(headerType()).toBe("Type: Rich text");
-    expect(headerType()).not.toMatch(/richText/);
-  });
-
-  it("names a plugin-contributed type by the label the picker shows", () => {
-    branding.current = {
-      plugins: [
-        {
-          name: "acme",
-          enabled: true,
-          fieldTypes: [
-            { type: "acme-colour", label: "Colour swatch", storage: "text" },
-          ],
-        },
-      ],
-    };
-    render(
-      <FieldEditorSheet
-        open
-        mode="edit"
-        kind="collection"
-        field={{ ...userField, type: "acme-colour" }}
-        siblingFields={[]}
-        onCancel={vi.fn()}
-        onApply={vi.fn()}
-        onDelete={vi.fn()}
-      />
-    );
-    expect(headerType()).toBe("Type: Colour swatch");
-    branding.current = {};
+    it("names a plugin-contributed type by the label the picker shows", () => {
+      branding.current = {
+        plugins: [
+          {
+            name: "acme",
+            enabled: true,
+            fieldTypes: [
+              { type: "acme-colour", label: "Colour swatch", storage: "text" },
+            ],
+          },
+        ],
+      };
+      try {
+        render(
+          <Builder
+            initial={[{ ...excerpt, type: "acme-colour" }]}
+            fieldId="f-1"
+          />
+        );
+        expect(headerType()).toBe("Type: Colour swatch");
+      } finally {
+        branding.current = {};
+      }
+    });
   });
 });

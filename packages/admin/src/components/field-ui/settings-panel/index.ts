@@ -6,6 +6,7 @@
 export { FieldSettingsPanel } from "./FieldSettingsPanel";
 export type {
   FieldSettingsControlProps,
+  FieldSettingsField,
   FieldSettingsPanelProps,
   FieldSettingsSurface,
   FieldSettingsSurfaceControlProps,

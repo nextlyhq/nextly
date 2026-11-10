@@ -33,6 +33,7 @@ export type {
 export { FieldSettingsPanel } from "./settings-panel";
 export type {
   FieldSettingsControlProps,
+  FieldSettingsField,
   FieldSettingsPanelProps,
   FieldSettingsSurface,
   FieldSettingsSurfaceControlProps,
