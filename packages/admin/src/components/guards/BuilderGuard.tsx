@@ -18,8 +18,8 @@ interface BuilderGuardProps {
 /**
  * Route-level guard for the schema builder.
  *
- * The builder is off in production by default (see `admin.branding.showBuilder`),
- * where the sidebar already drops its links — but a bookmark or a pasted URL
+ * The builder is off in production, and wherever `admin.branding.showBuilder`
+ * is false; the sidebar already drops its links there — but a bookmark or a pasted URL
  * would still land on the page. This sends those visits back to the dashboard
  * so the builder isn't reachable by address alone.
  *
