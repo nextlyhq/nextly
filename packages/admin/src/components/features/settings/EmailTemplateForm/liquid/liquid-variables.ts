@@ -119,7 +119,9 @@ export function variableUses(source: string): VariableUse[] {
   const parsed = parsedTemplate(source);
   if (!parsed) return [];
   const analysis = parsed.engine.analyzeSync(parsed.templates);
-  const outputs = outputsOf(parsed.templates);
+  // Outputs are disjoint and sorted by position, so the one containing an
+  // offset is found by halving: one search per use, not one pass per use.
+  const outputs = outputsOf(parsed.templates).sort((a, b) => a.begin - b.begin);
   const lineStarts = lineStartsOf(source);
   const pending: PendingUse[] = [];
   for (const [root, variables] of Object.entries(analysis.globals)) {
@@ -129,7 +131,7 @@ export function variableUses(source: string): VariableUse[] {
         variable.location.row,
         variable.location.col
       );
-      const outputIndex = outputs.findIndex(o => o.begin <= at && at < o.end);
+      const outputIndex = enclosingOutput(outputs, at);
       const output = outputIndex === -1 ? undefined : outputs[outputIndex];
       const inDefaultArg = output?.defaultArgs.some(
         range => range.begin <= at && at < range.end
@@ -154,6 +156,24 @@ export function variableUses(source: string): VariableUse[] {
     }
   }
   return judged(pending, outputs).sort((a, b) => a.from - b.from);
+}
+
+/**
+ * The output containing `at`, in `outputs` sorted by begin, or -1: the last
+ * one that begins at or before `at`, when `at` falls inside it.
+ */
+function enclosingOutput(outputs: OutputRange[], at: number): number {
+  let found = -1;
+  for (let lo = 0, hi = outputs.length - 1; lo <= hi; ) {
+    const mid = (lo + hi) >> 1;
+    if (outputs[mid].begin <= at) {
+      found = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return found !== -1 && at < outputs[found].end ? found : -1;
 }
 
 /**
