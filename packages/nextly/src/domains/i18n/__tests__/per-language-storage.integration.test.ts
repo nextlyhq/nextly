@@ -256,7 +256,7 @@ describe.each(getConfiguredTestDialects())(
       await current.nextly.updateSingle({
         slug: "notice",
         locale: "de",
-        data: { heading: "Hallo", status: "published" },
+        data: { heading: "Hallo", status: "published", _overwrite: true },
       });
       const [row] = await current.adapter.select<{ status: unknown }>(
         "single_notice",
@@ -347,7 +347,7 @@ describe.each(getConfiguredTestDialects())(
         await current.nextly.updateSingle({
           slug: "hero",
           locale,
-          data: { heading },
+          data: { heading, _overwrite: true },
         });
       }
       const q = (name: string) =>

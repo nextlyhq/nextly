@@ -797,7 +797,7 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
         collection: "flagged",
         id,
         locale: "de",
-        data: { body: { said: "de" } },
+        data: { body: { said: "de" }, _overwrite: true },
         overrideAccess: true,
       } as never);
       const read = languagesReader(current, "probe");

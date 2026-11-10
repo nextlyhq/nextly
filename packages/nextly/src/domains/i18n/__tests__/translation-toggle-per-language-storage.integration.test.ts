@@ -80,7 +80,7 @@ describe.each(
       ] as const) {
         const written = await singles.update(
           "hero",
-          { heading },
+          { heading, _overwrite: true },
           { overrideAccess: true, locale }
         );
         expect(written.success, JSON.stringify(written)).toBe(true);
@@ -238,7 +238,7 @@ describe.each(
         collection: "posts",
         id,
         locale: "de",
-        data: { heading: "Hallo" },
+        data: { heading: "Hallo", _overwrite: true },
       });
       await run(`UPDATE ${q("dc_posts")} SET ${q("status")} = 'published'`);
     }
