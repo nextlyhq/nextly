@@ -302,6 +302,45 @@ describe("the config a map checks its widgets against", () => {
     ).toEqual({ written: undefined, expected: "../../../nextly.config" });
   });
 
+  it("does not agree when a map listing only a site collection's config-relative view was written for another config", async () => {
+    // Imported through the config's folder: a moved config moves it.
+    const siteCollections = [
+      {
+        slug: "orders",
+        fields: [],
+        admin: {
+          components: {
+            views: { Edit: { Component: "./views/orders#OrderEditor" } },
+          },
+        },
+      },
+    ] as unknown as CollectionConfig[];
+    for (const artifact of buildImportMapArtifacts(
+      [],
+      TYPES,
+      importOf("other.config.ts"),
+      undefined,
+      siteCollections
+    )) {
+      await writeFile(join(root, artifact.path), artifact.code);
+    }
+
+    const found = await checkComponentMapFiles(
+      [],
+      TYPES,
+      root,
+      config(),
+      undefined,
+      siteCollections
+    );
+
+    expect(found.otherConfig).toEqual({
+      written: "../../../other.config",
+      expected: "../../../nextly.config",
+    });
+    expect(componentMapAgrees(found)).toBe(false);
+  });
+
   it("asks for no config import where nothing declares a widget, whose props are all it checks", async () => {
     const pagesOnly = {
       ...shop,

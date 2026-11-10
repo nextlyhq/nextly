@@ -986,7 +986,8 @@ async function registerServicesOnce(
   // of the framework's two schema modes had no queryable source.
   resetWidgetRegistries(
     transformedConfig.plugins ?? [],
-    transformedConfig.admin?.dashboard
+    transformedConfig.admin?.dashboard,
+    transformedConfig.collections
   );
 
   // Every schema write a development start makes runs inside one hold of the

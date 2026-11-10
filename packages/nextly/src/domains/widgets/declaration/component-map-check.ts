@@ -66,6 +66,7 @@ import { DEFAULT_TYPESCRIPT_CONFIG } from "../../../shared/types/config";
 
 import {
   adminComponentPlugins,
+  adminSiteCollections,
   adminSiteDashboard,
 } from "./component-map-store";
 
@@ -105,9 +106,10 @@ export async function checkAdminComponents(
   // config as written does not hold.
   const siteDashboard = adminSiteDashboard();
   // And the views the site's own collections name, as `generate:types` lists
-  // them: left out here, the map holding them would read as out of date and
-  // be written again without them.
-  const siteCollections = input.config.collections;
+  // them, read as the boot left them after every plugin's setup(), which may
+  // add a collection or rename its view: left out here, the map holding them
+  // would read as out of date and be written again without them.
+  const siteCollections = adminSiteCollections();
   const place = mapFolder(input.config);
   // Every use, not one per path: two widgets drawn with one missing component
   // are both named. A contribution whose module is not there is left out, as

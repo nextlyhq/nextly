@@ -182,14 +182,17 @@ describe("in development", () => {
         },
       },
     ];
-    const withViews = { ...config, collections } as unknown as typeof config;
+    // As the boot left them after every setup(): the config as written has
+    // no collections, and a plugin's setup() added this one.
+    setAdminComponentPlugins(
+      [shop],
+      undefined,
+      collections as unknown as Parameters<typeof setAdminComponentPlugins>[2]
+    );
 
     // A map without the view is out of date, and is written again with the
     // site's collections, so the rewrite keeps it.
-    await checkAdminComponents({
-      config: withViews,
-      registeredComponentPaths: BOTH,
-    });
+    await checkAdminComponents({ config, registeredComponentPaths: BOTH });
     expect(writeComponentMapFiles).toHaveBeenCalledWith(
       [shop],
       expect.any(String),
@@ -479,8 +482,10 @@ describe("a site collection's own views", () => {
   // `generate:types` lists the views the site's own collections name, and the
   // development check collects them too: read as obsolete, its rewrite would
   // remove them.
-  it("leaves alone a map listing a site collection's custom edit view", async () => {
-    const withViews = {
+  it("leaves alone a map listing a site collection's custom edit view, read as the boot left the collections", async () => {
+    // The config as written names no view; a plugin's setup() renamed it to
+    // this one, and the boot recorded the collections it ran with.
+    const written = {
       ...config,
       collections: [
         {
@@ -488,15 +493,26 @@ describe("a site collection's own views", () => {
           fields: [],
           admin: {
             components: {
-              views: { Edit: { Component: "./views/orders#OrderEditor" } },
+              views: { Edit: { Component: "./views/orders#OldEditor" } },
             },
           },
         },
       ],
     } as unknown as Parameters<typeof checkAdminComponents>[0]["config"];
+    setAdminComponentPlugins([shop], undefined, [
+      {
+        slug: "orders",
+        fields: [],
+        admin: {
+          components: {
+            views: { Edit: { Component: "./views/orders#OrderEditor" } },
+          },
+        },
+      },
+    ] as unknown as Parameters<typeof setAdminComponentPlugins>[2]);
 
     await checkAdminComponents({
-      config: withViews,
+      config: written,
       registeredComponentPaths: [...BOTH, "./views/orders#OrderEditor"],
     });
 

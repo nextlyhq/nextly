@@ -122,12 +122,16 @@ export async function checkComponentMapFiles(
     missing: declared.filter(each => !held.has(each.path)),
     obsolete: (listed ?? []).filter(path => !declaredPaths.has(path)),
     // Only a widget's components (its view and its settings' editors) are checked against the
-    // config, so a map declaring none needs no config import: a scaffold's map, made before its
-    // project's layout fixed the config's path.
+    // config, and only a component written relative to the config is imported through its
+    // folder, a site collection's view among them, so a map declaring none of these needs no
+    // config import: a scaffold's map, made before its project's layout fixed the config's path.
     otherConfig:
       map === undefined ||
       !declared.some(
-        each => each.use === "widget" || each.use === "setting editor"
+        each =>
+          each.use === "widget" ||
+          each.use === "setting editor" ||
+          each.fromConfig === true
       )
         ? undefined
         : otherConfigOf(map, dir, cwd, configFile),

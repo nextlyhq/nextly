@@ -1863,7 +1863,11 @@ async function applyReloadHolding(
       // the reloaded config declares them, so a plugin added or changed in
       // development is rewritten into the map without a restart. The site
       // dashboard with them, as the loader carries it after every setup().
-      setAdminComponentPlugins(newConfig.plugins, newConfig.admin?.dashboard);
+      setAdminComponentPlugins(
+        newConfig.plugins,
+        newConfig.admin?.dashboard,
+        newConfig.collections
+      );
     }
     publishCollectionDbOptions(
       buildCollectionSyncPayload(newConfig.collections ?? [])

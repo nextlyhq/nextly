@@ -63,4 +63,22 @@ describe("registerKnownPlugin, deprecated", () => {
       ).toBe(true)
     );
   });
+
+  it("names a registration that throws before it returns, as one that rejects", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(() =>
+      registerKnownPlugin("@acme/throws-at-once", () => {
+        throw new Error("thrown before any promise");
+      })
+    ).not.toThrow();
+
+    await vi.waitFor(() =>
+      expect(
+        warn.mock.calls.some(([message]) =>
+          String(message).includes('"@acme/throws-at-once"')
+        )
+      ).toBe(true)
+    );
+  });
 });

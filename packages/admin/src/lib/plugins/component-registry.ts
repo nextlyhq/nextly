@@ -525,7 +525,10 @@ export function registerKnownPlugin(
     // The browser's console: a plugin author reads it in their devtools.
     message => console.warn(message)
   );
-  registrationFn().catch(error => {
+  // Run inside a promise, so a function that throws before it returns one is
+  // named as one that rejects is: the generated map imports this module with
+  // the admin's, and a throw escaping here would stop the admin loading.
+  new Promise<void>(resolve => resolve(registrationFn())).catch(error => {
     console.warn(
       `[ComponentRegistry] Failed to register plugin "${packagePrefix}":`,
       error
