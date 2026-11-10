@@ -18,3 +18,12 @@ const LONE_SURROGATE =
 export function isWellFormed(text: string): boolean {
   return !LONE_SURROGATE.test(text);
 }
+
+/**
+ * Whether the string can be stored as a key on every dialect: well-formed,
+ * and free of NUL, which PostgreSQL's text cannot hold while MySQL and SQLite
+ * can, so the same call would fail on one database alone.
+ */
+export function isStorableText(text: string): boolean {
+  return !text.includes("\u0000") && isWellFormed(text);
+}

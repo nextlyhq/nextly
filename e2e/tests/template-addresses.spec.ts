@@ -29,7 +29,7 @@ test.describe.configure({ lock: [LOCK.schema, LOCK.usersRoles] });
 
 const RUN = Date.now().toString(36);
 
-/** The template: the entry's own Summary as its heading. */
+/** The template: the entry's title as its heading. */
 const TEMPLATE = {
   formatVersion: 1,
   kind: "template",
@@ -39,7 +39,7 @@ const TEMPLATE = {
       type: "core/heading",
       version: 1,
       props: { text: "Untitled", level: "h1" },
-      bindings: { text: { $bind: "summary", fallback: "Untitled" } },
+      bindings: { text: { $bind: "title", fallback: "Untitled" } },
     },
   ],
 };
@@ -116,11 +116,7 @@ test("serves a Schema Builder collection's entries at the address set in the adm
       { name: "summary", type: "text", label: "Summary" },
     ]);
     // Saved before the address is set: the template's publish claims it.
-    const before = {
-      title: `Opening night ${RUN}`,
-      slug: `opening-${RUN}`,
-      summary: `Doors at seven ${RUN}`,
-    };
+    const before = { title: `Opening night ${RUN}`, slug: `opening-${RUN}` };
     await createEntry(api, slug, before);
     const template = await draftTemplate(api, slug);
     takeBackRead = await letVisitorsRead(api, slug);
@@ -156,11 +152,7 @@ test("serves a Schema Builder collection's entries at the address set in the adm
       .toEqual([address, "published"]);
 
     // Saved after the address was set: held there by its own save.
-    const after = {
-      title: `Closing night ${RUN}`,
-      slug: `closing-${RUN}`,
-      summary: `Last call at ten ${RUN}`,
-    };
+    const after = { title: `Closing night ${RUN}`, slug: `closing-${RUN}` };
     await createEntry(api, slug, after);
 
     for (const entry of [before, after]) {
@@ -168,7 +160,7 @@ test("serves a Schema Builder collection's entries at the address set in the adm
         headers: { cookie: "" },
       });
       expect(response.status(), `${address}/${entry.slug}`).toBe(200);
-      expect(await response.text()).toContain(entry.summary);
+      expect(await response.text()).toContain(entry.title);
     }
   } finally {
     await takeBackRead?.();

@@ -327,6 +327,7 @@ export {
   type DocumentActionReplacementProps,
   type DocumentChangeResult,
   type DocumentPanelSectionProps,
+  type SidebarSectionProps,
   type DocumentViewProps,
 } from "./lib/plugins/component-registry";
 export type { DocumentLockGates } from "./components/features/entries/EntryForm/document-lock-affordances";

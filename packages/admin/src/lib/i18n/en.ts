@@ -65,6 +65,7 @@ export const en = {
   "nextly.userMenu.saveFailed": "Your interface language could not be saved.",
   "nextly.places.userDetail.content": "Profile",
   "nextly.places.settings.content": "General",
+  "nextly.places.document.content": "Content",
   "nextly.places.unavailable": "This part of the page couldn't be loaded.",
   "nextly.places.account.profile": "Profile",
   "nextly.account.title": "My Account",

@@ -1056,7 +1056,8 @@ function bindOptions(
   const entry = group.entry;
   // A related entry's pick removes the address's binding, so where that
   // binding is held it is not offered either.
-  const addressHeld = bound?.[group.link] !== undefined && !writable(group.link);
+  const addressHeld =
+    bound?.[group.link] !== undefined && !writable(group.link);
   return {
     clearsOnBind: destination.filter(name => name !== group.link),
     ...(entry === undefined
