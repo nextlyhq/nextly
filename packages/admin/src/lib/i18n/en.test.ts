@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { en } from "./en";
 
@@ -10,5 +10,32 @@ describe("the admin's own catalog", () => {
     const keys = Object.keys(en);
     expect(keys.length).toBeGreaterThan(0);
     expect(keys.filter(key => !key.startsWith("nextly."))).toEqual([]);
+  });
+
+  describe("the development-only error labels", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    async function catalogBuiltFor(mode: string) {
+      vi.stubEnv("NODE_ENV", mode);
+      vi.resetModules();
+      return (await import("./en")).en;
+    }
+
+    it("are empty in a production build, so their text does not ship", async () => {
+      const built = await catalogBuiltFor("production");
+      expect(built["nextly.errors.page.details"]).toBe("");
+      expect(built["nextly.errors.section.details"]).toBe("");
+    });
+
+    it("read as labels in development, where the boxes are drawn", async () => {
+      const built = await catalogBuiltFor("development");
+      expect(built["nextly.errors.page.details"]).toBe(
+        "View technical details"
+      );
+      expect(built["nextly.errors.section.details"]).toBe("Error details");
+    });
   });
 });

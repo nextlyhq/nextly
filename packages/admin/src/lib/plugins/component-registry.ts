@@ -42,6 +42,10 @@ import type { ComponentType } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import type { DocumentLockGates } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
+import type {
+  PlaceContributionProps,
+  PlaceTabProps,
+} from "@admin/components/shared/target-slot";
 
 import {
   componentRegistry,
@@ -147,6 +151,39 @@ export interface DocumentViewProps {
    * @experimental
    */
   fieldPath?: string;
+  /**
+   * For a view offered on a field type: the field's address from the
+   * document's root, which the view's own address carries (`?field=`). The
+   * same as `fieldPath` except inside a repeater's row, which the address
+   * names by its saved id (`sections.<rowId>.body`) and the form by its
+   * position (`sections.1.body`). It names the same field however the rows are
+   * reordered, so key anything that must stay with the field by this.
+   *
+   * @experimental
+   */
+  fieldAddress?: string;
+  /**
+   * For a field below the top level: where it sits, in words an author reads,
+   * each container's label and each row's title as the form's row header
+   * shows it, then the field's label (`Sections · Hero banner · Body`).
+   * Absent for a top-level field.
+   *
+   * @experimental
+   */
+  fieldLocation?: string;
+  /**
+   * For a field inside a repeater's row: where its address names it in a copy
+   * of the document's values — the values as stored, a recovery point, or,
+   * given none, the form's own values at the moment of asking — finding the
+   * row by its id wherever it now stands, or `undefined` where that row is
+   * not there. Ask it at the moment of writing and write only where it
+   * answers, never through a path read earlier: a row that moved since would
+   * put the value in another row. Absent where the field sits in no row, and
+   * `fieldPath` names it in every copy.
+   *
+   * @experimental
+   */
+  fieldPathIn?: (values?: Record<string, unknown>) => string | undefined;
 }
 
 /**
@@ -224,6 +261,50 @@ export interface DocumentPanelSectionProps {
    */
   documentChanged: (result: DocumentChangeResult) => void;
 }
+
+/**
+ * @experimental Props passed to a side panel section a plugin declares at an
+ * edit page's place (`kind: "sidebarSection"`): the place's `context` and
+ * `entry`, as every contributed component receives them, and on a collection
+ * entry's page also the document's own handles that a section added through
+ * `views[slug].panelSections` is given. One component written against the
+ * place's props works on both edit pages; on a collection entry's page it may
+ * also act on the document.
+ */
+export type SidebarSectionProps =
+  | (PlaceContributionProps<"collection.edit"> & DocumentPanelSectionProps)
+  | PlaceContributionProps<"single.edit">;
+
+/**
+ * @experimental Props passed to a tab a plugin declares at an edit page's
+ * place (`kind: "tab"` at `collection.edit` or `single.edit`): what every
+ * contributed tab receives (the place's `context` and `entry`, and
+ * `setBadge`), and the document's form and lock, on a saved entry, a new one
+ * and a Single alike.
+ *
+ * The tab is drawn inside the document's editor, under the same bar, so Save
+ * and Publish store what it writes through `control` with everything else,
+ * and `useDocumentLocale()` and `useDocumentActions()` answer for the same
+ * document. It stays mounted while another tab is open, so what it holds is
+ * kept across tabs and its count stays current.
+ */
+export type DocumentTabProps = (
+  | PlaceTabProps<"collection.edit">
+  | PlaceTabProps<"single.edit">
+) & {
+  /**
+   * The document form's control, the one its fields write through and a
+   * document view is handed: read values the author typed and has not saved,
+   * and write values the bar's Save and Publish then store.
+   */
+  control: Control<FieldValues>;
+  /**
+   * What holds the document right now, the answer a side panel section is
+   * given: `readOnly` as the fields are held, when the tab takes no edits,
+   * and `actionsDisabled` as a plugin's own writes are held.
+   */
+  documentLock: DocumentLockGates;
+};
 
 /**
  * Props passed to injection point components (BeforeListTable, etc.).

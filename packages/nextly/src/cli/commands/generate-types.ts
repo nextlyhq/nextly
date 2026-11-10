@@ -41,6 +41,10 @@ import {
 import { NextlyError } from "../../errors/nextly-error";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import {
+  describeUnbackedContribution,
+  unbackedContributions,
+} from "../../plugins/codegen/unbacked-contributions";
+import {
   planComponentMapFiles,
   writeComponentMapFiles,
 } from "../../plugins/codegen/write-component-map";
@@ -58,7 +62,7 @@ import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import { carriedUserFieldOptions } from "../../shared/lib/user-field-plugin-options";
 import type { SingleConfig } from "../../singles/config/types";
 import type { UserFieldConfig } from "../../users/config/types";
-import { reportDryRun, type DryRunChange } from "../dry-run";
+import { projectPath, reportDryRun, type DryRunChange } from "../dry-run";
 import { configDeclarationError, exitWithError } from "../errors/index";
 import { createContext, type CommandContext } from "../program";
 import { loadConfigOrExit } from "../utils/command-prerequisites";
@@ -82,7 +86,6 @@ import {
   applyBlockManifestState,
   blockManifestDryRunChanges,
   readBlockManifestState,
-  shownPath,
 } from "./generate-manifest";
 
 // ============================================================================
@@ -311,9 +314,19 @@ export async function runGenerateTypes(
       if (each.previous === each.code) continue;
       dryRunChanges.push({
         action: "write",
-        target: shownPath(manifestCwd, each.file),
+        target: projectPath(manifestCwd, each.file),
       });
     }
+  }
+  // Each contribution the map leaves out because its module is not there,
+  // named, since its place then draws its fallback with no other sign.
+  for (const each of unbackedContributions(
+    configResult.config.plugins ?? [],
+    importMapArgs[1],
+    manifestCwd,
+    configResult.config.admin?.dashboard
+  )) {
+    logger.warn(describeUnbackedContribution(each));
   }
   const writtenImportMapPath = dryRun
     ? undefined
@@ -349,7 +362,7 @@ export async function runGenerateTypes(
           ...dryRunChanges,
           ...plannedFiles(plan).map(file => ({
             action: "write" as const,
-            target: shownPath(manifestCwd, file.path),
+            target: projectPath(manifestCwd, file.path),
           })),
         ],
       });

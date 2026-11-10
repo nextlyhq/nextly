@@ -104,6 +104,8 @@ export interface BuilderCompanionReconcile {
   /** Draft/Published after and before this save. A field group has neither. */
   status?: boolean;
   wasStatus?: boolean;
+  /** Seed every language's added `_status` from the entry (a translation turned on under the setting). */
+  statusFromEntryInEveryLanguage?: boolean;
   /**
    * The settings step of Required or Unique fields leaving translation (`leavingSettingsStep`),
    * run once their values are copied onto main and before their companion columns are dropped.

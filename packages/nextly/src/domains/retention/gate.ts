@@ -47,6 +47,14 @@ export const CACHE_TAG_EXPIRIES_RETENTION_GATE_KEY =
 export const ONE_TIME_SECRETS_RETENTION_GATE_KEY =
   "secrets.retention.lastPassAt";
 
+/** Plugins' received-webhook claims past their retention; its own key, as each pass has. */
+export const RECEIVED_WEBHOOKS_RETENTION_GATE_KEY =
+  "received-webhooks.retention.lastPassAt";
+
+/** Plugins' durable events finished past their retention; its own key, as each pass has. */
+export const PLUGIN_EVENTS_RETENTION_GATE_KEY =
+  "plugin-events.retention.lastPassAt";
+
 /** Recorded preview links long past their end; its own key, as each pass has. */
 export const PREVIEW_LINKS_RETENTION_GATE_KEY =
   "preview-links.retention.lastPassAt";
@@ -265,6 +273,22 @@ export async function claimRetentionPass(
  */
 export const ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY =
   "secrets.retention.lastDrainPassAt";
+
+/**
+ * The scheduled drain's turn at plugins' received-webhook claims, for the
+ * secrets sweep's reason: an install that stops receiving webhooks makes no
+ * write that offers the pass.
+ */
+export const RECEIVED_WEBHOOKS_RETENTION_DRAIN_GATE_KEY =
+  "received-webhooks.retention.lastDrainPassAt";
+
+/**
+ * The scheduled drain's turn at plugins' finished durable events, for the
+ * secrets sweep's reason: an install whose plugins stop recording events makes
+ * no write that offers the pass.
+ */
+export const PLUGIN_EVENTS_RETENTION_DRAIN_GATE_KEY =
+  "plugin-events.retention.lastDrainPassAt";
 
 /**
  * The scheduled drain's own marker for the preview-links sweep, for the reason

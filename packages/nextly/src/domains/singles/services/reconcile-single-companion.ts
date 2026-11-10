@@ -57,6 +57,11 @@ export interface ReconcileSingleCompanionArgs {
    * beforehand — a copy from columns that were not there fails the whole migration.
    */
   wasStatus: boolean;
+  /**
+   * Seed every language's added `_status` from the entry, for a translation turned on under
+   * `experimental.perLanguageStorage`, where every language was live with the entry until now.
+   */
+  statusFromEntryInEveryLanguage?: boolean;
   adapter: DrizzleAdapter;
   /**
    * Fields joining translation whose companion columns the caller added and filled before the main
@@ -131,6 +136,7 @@ export async function reconcileSingleCompanion(
     companionExists,
     companionHasStatus,
     wasStatus,
+    statusFromEntryInEveryLanguage: args.statusFromEntryInEveryLanguage,
     joinedBefore: args.joinedBefore,
     renamed: args.renamed,
     holdLeavingDrops: args.settleLeaving !== undefined,

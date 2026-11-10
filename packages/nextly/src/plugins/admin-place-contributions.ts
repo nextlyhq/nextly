@@ -19,6 +19,7 @@ import {
   ADMIN_CONTRIBUTION_KINDS,
   type AdminContributionKind,
   coreAdminPlaceBuiltIns,
+  coreAdminPlaceNotReplaceable,
   isWellFormedAdminPlaceName,
 } from "./admin-places";
 import {
@@ -63,7 +64,7 @@ const BASE_KEYS = [
 const KIND_KEYS: Record<AdminContributionKind, readonly string[]> = {
   block: ["component"],
   tab: ["label", "component"],
-  sidebarSection: ["label", "component"],
+  sidebarSection: ["label", "component", "narrow"],
   column: ["label", "field", "component"],
   rowAction: ["label", "action"],
   bulkAction: ["label", "action"],
@@ -201,6 +202,15 @@ function kindProblem(
     }
   }
   if (ROW_KINDS.has(kind)) return actionProblem(declared.action, plugin);
+  // The one narrow placement the admin draws; anything else would be
+  // delivered and silently ignored.
+  if (
+    kind === "sidebarSection" &&
+    declared.narrow !== undefined &&
+    declared.narrow !== "above-form"
+  ) {
+    return 'its `narrow` is not "above-form"';
+  }
   return isText(declared.component) ? undefined : "it names no component";
 }
 
@@ -407,10 +417,12 @@ function orderedByPlace(
     for (const [kind, items] of kinds) {
       lists.set(
         kind,
-        orderContributions(items, coreAdminPlaceBuiltIns(place, kind), {
-          place,
-          kind,
-        })
+        orderContributions(
+          items,
+          coreAdminPlaceBuiltIns(place, kind),
+          { place, kind },
+          coreAdminPlaceNotReplaceable(place, kind)
+        )
       );
     }
     ordered.set(place, lists);

@@ -153,6 +153,7 @@ import {
 import { genericPublicMessage } from "./errors/error-codes";
 import { NextlyError } from "./errors/nextly-error";
 import { retryAfterHeader } from "./errors/retry-after";
+import { ruleCouldNotRunIn } from "./errors/rule-could-not-run";
 import {
   currentFlattenedErrors,
   logFlattenedErrors,
@@ -180,11 +181,11 @@ import {
   type ContributionAudience,
 } from "./plugins/admin-contributions-offer";
 import { buildPluginAdminMeta } from "./plugins/admin-meta";
-import { assertDocumentSurfaces } from "./plugins/document-surfaces";
 import {
   contributionAudienceFor,
   NOBODY,
 } from "./plugins/contribution-audience";
+import { assertDocumentSurfaces } from "./plugins/document-surfaces";
 import { assertNoRemovedWidgetKeys } from "./plugins/removed-widget-keys";
 import {
   pluginRouteAuthRequired,
@@ -219,7 +220,7 @@ import type { CollectionsHandler } from "./services/collections-handler";
 import type { GeneralSettingsService } from "./services/general-settings/general-settings-service";
 import { resolveRoleSlugs } from "./services/lib/permissions";
 import {
-  builderDisabledError,
+  builderRefusal,
   isBuilderEnabled,
   isBuilderRoute,
 } from "./shared/builder-access";
@@ -1523,15 +1524,19 @@ async function serveServiceRequest(
   if (refusedBuiltIn) return refusedBuiltIn;
 
   // The builder writes DDL straight to the live database, so it is off in
-  // production by default. Refuse its routes here, at the one point every
-  // dispatched request passes through — hiding the navigation would still
-  // leave these reachable by URL. Entry CRUD is untouched, and boot-time
-  // code-first sync goes through the registry services, not this dispatcher.
+  // production whatever the configuration says, and off wherever showBuilder
+  // is false. Refuse its routes here, at the one point every dispatched
+  // request passes through — hiding the navigation would still leave these
+  // reachable by URL. Entry CRUD is untouched, and boot-time code-first sync
+  // goes through the registry services, not this dispatcher.
   //
   // Returned rather than thrown: this runs outside the dispatcher's
   // NextlyError-to-response mapping, so a throw would surface as a 500.
-  if (isBuilderRoute(service, method) && !isBuilderEnabled()) {
-    const err = builderDisabledError(`${service}.${method}`);
+  const builderRefused = isBuilderRoute(service, method)
+    ? builderRefusal(`${service}.${method}`)
+    : null;
+  if (builderRefused) {
+    const err = builderRefused;
     const requestId = readOrGenerateRequestId(req);
     return new Response(
       JSON.stringify({ error: err.toResponseJSON(requestId) }),
@@ -1742,15 +1747,20 @@ async function serveServiceRequest(
       if (servesVisitor(service, method) && carriesNoCredential(req)) {
         await ensureServicesInitialized();
       }
-      const authResult = await resolveAuthorization(
-        req,
-        service,
-        method,
-        operation,
-        routeParams,
-        httpMethod,
-        entryInPath
-      );
+      let authResult: Awaited<ReturnType<typeof resolveAuthorization>>;
+      try {
+        authResult = await resolveAuthorization(
+          req,
+          service,
+          method,
+          operation,
+          routeParams,
+          httpMethod,
+          entryInPath
+        );
+      } catch (error) {
+        return gateRuleCouldNotRun(req, error);
+      }
       if (isErrorResponse(authResult)) {
         return refuseRequest(req, method, authResult);
       }
@@ -2274,6 +2284,25 @@ function respondAdminMeta(payload: Record<string, unknown>): Response {
  * belong to one caller, the refusal does too: a shared cache replaying one
  * person's 401 or 403 to another hides from them what they may read.
  */
+/**
+ * The answer for a route whose gate asked a rule that could not run, its own
+ * query having waited out the bound for a database connection: 503 with the
+ * rule's subject and the retry hint, built and RETURNED as the refusals beside
+ * it are, since the gate runs outside the dispatcher's error mapping and a
+ * throw would surface as the framework's bare 500. Anything else the gate
+ * throws is rethrown as before.
+ */
+function gateRuleCouldNotRun(req: Request, error: unknown): Response {
+  const couldNotRun = ruleCouldNotRunIn(error);
+  if (!couldNotRun) throw error;
+  // Who asked decides which rule ran, so no shared cache may replay it.
+  return withSessionCacheHeaders(
+    buildErrorResponse(couldNotRun, {
+      requestId: readOrGenerateRequestId(req),
+    })
+  );
+}
+
 function refuseRequest(
   req: Request,
   method: string,

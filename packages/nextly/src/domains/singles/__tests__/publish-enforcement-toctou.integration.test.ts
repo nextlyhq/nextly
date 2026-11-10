@@ -142,13 +142,16 @@ describeLeg("single publish transition TOCTOU (postgres dialect gate)", () => {
       const service =
         handle.getService<SingleEntryService>("singleEntryService");
 
-      // Seed the row as draft via a trusted write.
+      // Seed the row as draft via a trusted write, over whatever is stored.
       await service.update(
         SLUG,
-        { siteName: "S", status: "draft" },
+        { siteName: "S", status: "draft", _overwrite: true },
         { overrideAccess: true }
       );
       const seeded = await handle.adapter.selectOne<{ id: string }>(TABLE, {});
+      // A refused seed leaves no row to lock, and the race below would then
+      // wait out the timeout instead of failing here.
+      expect(seeded?.id).toEqual(expect.any(String));
       const id = seeded?.id as string;
 
       const gate = deferred();
@@ -168,10 +171,12 @@ describeLeg("single publish transition TOCTOU (postgres dialect gate)", () => {
 
       // Writer A: an editor (route-attested `update`, no `unpublish`) edits the
       // row and keeps it `draft`. Its pre-lock read sees the committed `draft`
-      // (B is uncommitted), then it blocks taking the row lock behind B.
+      // (B is uncommitted), then it blocks taking the row lock behind B. It
+      // overwrites, so its version, which this race is not about, is not
+      // judged.
       const aResultP = service.update(
         SLUG,
-        { siteName: "S2", status: "draft" },
+        { siteName: "S2", status: "draft", _overwrite: true },
         { user: { id: "editor" }, routeAuthorized: true }
       );
 

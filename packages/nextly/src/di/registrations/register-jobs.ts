@@ -30,10 +30,14 @@ import {
 } from "../../domains/email/queued-send";
 import { scopedSender } from "../../domains/email/send-claims";
 import type { EmailService } from "../../domains/email/services/email-service";
+import { createGrantsContentExpiryJob } from "../../domains/grants-content-expiry-job";
 import { JobRegistry } from "../../domains/jobs/job-registry";
 import { JobsRepository } from "../../domains/jobs/jobs-repository";
 import { databaseRunAs } from "../../domains/jobs/jobs-runner";
 import { createMediaFinalizeDeletesJob } from "../../domains/media/finalize-deletes-job";
+import type { DispatchAdapter } from "../../domains/plugin-events/dispatch";
+import { createDurableEventsDispatchJob } from "../../domains/plugin-events/dispatch-job";
+import { getDurableSubscribers } from "../../domains/plugin-events/subscribers";
 import { pluginSettingsSecrets } from "../../domains/plugins/settings-service";
 import type { ApplyDueReleasesResult } from "../../domains/releases/apply-due-releases";
 import { createReleaseNoticeEmailJob } from "../../domains/releases/release-notice-email";
@@ -263,6 +267,17 @@ export function registerJobServices(ctx: RegistrationContext): void {
         result => reportWebhookDrainOutcome(logger, result)
       )
     );
+    // Durable plugin events: fanned out to the subscribers registered in this
+    // process and delivered until each succeeds, on every jobs run, apart
+    // from the webhook outbox. The subscribers are read per run, as plugins
+    // register them at init.
+    registry.register(
+      createDurableEventsDispatchJob({
+        adapter: () => container.get<DispatchAdapter>("adapter"),
+        subscribers: getDurableSubscribers,
+        logger,
+      })
+    );
     // Queued email: one attempt per run of a queued email's job, which carries
     // only the email's id. The send service is resolved per run, as the
     // queued email's own scope sends through it, so its key is claimed where
@@ -289,6 +304,16 @@ export function registerJobServices(ctx: RegistrationContext): void {
           "../../domains/media/booted-pending-deletes"
         );
         return bootedPendingDeletes(() => now);
+      })
+    );
+
+    // The content expiry a change to grants owes: queued before the expiry is
+    // tried and withdrawn once it lands, so a row left is one whose process
+    // failed or is gone, and the next jobs run expires the pages it left. A
+    // row near the end of its attempts queues a successor through the queue.
+    registry.register(
+      createGrantsContentExpiryJob({
+        jobs: () => container.get<JobsRepository>("jobsRepository"),
       })
     );
 

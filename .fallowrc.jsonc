@@ -8,7 +8,7 @@
   //
   // Commands:
   //   - pnpm fallow       = full-repo report, apps/playground included.
-  //   - pnpm fallow:audit = the diff, against origin/main. Same check the
+  //   - pnpm fallow:audit = the diff, against origin/dev. Same check the
   //                         agent gate runs before a commit.
   //
   // In CI, .github/workflows/code-hygiene.yml runs a changed-files audit
@@ -58,6 +58,13 @@
     // Type-level tests, compiled by each package's `check-types` rather than
     // run by Vitest, so no test runner names them as entries.
     "**/*.test-d.ts",
+    // The playground's "use cache" read function, imported by its root layout
+    // for its side effect: `cachedRead` is exported as the app-side file every
+    // template ships it, and registered by the file itself, not imported. Its
+    // Cache Components off variant is reached only through the alias
+    // apps/playground/next.config.ts sets when that setting is off.
+    "apps/playground/src/nextly/cached-read.ts",
+    "apps/playground/src/nextly/cached-read.cache-components-off.ts",
   ],
 
   // A lazy import, an `import()` inside a function, loads nothing when the
@@ -265,6 +272,14 @@
       // so a cached build would survive an edit to how it is built. Six small
       // copies that turbo can see are the safer repetition.
       "dup:aecdfbd0:6",
+
+      // apps/playground/src/nextly/cached-read.ts and
+      // e2e/multi-instance/fixture/nextly/cached-read.cache-components.ts —
+      // the 20-line "use cache" read function an app compiles. Each is its own
+      // app's file: Next.js compiles the directive only in code the app itself
+      // builds, so neither can import the other's, and both copy the
+      // templates' file, which a create-nextly-app test holds them to.
+      "dup:12d5e42b:2",
     ],
   },
 }

@@ -12,12 +12,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildSignatureHeaders } from "../../../domains/webhooks/signing";
 import {
-  createPluginReceivedWebhooks,
   standardWebhooks,
   verifyWebhookDelivery,
   type InboundWebhookScheme,
   type WebhookVerification,
 } from "../inbound-webhooks";
+import { createPluginReceivedWebhooks } from "../received-webhooks";
 
 vi.mock("node:crypto", async importOriginal => {
   const actual = await importOriginal<typeof import("node:crypto")>();
@@ -532,7 +532,14 @@ describe("verifying an inbound webhook", () => {
 });
 
 describe("ctx.security.webhooks.verify", () => {
-  const webhooks = createPluginReceivedWebhooks({ now: () => AT });
+  // Verifying reads no database: an adapter asked for fails the test.
+  const webhooks = createPluginReceivedWebhooks({
+    owner: "@test/verify",
+    adapter: () => {
+      throw new Error("verify reached the database");
+    },
+    now: () => AT,
+  });
 
   function request(delivery: { headers: Headers; bytes: Uint8Array }) {
     return new Request("https://site.example/api/plugins/shop/webhooks", {
@@ -580,6 +587,50 @@ describe("ctx.security.webhooks.verify", () => {
     expect(pulled).toBeLessThan(10);
     // The handler can still read the whole request.
     expect((await req.text()).length).toBe(chunks * 4);
+  });
+
+  it("judges a delivery's age when its body has arrived, not when its request began", async () => {
+    // A captured delivery replayed slowly: its request starts while the
+    // timestamp is fresh, and its body finishes arriving after the tolerance
+    // has passed. The age is the clock's when the body is whole.
+    let clock = AT;
+    const ages = createPluginReceivedWebhooks({
+      owner: "@test/verify",
+      adapter: () => {
+        throw new Error("verify reached the database");
+      },
+      now: () => clock,
+    });
+    const bytes = new TextEncoder().encode(BODY);
+    let release!: () => void;
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    let pulled = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        pulled += 1;
+        if (pulled === 1) controller.enqueue(bytes.slice(0, 8));
+        else if (pulled === 2) {
+          await held;
+          controller.enqueue(bytes.slice(8));
+        } else controller.close();
+      },
+    });
+    const req = new Request("https://site.example/api/plugins/shop/webhooks", {
+      method: "POST",
+      headers: standardDelivery().headers,
+      body: stream,
+      duplex: "half",
+    } as RequestInit);
+    const result = ages.verify(req, {
+      scheme: standardWebhooks,
+      secrets: [SECRET],
+    });
+    // Ten minutes go by while the rest of the body trickles in.
+    clock = new Date(AT.getTime() + 10 * 60_000);
+    release();
+    expect(reasonOf(await result)).toBe("expired");
   });
 
   it("a body over the limit is refused as too-large: 1 MiB, unless the call sets another", async () => {

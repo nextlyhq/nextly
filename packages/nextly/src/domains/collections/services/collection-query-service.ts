@@ -135,6 +135,7 @@ import {
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
+import { lockedForRead } from "../../../shared/lib/read-transaction-scope";
 import {
   buildPaginatedResponse,
   clampLimit,
@@ -172,6 +173,7 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   isCompanionReady,
@@ -234,7 +236,10 @@ import {
   refuseFilterProblems,
   unknownFieldProblem,
 } from "../query/filter-shape";
-import { groupKeyDeclarationProblem } from "../query/group-key-declaration";
+import {
+  declaredAsStored,
+  groupKeyDeclarationProblem,
+} from "../query/group-key-declaration";
 import { orderBySortKeys } from "../query/sort-order";
 import {
   timeseriesBoundOperand,
@@ -834,7 +839,9 @@ function assertGroupKeyUsable(
   column: unknown,
   declaredFields: FieldDefinition[],
   /** Whether a key names a hidden contributed column of the read's table. */
-  isHiddenColumn: (key: string) => boolean
+  isHiddenColumn: (key: string) => boolean,
+  /** Whether the collection keeps its translatable fields per language. */
+  storedPerLanguage: boolean
 ): FieldDefinition | undefined {
   const snake = toSnakeCase(groupBy);
   const isOwner =
@@ -863,7 +870,10 @@ function assertGroupKeyUsable(
   ]);
   const declared = declaredFields.find(field => spelled.has(field.name));
 
-  const declaredProblem = groupKeyDeclarationProblem(declared, groupBy);
+  const declaredProblem = groupKeyDeclarationProblem(
+    declaredAsStored(declared, storedPerLanguage),
+    groupBy
+  );
   if (declaredProblem !== undefined) {
     throw NextlyError.validation({
       errors: [
@@ -1698,13 +1708,18 @@ export class CollectionQueryService extends BaseService {
      * is filtered out so a draft translation never leaks — the field falls back to the published
      * default.
      */
-    statusFilterValues?: readonly string[] | null
-  ): Promise<void> {
-    if (!localeChain || rows.length === 0) return;
+    statusFilterValues?: readonly string[] | null,
+    /**
+     * Also take each translation's version counter in the same statement, and answer the rows
+     * read, for a read whose version comes from them (`PopulateCompanionArgs.withRevisions`).
+     */
+    withRevisions = false
+  ): Promise<Record<string, unknown>[] | undefined> {
+    if (!localeChain || rows.length === 0) return undefined;
     const companion =
       preloaded ?? (await this.fileManager.loadCompanionSchema(collectionName));
-    if (!companion) return;
-    await populateCompanionFields({
+    if (!companion) return undefined;
+    return populateCompanionFields({
       db: this.db as never,
       companionTable: companion.table,
       readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
@@ -1715,6 +1730,7 @@ export class CollectionQueryService extends BaseService {
         companion.hasStatus && statusFilterValues
           ? statusFilterValues
           : undefined,
+      withRevisions,
     });
   }
 
@@ -3702,14 +3718,22 @@ export class CollectionQueryService extends BaseService {
         // Geo filtering: fetch all matching entries (with reasonable limit)
         // We'll filter and paginate in memory
         const maxGeoResults = 10000; // Prevent memory issues on very large collections
-        query = query.limit(maxGeoResults);
+        query = lockedForRead(query.limit(maxGeoResults), this.adapter, schema);
         entries = await query;
 
         // We'll calculate totalDocs after geo filtering below
         totalDocs = 0;
       } else {
-        // Standard pagination: use SQL LIMIT/OFFSET
-        query = query.limit(limit).offset(offset);
+        // Standard pagination: use SQL LIMIT/OFFSET. Inside a read routed to
+        // a plugin's transaction the page's rows are read with a shared lock
+        // (`lockedForRead`); the count beside it is an aggregate and takes
+        // none, so the total is not held and may move before the transaction
+        // ends.
+        query = lockedForRead(
+          query.limit(limit).offset(offset),
+          this.adapter,
+          schema
+        );
 
         // Execute data query and count query in parallel
         // We call countEntries separately to get total (it handles same filters)
@@ -3800,15 +3824,22 @@ export class CollectionQueryService extends BaseService {
             : 0;
       }
 
-      // The page's translation counters, before its translated content.
-      const knownLanguages = await this.languageCountersFirst(
-        entries,
-        companion
-      );
+      // The page's version counters come with its translated content when the chain holds every
+      // language the version names, as a detail read's do: one statement where two were sent.
+      // Otherwise they are read first, apart from the content.
+      const countersWithContent =
+        localeChain !== null &&
+        chainCoversVersion(localeChain, {
+          localization: this.localization,
+          locale: params.locale,
+        });
+      const knownFirst = countersWithContent
+        ? undefined
+        : await this.languageCountersFirst(entries, companion);
       // Resolve localized fields for the whole page from the companion table
       // (batch — one query for all rows), with fallback, BEFORE relationship/component
       // expansion and hooks. Reuses the companion loaded above. No-op when non-localized.
-      await this.overlayLocalized(
+      const translationRows = await this.overlayLocalized(
         params.collectionName,
         "translation-load-failed",
         () =>
@@ -3817,9 +3848,21 @@ export class CollectionQueryService extends BaseService {
             entries,
             localeChain,
             companion,
-            statusFilter?.values ?? null // the per-locale published filter
+            statusFilter?.values ?? null, // the per-locale published filter
+            countersWithContent
           )
       );
+      const joinedRevisions =
+        countersWithContent && translationRows
+          ? languageRevisionsOf(translationRows)
+          : undefined;
+      // A page whose content read took no counters, its translations table not being there yet
+      // among others, reads them as before.
+      const knownLanguages =
+        knownFirst ??
+        (joinedRevisions && localeChain
+          ? { revisions: joinedRevisions, locales: localeChain }
+          : await this.languageCountersFirst(entries, companion));
       // `locale=all` → language-keyed values per localized field (admin/export).
       await this.overlayLocalized(
         params.collectionName,
@@ -4260,7 +4303,8 @@ export class CollectionQueryService extends BaseService {
       // table here as they are there.
       hiddenColumnMatcher(
         collectionTableName(collection, params.collectionName)
-      )
+      ),
+      storesPerLanguage(collection as { localized?: unknown })
     );
     return { key, field };
   }
@@ -5166,6 +5210,7 @@ export class CollectionQueryService extends BaseService {
               where: whereCondition,
               companionTable: table,
               localeChain: joinedLocaleChain,
+              lockingOn: this.adapter,
             })
         );
         entry = joined.entry;
@@ -5188,11 +5233,11 @@ export class CollectionQueryService extends BaseService {
           });
         }
       } else {
-        [entry] = (await this.db
-          .select()
-          .from(schema)
-          .where(whereCondition)
-          .limit(1)) as Record<string, unknown>[];
+        [entry] = (await lockedForRead(
+          this.db.select().from(schema).where(whereCondition).limit(1),
+          this.adapter,
+          schema
+        )) as Record<string, unknown>[];
       }
 
       if (!entry) {

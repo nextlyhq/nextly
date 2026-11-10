@@ -27,14 +27,13 @@ import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
+import { parseInterfaceLanguage } from "../interface-language";
 
 import {
   passwordColumns,
   updateUserEndingSessions,
   type PasswordWriteTx,
 } from "./password-write";
-import { parseInterfaceLanguage } from "../interface-language";
-
 import { UserQueryService } from "./user-query-service";
 
 /**
@@ -43,6 +42,43 @@ import { UserQueryService } from "./user-query-service";
  * `.success`/`.data`); failures throw NextlyError.
  */
 export type GetUserResponse = MinimalUser;
+
+/**
+ * The width of `users.name` and `users.image` on MySQL, the narrowest of the
+ * dialects (both are text on PostgreSQL and SQLite): the longest value every
+ * installation can store.
+ */
+const PROFILE_TEXT_MAX = 255;
+
+/**
+ * Refuse a profile change whose name or image address is longer than every
+ * dialect stores, naming the field, before anything is read or written. MySQL
+ * would otherwise refuse the write with a database error, or cut the value
+ * short, while PostgreSQL and SQLite kept it whole.
+ */
+function assertProfileTextFits(changes: {
+  name?: string;
+  image?: string;
+}): void {
+  const tooLong = (["name", "image"] as const).filter(
+    field =>
+      typeof changes[field] === "string" &&
+      // Characters, as the column counts them, not UTF-16 units: an emoji
+      // is one character and two units.
+      [...changes[field]].length > PROFILE_TEXT_MAX
+  );
+  if (tooLong.length === 0) return;
+  throw NextlyError.validation({
+    errors: tooLong.map(field => ({
+      path: field,
+      code: "TOO_LONG",
+      message:
+        field === "name"
+          ? `A name can be at most ${PROFILE_TEXT_MAX} characters.`
+          : `A picture's address can be at most ${PROFILE_TEXT_MAX} characters. Choose another picture.`,
+    })),
+  });
+}
 
 export class UserAccountService extends BaseService {
   private queryService: UserQueryService;
@@ -91,6 +127,7 @@ export class UserAccountService extends BaseService {
       interfaceLanguage?: string | null;
     }
   ): Promise<GetUserResponse> {
+    assertProfileTextFits(changes);
     const interfaceLanguage = parseInterfaceLanguage(changes);
     // Validate that user exists first. getUserById throws NOT_FOUND when
     // missing; we let that propagate unchanged.

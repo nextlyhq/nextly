@@ -43,6 +43,7 @@ import {
 } from "../../../domains/schema/migrate/plugin/plugin-migration";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
+import type { DataLossConsent } from "../../../domains/schema/migrate/data-loss-consent";
 import { CORE_TABLE_NAMES } from "../../../schemas/index";
 import { createLogger } from "../../utils/logger";
 import {
@@ -56,8 +57,15 @@ const DIALECT = "sqlite" as const;
 
 /** Minimal adapter surface the phase touches, backed by the live database. */
 function adapterFor(sqlite: Database.Database) {
+  // Whether this double's transaction is open. The tests run one flow at a
+  // time, so the flag answers for the calling flow as the adapter does.
+  let open = false;
   return {
     dialect: DIALECT,
+    // The probe a migration asks before it opens its own transaction, so a
+    // migration started inside this double's transaction is refused as the
+    // SQLite adapter refuses it.
+    transactionOpenInFlow: () => open,
     getCapabilities: () => ({ dialect: DIALECT }),
     // A PRAGMA that reads a setting returns its rows, as the SQLite adapter's
     // does; everything else runs for its effect.
@@ -78,6 +86,7 @@ function adapterFor(sqlite: Database.Database) {
       }) => Promise<T>
     ): Promise<T> => {
       sqlite.exec("BEGIN IMMEDIATE");
+      open = true;
       try {
         const result = await work({
           execute: async statement => {
@@ -93,6 +102,8 @@ function adapterFor(sqlite: Database.Database) {
       } catch (error) {
         sqlite.exec("ROLLBACK");
         throw error;
+      } finally {
+        open = false;
       }
     },
     listTables: async () =>
@@ -892,8 +903,22 @@ describe("ownership within and after one migrate run (sqlite)", () => {
           },
         ],
         pluginsWithMigrations: new Set(["dropper"]),
+        // Consent to delete data, so the run passes the consent gate and
+        // reaches the plugin phase: consent never lets one owner drop
+        // another's table, and the drop guard is what refuses it.
+        consent: {
+          given: { from: "flag", targets: "all" },
+          earlier: [],
+          ignored: [],
+        } satisfies DataLossConsent,
       } as never)
-    ).rejects.toMatchObject({ code: "DROP_OF_FOREIGN_TABLE" });
+    ).rejects.toMatchObject({
+      code: "DROP_OF_FOREIGN_TABLE",
+      // Refused as the app's table, not as one nobody owns: the guard refuses
+      // a plugin dropping an unowned table too, so only the owner it names
+      // shows the app's row was in place before the plugin phase.
+      logContext: { table: "app_ledger", belongsTo: "app" },
+    });
     expect(await adapter.listTables()).toContain("app_ledger");
   });
 
@@ -989,7 +1014,10 @@ describe("--step across plugin modules and app files (sqlite)", () => {
   let sqlite: Database.Database;
   let db: unknown;
 
-  beforeAll(async () => {
+  // A database per test: each test brings its own migrations folder, and a
+  // ledger recording a file from another test's folder is an applied file
+  // this build lacks, which `migrateCore` refuses before it runs anything.
+  beforeEach(async () => {
     sqlite = new Database(":memory:");
     db = drizzle({ client: sqlite });
     await reconcileCore({
@@ -999,7 +1027,7 @@ describe("--step across plugin modules and app files (sqlite)", () => {
     });
   });
 
-  afterAll(() => sqlite.close());
+  afterEach(() => sqlite.close());
 
   it("runs N migrations in all, plugin modules first, then app files", async () => {
     // The plugin phase runs first, so a run limited to one migration applies

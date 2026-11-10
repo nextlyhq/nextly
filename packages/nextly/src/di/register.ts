@@ -75,9 +75,11 @@ import {
   resolveKnownTypeColumns,
   resolveTypeColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
+import { stopGrantsExpiryRetry } from "../domains/flush-content-change";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import { LanguageRegistry } from "../domains/i18n/language-registry";
 import {
+  mainTableFields,
   publishesPerLanguage,
   setPerLanguageStorage,
   storesPerLanguage,
@@ -143,6 +145,7 @@ import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/w
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
 import type { DeferrableEntityKind } from "../domains/widgets/deferred-entities";
+import { withdrawApprovalsUnderEarlierDefinitions } from "../domains/workflows/approval-follows-content";
 import {
   buildWorkflowRegistry,
   publishWorkflows,
@@ -276,6 +279,10 @@ import type {
   UserService,
 } from "../services/users/user-service";
 import { assertConfiguredAddresses } from "../shared/address-rule";
+import {
+  isProductionRuntime,
+  showBuilderProductionNotice,
+} from "../shared/builder-refusal";
 import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { assertPluginFieldDeclarations } from "../shared/lib/assert-plugin-field-declarations";
 import { replaceFieldFunctions } from "../shared/lib/field-level-registry";
@@ -918,6 +925,14 @@ async function registerServicesOnce(
     process.env.NODE_ENV === "production"
   );
   if (memoryWarning) resolvedLogger.warn?.(memoryWarning);
+  // Likewise a production start whose config turns the schema builder on,
+  // which has no effect there: the operator is told once, at start, rather
+  // than finding out from a refused save.
+  const builderNotice = showBuilderProductionNotice(
+    transformedConfig,
+    isProductionRuntime()
+  );
+  if (builderNotice) resolvedLogger.warn?.(builderNotice);
   // Likewise each configured auth strategy the sign-in limiter cannot ask
   // which account a request names: its sign-ins are limited by email instead.
   for (const warning of unkeyedStrategyWarnings(transformedConfig)) {
@@ -948,12 +963,6 @@ async function registerServicesOnce(
   // The cache handlers read expiries from this adapter's ledger, and writes
   // made outside a request record theirs into it, for every instance.
   installTagExpiryLedger(adapter);
-
-  // Published before the schema registry registers a single table, since registration already
-  // decides where translatable values are stored, and chosen here once: a reload refuses to change
-  // it. A site restarted over the database it laid out would otherwise register its tables as if
-  // the setting were off, naming translatable columns its main tables do not have.
-  setPerLanguageStorage(transformedConfig.perLanguageStorage === true);
 
   const bootExtensionSchema = await prepareBootSchema(
     adapter,
@@ -1178,6 +1187,14 @@ async function registerServicesOnce(
         logger: resolvedLogger,
       });
 
+      // Approvals given under an earlier definition of a workflow are withdrawn now the workflows
+      // this boot registered are published, unless the definition keeps them. After the migrations,
+      // so the review states table is there to read where it exists at all.
+      await withdrawApprovalsUnderEarlierDefinitions(
+        adapter,
+        workflows.values()
+      );
+
       // The stored language list is read before any plugin starts and before registration publishes:
       // until its first read the registry knows no stored languages, and a plugin's `init` writing
       // through the services, or a request served in that gap, would read a site with languages as
@@ -1377,6 +1394,13 @@ async function resolveBootConfig(
   // DEFERRED here (candidate Builder-made collections) and finalized after the
   // DB is reachable below — this is how extending/relating to a Builder
   // collection works.
+  //
+  // Published before the fold, because the fold already decides where translatable values are
+  // stored: a transform of another plugin's entity is refused when it changes that. The schema
+  // registry registers no table before this either, and the choice is made here once: a reload
+  // refuses to change it. A site restarted over the database it laid out would otherwise register
+  // its tables as if the setting were off, naming translatable columns its main tables lack.
+  setPerLanguageStorage(transformedSetupConfig.perLanguageStorage === true);
   const { config: contributedConfig, deferredExtends } =
     applyPluginSchemaContributionsDeferred(
       transformedSetupConfig,
@@ -1956,6 +1980,7 @@ interface MaterializeContext {
   adapter: DrizzleAdapter;
   logger: Logger;
   schemaRegistry: SchemaRegistry | undefined;
+  dialect: SupportedDialect;
   addMissingColumnsForFields: (
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -1979,10 +2004,12 @@ interface MaterializeKindArgs {
   // while the collection and single ones are synchronous. Typed as
   // `unknown` because a `unknown | Promise<unknown>` union collapses to
   // `unknown` anyway; the call site awaits, which is correct for both.
+  // `localized` says whether the main table leaves its translatable columns to the companion.
   makeRuntime: (
     tableName: string,
     fields: FieldConfig[],
-    status: boolean
+    status: boolean,
+    localized: boolean
   ) => unknown;
 }
 
@@ -2000,20 +2027,60 @@ async function materializeBuilderKind(
     const before = args.loaded.find(c => c.slug === ent.slug);
     if (!before) continue;
     const fields = ent.fields ?? [];
+    // Where the entity's translatable values live. Kept per language, a translatable field a plugin
+    // added belongs in the companion, so the main table gets only the shared fields and the
+    // companion is brought up to the rest; added to the main table, it would leave the companion a
+    // column short while every write splits the value into it.
+    const perLanguage = storesPerLanguage(before);
+    const companionStatus = publishesPerLanguage(before);
     try {
       await ctx.addMissingColumnsForFields(
         ctx.adapter,
         ctx.logger,
         before.tableName,
-        fields,
+        mainTableFields(before, fields),
         { timestamps: true, builtBy: args.builtBy }
       );
+      if (perLanguage) {
+        await addMissingCompanionColumns(ctx, {
+          builtBy: args.builtBy,
+          slug: ent.slug,
+          tableName: before.tableName,
+          fields,
+          status: companionStatus,
+        });
+      }
       await args.persist(ent.slug, fields);
       if (ctx.schemaRegistry) {
         ctx.schemaRegistry.registerDynamicSchema(
           before.tableName,
-          await args.makeRuntime(before.tableName, fields, before.status)
+          await args.makeRuntime(
+            before.tableName,
+            fields,
+            before.status,
+            perLanguage
+          )
         );
+        if (perLanguage) {
+          const { buildCompanionRuntimeTable } = await import(
+            "../domains/i18n/runtime/companion-registration"
+          );
+          const companion = buildCompanionRuntimeTable({
+            slug: ent.slug,
+            tableName: before.tableName,
+            fields: fields as { name: string; type: string }[],
+            dialect: ctx.dialect,
+            builtBy: args.builtBy,
+            localized: true,
+            status: companionStatus,
+          });
+          if (companion) {
+            ctx.schemaRegistry.registerDynamicSchema(
+              companion.companionTableName,
+              companion.table
+            );
+          }
+        }
       }
     } catch (err) {
       ctx.logger.warn?.(
@@ -2023,6 +2090,74 @@ async function materializeBuilderKind(
       );
     }
   }
+}
+
+/**
+ * Bring an existing companion up to the translatable fields of a Builder entity, additively.
+ * Throws what the reconcile reported, so the entity is skipped (and retried next boot) rather than
+ * persisted with a field its companion cannot hold.
+ */
+async function addMissingCompanionColumns(
+  ctx: MaterializeContext,
+  entity: {
+    builtBy: ColumnOrigin;
+    slug: string;
+    tableName: string;
+    fields: FieldConfig[];
+    status: boolean;
+  }
+): Promise<void> {
+  const { ensureCompanionTable, reconcileCompanionColumns } = await import(
+    "../domains/i18n/runtime/companion-io"
+  );
+  let failure: unknown;
+  // An entity whose every field was shared has no companion yet, and the reconcile below only
+  // brings an existing one up: the first translatable field a plugin adds creates it here.
+  await ensureCompanionTable(
+    ctx.adapter,
+    {
+      builtBy: entity.builtBy,
+      slug: entity.slug,
+      tableName: entity.tableName,
+      fields: entity.fields as { name: string; type: string }[],
+      dialect: ctx.dialect,
+      status: entity.status,
+    },
+    error => {
+      failure = error;
+    }
+  );
+  if (failure !== undefined) {
+    throw NextlyError.internal({
+      ...(failure instanceof Error ? { cause: failure } : {}),
+      logContext: {
+        reason: "builder-companion-create-failed",
+        slug: entity.slug,
+      },
+    });
+  }
+  const inStep = await reconcileCompanionColumns(
+    ctx.adapter,
+    {
+      builtBy: entity.builtBy,
+      slug: entity.slug,
+      tableName: entity.tableName,
+      fields: entity.fields as { name: string; type: string }[],
+      dialect: ctx.dialect,
+      status: entity.status,
+    },
+    error => {
+      failure = error;
+    }
+  );
+  if (inStep) return;
+  throw NextlyError.internal({
+    ...(failure instanceof Error ? { cause: failure } : {}),
+    logContext: {
+      reason: "builder-companion-columns-failed",
+      slug: entity.slug,
+    },
+  });
 }
 
 /** Add, persist and register the plugin fields merged onto Builder entities. */
@@ -2039,6 +2174,7 @@ async function materializeBuilderChanges(
     adapter: args.adapter,
     logger: args.logger,
     schemaRegistry: args.schemaRegistry,
+    dialect: args.dialect,
     addMissingColumnsForFields,
   };
 
@@ -2046,13 +2182,14 @@ async function materializeBuilderChanges(
   const runtimeTable = (
     tableName: string,
     fields: FieldConfig[],
-    status: boolean
+    status: boolean,
+    localized: boolean
   ) =>
     generateRuntimeSchema(
       tableName,
       fields as unknown as FieldDefinition[],
       args.dialect,
-      { status }
+      { status, localized }
     ).table;
 
   if (args.changed.collections.length > 0) {
@@ -2153,8 +2290,9 @@ async function materializeBuilderComponents(
         loaded: args.builderEntities.components,
         persist: (slug, fields) =>
           reg.updateComponent(slug, { fields: fields }),
-        makeRuntime: async (tableName, fields) =>
+        makeRuntime: async (tableName, fields, _status, localized) =>
           compSchema.generateRuntimeSchema(tableName, fields, {
+            localized,
             typeColumn:
               (await resolveTypeColumns(adapter, [tableName])).get(tableName) ??
               STORAGE_FORMAT.columns.type,
@@ -4336,7 +4474,14 @@ async function reconcileSingleTablesForBoot(
         const migrationSQL = schemaService.generateMigrationSQL(
           single.tableName,
           fields,
-          { isSingle: true, hasStatus, localized }
+          // Where its translatable columns live: its per-language table when it is translated, or
+          // for every Single under `experimental.perLanguageStorage`, as `completeSingleTable`
+          // registers it.
+          {
+            isSingle: true,
+            hasStatus,
+            localized: storesPerLanguage({ localized }),
+          }
         );
 
         const statements = migrationSQL
@@ -4552,6 +4697,9 @@ async function initializePlugins(
       | EmailService
       | VersionsService
       | SingleRegistryService
+      | SingleEntryService
+      | CollectionRegistryService
+      | FieldGroupRegistryService
       | DatabaseInstance
       | AnyRelations
       | SupportedDialect
@@ -4573,6 +4721,16 @@ async function initializePlugins(
       services.container.get<VersionsService>("versionsService"),
     singleRegistryService: () =>
       services.container.get<SingleRegistryService>("singleRegistryService"),
+    singleEntryService: () =>
+      services.container.get<SingleEntryService>("singleEntryService"),
+    collectionRegistryService: () =>
+      services.container.get<CollectionRegistryService>(
+        "collectionRegistryService"
+      ),
+    fieldGroupRegistryService: () =>
+      services.container.get<FieldGroupRegistryService>(
+        "fieldGroupRegistryService"
+      ),
     db: () => adapterDrizzleDb,
     // The adapter's own answer. Everything that turns a plugin's settings into
     // SQL picks its table metadata and its upsert spelling from this, and the
@@ -4982,6 +5140,10 @@ export async function shutdownServices(): Promise<void> {
 async function releaseServices(opts: {
   disconnectAdapter: boolean;
 }): Promise<void> {
+  // This registration's retries of grants expiries flush through the services
+  // released below, so they stop first; what they owe stays queued for the
+  // next registration's jobs runs.
+  stopGrantsExpiryRetry();
   // Before the adapter disconnects, so destroy can still use db.
   await destroyRegisteredPlugins();
   // Before the adapter disconnects, so a sweep under way finishes with it.
@@ -5041,6 +5203,8 @@ async function releaseServices(opts: {
  * tears them down in reverse before it initialises any plugin.
  */
 export function clearServices(): void {
+  // Stopped first, for the reason `releaseServices` gives.
+  stopGrantsExpiryRetry();
   // Plugins still running are torn down at the next registration, and their
   // `destroy` may still need the services they were started with: those move
   // aside for them rather than vanish, their contexts re-pointed at them for

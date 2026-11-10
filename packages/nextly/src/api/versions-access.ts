@@ -28,6 +28,7 @@ import {
   appLocalization,
   configuredLocales,
 } from "../domains/i18n/configured-locales";
+import { storesPerLanguage } from "../domains/i18n/per-language-storage";
 import {
   resolveSingleDocumentId,
   singleDocumentEditable,
@@ -62,6 +63,7 @@ import {
   type ServiceErrorEnvelope,
 } from "../errors/from-service-envelope";
 import { NextlyError } from "../errors/nextly-error";
+import { rethrowIfRuleCouldNotRun } from "../errors/rule-could-not-run";
 import { getCachedNextly } from "../init";
 import type {
   ResolvedVersionsConfig,
@@ -300,7 +302,9 @@ export async function historyLanguagesOf(
 ): Promise<ReadonlySet<string>> {
   const configured = configuredLocales() ?? new Set<string>();
   const entity = await registryEntityOf(scopeKind, slug);
-  if ((entity as { localized?: boolean } | null)?.localized === true) {
+  // A save of an entity kept per language is recorded in its language: a translated one, or any
+  // under `experimental.perLanguageStorage`.
+  if (entity !== null && storesPerLanguage(entity)) {
     return configured;
   }
   const defaultLocale = appLocalization()?.defaultLocale ?? null;
@@ -615,8 +619,9 @@ export { resolveSingleDocumentId };
  * The fault keeps the code and status the read gave it, rebuilt through the
  * shared converter: a database not migrated for the collection answers
  * ENTITY_NOT_MIGRATED, as the caller's own read of the document does, rather
- * than an opaque 500. The read ran as the caller, so its answer names only
- * what the caller may be told.
+ * than an opaque 500, and a rule that could not run answers RULE_COULD_NOT_RUN
+ * rather than an internal error. The read ran as the caller, so its answer
+ * names only what the caller may be told.
  */
 function interpretReadResult(
   read: ServiceErrorEnvelope & { success: boolean; statusCode: number }
@@ -714,6 +719,9 @@ export async function redactSnapshotForUser(
     });
     await applyComponentReadAccess(entry, fields, componentFields, caller);
   } catch (error) {
+    // A rule that could not run never answered: the request ends with that,
+    // not with every field carrying a read rule withheld.
+    rethrowIfRuleCouldNotRun(error);
     // Rules that could not be evaluated decide nothing, so nothing they guard
     // is shown: every field carrying a read rule is withheld, and named.
     for (const key of fieldsCarryingReadRules(

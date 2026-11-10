@@ -1262,7 +1262,8 @@ function planTranslatedUniqueMigrations(
       dialect,
       defaultLocale,
       collectionLocalized: true,
-      status: c.status === true,
+      // A per-language `_status` only where each language publishes on its own.
+      status: publishesPerLanguage(c),
     };
     // With no field translated now, the companion is still addressed when the previous snapshot
     // recorded per-language unique indexes on it: the last such field to leave translation takes
@@ -1473,7 +1474,8 @@ function addsEntryFor(
     tableName: c.tableName,
     dialect,
     defaultLocale,
-    status: c.status === true,
+    // A per-language `_status` only where each language publishes on its own.
+    status: publishesPerLanguage(c),
     recorded: translated.filter(f => !isAdded(f)),
     added,
   });
@@ -1564,8 +1566,10 @@ function planFieldsLeavingTranslation(
           // A rollback recreates default-language rows with the main row's publishing state, when
           // both have one: Draft/Published on before this change, so the companion has `_status`,
           // and still on after it, so the main table still has `status` when the rollback runs.
+          // Only where each language publishes on its own: an untranslated entity kept per
+          // language under the setting publishes as a document, and its companion has no `_status`.
           status:
-            c.status === true &&
+            publishesPerLanguage(c) &&
             previousSnapshot.tables
               .find(t => t.name === c.tableName)
               ?.columns.some(col => col.name === "status") === true,
@@ -1922,8 +1926,11 @@ function planFieldsJoiningTranslation(
             columns: joining.map(j => j.column),
             // A default-language row created for an entry takes its publishing state, when the
             // main table and the companion both have one before this change.
+            // Only where each language publishes on its own: an untranslated entity kept per
+            // language under the setting publishes as a document, and its companion has no
+            // `_status`.
             status:
-              c.status === true &&
+              publishesPerLanguage(c) &&
               prevMain?.columns.some(col => col.name === "status") === true,
           },
           builtBy: "codeFirst",

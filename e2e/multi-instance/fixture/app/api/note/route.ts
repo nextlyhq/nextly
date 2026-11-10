@@ -7,7 +7,7 @@
 import { connection } from "next/server";
 import { getNextly } from "nextly";
 
-import { readNote, writeNote } from "../../../lib/note";
+import { readNote, writeNote, writeRefused } from "../../../lib/note";
 import config from "../../../nextly.config";
 
 export async function GET(): Promise<Response> {
@@ -18,10 +18,8 @@ export async function GET(): Promise<Response> {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const secret = process.env.FIXTURE_WRITE_SECRET;
-  if (!secret || request.headers.get("x-fixture-secret") !== secret) {
-    return new Response(null, { status: 404 });
-  }
+  const refused = writeRefused(request);
+  if (refused) return refused;
   const body = (await request.json().catch(() => null)) as {
     value?: unknown;
   } | null;

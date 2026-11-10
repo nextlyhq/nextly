@@ -117,6 +117,13 @@ export interface ReconcileCompanionArgs {
    */
   defaultLocale?: string;
   /**
+   * Back-fill EVERY language's `_status` from the main row's `status` when `_status` is added, not
+   * only the default language's. For a translation turned on under
+   * `experimental.perLanguageStorage`: the values were per language already, and every language was
+   * published with the entry until now, so each takes the entry's state.
+   */
+  statusFromEntryInEveryLanguage?: boolean;
+  /**
    * The site's languages in its order, which decides, with `companionHasStatus`, the language a
    * field leaving translation takes its shared value from (`copyLiveness`). Omitted, the default
    * language's value, else the first by code.
@@ -576,13 +583,18 @@ function companionStatusStatements(
       // Only the default-locale row: other locales are genuinely per-locale and
       // correctly start at 'draft'. The subquery targets a different table (main)
       // than the one updated, so it is valid on Postgres, MySQL and SQLite.
-      if (args.defaultLocale !== undefined) {
+      const fromEntry =
+        `UPDATE ${q(companionTable, dialect)} SET ${q("_status", dialect)} = ` +
+        `(SELECT ${q("status", dialect)} FROM ${q(tableName, dialect)} ` +
+        `WHERE ${q(tableName, dialect)}.${q("id", dialect)} = ${q(companionTable, dialect)}.${q("_parent", dialect)})`;
+      if (args.statusFromEntryInEveryLanguage === true) {
+        // Every language was live with the entry until now, so each takes its state.
+        stmts.push(fromEntry);
+      } else if (args.defaultLocale !== undefined) {
         const literalLocale = args.defaultLocale.replace(/'/g, "''");
         stmts.push(
-          `UPDATE ${q(companionTable, dialect)} SET ${q("_status", dialect)} = ` +
-            `(SELECT ${q("status", dialect)} FROM ${q(tableName, dialect)} ` +
-            `WHERE ${q(tableName, dialect)}.${q("id", dialect)} = ${q(companionTable, dialect)}.${q("_parent", dialect)}) ` +
-            `WHERE ${q(companionTable, dialect)}.${q("_locale", dialect)} = '${literalLocale}'`
+          fromEntry +
+            ` WHERE ${q(companionTable, dialect)}.${q("_locale", dialect)} = '${literalLocale}'`
         );
       }
     } else if (!status && args.companionHasStatus) {
@@ -655,6 +667,8 @@ export interface CompanionTransitionArgs {
   wasStatus: boolean;
   /** Whether the existing companion physically has `_status` (see ReconcileCompanionArgs). */
   companionHasStatus?: boolean;
+  /** Seed every language's added `_status` from the entry (see ReconcileCompanionArgs). */
+  statusFromEntryInEveryLanguage?: boolean;
   /** Companion columns this database already has for added translated fields (see ReconcileCompanionArgs). */
   presentOnCompanion?: readonly string[];
   /**
@@ -996,6 +1010,7 @@ export function buildCompanionTransitionStatements(
       status,
       companionExists,
       companionHasStatus: args.companionHasStatus,
+      statusFromEntryInEveryLanguage: args.statusFromEntryInEveryLanguage,
       // Carry the default locale so a newly-added `_status` back-fills the
       // default-locale companion row from the main row's status, and a field leaving
       // translation keeps its default language's value.

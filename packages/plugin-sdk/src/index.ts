@@ -228,6 +228,42 @@ export { PLUGIN_CATEGORIES, isPluginCategory, pluginAdminSlug } from "nextly";
 export { isLocaleSelector } from "nextly";
 
 /**
+ * Where an entry is served, and what names it, as the core answers both.
+ * @experimental `previewUrlFromTemplate` fills a path template such as
+ *   `/blog/{slug}` from an entry, the way the admin's preview and page search
+ *   do, so a plugin holding or linking an entry's address names the one the
+ *   host serves rather than a second spelling of it. `readableTitleText`
+ *   answers whether a title field's value can name an entry, and as what
+ *   text, the way the admin and the activity feed read it. Intended to be
+ *   stable; `plugin-page-builder`'s address claims exercise both, and they
+ *   graduate per D55 once that ships in a release.
+ */
+export { previewUrlFromTemplate, readableTitleText } from "nextly/config";
+
+/**
+ * @experimental A field's key as the admin's screens word it, where the
+ * field carries no label of its own: `humanizeFieldName("membersOnly")` is
+ * "Members Only". Core's one humaniser, from a module that imports nothing,
+ * so a plugin's server code names a field as the admin does. The same
+ * function `./admin` offers a plugin's admin code. `plugin-page-builder`
+ * names a template's blocks fields with it.
+ */
+export { humanizeFieldName } from "nextly/field-label";
+
+/**
+ * Which entries have changes waiting to be published.
+ * @experimental `PENDING_CHANGE_KEY` — the reserved filter key that keeps,
+ *   in a `where` handed to `ctx.services.collections`, only the entries whose
+ *   working draft differs from their published row. A plugin that must not
+ *   publish someone's unfinished edits as a side effect of its own write asks
+ *   the core with this key rather than spelling it, so it names the key the
+ *   query layer reads. Held experimental with the other workflow keys until
+ *   the dashboard's Needs attention card is complete; `plugin-page-builder`
+ *   exercises it when a template delete unlinks its copies.
+ */
+export { PENDING_CHANGE_KEY } from "nextly/reserved-filter-keys";
+
+/**
  * Core plugin contract types.
  * @public `PluginDefinition`, `PluginContributions`, `PluginContext`,
  *   `PluginPermission`, `PermissionSlug`, `ServiceOpts`, `AuthUser`.
@@ -273,7 +309,8 @@ export type {
 /**
  * The runtime surfaces a plugin receives when it declares them, and the
  * declarations that ask for them.
- * @experimental `PluginSettingsApi` (`ctx.settings`), `PluginAuditApi`
+ * @experimental `PluginSettingsApi` (`ctx.settings`), `PluginCacheApi`
+ *   (`ctx.cache`), `PluginAuditApi`
  *   (`ctx.audit`), `PluginAuthApi` and `CompleteLoginOptions` (`ctx.auth`),
  *   `PluginCapabilities` (`capabilities`), `PluginAuditDeclaration`
  *   (`contributes.audit`) and `PluginHookPointDeclaration`
@@ -282,6 +319,7 @@ export type {
  */
 export type {
   PluginSettingsApi,
+  PluginCacheApi,
   PluginAuditApi,
   PluginAuthApi,
   CompleteLoginOptions,
@@ -355,8 +393,10 @@ export type {
  *   `TxOption`. Held experimental until a first-party plugin signs people in
  *   with them (see STABILITY.md). `PluginReceivedWebhooks`
  *   (`ctx.security.webhooks`), verifying a received webhook against a
- *   `standardWebhooks` or a plugin's own `InboundWebhookScheme`, is
- *   experimental too, until a first-party plugin receives webhooks with it.
+ *   `standardWebhooks` or a plugin's own `InboundWebhookScheme` and claiming
+ *   it once (`claimDelivery`, with `ClaimDeliveryOptions`, `DeliveryClaim`,
+ *   `DeliveryClaimResult` and `VerifiedWebhook`), is experimental too, until
+ *   a first-party plugin receives webhooks with it.
  */
 export { PasswordTooLongError, standardWebhooks } from "nextly";
 export type {
@@ -370,6 +410,10 @@ export type {
   SecretData,
   TxOption,
   PluginReceivedWebhooks,
+  ClaimDeliveryOptions,
+  DeliveryClaim,
+  DeliveryClaimResult,
+  VerifiedWebhook,
   InboundWebhookScheme,
   InboundWebhookDelivery,
   InboundWebhookReading,
@@ -599,6 +643,14 @@ export type {
 export { getCachedNextly } from "nextly";
 
 /**
+ * @experimental The cache tag `ctx.cache.tag(part)` gives, for code that
+ * renders a plugin's data outside its context (a route an app owns), so the
+ * read it caches carries the tag `ctx.cache.expire(part)` clears. Intended to
+ * be stable once a first-party plugin expires its pages through `ctx.cache`.
+ */
+export { pluginCacheTag } from "nextly";
+
+/**
  * @experimental The canonical response envelopes, and the trusted-client-IP
  *   facade. Graduates per D55 once `plugin-form-builder`'s public form routes
  *   ship in a release.
@@ -712,6 +764,25 @@ export type {
 } from "nextly";
 
 /**
+ * @experimental Whether a person may delete one entry, asked of the delete's
+ *   own gate without deleting it. Graduates with the stored reads above.
+ *
+ * `ctx.caller.can(action, resource, { anyEntry: true })` answers yes for a
+ *   rule that lets a person delete only some entries, so a plugin that does
+ *   work before a delete cannot rely on it. `mayDeleteEntry` runs the very
+ *   gate the collection delete runs before its hooks: the person's grant, and
+ *   a rule's row filter matched against this entry, in every language it
+ *   holds. No hook runs, nothing is written, and an entry that does not exist
+ *   answers `false`, as one the person may not delete. `mayWriteEntry` asks
+ *   the same of a write: the update gate, the lifecycle gate only where the
+ *   status the write names moves the document into or out of published (as
+ *   core's update decides it), and each named field's update rule, for an
+ *   entry or a Single.
+ */
+export { mayDeleteEntry, mayWriteEntry } from "nextly";
+export type { PluginDeleteCheck, PluginWriteCheck } from "nextly";
+
+/**
  * Admin UI contributions (P5, D19–D23) — `contributes.admin` author surface.
  * The component-registration runtime lives on `@nextlyhq/plugin-sdk/admin`.
  *
@@ -808,7 +879,8 @@ export type {
  * Contributions a plugin adds to admin places (`contributes.admin.contributions`):
  * blocks, tabs, list columns, row and bulk actions and side panel sections,
  * each ordered at its place, with a declared visibility rule and permission.
- * @experimental Nothing in the admin draws them yet (see STABILITY.md).
+ * @experimental The admin draws blocks and tabs at five places so far (see
+ * STABILITY.md).
  */
 export type {
   AdminBlockContribution,

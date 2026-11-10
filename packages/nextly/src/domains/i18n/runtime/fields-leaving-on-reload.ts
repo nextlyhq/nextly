@@ -42,6 +42,7 @@ import {
   recordedBeforeOf,
 } from "../migration/recorded-before";
 import type { I18nTransitionKind } from "../migration/transition-state";
+import { storesPerLanguage } from "../per-language-storage";
 
 import { companionColumnNames, liveCompanionShape } from "./companion-io";
 import {
@@ -154,7 +155,9 @@ function reloadTarget(
   fieldGroupTables: ReadonlyMap<string, string>
 ): ReloadTarget | undefined {
   const slug = entity.slug;
-  if (slug === undefined || entity.localized !== true) return undefined;
+  // Kept per language when translated, or for every entity under `experimental.perLanguageStorage`:
+  // either way a field made shared leaves its per-language table.
+  if (slug === undefined || !storesPerLanguage(entity)) return undefined;
   const stored = kind === "fieldGroup" ? fieldGroupTables.get(slug) : undefined;
   return { kind, slug, tableName: stored ?? tableNameOf(entity), entity };
 }

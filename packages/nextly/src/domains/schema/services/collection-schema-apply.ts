@@ -50,14 +50,14 @@ import { withoutLeavingConstraints } from "../../i18n/migration/field-leaves-tra
 import { applyCompanionTransition } from "../../i18n/migration/held-leaving-drops";
 import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
 import {
-  perLanguageStorageEnabled,
-  publishesPerLanguage,
-  storesPerLanguage,
+  translationLayoutChange,
+  type TranslationLayoutChange,
 } from "../../i18n/per-language-storage";
 import {
   companionHasStatusColumn,
   liveCompanionShape,
 } from "../../i18n/runtime/companion-io";
+import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
 import { runStatement } from "../pipeline/_internal/run-statement";
 import {
   createApplyDesiredSchema,
@@ -577,6 +577,19 @@ function translatedSettingsDeferred(
 }
 
 /**
+ * Where the change's collection kept, and keeps, its translatable values and how each language
+ * publishes (`translationLayoutChange`): the one derivation every step of the apply reads.
+ */
+function layoutOf(change: CollectionSchemaChange): TranslationLayoutChange {
+  return translationLayoutChange({
+    wasLocalized: change.wasLocalized,
+    isLocalized: change.isLocalized,
+    wasStatus: change.wasStatus,
+    hasStatus: change.status,
+  });
+}
+
+/**
  * Whether the change's collection kept, and keeps, its translatable values per language: the
  * storage answer to its translation flags before and after.
  */
@@ -584,10 +597,8 @@ function storedPerLanguage(change: CollectionSchemaChange): {
   wasLocalized: boolean;
   isLocalized: boolean;
 } {
-  return {
-    wasLocalized: storesPerLanguage({ localized: change.wasLocalized }),
-    isLocalized: storesPerLanguage({ localized: change.isLocalized }),
-  };
+  const layout = layoutOf(change);
+  return { wasLocalized: layout.wasStored, isLocalized: layout.isStored };
 }
 
 /** `applyCollectionSchemaChange`'s work, run while this context holds the schema lock. */
@@ -603,6 +614,15 @@ async function applyHoldingSchemaLock(
   const deps = requireSchemaChangeDeps(slug);
   const { adapter } = deps;
   const dialect = adapter.dialect;
+  // A precondition, so before anything changes: turning translation off drops each language's
+  // own publish state, which loses nothing only where it is the entry's.
+  if (layoutOf(change).languagesMustAgreeWithEntry) {
+    await assertLanguageStatesAgreeWithEntry(adapter, {
+      kind: "collection",
+      slug,
+      tableName,
+    });
+  }
 
   // The FULL desired schema (collections, singles and field groups), so drizzle-kit sees every
   // managed table: without the others, tables of other entity types in the live database are
@@ -761,19 +781,15 @@ async function reconcileCompanion(args: {
       dialect: adapter.dialect,
       defaultLocale: args.defaultLocale,
       languageOrder: appLanguageOrder(),
-      // Under per-language storage a per-language `_status` only where it publishes each language
-      // on its own; otherwise the Draft/Published flag, as it has always been.
-      status: perLanguageStorageEnabled()
-        ? publishesPerLanguage({
-            localized: change.isLocalized,
-            status: change.status,
-          })
-        : change.status,
+      // The companion's own `_status`, after and before this apply: under per-language storage
+      // only where each language publishes on its own, otherwise the Draft/Published flag. The
+      // one before decides whether main carried `status` and the companion `_status`.
+      status: layoutOf(change).isPublishedPerLanguage,
       wasLocalized,
       isLocalized,
-      // The status before the change, which decides whether main carried `status` and the
-      // companion `_status` before this apply.
-      wasStatus: change.wasStatus,
+      wasStatus: layoutOf(change).wasPublishedPerLanguage,
+      statusFromEntryInEveryLanguage:
+        layoutOf(change).statusFromEntryInEveryLanguage,
       oldFields,
       newFields: fields,
       companionExists,

@@ -83,8 +83,17 @@ export type { DocumentViewProps } from "@nextlyhq/admin";
  *   `collectionSlug` and `entryId`, `documentLock` (hold writes while
  *   `actionsDisabled`), `mayWrite()`, and `documentChanged(result)`, the same
  *   two results.
+ * - `SidebarSectionProps`: a side panel section declared at an edit page's
+ *   place (`kind: "sidebarSection"`): the place's `context` and `entry`, as
+ *   every contributed component receives them, and on a collection entry's
+ *   page also every field of `DocumentPanelSectionProps`.
+ * - `DocumentTabProps`: a tab declared at an edit page's place
+ *   (`kind: "tab"`): the place's `context` and `entry`, `setBadge` to show a
+ *   count beside the tab's label, the document form's `control` to read what
+ *   the author typed and write values the bar's Save stores, and
+ *   `documentLock`. Handed on a saved entry, a new one and a Single alike.
  *
- * Both are drawn inside the document's editor, so `useDocumentLocale()` names
+ * All are drawn inside the document's editor, so `useDocumentLocale()` names
  * the language being edited — the one a replaced Unpublish acts on — and
  * `useDocumentActions()` answers for the same document.
  *
@@ -107,6 +116,8 @@ export type {
   DocumentActionReplacementProps,
   DocumentChangeResult,
   DocumentPanelSectionProps,
+  DocumentTabProps,
+  SidebarSectionProps,
 } from "@nextlyhq/admin";
 
 /**
@@ -135,6 +146,16 @@ export { navigateWithinAdmin as navigateTo } from "@nextlyhq/admin";
  * ordinary answer to handle, not an error.
  */
 export { useDocumentLocale, type DocumentLocale } from "@nextlyhq/admin";
+
+/**
+ * A field's address in its document (@experimental): its path from the
+ * document's root, with each repeater row named by the id it was last saved
+ * with rather than its position (`sections.<rowId>.body`), so a link built on
+ * it opens the same row however the rows are reordered. A row added since the
+ * last save, or in a repeater whose rows set their own `id` field, has none
+ * yet, and the answer says why. Outside repeaters it is the field's form path.
+ */
+export { useFieldAddress, type FieldAddress } from "@nextlyhq/admin";
 
 /**
  * The surrounding document's full-page preview (@experimental).
@@ -525,6 +546,14 @@ export { FrameState, Widget } from "@nextlyhq/admin";
  */
 export { formatWidgetTime, useWidgetClock } from "@nextlyhq/admin";
 /**
+ * @experimental A field's key as the admin's screens word it, where the
+ * field carries no label of its own or is held only by its key:
+ * `humanizeFieldName("membersOnly")` is "Members Only". Core's one humaniser,
+ * so a plugin names a field as the admin does. The same function the root
+ * entry offers server code.
+ */
+export { humanizeFieldName } from "@nextlyhq/admin";
+/**
  * @experimental `useRefreshDashboard()`: a function that asks every card on
  * the dashboard, and the header's summary, again, for a widget whose own
  * write changes what they answer (a card marking a row done, say). Each card
@@ -623,11 +652,62 @@ export { useSuppressAdminChrome } from "@nextlyhq/admin";
 export type { AdminChromeLayer } from "@nextlyhq/admin";
 
 /**
+ * The live values of the document being edited (@experimental), for any
+ * component a plugin draws inside the editor: a block, a side panel section
+ * or a tab, on an entry, a new one or a Single. A place's `entry` prop is the
+ * document as it was read; these are the document as it is being typed.
+ *
+ * - `useDocumentValues(paths)`: the named fields by their dot paths
+ *   (`"seo.title"`), drawing again only when one of them changes.
+ * - `useDocumentField(path)`: one field's value, whether it may be written
+ *   now, and `set(next)`, which writes as the author typing would and marks the
+ *   document changed, or writes nothing and answers `false` while the
+ *   document's content is held. `set(null)` returns a field to automatic.
+ *
+ * Both read the editor's own form, never the nearest form context, so a
+ * plugin component with a form of its own still reads the document. Both
+ * answer `null` outside a document editor.
+ */
+export { useDocumentField, useDocumentValues } from "@nextlyhq/admin";
+export type { DocumentField } from "@nextlyhq/admin";
+
+/**
+ * Draw the contributions sent to an admin place (@experimental): blocks with
+ * `TargetSlot`, tabs with `PlaceTabs`, in the order the server sent them and
+ * each behind its own error boundary, as core's pages draw theirs.
+ *
+ * For a place the plugin declared under `contributes.admin.places`, on one of
+ * its own pages: other plugins' blocks and tabs added there arrive already
+ * filtered for the signed-in reader, and each receives the place's `context`
+ * and the page's `entry` when it passes one. Pass `context={null}` while the
+ * page does not know its ids yet; nothing contributed is drawn until it does.
+ * A plugin's place has no built-in parts, so the page draws its own content
+ * beside the slot.
+ *
+ * A contributed tab receives `PlaceTabProps`: the place's `context` and
+ * `entry`, and `setBadge`, which shows a count beside the tab's label
+ * (`PlaceTabBadge`) or none with `null`. A tab stays mounted while another is
+ * open, so its count stays current and what it holds is kept.
+ */
+export { PlaceTabs, TargetSlot } from "@nextlyhq/admin";
+export type {
+  PlaceContributionProps,
+  PlaceProps,
+  PlaceTabBadge,
+  PlaceTabProps,
+  PlaceTabsProps,
+  TargetSlotProps,
+} from "@nextlyhq/admin";
+
+/**
  * The unified admin data table + its extension points (@experimental). Render
  * `DataTable` (batteries-included) or `DataTableView` (controlled) to match the
  * admin's lists, and contribute cell renderers, columns, column transforms, and
  * row/bulk actions to any list. Contributions are keyed by a list `target`: a
  * collection slug, a fixed key like `"users"`/`"media"`, or `"*"` for all lists.
+ * Each registration returns the function that takes it back; a list on screen
+ * follows both, so a contribution that depends on something the admin can
+ * change while open need not wait for the list to be opened again.
  */
 export {
   DataTable,
@@ -757,6 +837,16 @@ export { useMediaItem } from "@nextlyhq/admin";
  * @experimental
  */
 export { useMediaResolver } from "@nextlyhq/admin";
+/**
+ * Search the media library's images by name from code outside a component's
+ * render, such as a picker that searches as the author types: the newest
+ * twelve images for an empty search. Read through the same list query as the
+ * library's own dialog, with the signed-in author's access. Rejects when the
+ * library cannot be read, and when the given signal aborts.
+ *
+ * @experimental
+ */
+export { useMediaSearcher } from "@nextlyhq/admin";
 
 /**
  * @experimental The media library as a dialog a plugin can open: browse,

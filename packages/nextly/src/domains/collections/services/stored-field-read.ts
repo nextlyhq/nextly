@@ -47,6 +47,7 @@ import type {
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getService } from "../../../di";
 import { NextlyError } from "../../../errors";
+import { keysNoUpdateStores } from "../../../lib/immutable-system-fields";
 import {
   DOCUMENT_OVERWRITE_KEY,
   DOCUMENT_VERSION_KEY,
@@ -58,6 +59,10 @@ import type {
 import { addressableFields } from "../../../shared/addressable-fields";
 import type { EntryWriteContext } from "../../../shared/lib/entry-validation";
 import type { LocalizedFieldRef } from "../../i18n/companion-join";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import {
   buildCompanionSchema,
   type CompanionSchema,
@@ -123,6 +128,73 @@ export function entryWriteContext(args: {
     readStored: (allowedType, target) =>
       readStoredField(args.connection, allowedType, target, records),
   };
+}
+
+/** What {@link storedReadsOn} answers. */
+export interface StoredReads {
+  /** One stored value of `allowedType`, as {@link readStoredField} reads it. */
+  read(
+    allowedType: string,
+    target: StoredFieldTarget
+  ): Promise<PluginStoredValue>;
+  /** The document's fields of `allowedType`, as a stored read names them. */
+  fieldPaths(
+    document: { readonly collection: string } | { readonly single: string },
+    allowedType: string
+  ): Promise<string[]>;
+}
+
+/**
+ * Stored reads on one connection for one handler: values of a field type, and
+ * which of a document's fields are of it, sharing one registry lookup per
+ * collection as a write context does ({@link entryWriteContext}).
+ */
+export function storedReadsOn(connection: StoredFieldConnection): StoredReads {
+  const records = registryRecords(connection);
+  return {
+    read: (allowedType, target) =>
+      readStoredField(connection, allowedType, target, records),
+    fieldPaths: async (document, allowedType) => {
+      const fields =
+        "single" in document
+          ? ((
+              await getService("singleRegistryService").getSingleBySlug(
+                document.single,
+                connection.executor
+              )
+            )?.fields as unknown as FieldDefinition[] | undefined)
+          : await records(document.collection).then(record =>
+              record === null ? undefined : collectionFields(record)
+            );
+      return fields === undefined ? [] : pathsOfType(fields, allowedType);
+    },
+  };
+}
+
+/**
+ * The paths of the fields of `allowedType` among `fields`, at their level and
+ * through named groups, as a stored read names them (`hero.body`). Unnamed
+ * groups store their fields at the level they sit in; a repeater's rows and a
+ * field-group instance are not walked, being stored elsewhere. A group kept
+ * per language is walked: the write holds a value for a field inside it,
+ * though a stored read of that field is refused.
+ */
+function pathsOfType(
+  fields: readonly FieldDefinition[],
+  allowedType: string,
+  prefix = ""
+): string[] {
+  const paths: string[] = [];
+  for (const field of storedAtLevel(fields)) {
+    if (typeof field.name !== "string" || field.name === "") continue;
+    const path = `${prefix}${field.name}`;
+    if (field.type === allowedType) {
+      paths.push(path);
+    } else if (field.type === "group" && Array.isArray(field.fields)) {
+      paths.push(...pathsOfType(field.fields, allowedType, `${path}.`));
+    }
+  }
+  return paths;
 }
 
 /** A collection's registry record by slug, or `null` where there is none. */
@@ -600,7 +672,7 @@ function groupKeptPerLanguage(
 ): boolean {
   return depth === 0
     ? companionFieldOf(entity, group.name) !== undefined
-    : entity.localized && group.localized === true;
+    : entity.storedPerLanguage && group.localized === true;
 }
 
 /**
@@ -686,6 +758,12 @@ interface StoredEntity {
   readonly localized: boolean;
   /** Whether it has a draft/published status, kept per language as well. */
   readonly status: boolean;
+  /**
+   * Whether its translatable values are kept per language: when it is translated, or for every
+   * entity under `experimental.perLanguageStorage`. Where a value is read from; `localized` stays
+   * whether its drafts are kept per language.
+   */
+  readonly storedPerLanguage: boolean;
 }
 
 /**
@@ -721,6 +799,7 @@ async function storedEntity(
       tableName: single.tableName,
       localized: single.localized === true,
       status: (single as { status?: unknown }).status === true,
+      storedPerLanguage: storesPerLanguage(single),
     };
   }
   const collection = await records(target.collection);
@@ -735,6 +814,7 @@ async function storedEntity(
     tableName: collectionTableName(collection, target.collection),
     localized: (collection as { localized?: unknown }).localized === true,
     status: (collection as { status?: unknown }).status === true,
+    storedPerLanguage: storesPerLanguage(collection),
   };
 }
 
@@ -780,13 +860,16 @@ function companionFieldOf(
  * `null` for an entity that keeps nothing per language.
  */
 function companionOf(entity: StoredEntity): CompanionSchema | null {
-  if (!entity.localized) return null;
+  // Where its translatable values are kept: per language when it is translated, or for every
+  // entity under `experimental.perLanguageStorage`.
+  if (!entity.storedPerLanguage) return null;
   return buildCompanionSchema({
     slug: entity.slug,
     tableName: entity.tableName,
     fields: entity.fields as unknown as { name: string; type: string }[],
     dialect: getService("adapter").dialect,
-    status: entity.status,
+    // A `_status` of each language only where each language publishes on its own.
+    status: publishesPerLanguage(entity),
   });
 }
 
@@ -1159,6 +1242,10 @@ export interface PinnedExpectation {
   readonly expect: StoredExpectation;
   /** Set once the expectation held under the row lock of the write's own transaction. */
   checked: boolean;
+  /** Every key of the data the write sent. */
+  readonly sentKeys: readonly string[];
+  /** Set once the write path judged those keys (see {@link refuseUnstoredKeys}). */
+  keysJudged?: boolean;
   /**
    * The write is made whole or not at all (see {@link refuseUnlessWhole}).
    * Set for a write made under field rules.
@@ -1322,6 +1409,46 @@ const WRITE_TRANSPORT_KEYS: ReadonlySet<string> = new Set([
   DOCUMENT_OVERWRITE_KEY,
 ]);
 
+/**
+ * Refuse with `INVALID_INPUT` a conditional write naming a key no update of
+ * this entity stores, asked of `keysNoUpdateStores` with the entity's own
+ * table and fields: an immutable system column, a column schema hooks
+ * contributed, a field stored nowhere, or another spelling of a field kept in
+ * its own table. Nothing happens for any other write. The
+ * {@link WRITE_TRANSPORT_KEYS} are not among them, being read before the
+ * strip and never stored.
+ *
+ * Called by a write path once its access to the entry has been judged and
+ * before any hook runs or anything is written: a caller who may not update
+ * the entry is refused by that judgment alike, whatever the data names, so
+ * the answer tells them nothing of the table's columns. Only then is the
+ * write's data judged, which {@link holdStoredExpectation} requires under the
+ * row lock.
+ */
+export function refuseUnstoredKeys(
+  context: Record<string, unknown> | undefined,
+  document: ExpectedDocument,
+  entity: {
+    readonly tableName: string;
+    readonly fields: Parameters<typeof keysNoUpdateStores>[3];
+  }
+): void {
+  const pin = context === undefined ? undefined : expectations.get(context);
+  if (pin === undefined || !sameDocument(pin.document, document)) return;
+  const unstored = keysNoUpdateStores(
+    Object.fromEntries(pin.sentKeys.map(key => [key, true])),
+    document.kind,
+    entity.tableName,
+    entity.fields
+  ).filter(key => !WRITE_TRANSPORT_KEYS.has(key));
+  if (unstored.length > 0) {
+    throw NextlyError.invalidInput({
+      message: `A conditional write cannot write ${unstored.map(key => `"${key}"`).join(", ")}: an update never stores ${unstored.length === 1 ? "it" : "them"}, so the write would be made in part.`,
+    });
+  }
+  pin.keysJudged = true;
+}
+
 /** The whole-write record of the write called with `context`, for this document. */
 function wholeWriteFor(
   context: Record<string, unknown> | undefined,
@@ -1354,6 +1481,18 @@ export async function holdStoredExpectation(
 ): Promise<void> {
   const pin = context === undefined ? undefined : expectations.get(context);
   if (pin === undefined || !sameDocument(pin.document, document)) return;
+  // A write whose path never judged the keys it sent, after its access, was
+  // never judged at all: refused under the lock, so it rolls back.
+  if (pin.keysJudged !== true) {
+    refused.refusal = NextlyError.internal({
+      logContext: {
+        reason: "conditional-write-keys-not-judged",
+        kind: document.kind,
+        slug: document.slug,
+      },
+    });
+    throw refused.refusal;
+  }
   // A write that must be made whole, whose path never judged its final
   // payload through `refuseUnlessWhole`, was never judged whole: refused
   // under the lock, so it rolls back rather than landing unjudged.

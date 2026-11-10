@@ -32,7 +32,7 @@ The top-level sections (in order) are:
 | Users | `/admin/users` | Users, Roles, Custom user fields |
 | Settings | `/admin/settings` | General, API keys, Email providers, Email templates, Email layout |
 
-Collection and Single icons are added to the primary sidebar dynamically as you register collections / singles in `nextly.config.ts` (or create them via the Visual Schema Builder). The Builder icon is always present but can be hidden in production; see [Schema Builder visibility](/docs/admin/branding#schema-builder-visibility) for the `admin.branding.showBuilder` toggle.
+Collection and Single icons are added to the primary sidebar dynamically as you register collections / singles in `nextly.config.ts` (or create them via the Visual Schema Builder). The Builder icon is present outside production unless `admin.branding.showBuilder` is `false`, and never in production, where schema arrives through migrations; see [Schema Builder visibility](/docs/admin/branding#schema-builder-visibility).
 
 ## What you can do in each section
 
@@ -88,21 +88,13 @@ The admin sidebar is permission-gated. The built-in mapping is:
 | API Keys | `update-api-keys` |
 | Email Providers / Templates / Layout | `read-email-providers` (Sending) or `read-email-templates` (Messages, Design) |
 | Plugins overview | `create-settings`, `update-settings` or `delete-settings` |
-| Builders (Collections / Singles / Field Groups Builder) | Gated by the `admin.branding.showBuilder` toggle |
+| Builders (Collections / Singles / Field Groups Builder) | Off in production; elsewhere off when `admin.branding.showBuilder` is `false` |
 
 Permissions for collections you define in `nextly.config.ts` follow the same slug pattern (`read-posts`, `update-posts`, etc.); they are wired up automatically when the collection is registered. Assign permissions to roles from `/admin/security/roles`.
 
 ## Who else is editing
 
-Opening an existing entry or a Single in the admin claims it for you while the editor is open. Anyone else who opens it sees a notice that names you: "… is editing this document. You can read it, or take over." The form is read-only for them until they choose **Take over**, or they can choose **Request edit access**, which tells you that someone is waiting and changes nothing else. If someone takes over from you, your unsaved changes stay on screen, but you can't save them until you take the document back. Plugin views that open inside the editor, such as the Visual Page Builder, are covered by the same claim.
-
-While the editor is open it renews the claim every 15 seconds, and it releases the claim when you leave. A claim that is not renewed, from a tab that closed without saying so, lapses 150 seconds after its last renewal.
-
-### Limits
-
-- **Advisory, not a lock.** Only the admin's editors honour a claim. The server refuses no write because someone else holds the document, so the REST API, the Direct API and anything else that writes go ahead as usual.
-- **One person at a time.** It names whoever holds the document, not everyone who has it open, and a request for edit access does not say who is asking. There is no editing together: no live cursors and no merged edits.
-- **Existing documents only.** A new entry is not claimed while it is being created.
+Opening an existing entry or a Single in the admin claims it for you while the editor is open. Anyone else who opens it is told you are editing it, and sees it read-only. They can choose **Take over** to edit it at once, or **Request edit access** to let you know they are waiting: the document stays read-only for them until you leave it. The claim is a courtesy between people in the admin: the server refuses no write because someone else holds the document. A save made from a copy someone has changed since is refused, though, and the editor asks what to do. [Editing with others](/docs/admin/editing-together) explains each message and what to do about it, and the [REST API](/docs/api-reference/rest-api#document-locks) documents the claim itself.
 
 ## Plugins in the admin
 

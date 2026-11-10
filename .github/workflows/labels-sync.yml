@@ -1,8 +1,12 @@
 name: Sync Labels
 
+# On a push to `dev` alone, the branch pull requests merge into. Labels are
+# one repository-wide set and the sync deletes any label the file lacks, so
+# syncing `main` as well would put back an older list each time a promotion
+# carried a file `dev` had since changed.
 on:
   push:
-    branches: [main]
+    branches: [dev]
     paths:
       - .github/labels.yml
       - .github/workflows/labels-sync.yml

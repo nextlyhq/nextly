@@ -61,7 +61,7 @@ describe("TypeGenerator — a non-required field is a nullable column", () => {
     // the create input is still derived by `Omit` and so still inherits the
     // `?`, which is what keeps the field omittable.
     expect(code).toMatch(
-      /export type \w+CreateInput = Omit<\w+, "id" \| "createdAt" \| "updatedAt">;/
+      /export type \w+CreateInput = Omit<\w+, "id" \| "_rev" \| "createdAt" \| "updatedAt">;/
     );
   });
 });
@@ -273,5 +273,42 @@ describe("TypeGenerator — icon", () => {
 
     expect(code).toContain("badge: string;");
     expect(code).not.toMatch(/\bother\??:/);
+  });
+});
+
+describe("TypeGenerator — the site's languages", () => {
+  // The languages a read accepts: exactly the codes the configuration locks, as written, since a
+  // read matches a requested code against them as they are.
+  it("lists exactly the codes the configuration locks, as written", () => {
+    const { code } = new TypeGenerator({
+      locales: ["en", "fr", "en_US"],
+    }).generateTypesFile([collection([{ name: "title", type: "text" }])]);
+    expect(code).toContain(
+      '  locales: {\n    "en": true;\n    "en_US": true;\n    "fr": true;\n  };'
+    );
+    expect(code).not.toContain("deprecatedLocales");
+  });
+
+  // Settings manages the languages, or there are none: the type takes any code, and the server
+  // checks it against the registry. An empty map would type every read's language as `never`.
+  it("lists no languages where the configuration does not lock them", () => {
+    for (const locales of [undefined, []]) {
+      const { code } = new TypeGenerator({ locales }).generateTypesFile([
+        collection([{ name: "title", type: "text" }]),
+      ]);
+      expect(code).not.toContain("locales:");
+    }
+  });
+
+  // A code converted to its standard form is accepted as it was written for one release, so the
+  // input type takes it too, marked deprecated with the code to use instead.
+  it("lists a converted old code as deprecated, naming the code to use", () => {
+    const { code } = new TypeGenerator({
+      locales: ["en-US", "fr"],
+      deprecatedLocales: { en_US: "en-US" },
+    }).generateTypesFile([collection([{ name: "title", type: "text" }])]);
+    expect(code).toContain(
+      '  deprecatedLocales: {\n    /** @deprecated Use "en-US". */\n    "en_US": "en-US";\n  };'
+    );
   });
 });

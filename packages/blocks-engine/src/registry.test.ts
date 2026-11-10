@@ -424,6 +424,14 @@ describe("registration rules", () => {
     ).toThrow(/NEXTLY_BLOCK_RESERVED_NAME/);
   });
 
+  it("refuses the type an editor draws a condition-hidden block as", () => {
+    // A plugin block under that name would be drawn as the marker, and the
+    // marker as it, while an editor applies conditions.
+    expect(() =>
+      registerBlocks([block({ name: "nextly/condition-hidden" })])
+    ).toThrow(/NEXTLY_BLOCK_RESERVED_NAME/);
+  });
+
   it("refuses a version bump that has no covering migration", () => {
     expect(() =>
       registerBlocks([block({ name: "core/e", version: 3 })])

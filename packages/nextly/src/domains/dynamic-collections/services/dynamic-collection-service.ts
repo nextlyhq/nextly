@@ -77,6 +77,10 @@ import { resolveBuilderVersions } from "../../versions/builder-versions";
 import { resolveBuilderWebhooks } from "../../webhooks/builder-webhooks";
 
 import {
+  type CollectionTables,
+  collectionTablesBySlug,
+} from "./collection-tables";
+import {
   DynamicCollectionRegistryService,
   type CollectionMetadata,
   type ListCollectionsOptions,
@@ -86,6 +90,7 @@ import {
 import { DynamicCollectionSchemaService } from "./dynamic-collection-schema-service";
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
 import { namesKeptFromStored } from "./field-names";
+import { refuseNewJunctionsOnRenamedCollection } from "./junctions-on-renamed-collections";
 import { refusalsForCollectionSave } from "./save-preconditions";
 
 export interface CollectionArtifacts {
@@ -604,7 +609,15 @@ export class DynamicCollectionService extends BaseService {
       userDefinedFields,
       // i18n: omit translatable columns from the main table when localized — they
       // live in the companion `_locales` table created below.
-      { hasStatus: data.status === true, localized: storesPerLanguage(data) }
+      {
+        hasStatus: data.status === true,
+        localized: storesPerLanguage(data),
+        // A relationship to a renamed collection keys the table it kept.
+        targetTables: await collectionTablesBySlug(
+          this.adapter,
+          userDefinedFields
+        ),
+      }
     );
 
     // i18n: for a localized collection, append the companion `<table>_locales`
@@ -1468,6 +1481,12 @@ export class DynamicCollectionService extends BaseService {
           collection.tableName,
           recorded
         ),
+        // Where each relationship's target is stored, so a key this save adds or changes
+        // references the table a renamed target kept rather than one spelled from its new slug.
+        targetTables: await collectionTablesBySlug(this.adapter, [
+          ...recorded,
+          ...(updates.fields ?? []),
+        ]),
       };
     };
 
@@ -1535,6 +1554,14 @@ export class DynamicCollectionService extends BaseService {
       const oldUserFields = (collection.fields || []).filter(
         (f: FieldDefinition) => !RESERVED_FIELD_NAMES.includes(f.name)
       );
+
+      // A many-to-many added to a renamed collection would get a junction its reads can't find.
+      refuseNewJunctionsOnRenamedCollection({
+        slug: collectionName,
+        tableName: collection.tableName,
+        oldFields: oldUserFields,
+        newFields: userDefinedFields,
+      });
 
       // Asked here rather than in the generator, because only this side can
       // ask the database. The generator refuses a move onto a table this
@@ -1949,17 +1976,20 @@ export class DynamicCollectionService extends BaseService {
   /**
    * The foreign keys a collection's own relationship columns hold, as the
    * schema service declares them. Read for a stored definition, so an action
-   * the current rules would refuse is reported rather than refused.
+   * the current rules would refuse is reported rather than refused. With
+   * `targetTables`, a key to a renamed collection names the table it kept.
    */
   relationshipForeignKeys(
     tableName: string,
-    fields: readonly FieldDefinition[]
+    fields: readonly FieldDefinition[],
+    targetTables?: CollectionTables
   ): ForeignKeySpec[] {
     return fields.flatMap(field => {
       const key = this.schemaService.relationshipForeignKey(
         tableName,
         field,
-        false
+        false,
+        targetTables
       );
       return key === null ? [] : [key];
     });
@@ -2029,6 +2059,15 @@ export class DynamicCollectionService extends BaseService {
 
   async unregisterCollection(name: string): Promise<unknown> {
     return this.registryService.unregisterCollection(name);
+  }
+
+  /** Lock the registry rows of `slugs` inside `tx`; see the registry's `holdCollectionsIn`. */
+  async holdCollectionsIn(
+    tx: TransactionContext,
+    slugs: readonly string[],
+    strength: "share" | "update"
+  ): ReturnType<DynamicCollectionRegistryService["holdCollectionsIn"]> {
+    return this.registryService.holdCollectionsIn(tx, slugs, strength);
   }
 
   /** Remove a collection's registry row inside `tx`; forget it once `tx` commits. */

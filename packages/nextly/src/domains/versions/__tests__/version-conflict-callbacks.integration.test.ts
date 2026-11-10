@@ -122,7 +122,7 @@ const WRITES: ReadonlyArray<{
       return () =>
         entries.updateEntry(
           { collectionName: POSTS, entryId, overrideAccess: true },
-          { title: "second" }
+          { title: "second", _overwrite: true }
         );
     },
   },
@@ -139,6 +139,7 @@ const WRITES: ReadonlyArray<{
           collectionName: ARTICLES,
           entryId,
           overrideAccess: true,
+          data: { _overwrite: true },
         });
     },
   },
@@ -148,7 +149,11 @@ const WRITES: ReadonlyArray<{
       // Its default document, and that document's first version, made now.
       await singles.get(BANNER, { overrideAccess: true });
       return () =>
-        singles.update(BANNER, { title: "second" }, { overrideAccess: true });
+        singles.update(
+          BANNER,
+          { title: "second", _overwrite: true },
+          { overrideAccess: true }
+        );
     },
   },
   {
@@ -156,10 +161,14 @@ const WRITES: ReadonlyArray<{
     prepare: async ({ singles }) => {
       await singles.update(
         NOTICE,
-        { headline: "en" },
+        { headline: "en", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
-      return () => singles.publishAllLocales(NOTICE, { overrideAccess: true });
+      return () =>
+        singles.publishAllLocales(NOTICE, {
+          overrideAccess: true,
+          data: { _overwrite: true },
+        });
     },
   },
   {

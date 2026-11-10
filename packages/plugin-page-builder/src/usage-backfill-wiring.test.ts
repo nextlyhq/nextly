@@ -10,8 +10,9 @@
  * @module usage-backfill-wiring.test
  */
 import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import { installContext } from "./plugin";
 import {
   backfillScopeKey,
   GONE_SCOPES_SWEPT_KEY,
@@ -25,6 +26,9 @@ import {
   type BackfillHost,
 } from "./usage-backfill-wiring";
 import type { UsageRowReader } from "./usage-count";
+
+const runtime = vi.hoisted(() => ({ requireNextly: vi.fn() }));
+vi.mock("nextly/runtime", () => runtime);
 
 const NOT_USED = () => {
   throw new Error("the scope enumeration should not have reached this");
@@ -278,6 +282,82 @@ describe("reporting content no scope can cover", () => {
     expect(survey.unaddressable).toBe(true);
   });
 
+  describe("a Single referencing a field group", () => {
+    const referencing = {
+      collectionSlugs: async () => [],
+      singles: async () => [
+        {
+          slug: "home",
+          fields: [
+            { type: "text", name: "headline" },
+            { type: "component", name: "card", component: "link-card" },
+          ],
+        },
+      ],
+    };
+    const declaring = (fields: unknown[]) => async () => (slug: string) =>
+      slug === "link-card" ? { fields } : undefined;
+
+    it("leaves nothing out of reach when the group is declared with no blocks field", async () => {
+      const survey = await backfillSurvey(
+        host({
+          ...referencing,
+          fieldGroups: declaring([{ type: "text", name: "heading" }]),
+        })
+      );
+      expect(survey.unaddressable).toBe(false);
+    });
+
+    it("stays out of reach when the declared group holds a blocks field", async () => {
+      const survey = await backfillSurvey(
+        host({
+          ...referencing,
+          fieldGroups: declaring([{ type: "blocks", name: "body" }]),
+        })
+      );
+      expect(survey.unaddressable).toBe(true);
+    });
+
+    it("stays out of reach when the site does not declare the group", async () => {
+      const survey = await backfillSurvey(
+        host({ ...referencing, fieldGroups: async () => () => undefined })
+      );
+      expect(survey.unaddressable).toBe(true);
+    });
+
+    it("reads the definitions once for each survey, and again for the next", async () => {
+      // The per-survey read is what a group gaining a blocks field after boot
+      // depends on; once per survey is what keeps a site with many documents
+      // from re-reading the registry for each.
+      let definition: unknown[] = [{ type: "text", name: "heading" }];
+      let reads = 0;
+      const site = host({
+        ...referencing,
+        singles: async () => [
+          ...(await referencing.singles()),
+          {
+            slug: "about",
+            fields: [
+              { type: "component", name: "card", component: "link-card" },
+            ],
+          },
+        ],
+        fieldGroups: async () => {
+          reads += 1;
+          return slug =>
+            slug === "link-card" ? { fields: definition } : undefined;
+        },
+      });
+
+      expect((await backfillSurvey(site)).unaddressable).toBe(false);
+      expect(reads).toBe(1);
+
+      definition = [{ type: "blocks", name: "body" }];
+      expect((await backfillSurvey(site)).unaddressable).toBe(true);
+      expect(reads).toBe(2);
+    });
+  });
+
   it("CONTROL: an ordinary site reports nothing out of reach", async () => {
     // Without this, reporting every site as unreachable would satisfy both
     // cases above and withhold completeness from every installation for ever.
@@ -292,6 +372,93 @@ describe("reporting content no scope can cover", () => {
     expect(await backfillScopes(one)).toEqual(
       (await backfillSurvey(one)).scopes
     );
+  });
+});
+
+/**
+ * The installed plugin's own answer, through the host it builds: what decides
+ * whether the survey sees a field group as it is now or as it was at boot.
+ */
+describe("the field groups an installed site's survey reads", () => {
+  const HOLDS_TEXT = [{ type: "text", name: "heading" }];
+  const HOLDS_BLOCKS = [{ type: "blocks", name: "body" }];
+
+  /** The registry's answer: one group, whatever fields it holds now. */
+  const listing = (fields: unknown[]) => ({
+    items: [{ slug: "link-card", fields }],
+    meta: { total: 1, hasNext: false },
+  });
+
+  /**
+   * A site with one Single placing the group `link-card`, whose code declares
+   * the groups in `inCode` and never changes after this runs.
+   */
+  function installed(find: () => Promise<unknown>, inCode: unknown[]) {
+    const warn = vi.fn();
+    runtime.requireNextly.mockReturnValue({ fieldGroups: { find } });
+    const site = installContext(
+      {
+        config: { fieldGroups: inCode, singles: [] },
+        logger: { warn },
+        services: {
+          collections: {
+            listCollections: async () => ({
+              data: [],
+              pagination: { total: 0, hasMore: false },
+            }),
+          },
+          singles: {
+            list: async () => ({
+              data: [
+                {
+                  slug: "home",
+                  fields: [
+                    { type: "component", name: "card", component: "link-card" },
+                  ],
+                },
+              ],
+              total: 1,
+            }),
+          },
+        },
+      } as never,
+      {}
+    );
+    return { site, warn };
+  }
+
+  const DECLARED_TEXT = [{ slug: "link-card", fields: HOLDS_TEXT }];
+
+  it("sees a group the registry now says holds a blocks field, though the code it booted with did not", async () => {
+    // A reload syncs the registry and does not run `init` again, so the
+    // config this host was built from still says the group is plain. Asked of
+    // that, the survey reports nothing out of reach and a shared style those
+    // blocks use could be deleted as unused.
+    let fields = HOLDS_TEXT;
+    const { site } = installed(async () => listing(fields), DECLARED_TEXT);
+
+    expect((await backfillSurvey(site)).unaddressable).toBe(false);
+
+    fields = HOLDS_BLOCKS;
+    expect((await backfillSurvey(site)).unaddressable).toBe(true);
+  });
+
+  it("keeps a group out of reach when the registry cannot be read, whatever the code says", async () => {
+    const { site, warn } = installed(async () => {
+      throw new Error("the registry is unavailable");
+    }, DECLARED_TEXT);
+
+    expect((await backfillSurvey(site)).unaddressable).toBe(true);
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a reference out of reach when neither the registry nor the code knows the group", async () => {
+    const { site } = installed(
+      async () => ({ items: [], meta: { total: 0, hasNext: false } }),
+      []
+    );
+
+    expect((await backfillSurvey(site)).unaddressable).toBe(true);
   });
 });
 

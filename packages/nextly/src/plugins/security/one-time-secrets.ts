@@ -50,7 +50,8 @@ import { isUniqueViolation } from "../../shared/lib/unique-violation";
 import type { PluginTransaction } from "../database/plugin-database";
 import { linkedTransaction } from "../database/plugin-transaction-link";
 
-import { isWellFormed } from "./well-formed";
+import { pluginWriter } from "./plugin-write";
+import { isStorableText } from "./well-formed";
 
 /** @experimental A secret's data: stored in clear, at most 1 KB serialised. */
 export type SecretData = Record<string, string | number | boolean | null>;
@@ -253,20 +254,9 @@ export function createOneTimeSecrets(
       )
       .digest("hex");
 
-  /**
-   * Run a write on the plugin's transaction when it passed one, else in a
-   * transaction of its own, refused when the calling flow has one open.
-   */
-  const write = <R>(
-    operation: string,
-    tx: PluginTransaction | undefined,
-    work: (adapterTx: TransactionContext) => Promise<R>
-  ): Promise<R> => {
-    if (tx !== undefined) return linkedTransaction(tx, operation).run(work);
-    const adapter = options.adapter();
-    assertNoOpenTransaction(adapter, operation);
-    return adapter.transaction(work);
-  };
+  // Every write on the plugin's transaction or one of its own, as
+  // `runPluginWrite` decides.
+  const write = pluginWriter(options.adapter);
 
   const ownerWhere = (purpose: string) => [
     { column: "owner", op: "=" as const, value: owner },
@@ -746,10 +736,10 @@ function checkSubject(subject: string): string {
     typeof subject === "string" &&
     subject.length > 0 &&
     subject.length <= BOUNDS.subjectLength &&
-    !subject.includes("\u0000") &&
-    // Lone surrogates all encode to one replacement character, so two such
-    // subjects would share a key and reach each other's secrets.
-    isWellFormed(subject)
+    // No NUL, which PostgreSQL cannot store, and no lone surrogates, which all
+    // encode to one replacement character, so two such subjects would share a
+    // key and reach each other's secrets.
+    isStorableText(subject)
   ) {
     return subject;
   }
