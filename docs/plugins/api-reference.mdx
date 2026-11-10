@@ -763,8 +763,9 @@ reserves (`admin-place-reserved-slug`), under one of core's segments
 (`admin-place-reserved`), outside the plugin's slug
 (`admin-place-outside-namespace`), or declared twice (`admin-place-collision`).
 
-Settings, a user's detail page, the entry form, the login page and both edit
-pages draw what is sent to them; the other core places draw nothing yet. A plugin draws its own
+Settings, a user's detail page, the entry form, the login page, both edit pages
+and the dashboard draw what is sent to them; the other core places draw nothing
+yet. A plugin draws its own
 place on one of its pages with `TargetSlot` and `PlaceTabs` from
 `@nextlyhq/plugin-sdk/admin` (`@experimental`), the parts core's pages use:
 
