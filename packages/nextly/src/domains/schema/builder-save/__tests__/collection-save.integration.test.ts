@@ -11,6 +11,7 @@
  * replays it.
  */
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -320,6 +321,45 @@ describe.each(getConfiguredTestDialects())(
       expect(await appliedRows()).toEqual([]);
       expect(definedSlugs().map(c => c.slug)).toEqual(["posts"]);
     });
+
+    // Windows ignores the mode and root writes past it, so neither can make the folder unwritable.
+    it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+      "leaves no file of a generation that failed part-way, and puts the definition back",
+      async () => {
+        await writeCollectionSave(deps(), {
+          slug: "posts",
+          previous: null,
+          entity: posts([text("title")]),
+          change: "create",
+        });
+        const before = {
+          files: migrationFiles(),
+          snapshots: snapshotFiles(),
+          definition: definition(),
+        };
+
+        // The change's SQL file is written, then its snapshot cannot be.
+        chmodSync(join(dir, "migrations", "meta"), 0o555);
+        try {
+          await expect(
+            writeCollectionSave(deps(), {
+              slug: "posts",
+              previous: posts([text("title")]),
+              entity: posts([text("title"), text("subtitle")]),
+              change: "update",
+            })
+          ).rejects.toBeDefined();
+        } finally {
+          chmodSync(join(dir, "migrations", "meta"), 0o755);
+        }
+
+        expect({
+          files: migrationFiles(),
+          snapshots: snapshotFiles(),
+          definition: definition(),
+        }).toEqual(before);
+      }
+    );
 
     it("leaves no file and puts the definition back when the statements fail with nothing applied", async () => {
       await writeCollectionSave(deps(), {

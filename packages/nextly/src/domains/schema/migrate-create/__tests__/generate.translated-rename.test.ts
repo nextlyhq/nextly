@@ -70,6 +70,26 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
     const before = translated([{ name: "heading", type: "text" }, VIEWS]);
     const after = translated([{ name: "title2", type: "text" }, VIEWS]);
 
+    it("refuses a rename that also changes the field's storage, since a rename keeps the column's type", async () => {
+      // `heading` was translated text; renamed to `score`, it becomes a number in the same change.
+      const reshaped = translated([
+        { name: "score", type: "number", localized: true },
+        VIEWS,
+      ]);
+      await expect(
+        secondRun(dialect, before, reshaped, true)
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "RESHAPED_TRANSLATED_FIELD_RENAMED",
+            }),
+          ],
+        },
+      });
+    });
+
     it("renames its column in the translations table where the rename is accepted", async () => {
       const { up, down } = await secondRun(dialect, before, after, true);
 

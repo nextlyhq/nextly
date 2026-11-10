@@ -35,7 +35,9 @@ import {
 } from "../../i18n/per-language-storage";
 import {
   checkSaveHistory,
+  prepareCollectionSave,
   writeCollectionSave,
+  type PreparedCollectionSave,
   type BuilderSaveSetup,
   type CollectionSaveDeps,
 } from "../../schema/builder-save/collection-save";
@@ -1649,22 +1651,21 @@ export class CollectionMetadataService extends BaseService {
   /**
    * Remove the collections deleted together through the Builder save writer.
    * The history checks `nextly migrate` runs first refuse the delete before
-   * anything is torn down. One transaction then removes every collection's
-   * field-group values, translations and registry row, as without the writer.
-   * Then, in drop order, each collection's definition goes and its drop
-   * migration is written, with its junction tables' drops, and in development
-   * run as `nextly migrate` runs it. A failure there is refused with its
-   * reason and keeps the files, which `nextly migrate` finishes from: the
-   * registry rows are gone already.
+   * anything is written. Then, in drop order, each collection's definition
+   * goes and its drop migration is written, with its junction tables' drops,
+   * and nothing runs: a failure writing one withdraws every file and puts the
+   * definition back, with nothing torn down. One transaction then removes every
+   * collection's field-group values, translations and registry row, as without
+   * the writer, and a failure there withdraws the files too: the collections
+   * still stand. Last, in development, each file runs as `nextly migrate` runs
+   * it; a failure there keeps the files, which `nextly migrate` finishes from,
+   * since the registry rows are gone already.
    */
   private async removeThroughWriter(
     ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>,
     deps: CollectionSaveDeps
   ): Promise<void> {
     await checkSaveHistory(deps);
-    // The registry rows and what the collections hold go first, as without
-    // the writer; the tables are dropped by the migrations written below.
-    const unregistered = await this.removeRegistered(ordered, []);
     // Every junction of the collections deleted together goes in the first
     // file, before any of their tables: a junction links two of them, and
     // dropping either table first would leave its rows pointing at nothing.
@@ -1679,22 +1680,44 @@ export class CollectionMetadataService extends BaseService {
       up: junctions.flatMap(j => j.up),
       down: junctions.flatMap(j => j.down),
     };
-    for (const [index, { slug, collection }] of ordered.entries()) {
-      await writeCollectionSave(
-        deps,
-        {
-          slug,
-          previous: definitionOfRow(slug, collection),
-          entity: null,
-          change: "delete",
-          removedTogether: ordered
-            .map(other => other.slug)
-            .filter(other => other !== slug),
-          junctions: index === 0 ? allJunctions : { up: [], down: [] },
-        },
-        { historyChecked: true, keepFilesOnFailure: true }
-      );
+    const prepared: PreparedCollectionSave[] = [];
+    // Withdrawn newest first, so the definition ends as it was before the first.
+    const withdrawAll = async () => {
+      for (const save of [...prepared].reverse()) await save.withdraw();
+    };
+    try {
+      for (const [index, { slug, collection }] of ordered.entries()) {
+        prepared.push(
+          await prepareCollectionSave(
+            deps,
+            {
+              slug,
+              previous: definitionOfRow(slug, collection),
+              entity: null,
+              change: "delete",
+              removedTogether: ordered
+                .map(other => other.slug)
+                .filter(other => other !== slug),
+              junctions: index === 0 ? allJunctions : { up: [], down: [] },
+            },
+            { historyChecked: true }
+          )
+        );
+      }
+    } catch (error) {
+      await withdrawAll();
+      throw error;
     }
+    // The registry rows and what the collections hold go next, as without
+    // the writer; the tables are dropped by the files written above.
+    let unregistered: Map<string, UnregisteredCollectionRow>;
+    try {
+      unregistered = await this.removeRegistered(ordered, []);
+    } catch (error) {
+      await withdrawAll();
+      throw error;
+    }
+    for (const save of prepared) await save.run();
     for (const { slug, collection } of ordered) {
       await this.forgetDeleted(
         slug,

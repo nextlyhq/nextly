@@ -45,6 +45,8 @@ import {
   type LeavingTranslationRefusal,
   refusalsForFieldsJoiningTranslation,
   refusalsForFieldsLeavingTranslation,
+  refusalsForTranslatedFieldRenamedAndReshaped,
+  storageDiffers,
 } from "../../i18n/migration/field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import {
@@ -683,7 +685,8 @@ export async function generateMigration(
   const companionRenames = await companionRenameDecisions(
     entities,
     previousSnapshot,
-    args
+    args,
+    companionHistory
   );
   const companionPlans = planCompanionMigrations(
     entities,
@@ -1914,11 +1917,17 @@ function companionRenameStatements(
  * translates now that was not recorded is a candidate, decided as main-table
  * renames are (`renameDecisions`). Each column takes part in one rename at
  * most, the first accepted.
+ *
+ * A rename keeps the column's type, so an accepted rename whose field's
+ * storage changes too (its kind, length or precision, against the column as
+ * the history records it) is refused, as the Builder's own path refuses it
+ * (`refusalsForTranslatedFieldRenamedAndReshaped`).
  */
 async function companionRenameDecisions(
   entities: readonly TaggedConfigEntity[],
   previous: NextlySchemaSnapshot,
-  args: GenerateArgs
+  args: GenerateArgs,
+  history: TranslationRecords
 ): Promise<Map<string, CompanionRename[]>> {
   const byTable = new Map<string, CompanionRename[]>();
   for (const { entity, kind } of entities) {
@@ -1927,16 +1936,20 @@ async function companionRenameDecisions(
       t => t.name === entity.tableName
     )?.localizedColumns;
     if (recorded === undefined) continue;
-    const now = entity.fields
-      .filter(f => isFieldLocalized(f, true))
-      .flatMap(f => {
-        const column = fieldToLocalizedColumnSpec(
-          f,
-          args.dialect,
-          columnOriginOf(entity, kind)
-        );
-        return column == null ? [] : [column.name];
-      });
+    // Each translated field's column as the config now describes it, by name.
+    const described = new Map(
+      entity.fields
+        .filter(f => isFieldLocalized(f, true))
+        .flatMap(f => {
+          const column = fieldToLocalizedColumnSpec(
+            f,
+            args.dialect,
+            columnOriginOf(entity, kind)
+          );
+          return column == null ? [] : [[column.name, { field: f, column }]];
+        })
+    );
+    const now = [...described.keys()];
     const gone = recorded.filter(c => !now.includes(c));
     const added = now.filter(c => !recorded.includes(c));
     if (gone.length === 0 || added.length === 0) continue;
@@ -1968,6 +1981,21 @@ async function companionRenameDecisions(
       used.add(`to:${candidate.toColumn}`);
       accepted.push({ from: candidate.fromColumn, to: candidate.toColumn });
     }
+    const recordedColumns = history.columns.get(
+      companionHistoryKey(kind, entity.slug, entity.tableName)
+    );
+    const reshaped = accepted.find(r =>
+      storageDiffers(recordedColumns?.get(r.from), described.get(r.to)?.column)
+    );
+    refuseMigration(
+      entity,
+      refusalsForTranslatedFieldRenamedAndReshaped({
+        reshaped:
+          reshaped === undefined
+            ? undefined
+            : (described.get(reshaped.to)?.field.name ?? reshaped.to),
+      })
+    );
     if (accepted.length > 0) byTable.set(entity.tableName, accepted);
   }
   return byTable;

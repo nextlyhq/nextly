@@ -205,15 +205,9 @@ export async function writeCollectionSave(
   options: {
     /**
      * The history checks ran already (`checkSaveHistory`), before work the
-     * caller did first: a delete checks before its teardown.
+     * caller did first.
      */
     historyChecked?: boolean;
-    /**
-     * Keep the files a failure leaves: the caller changed the database before
-     * the save (a delete's teardown), so they are what `nextly migrate`
-     * finishes from.
-     */
-    keepFilesOnFailure?: boolean;
     /**
      * What applies the change in development instead of the file's
      * statements: a translated collection's push, which carries its values
@@ -225,6 +219,78 @@ export async function writeCollectionSave(
     appliedBy?: () => Promise<void>;
   } = {}
 ): Promise<CollectionSaveResult> {
+  const written = await writeSave(deps, save, options);
+  // Once a push has run, the database changed outside the files: they stay.
+  let pushed = false;
+  try {
+    if (deps.applies && options.appliedBy !== undefined) {
+      await options.appliedBy();
+      pushed = true;
+      await recordWhatWasPushed(deps, written.files, written.table);
+    } else if (deps.applies) {
+      await runWritten(deps, written.files, written.table);
+    }
+    return { files: [...written.names], applied: deps.applies };
+  } catch (error) {
+    if (!pushed) await written.undo(error);
+    throw error;
+  }
+}
+
+/**
+ * A save written and not run: its definition and files are in place, and the
+ * caller runs them, or withdraws them, once its own work has settled.
+ */
+export interface PreparedCollectionSave {
+  /** The migration files written, in run order. */
+  files: string[];
+  /**
+   * In development, run the files as `nextly migrate` runs them. A failure
+   * keeps them, with the definition, for `nextly migrate` to finish from.
+   */
+  run(): Promise<void>;
+  /** Remove the files and their snapshots, and put the definition back. */
+  withdraw(): Promise<void>;
+}
+
+/**
+ * Write the save's definition and migration, run nothing, and hand back how
+ * to run or withdraw them: for a caller that changes the database itself
+ * between the two, as a delete tears down what a collection holds. Every file
+ * exists before that work starts, so a failure writing one leaves the
+ * database as it was.
+ */
+export async function prepareCollectionSave(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  options: { historyChecked?: boolean } = {}
+): Promise<PreparedCollectionSave> {
+  const written = await writeSave(deps, save, options);
+  return {
+    files: [...written.names],
+    run: async () => {
+      if (deps.applies) await runWritten(deps, written.files, written.table);
+    },
+    withdraw: () => written.undo(undefined),
+  };
+}
+
+/**
+ * The save's checks, its definition and its files, written: what every save
+ * does before anything runs. A failure writing a file removes what was
+ * written and puts the definition back. `undo` does the same afterwards for
+ * the files that did not apply (`undoUnapplied`).
+ */
+async function writeSave(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  options: { historyChecked?: boolean }
+): Promise<{
+  files: SaveFiles;
+  names: readonly string[];
+  table: string;
+  undo(error: unknown): Promise<void>;
+}> {
   if (options.historyChecked !== true) await checkSaveHistory(deps);
   const plan = await planSave(deps, save);
   refuseUnconfirmedConversions(plan, save);
@@ -235,25 +301,16 @@ export async function writeCollectionSave(
   const before = await readIfPresent(definitionPath);
   await writeAtomically(definitionPath, serializeUiSchema(plan.next));
 
-  const written: string[] = [];
-  // Once a push has run, the database changed outside the files: they stay.
-  let pushed = false;
+  const names: string[] = [];
+  const undo = (error: unknown) =>
+    undoUnapplied(deps, names, before, definitionPath, error);
   try {
-    const files = await writeFiles(deps, save, plan, names =>
-      written.push(...names)
+    const files = await writeFiles(deps, save, plan, written =>
+      names.push(...written)
     );
-    if (deps.applies && options.appliedBy !== undefined) {
-      await options.appliedBy();
-      pushed = true;
-      await recordWhatWasPushed(deps, files, plan.table);
-    } else if (deps.applies) {
-      await runWritten(deps, files, plan.table);
-    }
-    return { files: [...written], applied: deps.applies };
+    return { files, names, table: plan.table, undo };
   } catch (error) {
-    if (options.keepFilesOnFailure !== true && !pushed) {
-      await undoUnapplied(deps, written, before, definitionPath, error);
-    }
+    await undo(error);
     throw error;
   }
 }
@@ -892,7 +949,24 @@ async function generateFor(
     manifest: args.manifest,
   });
   const before = new Set(await sqlFiles(deps.migrationsDir));
-  const result = await generateMigration({
+  const snapshotsBefore = new Set(await snapshotFiles(deps.migrationsDir));
+  // A generation that fails part-way may have written some of its files (the
+  // SQL before its snapshot, the main file before a companion): each is
+  // removed before the failure travels, so nothing of a refused save is left
+  // for `nextly migrate` to apply.
+  const removeWritten = async () => {
+    for (const file of await sqlFiles(deps.migrationsDir)) {
+      if (!before.has(file)) {
+        await rm(join(deps.migrationsDir, file), { force: true });
+      }
+    }
+    for (const file of await snapshotFiles(deps.migrationsDir)) {
+      if (!snapshotsBefore.has(file)) {
+        await rm(join(deps.migrationsDir, "meta", file), { force: true });
+      }
+    }
+  };
+  const generated = generateMigration({
     name: args.name,
     dialect,
     migrationsDir: deps.migrationsDir,
@@ -925,6 +999,13 @@ async function generateFor(
       Promise.resolve(renamesOf(candidates, args.save.renamedFields ?? [])),
     now: args.now,
   });
+  let result: Awaited<typeof generated>;
+  try {
+    result = await generated;
+  } catch (error) {
+    await removeWritten();
+    throw error;
+  }
   if (result === null) return [];
   return (await sqlFiles(deps.migrationsDir)).filter(f => !before.has(f));
 }
@@ -1057,6 +1138,18 @@ function renamesOf(
     candidate,
     accepted: pairs.has(`${candidate.fromColumn}\u0000${candidate.toColumn}`),
   }));
+}
+
+/** The snapshot files beside the migrations, in `meta/` (a missing folder has none). */
+async function snapshotFiles(dir: string): Promise<string[]> {
+  try {
+    return (await readdir(join(dir, "meta")))
+      .filter(f => f.endsWith(".snapshot.json"))
+      .sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
 }
 
 /** The folder's migration files, in run order. */

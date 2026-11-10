@@ -4,7 +4,13 @@
  * migration where the config's `db` block says, and in development runs it as `nextly migrate`
  * does: nothing goes to the old `src/db/migrations/dynamic` folder, on every dialect.
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -196,6 +202,44 @@ describe.each(getConfiguredTestDialects())(
           .sort()
       ).toEqual(files);
     });
+
+    // Windows ignores the mode and root writes past it, so neither can make the folder unwritable.
+    it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+      "leaves the collection whole when its delete's migration cannot be written",
+      async () => {
+        vi.stubEnv("NODE_ENV", "development");
+        const service = t.getService("collectionService");
+        await service.createCollection(created("articles"), {});
+        const folder = join(t.basePath, "database", "history");
+        const definitionPath = join(t.basePath, "schema", "builder.json");
+        const before = {
+          files: readdirSync(folder).sort(),
+          definition: readFileSync(definitionPath, "utf-8"),
+        };
+
+        chmodSync(folder, 0o555);
+        try {
+          await expect(
+            service.deleteCollection("articles", {})
+          ).rejects.toBeDefined();
+        } finally {
+          chmodSync(folder, 0o755);
+        }
+
+        // Nothing was torn down: the table, its registry row (read from the table, not a cache),
+        // the definition and the folder stand.
+        const adapter = t.adapter as unknown as DrizzleAdapter;
+        expect(await adapter.tableExists("dc_articles")).toBe(true);
+        const rows = (await adapter.executeQuery(
+          "SELECT slug FROM dynamic_collections WHERE slug = 'articles'"
+        )) as unknown as { slug: string }[];
+        expect(rows.map(row => row.slug)).toEqual(["articles"]);
+        expect({
+          files: readdirSync(folder).sort(),
+          definition: readFileSync(definitionPath, "utf-8"),
+        }).toEqual(before);
+      }
+    );
 
     it("refuses a delete the history checks refuse, before anything is torn down", async () => {
       vi.stubEnv("NODE_ENV", "development");
