@@ -2609,24 +2609,6 @@ export function appliedFilesMissing(
 }
 
 /**
- * Refuses, before the run's first write, while a marked old Schema Builder
- * file no longer carries the whole signature (`oldBuilderFilesChanged`).
- * Part of `assertAppliedFilesUnchanged`; asked alone by a command that runs
- * no other checksum check.
- */
-export async function refuseChangedOldBuilderFiles(
-  args: AppHistoryArgs & {
-    /** The command refusing, as the operator typed it. */
-    command: string;
-  }
-): Promise<void> {
-  const history = await readAppHistory(args);
-  if (history !== undefined && history.oldBuilder.changed.length > 0) {
-    throw oldBuilderFilesChanged(args.command, history.oldBuilder.changed);
-  }
-}
-
-/**
  * Refuses a pending file that has a Schema Builder name and no snapshot but
  * is not recognised as an earlier Builder's (`classifyMigrationFile`'s
  * "partial"), naming each with the part of the signature it lacks and the
