@@ -5,7 +5,7 @@
  * an item; and the fold that grows the card for the items its height does not
  * hold.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LIST_ROW_HEIGHT_PX } from "nextly/card-geometry";
 
@@ -20,7 +20,33 @@ import { HiddenWhileEmptyContext } from "@admin/components/features/widgets/hidd
 import { WidgetCard } from "@admin/components/features/widgets/WidgetCard";
 import { fireEvent, render, screen, within } from "@admin/__tests__/utils";
 
+import type { ReleaseListResponse } from "@admin/types/releases";
+
 import { NeedsAttention } from "./NeedsAttention";
+
+// The releases a release row names, read from the Releases list's own Needs
+// attention tab; answered with none unless a test says otherwise.
+const releaseReads = vi.hoisted(() => ({ fetchReleases: vi.fn() }));
+vi.mock("@admin/services/releaseApi", async () => {
+  const actual = await vi.importActual<
+    typeof import("@admin/services/releaseApi")
+  >("@admin/services/releaseApi");
+  return { ...actual, fetchReleases: releaseReads.fetchReleases };
+});
+
+function releasesAnswer(
+  items: readonly { id: string; title: string; state: string }[]
+): ReleaseListResponse {
+  return {
+    items,
+    meta: { total: items.length, page: 1, limit: 3 },
+  } as unknown as ReleaseListResponse;
+}
+
+beforeEach(() => {
+  releaseReads.fetchReleases.mockReset();
+  releaseReads.fetchReleases.mockResolvedValue(releasesAnswer([]));
+});
 
 const STOPPED = {
   id: "core/stopped-releases",
@@ -133,6 +159,59 @@ const plugin = (n: number) => ({
 });
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("NeedsAttention's release rows", () => {
+  it("names each stopped release under its row, linked to its page, from the stopped part of Needs attention", async () => {
+    releaseReads.fetchReleases.mockImplementation(
+      (params: { reason?: string }) =>
+        Promise.resolve(
+          params.reason === "stopped"
+            ? releasesAnswer([
+                { id: "r-1", title: "Autumn launch", state: "blocked" },
+              ])
+            : releasesAnswer([])
+        )
+    );
+    draw([STOPPED, SEO]);
+    const [stopped] = screen.getAllByTestId("needs-attention-item");
+
+    const named = await within(stopped).findByRole("link", {
+      name: "Autumn launch",
+    });
+    expect(named.getAttribute("href")).toMatch(/\/releases\/r-1$/);
+    expect(releaseReads.fetchReleases).toHaveBeenCalledWith(
+      expect.objectContaining({ tab: "attention", reason: "stopped" })
+    );
+  });
+
+  it("names each overdue release under its row", async () => {
+    releaseReads.fetchReleases.mockImplementation(
+      (params: { reason?: string }) =>
+        Promise.resolve(
+          params.reason === "overdue"
+            ? releasesAnswer([
+                { id: "r-2", title: "Spring sale", state: "scheduled" },
+                { id: "r-3", title: "Price change", state: "scheduled" },
+              ])
+            : releasesAnswer([])
+        )
+    );
+    draw([OVERDUE]);
+    const [overdue] = screen.getAllByTestId("needs-attention-item");
+
+    expect(
+      await within(overdue).findByRole("link", { name: "Spring sale" })
+    ).toBeInTheDocument();
+    expect(
+      within(overdue).getByRole("link", { name: "Price change" })
+    ).toBeInTheDocument();
+  });
+
+  it("reads no releases for a row that is not about releases", () => {
+    draw([SEO]);
+    expect(releaseReads.fetchReleases).not.toHaveBeenCalled();
+  });
+});
 
 /**
  * What the card drawn four rows high (its stored body holds four default rows) last asked of its

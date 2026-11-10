@@ -359,10 +359,18 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("refuse to filter or sort by a field declared hidden", async () => {
+        // A refusal is a validation error whose message stays generic; what it
+        // refused, and why, is in each problem's code and path. Hidden is its
+        // own code, apart from a field the collection does not have.
         const refusal = (run: () => Promise<unknown>) =>
           run().then(
-            () => "",
-            (error: unknown) => String(error)
+            (): string[] => [],
+            (error: unknown): string[] => {
+              const data = NextlyError.is(error) ? error.publicData : undefined;
+              return data !== undefined && "errors" in data
+                ? data.errors.map(problem => `${problem.code} ${problem.path}`)
+                : [String(error)];
+            }
           );
         expect(
           await refusal(() =>
@@ -371,12 +379,12 @@ describe.each(getConfiguredTestDialects())(
               filters: [{ field: "adminOnly", op: "equals", value: "a1" }],
             })
           )
-        ).toContain("adminOnly");
+        ).toEqual(["FIELD_NOT_FILTERABLE where.adminOnly"]);
         expect(
           await refusal(() =>
             reader.find({ collection: POSTS, sort: ["-adminOnly"] })
           )
-        ).toContain("adminOnly");
+        ).toEqual(["FIELD_NOT_SORTABLE sort.adminOnly"]);
         expect(
           await refusal(() =>
             reader.count({
@@ -384,7 +392,7 @@ describe.each(getConfiguredTestDialects())(
               filters: [{ field: "adminOnly", op: "equals", value: "a1" }],
             })
           )
-        ).toContain("adminOnly");
+        ).toEqual(["FIELD_NOT_FILTERABLE where.adminOnly"]);
         // The control: the same count on a shown field answers.
         await expect(
           reader.count({

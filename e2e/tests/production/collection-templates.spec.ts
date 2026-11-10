@@ -93,7 +93,7 @@ test.describe("a collection's entries under its template address", () => {
     const api = page.request;
 
     // 2. The Posts template, published, then two published posts and a draft.
-    await idOf(
+    const template = await idOf(
       await api.post(`${API}/collections/templates/entries`, {
         data: {
           title: `Posts ${STAMP}`,
@@ -104,51 +104,60 @@ test.describe("a collection's entries under its template address", () => {
       }),
       "publishing the Posts template"
     );
-    const first = await idOf(
-      await api.post(`${API}/collections/posts/entries`, {
-        data: { ...FIRST, status: "published" },
-      }),
-      "publishing the first post"
-    );
-    await idOf(
-      await api.post(`${API}/collections/posts/entries`, {
-        data: { ...SECOND, status: "published" },
-      }),
-      "publishing the second post"
-    );
-    await idOf(
-      await api.post(`${API}/collections/posts/entries`, {
-        data: { ...DRAFT, status: "draft" },
-      }),
-      "saving the draft post"
-    );
+    // A collection holds one template, so this one is deleted at the end,
+    // or the next spec to give Posts a template is refused.
+    try {
+      const first = await idOf(
+        await api.post(`${API}/collections/posts/entries`, {
+          data: { ...FIRST, status: "published" },
+        }),
+        "publishing the first post"
+      );
+      await idOf(
+        await api.post(`${API}/collections/posts/entries`, {
+          data: { ...SECOND, status: "published" },
+        }),
+        "publishing the second post"
+      );
+      await idOf(
+        await api.post(`${API}/collections/posts/entries`, {
+          data: { ...DRAFT, status: "draft" },
+        }),
+        "saving the draft post"
+      );
 
-    // 3. Each published post at its own address, drawn with the template,
-    //    with its own title in the head.
-    for (const post of [FIRST, SECOND]) {
-      const response = await visit(request, `/blog/${post.slug}`);
-      expect(response.status(), `/blog/${post.slug}`).toBe(200);
-      const html = await response.text();
-      expect(html).toContain(`<h1`);
-      expect(html).toContain(post.title);
-      expect(html).toContain(`<title>${post.title} | Blog</title>`);
+      // 3. Each published post at its own address, drawn with the template,
+      //    with its own title in the head.
+      for (const post of [FIRST, SECOND]) {
+        const response = await visit(request, `/blog/${post.slug}`);
+        expect(response.status(), `/blog/${post.slug}`).toBe(200);
+        const html = await response.text();
+        expect(html).toContain(`<h1`);
+        expect(html).toContain(post.title);
+        expect(html).toContain(`<title>${post.title} | Blog</title>`);
+      }
+      // Neither post's page shows the other's.
+      expect(
+        await (await visit(request, `/blog/${FIRST.slug}`)).text()
+      ).not.toContain(SECOND.title);
+
+      // 4. A draft holds no address, and is not found.
+      expect(await notFoundAt(request, `/blog/${DRAFT.slug}`)).toBe(true);
+
+      // 5. Unpublished, a post gives its address up and is not found.
+      const unpublished = await api.patch(
+        `${API}/collections/posts/entries/${first}`,
+        // Replaces what is stored: this edit is not about stale ones.
+        { data: { status: "draft", _overwrite: true } }
+      );
+      expect(unpublished.ok(), await unpublished.text()).toBe(true);
+      expect(await notFoundAt(request, `/blog/${FIRST.slug}`)).toBe(true);
+      expect((await visit(request, `/blog/${SECOND.slug}`)).status()).toBe(200);
+    } finally {
+      const removed = await api.delete(
+        `${API}/collections/templates/entries/${template}`
+      );
+      expect(removed.ok(), await removed.text()).toBe(true);
     }
-    // Neither post's page shows the other's.
-    expect(
-      await (await visit(request, `/blog/${FIRST.slug}`)).text()
-    ).not.toContain(SECOND.title);
-
-    // 4. A draft holds no address, and is not found.
-    expect(await notFoundAt(request, `/blog/${DRAFT.slug}`)).toBe(true);
-
-    // 5. Unpublished, a post gives its address up and is not found.
-    const unpublished = await api.patch(
-      `${API}/collections/posts/entries/${first}`,
-      // Replaces what is stored: this edit is not about stale ones.
-      { data: { status: "draft", _overwrite: true } }
-    );
-    expect(unpublished.ok(), await unpublished.text()).toBe(true);
-    expect(await notFoundAt(request, `/blog/${FIRST.slug}`)).toBe(true);
-    expect((await visit(request, `/blog/${SECOND.slug}`)).status()).toBe(200);
   });
 });

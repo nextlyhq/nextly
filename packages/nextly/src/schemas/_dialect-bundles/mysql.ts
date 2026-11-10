@@ -30,6 +30,7 @@ export { nextlyDeletedPrincipals } from "../deleted-principals/mysql";
 // is CREATED, and a table in one but not the other is never made.
 export { nextlyPluginSettings } from "../plugin-settings/mysql";
 export { nextlyOneTimeSecrets } from "../one-time-secrets/mysql";
+export { nextlyReceivedWebhooks } from "../received-webhooks/mysql";
 export {
   nextlyPluginEvents,
   nextlyPluginEventDeliveries,
