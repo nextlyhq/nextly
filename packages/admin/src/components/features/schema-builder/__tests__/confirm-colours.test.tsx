@@ -214,6 +214,7 @@ describe("each Builder dialog's confirming button is destructive only when it de
         fieldId={field.id}
         savedFieldIds={new Set([field.id])}
         readOnly={false}
+        docked={false}
         onFieldChange={vi.fn()}
         onFieldDelete={vi.fn()}
         onClose={vi.fn()}

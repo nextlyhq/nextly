@@ -247,6 +247,31 @@ describe("GeneralTab -- PR E1 Label-first + Name auto-derive", () => {
     expect(last.name).toBe("excerpt");
   });
 
+  it("leaves the earlier snake-case rule to a surface whose names are snake case", async () => {
+    // "phone_no_" is what the earlier snake-case rule derived from "phone no.".
+    // On a surface that derives names some other way it was typed by hand, so
+    // a label edit must not take it for derived and replace it.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const kebab = (label: string) =>
+      label
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "");
+    const seeded: BuilderField = {
+      ...blank,
+      label: "phone no.",
+      name: "phone_no_",
+    };
+    render(
+      <GeneralTab field={seeded} deriveName={kebab} onChange={onChange} />
+    );
+    await user.type(screen.getByLabelText(/^Label$/), "!");
+    const last = onChange.mock.lastCall?.[0] as BuilderField;
+    expect(last.name).toBe("phone_no_");
+  });
+
   it("stops auto-deriving Name once the user manually edits Name", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

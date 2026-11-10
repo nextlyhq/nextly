@@ -117,11 +117,13 @@ function fieldOfType(type: string): BuilderField {
 function Host({
   initial,
   saved = false,
+  readOnly = false,
   surface = entries,
   onChange,
 }: {
   initial: BuilderField;
   saved?: boolean;
+  readOnly?: boolean;
   surface?: FieldSettingsSurface;
   onChange?: (next: BuilderField) => void;
 }) {
@@ -133,6 +135,7 @@ function Host({
       ancestors={[]}
       siblings={[]}
       saved={saved}
+      readOnly={readOnly}
       onChange={next => {
         setField(next);
         onChange?.(next);
@@ -316,6 +319,41 @@ describe("FieldSettingsPanel", () => {
       expect(unnamed).toEqual([]);
       expect(unkept).toEqual([]);
     });
+  });
+
+  describe("a read-only panel disables the type's own controls", () => {
+    // Blocks draws no edit controls at all when read-only (its lists are shown
+    // as text), so it is checked separately below.
+    it.each([...TYPES_WITH_DEFINING_SETTINGS].filter(t => t !== "blocks"))(
+      "%s",
+      type => {
+        render(<Host initial={fieldOfType(type)} readOnly />);
+        const defining = screen.getByRole("group", { name: / settings$/ });
+        const controls = Array.from(
+          defining.querySelectorAll<HTMLElement>(
+            'input, textarea, button, [role="switch"], [role="combobox"]'
+          )
+        );
+        expect(controls.length).toBeGreaterThan(0);
+        const enabled = controls
+          .filter(control => !control.matches(":disabled"))
+          .map(control => control.outerHTML.slice(0, 80));
+        expect(enabled).toEqual([]);
+      }
+    );
+  });
+
+  it("a read-only Blocks field shows its lists with nothing to edit", () => {
+    render(
+      <Host
+        initial={{ ...fieldOfType("blocks"), blocks: { allow: ["core/*"] } }}
+        readOnly
+      />
+    );
+    const defining = screen.getByRole("group", { name: / settings$/ });
+    expect(within(defining).getByText("core/*")).toBeInTheDocument();
+    expect(within(defining).queryAllByRole("textbox")).toEqual([]);
+    expect(within(defining).queryAllByRole("button")).toEqual([]);
   });
 
   it("edit, select another field, come back", async () => {

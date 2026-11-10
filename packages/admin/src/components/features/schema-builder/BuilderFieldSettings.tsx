@@ -39,7 +39,6 @@ import {
   type FieldSettingsSurfaceControlProps,
 } from "@admin/components/field-ui/settings-panel";
 import { Trash2 } from "@admin/components/icons";
-import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { toSnakeName } from "@admin/lib/builder";
 import { findFieldPlacement } from "@admin/lib/builder/field-placement";
 import { isRepeatingContainer } from "@admin/lib/builder/is-inside-repeating-ancestor";
@@ -95,6 +94,13 @@ type Props = {
   savedFieldIds: ReadonlySet<string>;
   /** A code-first entity: every setting shown, none changeable. */
   readOnly: boolean;
+  /**
+   * Docked beside the list (a wide screen) rather than opened as a sheet.
+   * Decided by the page, which stays mounted: asked here, the answer would
+   * start out "no" for every field opened, and a sheet would cover the list
+   * for a moment each time.
+   */
+  docked: boolean;
   onFieldChange: (next: BuilderField) => void;
   onFieldDelete: (fieldId: string) => void;
   onClose: () => void;
@@ -106,11 +112,11 @@ export function BuilderFieldSettings({
   fieldId,
   savedFieldIds,
   readOnly,
+  docked,
   onFieldChange,
   onFieldDelete,
   onClose,
 }: Props): JSX.Element | null {
-  const wide = useMediaQuery("(min-width: 1024px)");
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const placement = findFieldPlacement(fields, fieldId);
   if (!placement) return null;
@@ -150,7 +156,7 @@ export function BuilderFieldSettings({
 
   return (
     <>
-      {wide ? (
+      {docked ? (
         <aside className="sticky top-16 flex max-h-[calc(100vh-4rem)] w-[420px] shrink-0 flex-col border-l border-border">
           {panel}
         </aside>
