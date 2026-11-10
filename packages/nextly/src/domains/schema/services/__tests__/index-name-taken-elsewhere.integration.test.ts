@@ -17,6 +17,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import type { FieldDefinition } from "../../../../schemas/dynamic-collections/legacy-types";
 import { uniqueIndexNameForColumn } from "../index-name";
 
 interface CollectionsHandler {
@@ -100,7 +101,8 @@ describeEachDialect(
       }
     }
 
-    const withUniqueCode = [
+    // Typed as stored field definitions, which both the handler and the service take.
+    const withUniqueCode: FieldDefinition[] = [
       { name: "heading", type: "text" },
       // Short, as the other dialects' indexes need.
       {

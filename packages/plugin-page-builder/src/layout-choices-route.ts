@@ -34,6 +34,7 @@ import { z } from "nextly/zod";
 import { COMPONENTS_SLUG } from "./collections/components";
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import { PAGES_SLUG } from "./collections/pages";
+import { TEMPLATES_SLUG } from "./collections/templates";
 import { publishedStoreSource } from "./component-store-source";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
 import {
@@ -523,7 +524,7 @@ export function parseChoicesQuery(url: string | URL): LayoutChoicesQuery {
 }
 
 /** Where each of some Layouts stands with the fence, from one read of it. */
-function fenceStates(
+export function fenceStates(
   store: Pick<LayoutRemovalStore, "removalsOf">
 ): NonNullable<LayoutChoicesRequest["fence"]> {
   return {
@@ -575,13 +576,17 @@ export function layoutChoicesRoute(
   };
 }
 
-/** Which collections hold the plugin's pages and Layouts, as this site resolved them. */
+/**
+ * Which collections hold the plugin's pages, Layouts and templates, as this
+ * site resolved them.
+ */
 export function readPageCollection(
   ctx: Pick<PluginRouteContext, "self">
 ): PageCollectionResponse {
   return {
     pagesCollection: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
     layoutsCollection: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+    templatesCollection: ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG,
   };
 }
 

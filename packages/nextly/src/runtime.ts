@@ -50,6 +50,10 @@ export {
   nextlySiteSettingsTags,
   entryIdTag,
   cachedFind,
+  // Whether the app registered its `"use cache"` read function, for a
+  // component that must refuse to read through `unstable_cache` under Cache
+  // Components, where a miss fails the prerender.
+  cachedReadRegistered,
   registerCachedRead,
   runRegisteredRead,
   type CachedRead,
@@ -146,17 +150,55 @@ export type {
   PublicSourceReader,
 } from "./runtime/routing/public-reader";
 
+// Whether a failed read was refused by access, which a route built on the
+// public reader answers as not found, as nextly's own routes do; and the wait
+// for the request that an enforced, uncached read takes first, so a prerender
+// never mistakes it for build-time work. `@experimental` with the public
+// reader.
+export { isReadRefusal } from "./runtime/routing/miss-or-denied";
+export { deferToRequest } from "./runtime/routing/defer-to-request";
+
+// The frame a page builder named query's `run` executes in: inside it, the
+// Direct API refuses every call, and only the reader handed to the query
+// reads, through the frame's door. `@experimental` with named queries.
+export {
+  openNamedQueryFrame,
+  type NamedQueryFrame,
+} from "./auth/named-query-scope";
+
+// The reader a page builder's canvas reads the same lists with: the same
+// queries, read as the person editing, drafts included. `@experimental` with
+// the public reader.
+export {
+  createEditorReader,
+  toEditorFind,
+  toEditorFindById,
+  toEditorFindSingle,
+} from "./runtime/routing/editor-reader";
+export type {
+  EditorByIdQuery,
+  EditorReaderPerson,
+  EditorReaderSource,
+  EditorSourceReader,
+} from "./runtime/routing/editor-reader";
+
 // What a binding on a published page reads besides a list, `@experimental`
 // with the reader: the site settings through their public allowlist (a write
-// to them expires `nextlySiteSettingsTags()`), and the field shapes a binding
-// is checked against, as the anonymous visitor may read them. Both load the
-// service container inside the call, so importing this entry loads neither.
+// to them expires `nextlySiteSettingsTags()`), read from the instance a page
+// is served by when one is given (`PublicSiteSettingsSource`), and the field
+// shapes a binding is checked against, as the anonymous visitor may read
+// them. Both load the service container inside the call, so importing this
+// entry loads neither.
 export {
   readPublicSiteSettings,
   type PublicSiteSettings,
+  type PublicSiteSettingsSource,
 } from "./runtime/site-settings-read";
+// And the same fields as declared, whoever may read them: what a save judges
+// a binding against, since binding a field the public may not read is allowed.
 export {
   bindingFieldShapes,
+  declaredFieldShapes,
   type BindingFieldShape,
   type BindingFieldShapesOptions,
   type BindingSourceRef,
@@ -170,6 +212,10 @@ export {
   createSingleRoute,
   createPublicSingleRoute,
   slugToStaticParam,
+  LIST_PAGE_SEGMENT,
+  listPageNumber,
+  listPageOf,
+  slugToPath,
   nextlySitemap,
   nextlyRobots,
   type ContentEntry,

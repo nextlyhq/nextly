@@ -26,6 +26,9 @@ const api = vi.hoisted(() => ({
   updateByIDs: vi.fn(),
   publishAllEntryLocales: vi.fn(),
   publishAllSingleLocales: vi.fn(),
+  // The read of every language a publish of every language takes first.
+  findByID: vi.fn(() => Promise.resolve({ id: "e1", _rev: "2" })),
+  getDocument: vi.fn(() => Promise.resolve({ id: "s1", _rev: "2" })),
   updateDocument: vi.fn(),
   getSingleSchema: vi.fn(),
   getCollectionSchema: vi.fn(),
@@ -48,6 +51,7 @@ vi.mock("@admin/services/entryApi", async importOriginal => {
       deleteByIDs: api.deleteByIDs,
       updateByIDs: api.updateByIDs,
       publishAllLocales: api.publishAllEntryLocales,
+      findByID: api.findByID,
     },
   };
 });
@@ -60,6 +64,7 @@ vi.mock("@admin/services/singleApi", async importOriginal => {
     singleApi: {
       ...actual.singleApi,
       publishAllLocales: api.publishAllSingleLocales,
+      getDocument: api.getDocument,
       updateDocument: api.updateDocument,
       getSchema: api.getSingleSchema,
     },

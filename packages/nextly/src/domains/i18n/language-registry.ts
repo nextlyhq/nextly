@@ -20,6 +20,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import {
+  IMPLICIT_LANGUAGE,
   localizationFromStoredLanguages,
   type StoredLanguage,
 } from "./config/stored-languages";
@@ -43,6 +44,8 @@ const DEFAULT_TTL_MS = 1000;
 
 export class LanguageRegistry {
   private readonly configured: SanitizedLocalizationConfig | undefined;
+  /** The languages served while none are configured or stored, if any. */
+  private readonly implicit: SanitizedLocalizationConfig | undefined;
   private readonly reader: StoredLanguageReader | undefined;
   private readonly ttlMs: number;
   private readonly now: () => number;
@@ -62,10 +65,20 @@ export class LanguageRegistry {
   constructor(options: {
     configured?: SanitizedLocalizationConfig;
     reader?: StoredLanguageReader;
+    /**
+     * Serve the implicit language while none are configured or stored, as a site that keeps every
+     * translatable field per language does: its values are stored under one language even before
+     * it declares any. Otherwise such a site has no localization at all.
+     */
+    implicitLanguage?: boolean;
     ttlMs?: number;
     now?: () => number;
   }) {
     this.configured = options.configured;
+    this.implicit =
+      options.implicitLanguage === true
+        ? localizationFromStoredLanguages([IMPLICIT_LANGUAGE])
+        : undefined;
     this.reader = options.reader;
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     // A monotonic clock: the wall clock can jump, backwards or forwards, which would hold a stale
@@ -82,7 +95,7 @@ export class LanguageRegistry {
   current(): SanitizedLocalizationConfig | undefined {
     if (this.configured) return this.configured;
     const pinned = this.snapshot.getStore();
-    return pinned ? pinned.localization : this.stored;
+    return (pinned ? pinned.localization : this.stored) ?? this.implicit;
   }
 
   /**

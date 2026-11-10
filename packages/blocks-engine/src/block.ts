@@ -95,7 +95,35 @@ export interface PropSchema {
    * list (`image/*`), so an image is never given a PDF to draw.
    */
   accept?: string;
+  /**
+   * For a `media` or `upload` prop: the block's `url` prop that holds an image
+   * by its address rather than its library id, as core/image's `mediaId` and
+   * `src` are. Declared, never guessed from the props beside it: unbinding an
+   * image a visitor saw by its address keeps that address here, since the
+   * media prop can hold only a library id. Registration refuses one that
+   * names no `url` prop of the block.
+   */
+  addressProp?: string;
   [option: string]: unknown;
+}
+
+/**
+ * The prop that holds an image by its address for the media prop `prop`, as
+ * the block's definition declares it ({@link PropSchema.addressProp}), or
+ * `undefined` when it declares none.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function addressPropOf(
+  props: Readonly<Partial<Record<string, PropSchema>>> | undefined,
+  prop: string
+): string | undefined {
+  const schema = props?.[prop];
+  // Read on a media prop alone, as registration judges it: elsewhere the key
+  // is a block's own extension option.
+  if (schema?.type !== "media" && schema?.type !== "upload") return undefined;
+  const declared = schema.addressProp;
+  return typeof declared === "string" && declared !== "" ? declared : undefined;
 }
 
 /**
@@ -251,6 +279,8 @@ export const BLOCK_ICONS = [
   "star",
   // A component the site made, so the Add panel can say what it is at a glance.
   "component",
+  // An entry's own content drawn inside its template.
+  "entry",
 ] as const;
 
 /**
@@ -680,8 +710,11 @@ export interface BlockDefinition<
    * would put a network call between a crawler and the page title. An image is
    * returned as a media id or a URL and resolved by the caller, which is what
    * keeps it that way.
+   *
+   * `read.bound` names what each bound prop holds, as the block's render is
+   * given it, so the metadata offers the picture the page draws.
    */
-  seo?(props: P): BlockSeoContribution | undefined;
+  seo?(props: P, read?: BlockSeoRead): BlockSeoContribution | undefined;
   /**
    * Slots this block may decline to render for some props.
    *
@@ -705,6 +738,16 @@ export interface BlockDefinition<
   conditionalSlots?: readonly string[];
   /** Editor-only metadata; never serialized. */
   editor?: BlockEditorMeta<P>;
+}
+
+/**
+ * What a block's `seo` is told about the props it is asked with.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export interface BlockSeoRead {
+  /** What each bound prop holds, by prop name, as its render is given it. */
+  readonly bound?: Readonly<Record<string, BoundValue>>;
 }
 
 /**
@@ -846,5 +889,5 @@ export interface AnyBlockDefinition
    * nothing to fall back on, and EVERY typed definition was rejected by
    * `registerBlocks` whether or not it contributed any SEO at all.
    */
-  seo?(props: object): BlockSeoContribution | undefined;
+  seo?(props: object, read?: BlockSeoRead): BlockSeoContribution | undefined;
 }

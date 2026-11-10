@@ -118,7 +118,7 @@ function documentWith(children: unknown[]) {
 async function openBuilderWith(page: Page, children: unknown[]): Promise<void> {
   const api = await page.request;
   const stored = await api.patch(HOMEPAGE, {
-    data: { layout: documentWith(children) },
+    data: { layout: documentWith(children), _overwrite: true },
   });
   expect(stored.ok(), `seeding the homepage layout: ${stored.status()}`).toBe(
     true

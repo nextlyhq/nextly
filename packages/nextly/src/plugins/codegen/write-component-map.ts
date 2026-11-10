@@ -19,11 +19,70 @@ import {
   buildImportMapArtifacts,
   configImportSpecifier,
 } from "./component-import-map";
+import { unbackedContributions, unbackedPaths } from "./unbacked-contributions";
 
 /** Where the files were written, and which of them changed. */
 export interface ComponentMapWrite {
   readonly paths: readonly string[];
   readonly changed: readonly string[];
+}
+
+/** One file of the component map: where it goes, what it would hold, and what it holds now. */
+export interface PlannedComponentMapFile {
+  file: string;
+  code: string;
+  /** Its content on disk, or undefined where there is no such file yet. */
+  previous: string | undefined;
+}
+
+/**
+ * The map and its path list as `writeComponentMapFiles` writes them, read and
+ * computed without writing anything: a file whose `previous` differs from its
+ * `code` is one the write changes. A dry run reports from this plan, and the
+ * writer writes from it.
+ */
+export async function planComponentMapFiles(
+  plugins: PluginDefinition[],
+  typesOutputPath: string,
+  cwd: string,
+  /**
+   * The site's config, for the map's check of each widget component against its widget: its file,
+   * whose import is worked out from where the map sits, or an import an earlier write chose, kept
+   * as it stands. None where there is no config, and the map is then written unchecked, as before.
+   */
+  config?: string | { import: string },
+  /** The site config's `admin.dashboard`, whose own widgets the map lists beside the plugins'. */
+  siteDashboard?: unknown
+): Promise<PlannedComponentMapFile[]> {
+  const configImport =
+    config === undefined || typeof config !== "string"
+      ? config?.import
+      : configImportSpecifier(
+          resolve(cwd, dirname(typesOutputPath)),
+          resolve(cwd, config)
+        );
+  // A contribution whose module is not there is left out, as the check
+  // leaves it out, so the map never imports a file that would stop the build.
+  const unbacked = unbackedPaths(
+    unbackedContributions(plugins, typesOutputPath, cwd, siteDashboard)
+  );
+  const planned = await Promise.all(
+    buildImportMapArtifacts(
+      plugins,
+      typesOutputPath,
+      configImport,
+      siteDashboard,
+      unbacked
+    ).map(async artifact => {
+      const file = resolve(cwd, artifact.path);
+      return {
+        file,
+        code: artifact.code,
+        previous: await currentContent(file),
+      };
+    })
+  );
+  return planned;
 }
 
 /**
@@ -38,40 +97,9 @@ export interface ComponentMapWrite {
  * back as it was read before the error is thrown.
  */
 export async function writeComponentMapFiles(
-  plugins: PluginDefinition[],
-  typesOutputPath: string,
-  cwd: string,
-  /**
-   * The site's config, for the map's check of each widget component against its widget: its file,
-   * whose import is worked out from where the map sits, or an import an earlier write chose, kept
-   * as it stands. None where there is no config, and the map is then written unchecked, as before.
-   */
-  config?: string | { import: string },
-  /** The site config's `admin.dashboard`, whose own widgets the map lists beside the plugins'. */
-  siteDashboard?: unknown
+  ...args: Parameters<typeof planComponentMapFiles>
 ): Promise<ComponentMapWrite> {
-  const configImport =
-    config === undefined || typeof config !== "string"
-      ? config?.import
-      : configImportSpecifier(
-          resolve(cwd, dirname(typesOutputPath)),
-          resolve(cwd, config)
-        );
-  const planned = await Promise.all(
-    buildImportMapArtifacts(
-      plugins,
-      typesOutputPath,
-      configImport,
-      siteDashboard
-    ).map(async artifact => {
-      const file = resolve(cwd, artifact.path);
-      return {
-        file,
-        code: artifact.code,
-        previous: await currentContent(file),
-      };
-    })
-  );
+  const planned = await planComponentMapFiles(...args);
   // Every file a write was started on, the failing one included: a write
   // that fails partway can leave its own file cut short.
   const touched: (typeof planned)[number][] = [];

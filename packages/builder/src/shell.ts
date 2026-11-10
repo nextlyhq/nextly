@@ -96,7 +96,15 @@ export {
   Canvas,
   DropRefusal,
   nodeIdFromEvent,
+  revealedDefinitions,
 } from "./canvas";
+
+/**
+ * @experimental Which blocks' visibility conditions the page can't check, for
+ * a host to hand the canvas so it badges them in red: judged as the save
+ * judges them, with the collections the editor's services list.
+ */
+export { useConditionsUnchecked } from "./condition-checks";
 
 /**
  * @experimental The frame the canvas is drawn in, and how the code around the
@@ -132,7 +140,10 @@ export { CanvasFrameProvider, useCanvasFrame } from "./canvas-frame-context";
  * @experimental Where the docs explain the canvas route, for a note saying the
  * canvas is drawn without the site's layout.
  */
-export { CANVAS_ROUTE_DOCS_HREF } from "./docs-links";
+export {
+  CANVAS_ROUTE_DOCS_HREF,
+  SITE_CODE_POLICY_DOCS_HREF,
+} from "./docs-links";
 export { CanvasMarks } from "./canvas-marks";
 
 /**
@@ -184,6 +195,14 @@ export type {
   BlockInspectorResolver,
   InspectorPanelProps,
 } from "./inspector-panel";
+/**
+ * A bound image's Fallback row: an image address, shown with its picture,
+ * and a reserved place for choosing a library file. The inspector draws it
+ * under a bound image's chip; exported so the same row can be given more
+ * ways to fill it without a second implementation. @experimental
+ */
+export { ImageBindingFallback } from "./image-binding-fallback";
+export type { ImageBindingFallbackProps } from "./image-binding-fallback";
 // What a host tells the inspector about the component it edits, beside it.
 export type { ComponentFieldsHost } from "./component-fields";
 // The banner over a component's own view: its name, its reach, and Back.
@@ -198,6 +217,10 @@ export type {
 // The variant open in a component's view, previewed on the host's canvas.
 export { useVariantPreview, VariantPreviewTag } from "./variant-preview";
 export type { VariantPreviewState } from "./variant-preview";
+// The one row of tags over the canvas: the variant previewed, and the site
+// mode the author picked to preview the page in.
+export { CanvasPreviewTags } from "./canvas-preview-tags";
+export type { CanvasPreviewTagsProps } from "./canvas-preview-tags";
 
 /**
  * The Style half of the same inspector.
@@ -230,7 +253,11 @@ export type { SavedPattern } from "./inserter";
  * would offer two ways to mount one feature that must agree about when the
  * saved set has actually been read.
  */
-export { authoredBreakpoints, sameBreakpoints } from "./breakpoints";
+export {
+  authoredBreakpoints,
+  BASE_DEVICE_LABEL,
+  sameBreakpoints,
+} from "./breakpoints";
 export { BreakpointManager } from "./breakpoint-manager";
 export type { BreakpointManagerProps } from "./breakpoint-manager";
 
@@ -374,6 +401,54 @@ export type { SpacingScrubContext, SpacingSubject } from "./spacing-handles";
  */
 export { EmptyContainerAppenders } from "./empty-container-appender";
 export type { EmptyContainerAppendersProps } from "./empty-container-appender";
+/**
+ * The badge on a block whose bound value a visitor will not see, drawn in the
+ * canvas's overlay from the host's `visitorUnreadableBindings` answer.
+ */
+export { VisitorUnreadableBadges } from "./visitor-unreadable-badges";
+export type { VisitorUnreadableBadgesProps } from "./visitor-unreadable-badges";
+export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
+/**
+ * @experimental A template's document with an entry's own blocks composed
+ * into its Entry content block, as the canvas draws it, for a host asking
+ * for the sources the drawn page's bindings read.
+ */
+export { useComposedEntryContent } from "./entry-content-canvas";
+export type { EntryContentLimits } from "./entry-content-canvas";
+/**
+ * @experimental The entry a template is previewed with: the host provides it
+ * around a template's editor, and anything inside reads it. `undefined`
+ * outside a template.
+ */
+export {
+  PREVIEWED_ENTRY_KEYS,
+  PreviewedEntryProvider,
+  usePreviewedCollection,
+  usePreviewedEntry,
+} from "./previewed-entry";
+export type {
+  PreviewedBlocksField,
+  PreviewedCollection,
+  PreviewedEntry,
+} from "./previewed-entry";
+/**
+ * @experimental Visibility conditions applied for the entry a template is
+ * previewed with: what the host hands the canvas (`conditionsApplied`) and
+ * the Previewing strip's switch and count.
+ */
+export {
+  conditionedBlocksIn,
+  type AppliedConditions,
+  type ConditionsPreview,
+  type HiddenBlock,
+} from "./applied-conditions";
+export {
+  conditionsPreviewOf,
+  useAppliedConditions,
+  useItemHiddenAs,
+  type AppliedConditionsOptions,
+  type ItemHiddenOptions,
+} from "./use-applied-conditions";
 export { PageInserters } from "./page-inserters";
 export type { PageInsertersProps } from "./page-inserters";
 
@@ -550,9 +625,35 @@ export type {
   SpacingModeControl,
   TokensPanelProps,
   VariablesHeader,
+  VariablesPreview,
 } from "./tokens-panel";
+/*
+ * How widely variables are used, as a host reads it for the Variables view.
+ * Experimental, as the view's `usage` is.
+ */
+export type {
+  VariableReach,
+  VariablesAccess,
+  VariablesUsage,
+  VariableUse,
+  VariableUseKind,
+  VariableUsesPage,
+} from "./variable-usage";
 export { SelectionBreadcrumb } from "./breadcrumb";
 export type { SelectionBreadcrumbProps } from "./breadcrumb";
+/*
+ * The page reads meter: the reads a page makes against its allowance, from
+ * 80% of it a warning, and over it the blocks that went unread.
+ */
+export { ReadBudgetMeter } from "./read-budget-meter";
+export type { ReadBudgetMeterProps } from "./read-budget-meter";
+export { readBudgetStanding, READ_WARNING_SHARE } from "./read-budget";
+export type {
+  PageReadReport,
+  ReadBudgetStanding,
+  ReadKind,
+  UnreadBlock,
+} from "./read-budget";
 /*
  * The editor's words, spelled once, for every surface a host draws beside the
  * shell's own: a panel it mounts names its places with these.

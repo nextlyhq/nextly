@@ -97,6 +97,8 @@ export interface BlockSupportKeys {
   container: never;
   /** Marker style on a list. */
   list: never;
+  /** The icon a block's disclosure children show, and which side it sits on. */
+  disclosure: never;
   /** Author-written CSS on this block. Gates a capability, not a style group. */
   customCss: never;
 }
@@ -372,4 +374,42 @@ export type {
   NodeStyles,
   SlotLock,
   SlotSpec,
+} from "@nextlyhq/blocks-engine";
+
+/**
+ * Named queries: a collection list's custom source. A developer declares one
+ * with `defineNamedQuery`, its typed inputs made with `param`, every
+ * collection, Single and site setting it reads, and the shape of its rows.
+ * The site registers its own with `pageBuilder({ namedQueries })`; a plugin
+ * declares them under `contributes.declarations["@nextlyhq/plugin-page-builder"].namedQueries`.
+ *
+ * Re-exported from the engine, where the validator and the renderer read the
+ * same declaration. Its `run` function receives a reader that reads as an
+ * anonymous visitor, limited to what the query declares; the Direct API
+ * refuses any other read made while it runs.
+ *
+ * @experimental A collection list's custom source settles with the editor
+ * that offers it.
+ */
+export { defineNamedQuery, param } from "@nextlyhq/blocks-engine";
+/** @experimental Settles with `defineNamedQuery`. */
+export type {
+  BooleanParam,
+  ChoiceParam,
+  DayParam,
+  EntryParam,
+  NamedQueryChoice,
+  NamedQueryDeclaration,
+  NamedQueryDefinition,
+  NamedQueryParam,
+  NamedQueryParams,
+  NamedQueryParamValues,
+  NamedQueryReader,
+  NamedQueryResult,
+  NamedQueryRows,
+  NamedQueryRunArgs,
+  NamedReadFilter,
+  NamedReadQuery,
+  NumberParam,
+  TextParam,
 } from "@nextlyhq/blocks-engine";

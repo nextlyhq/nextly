@@ -37,8 +37,10 @@ import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-ow
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { SCHEMA_OWNERS_TABLE } from "../../schemas/schema-owners";
+import { reportDryRun, type DryRunPlan } from "../dry-run";
+import { plannedOrRefused } from "../dry-run-refusal";
 import type { CommandContext } from "../program";
-import { createCliAdapter } from "../utils/adapter";
+import { createCliAdapter, openCommandAdapter } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
 import { askToDeleteInTerminal } from "../utils/data-loss-consent";
 
@@ -51,11 +53,15 @@ import {
   type PlannedDown,
 } from "./migrate-down";
 import {
+  previewPluginInstall,
+  previewPluginInstallAll,
+  previewPluginUninstall,
   runPluginInstallAllCommand,
   runPluginInstallCommand,
   runPluginUninstallCommand,
   type InstallOptions,
   type LifecyclePlugin,
+  type PluginLifecycleDeps,
   type PreparedModuleDown,
   type UninstallOptions,
 } from "./plugin-lifecycle";
@@ -65,6 +71,11 @@ import { readSqliteSchemaVersion, readTableIdentities } from "./table-identity";
 interface RunnerOptions {
   config?: string;
   cwd?: string;
+  /**
+   * Show what the command would change and change nothing: the database is
+   * opened read-only, and no lock, consent, hook or write follows.
+   */
+  dryRun?: boolean;
 }
 
 /**
@@ -166,7 +177,13 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     configPath: options.config,
     cwd: options.cwd,
   });
-  const adapter = await createCliAdapter({});
+  // A dry run opens the database read-only; one whose database is not there
+  // has said so, and ends here.
+  const adapter =
+    options.dryRun === true
+      ? await openCommandAdapter({ dryRun: true }, context.logger)
+      : await createCliAdapter({});
+  if (adapter === undefined) return undefined;
   const dialect = adapter.dialect;
   const plugins = toLifecyclePlugins(config.plugins ?? []);
 
@@ -961,12 +978,40 @@ interface SettingsDeleteDb {
   delete(table: unknown): { where(condition: unknown): Promise<unknown> };
 }
 
+/**
+ * A plugin command's dry run: connected read-only, `plan` worked out from the
+ * command's own reads and reported, or the refusal the real command would
+ * meet, connecting included (a database `nextly migrate` has not prepared).
+ */
+async function reportPluginDryRun(
+  options: RunnerOptions,
+  context: CommandContext,
+  plan: (deps: PluginLifecycleDeps) => Promise<DryRunPlan>
+): Promise<void> {
+  let deps: PluginLifecycleDeps | undefined;
+  try {
+    const report = await plannedOrRefused(async () => {
+      deps = await connect(options, context);
+      return deps === undefined ? undefined : plan(deps);
+    });
+    if (report !== undefined) reportDryRun(context.logger, report);
+  } finally {
+    await deps?.adapter.disconnect();
+  }
+}
+
 export async function runPluginInstall(
   name: string,
   options: RunnerOptions & InstallOptions,
   context: CommandContext
 ): Promise<void> {
+  if (options.dryRun === true) {
+    return reportPluginDryRun(options, context, deps =>
+      previewPluginInstall(name, deps)
+    );
+  }
   const deps = await connect(options, context);
+  if (deps === undefined) return;
   try {
     await runPluginInstallCommand(name, deps, { consent: options.consent });
   } finally {
@@ -979,7 +1024,11 @@ export async function runPluginInstallAll(
   options: RunnerOptions & InstallOptions,
   context: CommandContext
 ): Promise<void> {
+  if (options.dryRun === true) {
+    return reportPluginDryRun(options, context, previewPluginInstallAll);
+  }
   const deps = await connect(options, context);
+  if (deps === undefined) return;
   try {
     await runPluginInstallAllCommand(deps, { consent: options.consent });
   } finally {
@@ -992,7 +1041,17 @@ export async function runPluginUninstall(
   options: RunnerOptions & UninstallOptions,
   context: CommandContext
 ): Promise<void> {
+  if (options.dryRun === true) {
+    return reportPluginDryRun(options, context, deps =>
+      previewPluginUninstall(
+        name,
+        { keepData: options.keepData, yes: options.yes },
+        deps
+      )
+    );
+  }
   const deps = await connect(options, context);
+  if (deps === undefined) return;
   try {
     // The command takes the migrate lock itself, through `underMigrateLock`,
     // once every refusal has been decided: the DOWNs, the ledger rows and the

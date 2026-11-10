@@ -248,15 +248,18 @@ describe.each(getConfiguredTestDialects())(
     const publish = (key: string, id: string) =>
       rest("PATCH", ["collections", "notes", "entries", id], key, {
         status: "published",
+        _overwrite: true,
       });
 
     const writeTwice = (key: string) =>
       rest("POST", ["plugins", ...PLUGIN.split("/"), "write-twice"], key);
 
+    // The key's authority is under test, not versions: the bulk publish sets
+    // its status over whatever each entry holds.
     const bulkPublish = (key: string, ids: string[]) =>
       rest("POST", ["collections", "notes", "entries", "bulk-update"], key, {
         ids,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       });
 
     it("passes a write route's gate and then the service's publish gate", async () => {

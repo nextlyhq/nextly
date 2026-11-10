@@ -90,6 +90,7 @@ export {
   type SanitizedNextlyConfig,
   type TypeScriptConfig,
   type DatabaseConfig,
+  type ExperimentalConfig,
   type RateLimitingConfig,
   type SanitizedRateLimitingConfig,
 } from "./collections/config/define-config";
@@ -143,6 +144,7 @@ export {
   email,
   password,
   code,
+  icon,
   number,
   checkbox,
   date,
@@ -175,6 +177,7 @@ export {
   isEmailField,
   isPasswordField,
   isCodeField,
+  isIconField,
   isNumberField,
   isCheckboxField,
   isDateField,
@@ -194,6 +197,10 @@ export {
 
 export type * from "./collections/fields/types";
 
+// The shape a stored icon id must have, as a value: the admin's form checks
+// an icon field with the same predicate the server's validators use.
+export { isIconIdShape } from "./collections/fields/types/icon";
+
 // Plugin identity and classification. Both modules are import-free, so the
 // admin can share the exact implementations the server uses without pulling
 // the plugin runtime into a browser bundle. Sharing them is the point: a slug
@@ -205,6 +212,30 @@ export {
   type PluginCategory,
 } from "./plugins/plugin-categories";
 export { pluginAdminSlug } from "./plugins/plugin-slug";
+// The admin places, for the same reason: the catalogue the server checks a
+// plugin's contributions against is the one the admin renders them from.
+export {
+  CORE_ADMIN_PLACES,
+  type AdminPlaceId,
+  type AdminPlaces,
+  type CoreAdminPlaceId,
+} from "./plugins/admin-places";
+// And the entry-list filters a plugin declares, as the workspace meta sends
+// them: the admin offers each one in the list's toolbar.
+export type { PluginListFilterDeclaration } from "./plugins/admin-contributions";
+// And each place's contributions, as the workspace meta sends them to one
+// reader, with the rule language and the one function that answers it, so the
+// admin judges a contribution's rule as the server does.
+export type {
+  AdminContributionsMeta,
+  DeliveredAdminContribution,
+  DeliveredAdminEntry,
+} from "./plugins/admin-contributions-offer";
+export {
+  rowMatches,
+  type RowPredicate,
+  type RowPredicateValue,
+} from "./plugins/row-predicate";
 // And the same for a plugin's HTTP routes, for the same reason and with a
 // sharper consequence. `pluginAdminSlug` derived twice produces a dead link;
 // this derived twice produces a request to a path nothing serves, which the
@@ -255,7 +286,14 @@ export type { HookWarning } from "./hooks/side-effect-warnings";
 export type {
   ComponentPath,
   HeaderButtonId,
+  // The document-action overrides a plugin publishes, which the admin draws.
+  OverridableDocumentAction,
+  PluginDocumentActionOverride,
 } from "./plugins/admin-contributions";
+// And the list those actions are, a value: the admin holds every one of them
+// while it cannot yet tell whether a plugin overrides it. The module imports
+// types only, so this adds the list and nothing behind it.
+export { OVERRIDABLE_DOCUMENT_ACTIONS } from "./plugins/admin-contributions";
 //
 // Taken from the leaf modules rather than from `domains/widgets/index.ts`: that
 // barrel also carries `executeWidgetQuery`, and through it the Direct API, which

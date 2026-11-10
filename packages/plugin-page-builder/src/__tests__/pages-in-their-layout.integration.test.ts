@@ -50,7 +50,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
-import { writeLayoutSettings } from "../default-layout/store";
+import {
+  readLayoutSettings,
+  writeLayoutSettings,
+} from "../default-layout/store";
 import { pageBuilderLayouts } from "../page-layouts";
 import { pageBuilder } from "../plugin";
 
@@ -212,7 +215,12 @@ describe.each(getConfiguredTestDialects())(
       main = await layout("main", mainHeader, "published");
       landing = await layout("landing", landingHeader, "published");
       unpublished = await layout("unpublished", landingHeader, "draft");
-      await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: main });
+      await writeLayoutSettings(
+        t.nextly,
+        SLUGS,
+        await readLayoutSettings(t.nextly, SLUGS),
+        { defaultLayout: main }
+      );
 
       await page("names-landing", landing);
       await page("names-nothing", null);
@@ -234,7 +242,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: LAYOUTS_SLUG,
         id,
-        data: { title, status: "published" },
+        data: { title, status: "published", _overwrite: true },
         overrideAccess: true,
       });
       // The write did expire something: a test of "no page was hit" against
@@ -271,7 +279,12 @@ describe.each(getConfiguredTestDialects())(
 
     it("changing the default through the settings Single rebuilds each dependent page once", async () => {
       expired.length = 0;
-      await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: landing });
+      await writeLayoutSettings(
+        t.nextly,
+        SLUGS,
+        await readLayoutSettings(t.nextly, SLUGS),
+        { defaultLayout: landing }
+      );
       expect(expired.length).toBeGreaterThan(0);
       expect(hits()).toEqual({
         "names-landing": 0,
@@ -303,7 +316,12 @@ describe.each(getConfiguredTestDialects())(
       expect(html).not.toContain("data-nextly-region");
 
       expired.length = 0;
-      await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: main });
+      await writeLayoutSettings(
+        t.nextly,
+        SLUGS,
+        await readLayoutSettings(t.nextly, SLUGS),
+        { defaultLayout: main }
+      );
       expect(hits()["names-nothing-unreadable"]).toBe(1);
     });
   }

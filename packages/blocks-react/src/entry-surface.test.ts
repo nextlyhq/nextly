@@ -21,13 +21,19 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import * as bindingWireModule from "./binding-wire";
 import * as boundaryModule from "./block-boundary";
 import * as blocksEntry from "./blocks/index";
+import * as listReadModule from "./blocks/list-read";
+import * as blockPropsModule from "./blocks/props";
 import * as typographyDefaultsModule from "./blocks/typography-defaults";
 import * as componentSourceModule from "./component-source";
 import * as contextModule from "./context";
+import * as listCollectionsModule from "./list-collections";
 import * as richTextModule from "./rich-text";
 import * as pagePartsModule from "./page-parts";
+import * as pageReadCountModule from "./page-read-count";
+import * as pageReadStagesModule from "./page-read-stages";
 import * as pageRendererModule from "./page-renderer";
 import * as pageStyleTraceModule from "./page-style-trace";
 import * as placeholderModule from "./placeholder";
@@ -35,6 +41,7 @@ import * as previewContainerModule from "./preview-container";
 import * as prepareModule from "./prepare-document";
 import * as readPageModule from "./read-page";
 import * as resolverModule from "./resolver";
+import * as sanitizeModule from "./sanitize";
 import * as sharedStyleInputsModule from "./shared-style-inputs";
 import * as stylesModule from "./styles";
 import * as visibilityModule from "./visibility";
@@ -114,7 +121,93 @@ const SOURCE_MODULES: ReadonlyArray<{
       "MAX_DISCOVERED_COMPONENTS",
     ],
   },
-  { name: "context", module: contextModule, internal: [] },
+  {
+    name: "blocks/list-read",
+    module: listReadModule,
+    // `conditionDayStart` is public, for the editor's canvas to judge a
+    // condition's day as the published page does. The rest is how a list
+    // reads its entries and counts its pages, which the list block and the
+    // route drive; a consumer draws a list through the block.
+    internal: [
+      "dayStartIn",
+      "listEntryCount",
+      "listPageWindow",
+      "listPagesOf",
+      // Published from `./blocks` beside `listEntryCount`, for the editor's
+      // canvas, rather than from the root.
+      "listShownCount",
+      "listWillRead",
+      "namedListBase",
+      "readList",
+      "wholeCount",
+    ],
+  },
+  {
+    name: "binding-wire",
+    module: bindingWireModule,
+    // The wire form and the one question about it an editor asks are public;
+    // these two are how that form is written and read back.
+    internal: ["recordedFieldShapes", "shapeRefKey"],
+  },
+  {
+    name: "blocks/props",
+    module: blockPropsModule,
+    // `fetchableUrl` is public, for a caller judging what a page draws by the
+    // renderer's one filter. The rest is how a block reads its own stored
+    // props: a block author's input is the render arguments, not these.
+    internal: [
+      "boundImage",
+      "boundText",
+      "canLink",
+      "flag",
+      "isAuthoredText",
+      "isPresent",
+      "isTrustedOrigin",
+      "LINK_PROPS",
+      "linkFor",
+      "number",
+      "oneOf",
+      "readClaimOf",
+      "relFor",
+      "text",
+      "url",
+    ],
+  },
+  {
+    name: "context",
+    module: contextModule,
+    // How the route batches its component reads, shared with the context's
+    // own reader; a consumer's batching is its own provider's.
+    internal: ["COMPONENT_BATCH_SIZE", "componentBatches", "placementsOf"],
+  },
+  // Public whole: the editor's count of what a page reads when published,
+  // which runs the published route's own read stages.
+  { name: "page-read-count", module: pageReadCountModule, internal: [] },
+  {
+    name: "page-read-stages",
+    module: pageReadStagesModule,
+    // Its types describe `countPageReads`' arguments and are published beside
+    // it. The stages themselves are the route's and that count's to run; a
+    // consumer asks through `countPageReads` or the route.
+    internal: [
+      "drawWithRegions",
+      "effectiveLimits",
+      "listDayInputs",
+      "pagedListOf",
+      "pageTimeZone",
+      "readPageInputs",
+      "readPageStages",
+      "readsMediaInBatches",
+      "stagedContext",
+    ],
+  },
+  {
+    name: "list-collections",
+    module: listCollectionsModule,
+    // The walk behind `listCollections`, shared with the route's other
+    // questions about a page's lists; not a consumer surface.
+    internal: ["anyListWhere", "listCollectionsWhere", "listPropsAsBound"],
+  },
   // Public whole: how a page and the regions of its Layout share one site
   // sheet and keep their styles apart, asked by the published route and the
   // editor's canvas alike.
@@ -128,17 +221,30 @@ const SOURCE_MODULES: ReadonlyArray<{
     // second one here. These are exported only so their own test can drive
     // them at a depth React's renderer could not reach, and at the
     // partition's bound from both sides. `drawsInteractive` is shared with the
-    // rich-text block's content model in this package, not offered outside it.
+    // rich-text block's content model in this package, not offered outside it,
+    // and so is `passageHeadings`, the walk the table-of-contents block lists
+    // a passage's headings by. `VIEWS_DRAWING_CHILDREN` is exported for the
+    // test that holds every view to what it declares it draws.
     internal: [
       "drawsInteractive",
       "holdsBlockContent",
       "holdsInteractive",
       "MAX_PARTITION_DEPTH",
       "partitionPhrasing",
+      "passageHeadings",
+      "VIEWS_DRAWING_CHILDREN",
     ],
   },
   { name: "page-style-trace", module: pageStyleTraceModule, internal: [] },
   { name: "resolver", module: resolverModule, internal: [] },
+  {
+    name: "sanitize",
+    module: sanitizeModule,
+    // `sanitizeDocument` is public, so the editor's canvas judges a page's
+    // conditions on the tree the renderer draws, not a corrupt node it drops.
+    // Repairing duplicate ids is a step of the renderer's own preparation.
+    internal: ["dedupeNodeIds"],
+  },
   {
     name: "shared-style-inputs",
     module: sharedStyleInputsModule,
@@ -244,6 +350,9 @@ const SOURCE_MODULES: ReadonlyArray<{
       "hasDuplicateNodeIds",
       "isRecordedGatedEntry",
       "isUsableGatedEntry",
+      // The rules a list serves beside the first instance of a block its items
+      // decide. The renderer asks it of the artifact it just compiled.
+      "itemDecidedRules",
       // The newest member of that family, and the reason it lives here rather
       // than beside either caller: a migration that turns a drawing node
       // drawless leaves stale rules published, and a fix reaching only one
@@ -266,7 +375,26 @@ const SOURCE_MODULES: ReadonlyArray<{
     // `pruneNodes` is the shared walk the three passes share so their identity
     // behaviour cannot diverge. It is a shape, not a policy, and a consumer
     // reaching for it is writing a fourth pass this package cannot account for.
-    internal: ["drawsNothing", "isUnconditional", "pruneNodes"],
+    // `entrySubjectOf` is the route's reading of its own read bindings: the
+    // entry a page's conditions judge. It lives beside the gate so the rule
+    // sits with the evaluator, and only the `./next` route, which made that
+    // read, has the bindings to hand it.
+    //
+    // The rest is how the route and the renderer decide a page's conditions
+    // between them. `pruneHiddenNodes` is the pass a caller needs; each of
+    // these takes the route's own read of the entry, or the state of a render
+    // in progress.
+    internal: [
+      "conditionAllows",
+      "drawsNothing",
+      "entryConditionedIn",
+      "entrySubjectOf",
+      "gateByConditions",
+      "isUnconditional",
+      "itemFields",
+      "markByConditions",
+      "pruneNodes",
+    ],
   },
   { name: "placeholder", module: placeholderModule, internal: [] },
   {
@@ -351,26 +479,24 @@ const SOURCE_MODULES: ReadonlyArray<{
     // returns. A consumer never holds a resolved node without also holding the
     // stages that explain it, so there is nothing here to offer.
     //
-    // `repairingLookup` is the view of the definitions map this pipeline
-    // composes through. It crosses to the pass that FETCHES definitions, which
-    // asks the resolver what it would reach and must ask through the same
-    // lookup — repair drops malformed nodes, so a fetch that built its own
-    // view would predict a different tree than the one that renders. Exported
-    // to delete that second view, not to offer one: a consumer holding a
-    // definitions map wants `prepareDocumentForRead`, which builds this itself.
-    //
     // `prepareDocument` and `readStagesFor` are the route preparing a page once
     // and the renderer reusing that preparation. The prop that carries one is
     // internal, and what it carries is sealed inside this module, so there is
     // nothing here a consumer could build.
+    //
+    // `regateDocument`, `heldConditionsOf` and `holdsBackConditions` are that
+    // same preparation deciding a page's conditions once the route has read
+    // its entry, sealed the same way.
     internal: [
+      "heldConditionsOf",
+      "holdsBackConditions",
       "isUnresolvedInstance",
       "prepareDocument",
       "prepareDocumentReadStages",
       "pruneKnownPlaceholders",
       "readingViewOf",
       "readStagesFor",
-      "repairingLookup",
+      "regateDocument",
     ],
   },
   {
@@ -403,8 +529,20 @@ describe("the root entry", () => {
       "COMPONENT_DOCUMENT_FIELD",
       // The editor marker namespace, public so an editor refuses a name the
       // renderer would drop rather than keeping a list beside it.
+      // The read budget's default: see `createQueryBudget`.
+      "DEFAULT_MAX_QUERIES",
       "EDITOR_NAMESPACE",
+      // The Entry content block's marks on the editor's canvas, public so the
+      // canvas's sheet draws by the names the renderer writes.
+      "ENTRY_CONTENT_DRAWN_ATTRIBUTE",
+      "ENTRY_CONTENT_NOTE_ATTRIBUTE",
       "INSTANCE_ATTRIBUTE",
+      // The action a collection list's note offers on the editor's canvas,
+      // public so the canvas acts on the name the renderer writes.
+      "LIST_ACTION_ATTRIBUTE",
+      // The log reference that note's copy button carries, public for the same
+      // reason: the canvas copies the value the renderer wrote.
+      "LIST_REF_ATTRIBUTE",
       "NODE_ID_ATTRIBUTE",
       // The container names a preview compile aims its breakpoints at. Public
       // because the surface doing the previewing must put the same identifier
@@ -417,30 +555,62 @@ describe("the root entry", () => {
       "PREVIEW_VIEWPORT_CONTAINER",
       "PROP_ATTRIBUTE",
       "PageRenderer",
+      // The kinds of read a page's allowance counts, in the order the editor's
+      // read meter lists them, so it cannot name a kind the budget does not.
+      "READ_KINDS",
       "RichText",
       // The container marker. Public so an editor asks whether a block declares
       // slots instead of keeping a hardcoded list of container type names.
       "SLOTS_ATTRIBUTE",
       "TYPOGRAPHY_DEFAULTS",
       "UNPREVIEWABLE_CONTAINER",
+      // Added deliberately: binding sources read on a server, carried to the
+      // editor's canvas and read back there, by one pair of functions.
+      "bindingsFromWire",
+      "bindingsToWire",
+      // When a day starts for a visibility condition on a date, in the site's
+      // zone: public so the editor's canvas judges conditions with the rule
+      // the published page judges them with.
+      "conditionDayStart",
+      // What a page reads when published, counted in the editor by the route's
+      // own read stages.
+      "countPageReads",
       "createBlockResolver",
       // The provider a route reads its lists through when given none, public
       // so a route's own `data` can narrow it rather than rewrite it.
       "createDefaultDataProvider",
+      // The bound on one render's reads, and its default, public so every
+      // surface that draws a page (the editor's canvas too) bounds alike.
+      "createQueryBudget",
       "createStandaloneContext",
       "defineBlock",
       // The definitions a document reaches, discovered as the render does.
       "definitionsFor",
       "emptyDataProvider",
       "fetchPolicyLabel",
+      // The image and embed blocks' one filter on an address, public so a
+      // caller judging what a page draws asks what they ask.
+      "fetchableUrl",
       // The render-safe attribute rule. Public because the editor offering that
       // field asks it rather than keeping a copy that would drift.
       "isAllowedAttribute",
+      // Splits the page's reported issues for a handler that reads only the
+      // bindings', the union `PageIssue` being public.
+      "isBindingIssue",
       "islandsFor",
       // Which part of a page drawn inside its Layout emits the site sheet, and
       // the scope each part compiles under.
       "layoutPartSheets",
+      // One block with its conditions lifted, as the editor draws one that
+      // holds while conditions are applied.
+      "liftedNode",
+      // The collections a page's lists draw: the published route and the
+      // editor's canvas ask one walk which lists a page holds.
+      "listCollections",
       "migrationSourceFor",
+      // Whether a recorded lookup found no field a visitor may read, so the
+      // editor can say a whole source is hidden from visitors.
+      "noPublicFields",
       "pageBindingRun",
       "pageStyleTrace",
       "prepareDocumentAsDrawn",
@@ -451,8 +621,17 @@ describe("the root entry", () => {
       "pruneHiddenNodes",
       "registeredBlocks",
       "rendersOwnMarkup",
+      // The view of the definitions map the pipeline composes through. Public
+      // because the editor composes a page beside the renderer, for the marks
+      // it draws over the canvas, and must compose the same tree: repair drops
+      // malformed nodes before they count against the page's budget, so a view
+      // of its own would compose a different tree than the one drawn.
+      "repairingLookup",
       "resolvePageStyles",
       "resolvePageStylesWithTrace",
+      // A stored document made sound to walk, as the renderer makes it: public
+      // so the editor judges conditions on the tree the renderer draws.
+      "sanitizeDocument",
       "sharedStyleInputs",
       "styleTextForInjection",
       // The render's own discovery, asked from outside the render. Public so a
@@ -578,28 +757,48 @@ describe("the blocks entry", () => {
       "HEADING_LEVELS",
       "IMAGE_LOADING",
       "LIST_KINDS",
+      "TABLE_OF_CONTENTS_DEPTHS",
       "accordion",
       "accordionItem",
       "box",
       "button",
       "card",
+      // Added deliberately, for a host running a named query where it is asked
+      // for: the failure a run carries, its log line, and the run itself.
+      "carriedFailureOf",
       "collectionLoop",
       "column",
       "columns",
       "coreBlocks",
       "divider",
       "embed",
+      // Added deliberately: the Entry content block, where a template draws
+      // the entry's own blocks content.
+      "entryContent",
       "form",
       "gallery",
       "heading",
+      "icon",
       "image",
       "list",
+      // Added deliberately: the editor's count of a list's matching entries,
+      // taken from the list's own read, so the two cannot disagree.
+      "listEntryCount",
+      // Added deliberately: the editor's count of the entries a list draws,
+      // read through the list's own read.
+      "listShownCount",
+      // Added deliberately: how a list's stored custom source reads, for the
+      // editor's choice of it and the host that runs it.
+      "namedListBase",
+      "namedQueryFailureLine",
       "paragraph",
       "quote",
+      "readNamedList",
       "renderContainer",
       "richText",
       "section",
       "spacer",
+      "tableOfContents",
     ]);
   });
 
@@ -640,9 +839,17 @@ describe("the next entry", () => {
       "BLOCKS_REACT_NEXT_ENTRY",
       "DEFAULT_MAX_QUERIES",
       "createBlocksPage",
+      // Added deliberately: the one route serving every address the site's
+      // address store holds, a page's or a collection's entry's.
+      "createContentPage",
       "createPublicBlocksPage",
+      "createPublicContentPage",
       "createPublicSinglePage",
       "createSinglePage",
+      // Added deliberately: what a page's bindings read, through whichever
+      // reader a route passes, so the editor's canvas reads its binding
+      // sources by the published page's own implementation.
+      "readBindingSources",
     ]);
   });
 });

@@ -19,6 +19,9 @@ vi.mock("@admin/hooks/queries", () => ({
     isError: false,
   }),
   useRunDrain: () => ({ mutate: vi.fn(), isPending: false }),
+  // The event-type filter's choices, not yet loaded: what the page shows
+  // before the server's list arrives.
+  useWebhookEventTypes: () => ({ data: undefined, isError: false }),
 }));
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
 

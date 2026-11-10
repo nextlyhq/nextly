@@ -1,6 +1,13 @@
 {
   "formatVersion": 1,
   "kind": "page",
+  "settings": {
+    "seo": {
+      "description": [
+        "Build real pages in Nextly's page builder, on a typed schema and one database, with no bespoke CMS glue."
+      ]
+    }
+  },
   "nodes": [
     {
       "id": "dogfood-hero",
@@ -200,7 +207,7 @@
             "version": 1,
             "props": {
               "text": "The page a visitor gets is the page the author built.",
-              "citation": "Nextly design note"
+              "attribution": "Nextly design note"
             }
           },
           {

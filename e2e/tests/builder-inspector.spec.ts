@@ -222,7 +222,7 @@ const LOCKED_REASON = /^Locked: it can't be moved, deleted or edited/;
  */
 async function lockAndUnlock(page: Page): Promise<void> {
   const content = page.getByRole("tabpanel", { name: "Content" });
-  await expect(content.getByLabel("Text")).toBeEnabled();
+  await expect(content.getByLabel("Text", { exact: true })).toBeEnabled();
   await page.getByRole("tab", { name: "Style" }).click();
   const style = page.locator(".nx-style-inspector");
   // A control of the open section, enabled before the lock, so its being
@@ -241,7 +241,7 @@ async function lockAndUnlock(page: Page): Promise<void> {
   // The reason is said once, on the card; the Style tab does not repeat it.
   const lock = page.locator('[data-lock="layers"]');
   await expect(lock).toContainText("Locked");
-  await expect(content.getByLabel("Text")).toBeDisabled();
+  await expect(content.getByLabel("Text", { exact: true })).toBeDisabled();
   await page.getByRole("tab", { name: "Style" }).click();
   await expect(field).toBeDisabled();
   await expect(page.getByText(LOCKED_REASON)).toHaveCount(1);
@@ -257,7 +257,7 @@ async function lockAndUnlock(page: Page): Promise<void> {
   await expect(lock).toHaveCount(0);
   await expect(field).toBeEnabled();
   await page.getByRole("tab", { name: "Content" }).click();
-  await expect(content.getByLabel("Text")).toBeEnabled();
+  await expect(content.getByLabel("Text", { exact: true })).toBeEnabled();
 }
 
 /** A Style section's header, by catalog key. */
@@ -474,19 +474,22 @@ test.describe("the inspector", () => {
       ((site.item ?? site) as Record<string, unknown>).classes ?? [];
     const storeClasses = async (value: unknown): Promise<void> => {
       const stored = await page.request.patch(SITE_STYLE, {
-        data: { classes: value },
+        data: { classes: value, _overwrite: true },
       });
       expect(stored.ok(), `storing shared styles: ${stored.status()}`).toBe(
         true
       );
     };
     await storeClasses([CARD]);
+    let id: string | undefined;
     try {
-      const id = await createPage(page.request, [CARD.id]);
+      id = await createPage(page.request, [CARD.id]);
       await openBuilder(page, id);
       await select(page, HEADING);
       await lockAndUnlock(page);
     } finally {
+      // The page goes first: a shared style still in use cannot be removed.
+      if (id !== undefined) await page.request.delete(`${ENTRIES}/${id}`);
       await storeClasses(classes);
     }
   });
@@ -546,21 +549,41 @@ test.describe("the inspector", () => {
     // The header below the opening section, where it is drawn now. An
     // opening section's fields left unclipped while it grows are drawn over
     // it, and take the click.
-    const size = await sectionHeader(page, "size").boundingBox();
-    if (size === null) throw new Error("the Size header has no box");
-    const x = size.x + 20;
-    const y = size.y + size.height / 2;
-    const hit = await page.evaluate(
-      ([px, py]) =>
-        document
-          .elementFromPoint(px, py)
-          ?.closest(".nx-style-inspector__section-trigger")
-          ?.closest("[data-section]")
-          ?.getAttribute("data-section") ?? null,
-      [x, y] as const
-    );
-    expect(hit).toBe("size");
-    await page.mouse.click(x, y);
+    //
+    // Measured and hit-tested in ONE evaluation, so in one frame: the header
+    // moves throughout the motion, and two round trips — its box, then the
+    // element at that point — let it move between them, which under a loaded
+    // machine sent the probe to where the header had been.
+    //
+    // And pressed in that same frame, by the element found at that point, so
+    // the press happens while the section above is still opening and cannot
+    // lag behind the header it was aimed at.
+    const hit = await page.evaluate(() => {
+      const header = document.querySelector(
+        '.nx-style-inspector [data-section="size"] .nx-style-inspector__section-trigger'
+      );
+      if (header === null) throw new Error("the Size header is not drawn");
+      const box = header.getBoundingClientRect();
+      const under = document.elementFromPoint(
+        box.x + 20,
+        box.y + box.height / 2
+      );
+      const trigger = under?.closest(".nx-style-inspector__section-trigger");
+      const section =
+        trigger?.closest("[data-section]")?.getAttribute("data-section") ??
+        null;
+      // Read BEFORE the press: the press starts Size's own animation, which
+      // would otherwise answer "still moving" for a section above that had
+      // already come to rest.
+      const stillMoving =
+        (document
+          .querySelector(".nx-style-inspector")
+          ?.getAnimations({ subtree: true }).length ?? 0) > 0;
+      if (trigger instanceof HTMLElement) trigger.click();
+      return { section, stillMoving };
+    });
+    expect(hit.section).toBe("size");
+    expect(hit.stillMoving, "pressed while the section above opens").toBe(true);
     await expect
       .poll(async () => (await openSections(page)).includes("size"))
       .toBe(true);

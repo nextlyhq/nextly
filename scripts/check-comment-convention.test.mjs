@@ -277,7 +277,7 @@ describe("the allowlist", () => {
   // entries without removing or lowering any, one more when it learned the bracketed form, and one
   // more when patterns began reading normalised text and a label wrapped across lines became
   // visible. A raise for any other reason is the silencing this guards against.
-  const EXPECTED_ENTRIES = 215;
+  const EXPECTED_ENTRIES = 214;
   // 503 -> 498: recorded offences in `services/users.ts`, the Direct API auth
   // namespace and its test, and `auth-service.ts` no longer exist, so the list
   // shrank by five digests. Each entry itself remains, which is why the count
@@ -310,7 +310,11 @@ describe("the allowlist", () => {
   // each naming a roadmap milestone, no longer exist; its entry remains.
   // 446 -> 445: one recorded offence in `route-parser.ts`, naming a roadmap
   // milestone, no longer exists; its entry remains.
-  const EXPECTED_TOTAL = 445;
+  // 445 -> 443: one recorded offence each in `generate.ts` and
+  // `collection-file-manager.ts` no longer exists; both entries remain.
+  // 443 -> 442: the one recorded offence in `scaffold-build.yml` no longer
+  // exists, and its entry went with it.
+  const EXPECTED_TOTAL = 442;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);

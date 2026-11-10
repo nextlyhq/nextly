@@ -47,6 +47,11 @@ import { withoutLeavingConstraints } from "../../i18n/migration/field-leaves-tra
 import { applyCompanionTransition } from "../../i18n/migration/held-leaving-drops";
 import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
 import {
+  perLanguageStorageEnabled,
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
+import {
   companionHasStatusColumn,
   liveCompanionShape,
 } from "../../i18n/runtime/companion-io";
@@ -568,11 +573,29 @@ function translatedSettingsDeferred(
     : undefined;
 }
 
+/**
+ * Whether the change's collection kept, and keeps, its translatable values per language: the
+ * storage answer to its translation flags before and after.
+ */
+function storedPerLanguage(change: CollectionSchemaChange): {
+  wasLocalized: boolean;
+  isLocalized: boolean;
+} {
+  return {
+    wasLocalized: storesPerLanguage({ localized: change.wasLocalized }),
+    isLocalized: storesPerLanguage({ localized: change.isLocalized }),
+  };
+}
+
 /** `applyCollectionSchemaChange`'s work, run while this context holds the schema lock. */
 async function applyHoldingSchemaLock(
   change: CollectionSchemaChange
 ): Promise<Extract<ApplyResult, { success: true }>> {
-  const { slug, collection, fields, wasLocalized, isLocalized } = change;
+  const { slug, collection, fields } = change;
+  // Where its translatable values were and are stored, which every step below decides from: per
+  // language when it is translated, or always under per-language storage, where turning
+  // translation on or off moves nothing.
+  const { wasLocalized, isLocalized } = storedPerLanguage(change);
   const { tableName } = collection;
   const deps = requireSchemaChangeDeps(slug);
   const { adapter } = deps;
@@ -716,7 +739,8 @@ async function reconcileCompanion(args: {
   defaultLocale: string;
 }): Promise<void> {
   const { change, adapter, desired, apply, oldFields } = args;
-  const { slug, fields, wasLocalized, isLocalized } = change;
+  const { slug, fields } = change;
+  const { wasLocalized, isLocalized } = storedPerLanguage(change);
   const { tableName } = change.collection;
   try {
     const companionExists = await adapter.tableExists(`${tableName}_locales`);
@@ -732,7 +756,14 @@ async function reconcileCompanion(args: {
       tableName,
       dialect: adapter.dialect,
       defaultLocale: args.defaultLocale,
-      status: change.status,
+      // Under per-language storage a per-language `_status` only where it publishes each language
+      // on its own; otherwise the Draft/Published flag, as it has always been.
+      status: perLanguageStorageEnabled()
+        ? publishesPerLanguage({
+            localized: change.isLocalized,
+            status: change.status,
+          })
+        : change.status,
       wasLocalized,
       isLocalized,
       // The status before the change, which decides whether main carried `status` and the

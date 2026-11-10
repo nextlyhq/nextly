@@ -26,6 +26,15 @@ import type {
   TokenKind,
   UrlLeaf,
 } from "./catalog-types";
+import {
+  DISCLOSURE_ICON_EXPANSIONS,
+  DISCLOSURE_ICON_PROPERTY,
+  DISCLOSURE_ICONS,
+  DISCLOSURE_POSITION_EXPANSIONS,
+  DISCLOSURE_POSITION_PROPERTY,
+  DISCLOSURE_POSITIONS,
+} from "./disclosure";
+import { OVERLAY_COLOR, OVERLAY_STRENGTH } from "./overlay";
 
 // --- Leaf constructors ------------------------------------------------------
 // Terse to author, explicit once built: every leaf carries the literal CSS
@@ -709,6 +718,27 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     summary: "The marker drawn beside each list item.",
   },
   {
+    property: "disclosureIcon",
+    // Its own group, offered only by a block whose children are disclosures
+    // (an Accordion): each keyword writes its sections' title rows, so on any
+    // other block it would style nothing.
+    group: "disclosure",
+    shape: {
+      ...keyword(DISCLOSURE_ICON_PROPERTY, DISCLOSURE_ICONS),
+      expands: DISCLOSURE_ICON_EXPANSIONS,
+    },
+    summary: "The icon each section shows beside its title.",
+  },
+  {
+    property: "disclosurePosition",
+    group: "disclosure",
+    shape: {
+      ...keyword(DISCLOSURE_POSITION_PROPERTY, DISCLOSURE_POSITIONS),
+      expands: DISCLOSURE_POSITION_EXPANSIONS,
+    },
+    summary: "Whether the icon sits before or after each section's title.",
+  },
+  {
     property: "textDecoration",
     group: "typography",
     shape: cssValue("text-decoration"),
@@ -762,7 +792,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
         // `none` is what clears an image set at an earlier state, and it has
         // to be a keyword rather than a path or it emits `url("none")`. A file
         // really named `none` is still reachable as `./none`.
-        url: url("background-image", ["none"]),
+        url: { ...url("background-image", ["none"]), overlaid: true },
         position: cssValue("background-position"),
         size: cssValue("background-size"),
         // `repeat-x` and `repeat-y` each name both axes already, so they are
@@ -778,6 +808,11 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
           "fixed",
           "local",
         ]),
+        // A colour laid over the image, and how strongly, in percent: each
+        // its own custom property, which the image's layer reads, so either
+        // may be set at a device the image is not.
+        overlay: color(OVERLAY_COLOR),
+        overlayStrength: numberValue(OVERLAY_STRENGTH, { min: 0, max: 100 }),
       },
     },
     summary: "Background image and how it is placed.",
@@ -786,7 +821,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     property: "backgroundGradient",
     group: "background",
     flag: "gradient",
-    shape: cssValue("background-image"),
+    shape: { ...cssValue("background-image"), overlaid: true },
     summary: "Gradient fill, as a CSS gradient value.",
   },
 

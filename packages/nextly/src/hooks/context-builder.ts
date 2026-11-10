@@ -37,6 +37,9 @@ export interface BuildContextOptions<T = any> {
    */
   originalData?: T;
 
+  /** See {@link HookContext.storedStatus}. */
+  storedStatus?: string | null;
+
   /**
    * User ID performing the operation (if authenticated)
    */
@@ -77,6 +80,9 @@ export interface BuildContextOptions<T = any> {
    * pool (see {@link HookContext.executor}). Omitted outside a transaction.
    */
   executor?: unknown;
+
+  /** Holds an effect until the write is durable; see {@link HookContext.afterCommit}. */
+  afterCommit?: (effect: () => unknown) => Promise<void>;
 }
 
 /**
@@ -146,10 +152,14 @@ export function buildContext<T = any>(
     operation: options.operation,
     data: options.data,
     originalData: options.originalData,
+    ...(options.storedStatus === undefined
+      ? {}
+      : { storedStatus: options.storedStatus }),
     user,
     context,
     req: options.req,
     executor: options.executor,
+    afterCommit: options.afterCommit,
   };
 }
 
@@ -218,6 +228,9 @@ export function cloneContext<T>(context: HookContext<T>): HookContext<T> {
     operation: context.operation,
     data: context.data,
     originalData: context.originalData,
+    ...(context.storedStatus === undefined
+      ? {}
+      : { storedStatus: context.storedStatus }),
     user: context.user ? { ...context.user } : undefined,
     context: { ...context.context },
     req: context.req
@@ -231,5 +244,9 @@ export function cloneContext<T>(context: HookContext<T>): HookContext<T> {
           http: context.req.http,
         }
       : undefined,
+    // Shared, not rebuilt: it holds an effect for the write this context
+    // belongs to, and a clone handed on without it would leave its receiver
+    // no way to wait for that write, so it would act at once.
+    afterCommit: context.afterCommit,
   };
 }

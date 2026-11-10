@@ -1082,18 +1082,22 @@ function isJsonLeaf(value: unknown): boolean {
  * token's kind — which is what decides where it may be used.
  */
 export function exportCss(tokens: SiteTokenSet): ExportResult {
-  const sheet = compileSiteSheet({
-    tokens,
-    /*
-     * No breakpoints, and TYPED rather than cast. Token declarations are not
-     * emitted under any at-rule, so the axes decide nothing here — but the cast
-     * that used to stand in for them hid the fact that the value was the wrong
-     * SHAPE entirely, and a wrong argument to this call would have gone on
-     * compiling. A `BreakpointSet` with two empty axes says the same thing and
-     * says it in the type.
-     */
-    breakpoints: { viewport: [], container: [] },
-  });
+  const sheet = compileSiteSheet(
+    {
+      tokens,
+      /*
+       * No breakpoints, and TYPED rather than cast. Token declarations are not
+       * emitted under any at-rule, so the axes decide nothing here — but the cast
+       * that used to stand in for them hid the fact that the value was the wrong
+       * SHAPE entirely, and a wrong argument to this call would have gone on
+       * compiling. A `BreakpointSet` with two empty axes says the same thing and
+       * says it in the type.
+       */
+      breakpoints: { viewport: [], container: [] },
+    },
+    // Tokens only: no class is compiled, so no part routes anything.
+    {}
+  );
   return {
     // An empty sheet stays empty rather than becoming a newline. A
     // one-character file downloads as `tokens.css` and reports as saved, which

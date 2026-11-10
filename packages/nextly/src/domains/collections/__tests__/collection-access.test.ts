@@ -99,6 +99,15 @@ vi.mock("../../../database/index", () => ({
   getDialectTables: vi.fn(() => ({})),
 }));
 
+// The physical companion these suites describe: created, and carrying the
+// `_status` column `loadCompanionSchema` declares. Both answers come from
+// introspecting a real table, which nothing behind this suite's mock db can do.
+vi.mock("../../i18n/runtime/companion-io", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  companionTableExists: vi.fn(async () => true),
+  companionHasStatusColumn: vi.fn(async () => true),
+}));
+
 vi.mock("../../../collections/fields/guards", () => ({
   isFieldGroupField: vi.fn().mockReturnValue(false),
 }));
@@ -351,7 +360,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
       const result = await service.updateEntry(
         { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
-        { title: "Updated" }
+        { title: "Updated", _overwrite: true }
       );
 
       expect(result.statusCode).toBe(403);
@@ -374,7 +383,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
           entryId: "entry-1",
           user: { id: "user-1" },
         },
-        { title: "Updated" }
+        { title: "Updated", _overwrite: true }
       );
 
       expect(result.success).toBe(false);
@@ -698,7 +707,7 @@ describe("publish-transition access control", () => {
 
     const result = await service.updateEntry(
       { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
 
     expect(result.success).toBe(false);
@@ -723,7 +732,7 @@ describe("publish-transition access control", () => {
           selectOne: async () => createSampleEntry({ status: "draft" }),
         } as never,
         { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       )
     )) as { statusCode: number; code?: string };
 
@@ -740,7 +749,7 @@ describe("publish-transition access control", () => {
 
     const result = await service.updateEntry(
       { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
-      { status: "draft" }
+      { status: "draft", _overwrite: true }
     );
 
     expect(result.success).toBe(false);
@@ -774,7 +783,7 @@ describe("publish-transition access control", () => {
 
     const result = await service.updateEntry(
       { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
-      { title: "still here", status: 0 }
+      { title: "still here", status: 0, _overwrite: true }
     );
 
     expect(result.success).toBe(false);
@@ -793,7 +802,11 @@ describe("publish-transition access control", () => {
 
     const result = await service.updateEntry(
       { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
-      { title: "Edited, still published", status: "published" }
+      {
+        title: "Edited, still published",
+        status: "published",
+        _overwrite: true,
+      }
     );
 
     // The transition check never fires (no move), so the publish denial is
@@ -811,7 +824,7 @@ describe("publish-transition access control", () => {
 
     const result = await service.updateEntry(
       { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
-      { title: "Just a title" }
+      { title: "Just a title", _overwrite: true }
     );
 
     expect(result.statusCode).not.toBe(403);
@@ -831,7 +844,7 @@ describe("publish-transition access control", () => {
 
     await service.updateEntry(
       { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
 
     // The gate was asked about the update, and never about publishing, when
@@ -862,7 +875,7 @@ describe("publish-transition access control", () => {
 
     const result = await service.updateEntry(
       { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
-      { title: "Body omits status" }
+      { title: "Body omits status", _overwrite: true }
     );
 
     expect(result.success).toBe(false);
@@ -910,7 +923,7 @@ describe("publish-transition access control", () => {
         user: { id: "user-1" },
         locale: "de",
       },
-      { title: "German translation", status: "published" }
+      { title: "German translation", status: "published", _overwrite: true }
     );
 
     expect(result.success).toBe(false);
@@ -958,7 +971,7 @@ describe("publish-transition access control", () => {
         // locale's companion `_status`.
         locale: "en",
       },
-      { title: "default-locale edit", status: "published" }
+      { title: "default-locale edit", status: "published", _overwrite: true }
     );
 
     expect(result.success).toBe(false);
@@ -1013,7 +1026,7 @@ describe("publish-transition access control", () => {
         user: { id: "user-1" },
         locale: "de",
       },
-      { title: "just a translation edit", status: null }
+      { title: "just a translation edit", status: null, _overwrite: true }
     );
 
     expect(result.statusCode).not.toBe(403);
@@ -1092,7 +1105,7 @@ describe("publish-transition access control", () => {
         entryId: "entry-1",
         overrideAccess: true,
       },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
 
     expect(result.statusCode).not.toBe(403);
@@ -1118,7 +1131,7 @@ describe("publish-transition access control", () => {
         user: { id: "user-1" },
         routeAuthorized: true,
       },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
 
     expect(result.success).toBe(false);
@@ -1150,7 +1163,7 @@ describe("publish-transition access control", () => {
           permissions: ["update-posts"],
         },
       },
-      { title: "no status change" }
+      { title: "no status change", _overwrite: true }
     );
 
     // The gate ran and denied — the super-admin bypass did not fire.

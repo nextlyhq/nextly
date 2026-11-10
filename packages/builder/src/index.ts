@@ -125,7 +125,7 @@ export {
   type BuilderOp,
   type NodePatch,
   type OpPosition,
-} from "./ops";
+} from "./op-vocabulary";
 
 /**
  * @experimental The editor shell's props.
@@ -221,6 +221,7 @@ export {
   blockAllowedAt,
   registryBlockSource,
   registrySlotSource,
+  slotsShowingEmpty,
   // The engine spells the placement destination, and this package re-exports
   // that spelling rather than a second one: the drop and region types below are
   // written in terms of it, and a consumer holding one has to be able to hand it

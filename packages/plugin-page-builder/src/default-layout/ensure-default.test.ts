@@ -56,6 +56,9 @@ function site(options: SiteOptions = {}) {
   const rows: Row[] = [...(options.rows ?? [])];
   const deleted: string[] = [];
   const finds: Record<string, unknown>[] = [];
+  // What each write sent, as sent: the stored settings merge it away.
+  const settingsWritten: Record<string, unknown>[] = [];
+  const layoutUpdates: { id: string; data: Record<string, unknown> }[] = [];
   let settings: Record<string, unknown> = { ...(options.settings ?? {}) };
   let settingsReads = 0;
   let settingsWrites = 0;
@@ -86,6 +89,7 @@ function site(options: SiteOptions = {}) {
       return answer;
     },
     updateSingle: async ({ data }: { data: Record<string, unknown> }) => {
+      settingsWritten.push(data);
       settingsWrites += 1;
       if (options.failFirstSettingsWrite === true && settingsWrites === 1) {
         throw new Error("the settings write failed");
@@ -130,6 +134,7 @@ function site(options: SiteOptions = {}) {
       id: string;
       data: Record<string, unknown>;
     }) => {
+      layoutUpdates.push({ id, data });
       const row = rows.find(candidate => candidate.id === id);
       if (row !== undefined && typeof data.status === "string") {
         row.status = data.status;
@@ -146,7 +151,15 @@ function site(options: SiteOptions = {}) {
     },
   } as unknown as DefaultLayoutDirectApi;
 
-  return { nextly, rows, deleted, finds, settings: () => settings };
+  return {
+    nextly,
+    rows,
+    deleted,
+    finds,
+    settingsWritten,
+    layoutUpdates,
+    settings: () => settings,
+  };
 }
 
 /**
@@ -342,5 +355,42 @@ describe("who chose the default", () => {
       defaultLayout: s.rows[0]?.id,
       defaultLayoutChangedBy: null,
     });
+  });
+});
+
+describe("the version each repair write sends", () => {
+  it("points the default back at the seed with the version its last read gave, and republishes the seed as an overwrite", async () => {
+    // A make-default landing between the repair's read and its write refuses
+    // the write instead of being undone; the seed it owns is published
+    // whatever it holds.
+    const s = site({
+      rows: [
+        {
+          id: "seed",
+          title: "Default (site)",
+          slug: "default-site",
+          status: "draft",
+        },
+      ],
+      settings: { defaultLayout: "gone", seededLayout: "seed", _rev: "2" },
+    });
+
+    await expect(ensureDefaultLayout(depsFor(s))).resolves.toBe("repointed");
+
+    expect(s.layoutUpdates).toEqual([
+      { id: "seed", data: { status: "published", _overwrite: true } },
+    ]);
+    expect(s.settingsWritten).toEqual([
+      { defaultLayout: "seed", defaultLayoutChangedBy: null, _rev: "2" },
+    ]);
+  });
+
+  it("records a new seed on settings never stored as an overwrite, there being nothing to be out of date with", async () => {
+    const s = site({ settings: {} });
+
+    await expect(ensureDefaultLayout(depsFor(s))).resolves.toBe("seeded");
+
+    expect(s.settingsWritten[0]).toMatchObject({ _overwrite: true });
+    expect(s.settingsWritten[0]).not.toHaveProperty("_rev");
   });
 });

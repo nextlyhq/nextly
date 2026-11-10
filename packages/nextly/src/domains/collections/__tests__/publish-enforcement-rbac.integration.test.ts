@@ -61,7 +61,7 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
         userId: "user-no-publish",
         routeAuthorized: true,
       },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
 
     expect(denied.success).toBe(false);
@@ -80,7 +80,7 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     // blanket-denying, it is enforcing the missing permission.
     const allowed = await handler.updateEntry(
       { collectionName: "posts", entryId: id, overrideAccess: true },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
     expect(allowed.success).toBe(true);
   });
@@ -114,7 +114,7 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
         userId: "user-1",
         routeAuthorized: true,
       },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
 
     expect(denied.success).toBe(false);
@@ -159,6 +159,7 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
       collectionName: "posts",
       entryId: id,
       userId: "user-1",
+      data: { _overwrite: true },
     });
 
     // The no-lifecycle publish-all is a genuine no-op success, not merely "not
@@ -200,6 +201,7 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
       collectionName: "posts",
       entryId: id,
       userId: "user-1",
+      data: { _overwrite: true },
     });
 
     // The no-lifecycle publish-all is a genuine no-op success, not merely "not
@@ -257,7 +259,7 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
         routeAuthorized: true,
         locale: "en",
       },
-      { heading: "H2", status: "published" }
+      { heading: "H2", status: "published", _overwrite: true }
     );
 
     expect(denied.success).toBe(false);
@@ -306,7 +308,7 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
           permissions: ["update-posts"],
         },
       },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
     expect(denied.success).toBe(false);
     // Refused read as well, so answered as a missing entry is.
@@ -324,7 +326,7 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
           permissions: ["update-posts", "publish-posts"],
         },
       },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
     expect(allowed.success).toBe(true);
   });
@@ -407,7 +409,7 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
           permissions: ["update-posts", "publish-posts"],
         },
       },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
     expect(denied.success).toBe(false);
     // Refused read as well, so answered as a missing entry is.
@@ -445,6 +447,7 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
         actorType: "apiKey",
         permissions: ["update-posts", "publish-posts"],
       },
+      data: { _overwrite: true },
     });
     expect(result.success).toBe(true);
   });
@@ -471,10 +474,11 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     );
     const id = (created.data as { id: string }).id;
 
+    // The key's grant is under test, not versions.
     const denied = await handler.bulkUpdateEntries({
       collectionName: "posts",
       ids: [id],
-      data: { status: "published" },
+      data: { status: "published", _overwrite: true },
       userId: "key-owner",
       routeAuthorized: true,
       authenticatedScope: {
@@ -489,7 +493,7 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     const allowed = await handler.bulkUpdateEntries({
       collectionName: "posts",
       ids: [id],
-      data: { status: "published" },
+      data: { status: "published", _overwrite: true },
       userId: "key-owner",
       routeAuthorized: true,
       authenticatedScope: {
@@ -526,7 +530,7 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     // must deny — publishing requires an authenticated caller.
     const denied = await handler.updateEntry(
       { collectionName: "posts", entryId: id },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
     expect(denied.success).toBe(false);
     // A visitor the Public role does not cover is asked to sign in.
@@ -572,7 +576,7 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
 
     const res = await handler.updateEntry(
       { collectionName: "posts", entryId: id, userId: "editor" },
-      { title: "changed", status: undefined }
+      { title: "changed", status: undefined, _overwrite: true }
     );
     expect(res.success).toBe(true);
 
@@ -636,7 +640,7 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     // after the point where the caller payload would have been stripped.
     const res = await handler.updateEntry(
       { collectionName: "posts", entryId: id, userId: "editor" },
-      { title: "changed" }
+      { title: "changed", _overwrite: true }
     );
     expect(res.success).toBe(true);
 

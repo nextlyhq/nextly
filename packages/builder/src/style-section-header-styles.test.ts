@@ -376,7 +376,7 @@ describe("a style field's row", () => {
     // "Semibold 600" wrapped to two lines in a 9rem list, making its row
     // twice the height of every other.
     const value = ruleBody(
-      '.nx-style-inspector__select [data-slot="select-value"]'
+      '.nx-style-inspector__select [data-slot="select-value"], .nx-binding__format [data-slot="select-value"]'
     );
     expect(value).toContain("white-space: nowrap");
     expect(value).toContain("text-overflow: ellipsis");
@@ -425,8 +425,18 @@ describe("the icon strip", () => {
     );
     expect(disabled).toContain("opacity: 0.5");
     expect(disabled).toContain("cursor: not-allowed");
-    expect(FLAT).toContain(".nx-icon-choice__option:not(:disabled):hover");
+    expect(FLAT).toContain(".nx-icon-choice__option:not(:disabled)");
     expect(FLAT).not.toMatch(/\.nx-icon-choice__option:hover/);
+  });
+
+  it("keeps a chosen icon's fill under the pointer", () => {
+    // The hover fill is an unchosen option's; on a chosen one it would hide
+    // which is chosen, since an icon has no label to carry the weight.
+    const hover = FLAT.match(
+      /\.nx-icon-choice__option:not\(:disabled\)[^{,]*:hover/
+    )?.[0];
+    expect(hover).toBeDefined();
+    expect(hover).toContain(':not([aria-checked="true"])');
   });
 });
 
@@ -678,5 +688,14 @@ describe("the inspector's Content and Style tabs", () => {
     expect(FLAT).toContain(
       '@media (forced-colors: active) { .nx-inspector__tab[data-state="active"] { border-block-end-color: CanvasText; } }'
     );
+  });
+});
+
+describe("a passage field that cannot be edited here", () => {
+  it("is drawn muted, not as a field waiting for input", () => {
+    // Held while the canvas edits the same passage, or with no editor.
+    const held = ruleBody('.nx-inspector__rich-text[aria-readonly="true"]');
+    expect(held).toContain("background: var(--nx-muted)");
+    expect(held).toContain("border-color: var(--nx-border)");
   });
 });

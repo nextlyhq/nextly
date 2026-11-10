@@ -55,6 +55,7 @@ import {
   type DiscardScopeKind,
 } from "../../domains/versions/discard-working-draft";
 import { lockDocument, lockPerson } from "../../domains/versions/history-locks";
+import { changesSinceRecoveryPoint } from "../../domains/versions/recovery-point-changes";
 import {
   restoreVersion,
   type RestoreVersionResult,
@@ -1060,5 +1061,19 @@ export async function getAutosaveForDocument(
     args.user,
     authenticatedScope
   );
+  // What changed since the version the point's edits began from, described
+  // as a refused save would describe it, so the editor can say whose work
+  // restoring the point would replace.
+  if (args.scopeKind === "collection" || args.scopeKind === "single") {
+    const changes = await changesSinceRecoveryPoint(getService("adapter"), {
+      scopeKind: args.scopeKind,
+      slug: args.slug,
+      entryId: args.entryId,
+      snapshot: row.snapshot,
+      locale: row.locale ?? null,
+      reader: { user: args.user, trusted: false, authenticatedScope },
+    });
+    if (changes) return { ...row, ...changes };
+  }
   return row;
 }

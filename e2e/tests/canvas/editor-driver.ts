@@ -321,8 +321,12 @@ export async function openEditorWith(
   nodes: readonly unknown[],
   firstId: string
 ): Promise<void> {
+  // A fixture, set over whatever the single holds.
   const stored = await page.request.patch(HOMEPAGE, {
-    data: { layout: { formatVersion: 1, kind: "page", nodes } },
+    data: {
+      layout: { formatVersion: 1, kind: "page", nodes },
+      _overwrite: true,
+    },
   });
   expect(stored.ok(), `seeding the homepage layout: ${stored.status()}`).toBe(
     true
@@ -332,6 +336,23 @@ export async function openEditorWith(
   // The block must be ON SCREEN before anything is aimed at it: a gesture sent
   // at an element that has not rendered lands on the page behind it.
   await expect(await block(page, firstId)).toBeVisible({ timeout: 30_000 });
+}
+
+/**
+ * Take every block off the homepage.
+ *
+ * A shared style or a variable a stored document still uses cannot be removed,
+ * so a spec that dressed the homepage in its own and restores the site style
+ * after takes them off the homepage first.
+ */
+export async function emptyHomepage(page: Page): Promise<void> {
+  const stored = await page.request.patch(HOMEPAGE, {
+    data: {
+      layout: { formatVersion: 1, kind: "page", nodes: [] },
+      _overwrite: true,
+    },
+  });
+  expect(stored.ok(), `emptying the homepage: ${stored.status()}`).toBe(true);
 }
 
 /**

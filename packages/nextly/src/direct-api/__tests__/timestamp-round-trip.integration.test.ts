@@ -20,6 +20,10 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../plugins/test-nextly";
+import {
+  STORAGE_MODES,
+  type StorageMode,
+} from "../../plugins/__tests__/helpers/dialect-matrix";
 
 let current: TestNextly | undefined;
 let restoreTz: (() => void) | undefined;
@@ -59,64 +63,77 @@ const ticks = () =>
  */
 const OCCURRED_AT = new Date("2026-08-04T15:04:01.000Z");
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
-  current = await createTestNextly({ dialect, collections: [ticks()] });
+async function boot(
+  dialect: TestDialect,
+  storage: StorageMode
+): Promise<TestNextly> {
+  current = await createTestNextly({
+    dialect,
+    perLanguageStorage: storage.perLanguageStorage,
+    collections: [ticks()],
+  });
   return current;
 }
 
-describe.each(getConfiguredTestDialects())(
-  "timestamp round trip (%s)",
-  dialect => {
-    it("reads back the instant that was written, on a non-UTC server", async () => {
-      underNonUtcTimezone();
-      const { nextly } = await boot(dialect);
+// Both storage layouts: where translatable values live must not change what this answers.
+describe.each(
+  STORAGE_MODES.flatMap(storage =>
+    getConfiguredTestDialects().map(dialect => ({
+      dialect,
+      storage,
+      mode: storage.name,
+    }))
+  )
+)("timestamp round trip ($dialect, $mode)", ({ dialect, storage }) => {
+  it("reads back the instant that was written, on a non-UTC server", async () => {
+    underNonUtcTimezone();
+    const { nextly } = await boot(dialect, storage);
 
-      const { item } = await nextly.create({
-        collection: "ticks",
-        data: { label: "a", occurredAt: OCCURRED_AT.toISOString() },
-        overrideAccess: true,
-      });
-
-      const found = await nextly.findByID({
-        collection: "ticks",
-        id: String(item.id),
-        overrideAccess: true,
-      });
-
-      // The user-supplied value survives, and the value the write reported
-      // agrees with the value a later read reports. The second assertion is the
-      // one that failed: the write stored a local wall clock and the read
-      // interpreted it as UTC, so the two differed by the offset.
-      expect(found?.occurredAt).toEqual(OCCURRED_AT);
-      expect(found?.occurredAt).toEqual(item.occurredAt);
+    const { item } = await nextly.create({
+      collection: "ticks",
+      data: { label: "a", occurredAt: OCCURRED_AT.toISOString() },
+      overrideAccess: true,
     });
 
-    it("reports the stored value, not the one it was handed", async () => {
-      underNonUtcTimezone();
-      const { nextly } = await boot(dialect);
-
-      const { item } = await nextly.create({
-        collection: "ticks",
-        data: { label: "a" },
-        overrideAccess: true,
-      });
-
-      const found = await nextly.findByID({
-        collection: "ticks",
-        id: String(item.id),
-        overrideAccess: true,
-      });
-
-      // `createdAt` is stamped by the write path rather than supplied, so this
-      // covers the system columns as well as a user-declared date field.
-      //
-      // Exactly, not to the nearest second. The write reports the value the
-      // database stored rather than the one it was handed, so a column that
-      // keeps only whole seconds reports whole seconds and a later read agrees
-      // to the millisecond. An assertion at second resolution would pass while
-      // a write invented sub-second precision the row never had.
-      expect(found?.createdAt).toEqual(item.createdAt);
-      expect(found?.updatedAt).toEqual(item.updatedAt);
+    const found = await nextly.findByID({
+      collection: "ticks",
+      id: String(item.id),
+      overrideAccess: true,
     });
-  }
-);
+
+    // The user-supplied value survives, and the value the write reported
+    // agrees with the value a later read reports. The second assertion is the
+    // one that failed: the write stored a local wall clock and the read
+    // interpreted it as UTC, so the two differed by the offset.
+    expect(found?.occurredAt).toEqual(OCCURRED_AT);
+    expect(found?.occurredAt).toEqual(item.occurredAt);
+  });
+
+  it("reports the stored value, not the one it was handed", async () => {
+    underNonUtcTimezone();
+    const { nextly } = await boot(dialect, storage);
+
+    const { item } = await nextly.create({
+      collection: "ticks",
+      data: { label: "a" },
+      overrideAccess: true,
+    });
+
+    const found = await nextly.findByID({
+      collection: "ticks",
+      id: String(item.id),
+      overrideAccess: true,
+    });
+
+    // `createdAt` is stamped by the write path rather than supplied, so this
+    // covers the system columns as well as a user-declared date field.
+    //
+    // Exactly, not to the nearest second. The write reports the value the
+    // database stored rather than the one it was handed, so a column that
+    // keeps only whole seconds reports whole seconds and a later read agrees
+    // to the millisecond. An assertion at second resolution would pass while
+    // a write invented sub-second precision the row never had.
+    expect(found?.createdAt).toEqual(item.createdAt);
+    expect(found?.updatedAt).toEqual(item.updatedAt);
+  });
+});

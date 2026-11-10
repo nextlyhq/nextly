@@ -64,22 +64,18 @@ export interface TranslationCounts {
  * map can still carry a language that was removed from the config, and
  * counting it would report progress against a denominator that excludes it.
  *
- * The default language is EXCLUDED from both sides. It is the source the
- * translations are made from, not one of them — counting it inflates every
- * document by one and reports progress on a document where nothing has been
- * translated at all. `defaultLocale` is required rather than optional so a
- * caller cannot omit it and silently get the inflated answer.
+ * Every configured language is counted, the default included: it is one of
+ * the languages a reader can be shown, and its status is as real as any
+ * other's. Every surface reading this count says the same of a document.
  */
 export function translationCounts(
   translations: Record<string, LocaleTranslationMeta> | undefined,
-  localeCodes: readonly string[],
-  defaultLocale: string
+  localeCodes: readonly string[]
 ): TranslationCounts {
   let translated = 0;
   let published = 0;
   let total = 0;
   for (const code of localeCodes) {
-    if (code === defaultLocale) continue;
     total += 1;
     const meta = translations?.[code];
     if (!meta?.translated) continue;
@@ -89,16 +85,17 @@ export function translationCounts(
   return { translated, published, total };
 }
 
-/** The languages still awaiting a translation, by label, for a "what is missing" hint. */
+/**
+ * The languages with no content of their own yet, by label, for a "what is
+ * missing" hint: over every configured language, as {@link translationCounts}
+ * counts them, so the hint and the count beside it always agree.
+ */
 export function untranslatedLocales(
   translations: Record<string, LocaleTranslationMeta> | undefined,
-  locales: readonly { code: string; label: string }[],
-  defaultLocale: string
+  locales: readonly { code: string; label: string }[]
 ): string[] {
   return locales
-    .filter(
-      l => l.code !== defaultLocale && !translations?.[l.code]?.translated
-    )
+    .filter(l => !translations?.[l.code]?.translated)
     .map(l => l.label);
 }
 

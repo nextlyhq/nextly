@@ -106,6 +106,11 @@ export const nextlyTables: TableDefinition[] = [
         type: "text",
       },
       {
+        // Nullable: unset means the person follows the site's language.
+        name: "interface_language",
+        type: "text",
+      },
+      {
         // Nullable, matching `mustChangePassword: integer(..., { mode: "boolean" })`
         // on the real table: unset means "no answer recorded", which is not the
         // same as "need not change".

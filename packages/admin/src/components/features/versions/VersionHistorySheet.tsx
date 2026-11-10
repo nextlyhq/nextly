@@ -39,6 +39,7 @@ import {
 } from "@admin/hooks/queries/useVersions";
 import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import { refusedAsChangedSince } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
 import type { VersionScope } from "@admin/services/versionApi";
 
@@ -49,8 +50,8 @@ import { HistoryStoryList } from "./HistoryStoryList";
 import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
 import { useMarkVersionSeen } from "./useMarkVersionSeen";
 import { newestInLocale, predecessorOf } from "./version-pairing";
-import { versionsHref } from "./VersionComparePage";
 import { VersionLabelDialog } from "./VersionLabelDialog";
+import { versionsHref } from "./versions-href";
 
 // How many extra history pages the panel will auto-fetch while searching for a
 // previewed version's previous same-locale version before deferring to the
@@ -241,7 +242,7 @@ export function VersionHistorySheet({
   } = list;
   const detail = useVersion({ scope, versionNo: selected, enabled: open });
 
-  const { setViewing, setRestore } = useDocumentHistory();
+  const { setViewing, setRestore, versionFor } = useDocumentHistory();
   const viewedSnapshot = detail.data?.snapshot;
   const viewedLocale = detail.data?.locale ?? null;
   const viewedLoading = detail.isLoading;
@@ -293,6 +294,9 @@ export function VersionHistorySheet({
 
   const restore = useRestoreVersion({
     scope,
+    // With the editor's version of the document in the language the restore
+    // writes, so a restore over changes made since is refused.
+    ...(versionFor ? { versionFor } : {}),
     onSuccess: result => {
       setConfirmingRestore(false);
       onOpenChange(false);
@@ -316,7 +320,11 @@ export function VersionHistorySheet({
       // action is still there to retry, and silence would read as the click
       // simply not having registered.
       setConfirmingRestore(false);
-      toast.error(apiErrorMessage(error) || "Could not restore this version.");
+      toast.error(
+        refusedAsChangedSince(error)
+          ? "Someone changed this document since you opened it. Load its current version, then restore again."
+          : apiErrorMessage(error) || "Could not restore this version."
+      );
     },
   });
 
@@ -880,7 +888,13 @@ export function VersionHistorySheet({
             // the dialog is open (a claim arriving mid-dialog), and an open
             // dialog must not restore past a refusal that arrived after it.
             onConfirm={() => {
-              if (canRestore && !restoreRefused) restore.mutate(selected);
+              if (canRestore && !restoreRefused) {
+                restore.mutate({
+                  versionNo: selected,
+                  // The language the restore writes: the version's own.
+                  locale: viewedAbout?.locale ?? null,
+                });
+              }
             }}
           />
         ) : null}

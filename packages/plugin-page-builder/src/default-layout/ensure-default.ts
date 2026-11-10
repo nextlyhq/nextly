@@ -37,6 +37,7 @@ import {
   type JobDefinition,
 } from "@nextlyhq/plugin-sdk";
 
+import { asOverwrite } from "../document-version";
 import { restoreMissingDefault } from "../layout-removal/restore";
 import { settleLayoutRemovals } from "../layout-removal/settle";
 import type { LayoutRemovalStore } from "../layout-removal/store";
@@ -172,16 +173,19 @@ async function repointToSeed(
   published: ReadonlySet<string>
 ): Promise<EnsureOutcome> {
   if (!published.has(seed)) {
+    // The repair publishes the seed it owns whatever it holds now: an
+    // overwrite by intent.
     await deps.nextly.update({
       collection: deps.slugs.layouts,
       id: seed,
-      data: { status: "published" },
+      data: asOverwrite({ status: "published" }),
       overrideAccess: true,
     });
   }
-  if (!(await stillDefault(deps, previous))) return "kept";
+  const before = await settingsBeforeRepair(deps, previous);
+  if (!before.stillDefault) return "kept";
   // No person chose this default, so nobody is credited with it.
-  await writeLayoutSettings(deps.nextly, deps.slugs, {
+  await writeLayoutSettings(deps.nextly, deps.slugs, before.latest, {
     defaultLayout: seed,
     defaultLayoutChangedBy: null,
   });
@@ -230,23 +234,21 @@ async function reseed(
 }
 
 /**
- * Whether the settings still name `observed` as the default, read again just
- * before the repair writes over it.
+ * The settings read again just before the repair writes over them, and
+ * whether they still name `observed` as the default.
  *
  * A make-default that lands while the repair runs owns the default, and
- * writing the seed over it would undo that request. This narrows the window
- * rather than closing it: the read and the write are two statements, not a
- * compare-and-set, so a make-default landing between them can still be
- * overwritten, and that choice is then lost.
+ * writing the seed over it would undo that request. The repair's write sends
+ * this read's version, so a make-default landing between the read and the
+ * write refuses the write instead of being overwritten; the run then fails
+ * and the next one finds the new default usable.
  */
-async function stillDefault(
+async function settingsBeforeRepair(
   deps: EnsureDefaultDeps,
   observed: string | null
-): Promise<boolean> {
-  return (
-    (await readLayoutSettings(deps.nextly, deps.slugs)).defaultLayout ===
-    observed
-  );
+): Promise<{ latest: LayoutSettings; stillDefault: boolean }> {
+  const latest = await readLayoutSettings(deps.nextly, deps.slugs);
+  return { latest, stillDefault: latest.defaultLayout === observed };
 }
 
 /**
@@ -263,7 +265,7 @@ async function stillDefault(
  * The seed is made the default only while the default is still `observed`,
  * the unusable one this run set out to replace; a make-default that landed
  * while the seed was being created keeps its choice, and the seed is recorded
- * as the seed alone (see {@link stillDefault}).
+ * as the seed alone (see {@link settingsBeforeRepair}).
  */
 async function recordSeed(
   deps: EnsureDefaultDeps,
@@ -271,11 +273,11 @@ async function recordSeed(
   observed: string | null
 ): Promise<void> {
   try {
-    const takeDefault = await stillDefault(deps, observed);
-    await writeLayoutSettings(deps.nextly, deps.slugs, {
+    const before = await settingsBeforeRepair(deps, observed);
+    await writeLayoutSettings(deps.nextly, deps.slugs, before.latest, {
       seededLayout: created,
       // A default the repair chooses credits no person.
-      ...(takeDefault
+      ...(before.stillDefault
         ? { defaultLayout: created, defaultLayoutChangedBy: null }
         : {}),
     });

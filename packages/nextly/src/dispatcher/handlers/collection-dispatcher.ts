@@ -40,6 +40,10 @@ import { clearRegistryRowCache } from "../../domains/dynamic-collections/service
 import { DynamicCollectionService } from "../../domains/dynamic-collections/services/dynamic-collection-service";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { fieldsAsFirstPushed } from "../../domains/i18n/migration/archive-preflight";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import {
   previewCollectionSave,
@@ -206,12 +210,14 @@ function allLocalesLifecycle(
   successMessage: string
 ): MethodHandler<CollectionsHandlerType> {
   return {
-    execute: async (svc, p, body) => {
+    execute: async (svc, p, body, request) => {
       // `requireParam` rather than an inline throw: a missing route parameter is
       // caller-fixable, and a bare `Error` here would surface it as a 500.
       const collectionName = requireParam(p, "collectionName");
       const entryId = requireParam(p, "entryId");
       const result = await svc[method]({
+        // The request this transition's hooks are told about.
+        request,
         collectionName,
         entryId,
         actor: readAuthenticatedActor(),
@@ -637,6 +643,31 @@ const COLLECTIONS_METHODS: Record<
       );
     },
   },
+  // What deleting a collection takes with it besides its own entries, by the
+  // plugin that holds it (`ctx.hooks.onCollectionDelete`), for the delete
+  // dialog to list before the confirm. `?together=a,b` names the collections
+  // a bulk delete removes with this one, as on the delete. Reads only.
+  previewCollectionDelete: {
+    execute: async (_svc, p) => {
+      const collectionName = requireParam(p, "collectionName");
+      const slugs = [
+        ...new Set([collectionName, ...parseTogetherParam(p.together)]),
+      ];
+      const [{ collectionDeleteImpact }, { getActiveHookRegistry }] =
+        await Promise.all([
+          import(
+            "../../domains/collections/services/collection-delete-plugins"
+          ),
+          import("../../hooks/hook-registry"),
+        ]);
+      const impact = await collectionDeleteImpact(
+        getActiveHookRegistry(),
+        slugs
+      );
+      // Read for this caller's dialog only; no shared cache keeps it.
+      return withSessionCacheHeaders(respondData({ impact }));
+    },
+  },
   // Preview schema changes (dry-run diff with row-count impact)
   previewSchemaChanges: {
     execute: async (_svc, p, body) => {
@@ -889,6 +920,12 @@ const COLLECTIONS_METHODS: Record<
           // collection into a DISABLE transition, restoring the companion's
           // columns onto the main table and archiving it.
           const isLocalized = readRequestLocalized(body) ?? wasLocalized;
+          // Where its translatable values are stored once this apply runs, which the runtime
+          // tables registered below describe: per language when it is translated, or always under
+          // per-language storage. `isLocalized` stays the product's answer.
+          const isStoredPerLanguage = storesPerLanguage({
+            localized: isLocalized,
+          });
           // i18n: enabling Internationalization needs the app-level
           // `localization` config — without it the companion reconcile below
           // would move translatable columns into a table the runtime cannot
@@ -1066,7 +1103,10 @@ const COLLECTIONS_METHODS: Record<
               tableName,
               storedFields,
               dialect,
-              { localized: isLocalized, status: collection.status === true }
+              {
+                localized: isStoredPerLanguage,
+                status: collection.status === true,
+              }
             );
             getCollectionsHandlerFromDI()?.refreshCollectionSchema(
               tableName,
@@ -1076,14 +1116,19 @@ const COLLECTIONS_METHODS: Record<
               tableName,
               freshTable
             );
-            if (isLocalized) {
+            if (isStoredPerLanguage) {
               const companion = buildCompanionRuntimeTable({
                 slug: p.collectionName,
                 tableName,
                 fields: fields as FieldDefinition[],
                 dialect,
                 localized: true,
-                status: collection.status === true,
+                // As saved, not as the record read before the save: a save that turns
+                // translation on gives a Draft/Published collection its per-language `_status`.
+                status: publishesPerLanguage({
+                  localized: isLocalized,
+                  status: (collection as { status?: unknown }).status,
+                }),
               });
               if (companion) {
                 getCollectionsHandlerFromDI()?.refreshCollectionSchema(

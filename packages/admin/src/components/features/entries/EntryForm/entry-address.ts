@@ -96,6 +96,24 @@ export function effectiveEntryStatus(
 }
 
 /**
+ * Whether the language being edited has no content of its own, read from the
+ * same overview {@link effectiveEntryStatus} reads, so the panel's Status
+ * sentence and the Languages panel's "not translated" agree. False where the
+ * overview was not read: no claim is made about a language nobody asked about.
+ */
+export function editedLanguageUntranslated(
+  entry: EntryData | null | undefined,
+  locale: string | undefined,
+  defaultLocale?: string
+): boolean {
+  const translations = entry?._translations;
+  const activeLocale = locale ?? defaultLocale;
+  if (activeLocale === undefined || !isRecord(translations)) return false;
+  const forLocale = translations[activeLocale];
+  return isRecord(forLocale) && forLocale.translated === false;
+}
+
+/**
  * Whether any language of this entry is published.
  *
  * The translation overview reports every configured locale, so this is answerable from the row the

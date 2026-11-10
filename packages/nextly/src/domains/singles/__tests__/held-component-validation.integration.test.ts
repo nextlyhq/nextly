@@ -127,6 +127,7 @@ async function bootSingle(dialect: TestDialect) {
         title: "T",
         hero: { heading: "Live", code: "ok" },
         status: "published",
+        _overwrite: true,
       },
       { overrideAccess: true }
     )
@@ -165,7 +166,7 @@ describe.each(getConfiguredTestDialects())(
         const onPublish = await outcomeOf(() =>
           singles.update(
             "home",
-            { hero, status: "published" },
+            { hero, status: "published", _overwrite: true },
             { overrideAccess: true }
           )
         );
@@ -174,7 +175,11 @@ describe.each(getConfiguredTestDialects())(
 
         // The same value, held.
         const onSave = await outcomeOf(() =>
-          singles.update("home", { hero }, { overrideAccess: true })
+          singles.update(
+            "home",
+            { hero, _overwrite: true },
+            { overrideAccess: true }
+          )
         );
 
         expect(onSave).toEqual(onPublish);
@@ -215,7 +220,13 @@ describe.each(getConfiguredTestDialects())(
       });
       const singles = current.getService("singleEntryService");
       const update = (data: Record<string, unknown>) =>
-        outcomeOf(() => singles.update("home", data, { overrideAccess: true }));
+        outcomeOf(() =>
+          singles.update(
+            "home",
+            { ...data, _overwrite: true },
+            { overrideAccess: true }
+          )
+        );
       expect((await update({ title: "T", status: "published" })).ok).toBe(true);
 
       expect(
@@ -367,7 +378,7 @@ describe.each(getConfiguredTestDialects())(
             t.nextly.update({
               collection: "pages" as never,
               id,
-              data: data as never,
+              data: { ...data, _overwrite: true } as never,
             })
           );
         const rowsBefore = await versionRows(t, "pages");

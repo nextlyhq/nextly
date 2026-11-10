@@ -24,9 +24,13 @@ import type {
   BlockDocument,
   BuilderOp,
   ComponentDocument,
-  OpPosition,
   ValidationIssue,
 } from "@nextlyhq/blocks-engine";
+import type {
+  DefinitionAction,
+  PageAction,
+  UnbindAnswer,
+} from "@nextlyhq/builder/ops";
 
 import type { ActionBy } from "./component-actions-contract";
 import type { StoredPageAddress } from "./library-contract";
@@ -39,52 +43,18 @@ import type { StoredPageAddress } from "./library-contract";
  */
 export const PAGE_ACTIONS_ROUTE_PATH = "/pages/actions";
 
-/** Where on the page an inserted block goes; the end of the page when absent. */
-export type ActionPosition = OpPosition;
-
-/** One action on a stored page. */
-export type PageAction =
-  /** Insert a published pattern's blocks, copied, as the editor's insert panel does. */
-  | {
-      readonly kind: "insert-pattern";
-      readonly patternId: string;
-      readonly at?: ActionPosition;
-    }
-  /** Place a component by reference, optionally choosing a variant and values. */
-  | {
-      readonly kind: "place-component";
-      readonly componentId: string;
-      readonly variant?: string;
-      readonly values?: Readonly<Record<string, unknown>>;
-      readonly at?: ActionPosition;
-    }
-  /**
-   * Set a placement's exposed values, keyed by exposure id. `{ "$unset": true }`
-   * empties a field ("Cleared"); `reset` returns fields to what the variant or
-   * the definition gives them.
-   */
-  | {
-      readonly kind: "set-placement-values";
-      readonly instanceId: string;
-      readonly values?: Readonly<Record<string, unknown>>;
-      readonly reset?: readonly string[];
-    }
-  /** Choose a placement's variant by its stable id, or `null` for the defaults. */
-  | {
-      readonly kind: "choose-variant";
-      readonly instanceId: string;
-      readonly variant: string | null;
-    }
-  /**
-   * Choose the page's Layout: a Layout's id, or `null` for the site's default.
-   * `noHeaderFooter: true` switches the Layout off for this page; absent, it
-   * is turned back on, as choosing a Layout in the editor does.
-   */
-  | {
-      readonly kind: "set-layout";
-      readonly layout: string | null;
-      readonly noHeaderFooter?: boolean;
-    };
+// The actions themselves are the builder's, published with the schemas the
+// routes parse them with, so a client typing against this contract and one
+// validating against `@nextlyhq/builder/ops` hold the same shape.
+export type {
+  ActionPosition,
+  DefinitionAction,
+  ExposureTargetInput,
+  ListQueryChange,
+  PageAction,
+  UnbindAnswer,
+  UnbindKeep,
+} from "@nextlyhq/builder/ops";
 
 /** @experimental Settles when the composition API ships. */
 export interface PageActionRequest {
@@ -96,6 +66,7 @@ export interface PageActionRequest {
   /** Publish the page with the change, rather than saving its working draft. */
   readonly publish?: boolean;
 }
+
 
 /** @experimental Settles when the composition API ships. */
 export interface PageActionResult {
@@ -112,6 +83,8 @@ export interface PageActionResult {
   };
   /** The id of a block the action added, for the next action to address. */
   readonly insertedId?: string;
+  /** For `unbind-prop`: what was kept in the prop's place, and why. */
+  readonly unbound?: UnbindAnswer;
   /** Why the site would refuse the write, in its own words; empty when it accepts it. */
   readonly refusals: readonly string[];
   /** The stored state this answer was planned against, for `expect`. */
@@ -130,44 +103,6 @@ export function definitionActionPath(componentId: string): string {
 
 /** The route path the definition actions are declared under. */
 export const DEFINITION_ACTIONS_ROUTE_PATH = "/components/:id/definition";
-
-/** Which part of a block an exposure targets: a prop, or its visibility. */
-export type ExposureTargetInput =
-  | { readonly nodeId: string; readonly propPath: string }
-  | { readonly nodeId: string; readonly visibility: true };
-
-/** One edit to a component's definition, each the editor's own planner. */
-export type DefinitionAction =
-  | ({ readonly kind: "expose"; readonly label: string } & ExposureTargetInput)
-  | {
-      readonly kind: "rename-exposure";
-      readonly exposureId: string;
-      readonly label: string;
-    }
-  | ({
-      readonly kind: "retarget-exposure";
-      readonly exposureId: string;
-    } & ExposureTargetInput)
-  | { readonly kind: "remove-exposure"; readonly exposureId: string }
-  | { readonly kind: "remove-exposed-slot"; readonly slotId: string }
-  | { readonly kind: "add-variant"; readonly label: string }
-  | {
-      readonly kind: "rename-variant";
-      readonly variantId: string;
-      readonly label: string;
-    }
-  | { readonly kind: "delete-variant"; readonly variantId: string }
-  | {
-      readonly kind: "set-variant-value";
-      readonly variantId: string;
-      readonly exposureId: string;
-      readonly value: unknown;
-    }
-  | {
-      readonly kind: "reset-variant-value";
-      readonly variantId: string;
-      readonly exposureId: string;
-    };
 
 /** @experimental Settles when the composition API ships. */
 export interface DefinitionActionRequest {

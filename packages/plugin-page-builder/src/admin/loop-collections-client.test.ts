@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * What a collection loop gets back from `listLoopCollections`, and what it
+ * What a collection list gets back from `listLoopCollections`, and what it
  * asked.
  *
  * The two properties that fail quietly are the ADDRESS and the FAILURE: a
@@ -32,17 +32,61 @@ describe("listLoopCollections", () => {
     });
   });
 
-  it("keeps each collection and field of the promised shape, and drops the rest", async () => {
+  it("asks in the language being edited, as a save judges the page's lists", async () => {
+    readPluginRoute.mockResolvedValue({ items: [], meta: {} });
+    await listLoopCollections("fr");
+    expect(readPluginRoute.mock.calls[0]?.[0]).toEqual({
+      plugin: "@nextlyhq/plugin-page-builder",
+      path: "/loop-collections?locale=fr",
+    });
+  });
+
+  it("keeps each collection, field and relation of the promised shape, and drops the rest", async () => {
     readPluginRoute.mockResolvedValue({
       items: [
         {
           slug: "posts",
           label: "Blog posts",
-          sortFields: [
-            { name: "title", label: "Title", date: false },
-            { name: "broken", label: "Broken" },
+          singular: "Post",
+          fields: [
+            { name: "title", label: "Title", kind: "text" },
+            {
+              name: "kind",
+              label: "Kind",
+              kind: "choice",
+              options: [{ value: "news", label: "News" }, { value: 3 }],
+            },
+            {
+              name: "author",
+              label: "Author",
+              kind: "entry",
+              relationTo: "authors",
+            },
+            { name: "day", label: "Day", kind: "date", dateOnly: true },
+            { name: "broken", label: "Broken", kind: "relationship" },
+            { name: "unkinded", label: "Unkinded" },
+          ],
+          relations: [
+            {
+              field: "categories",
+              label: "Categories",
+              collection: "categories",
+            },
+            { field: "nowhere", label: "Nowhere" },
+          ],
+          declared: ["id", "title", 4],
+          readable: [
+            { name: "title", type: "text" },
+            {
+              name: "tags",
+              type: "relationship",
+              hasMany: true,
+              relationTo: ["a", "b"],
+            },
+            { name: "broken" },
           ],
         },
+        { slug: "events", label: "Events" },
         { slug: 3, label: "Not a collection" },
       ],
       meta: {},
@@ -51,8 +95,81 @@ describe("listLoopCollections", () => {
       {
         slug: "posts",
         label: "Blog posts",
-        sortFields: [{ name: "title", label: "Title", date: false }],
+        singular: "Post",
+        fields: [
+          { name: "title", label: "Title", kind: "text" },
+          {
+            name: "kind",
+            label: "Kind",
+            kind: "choice",
+            options: [{ value: "news", label: "News" }],
+          },
+          {
+            name: "author",
+            label: "Author",
+            kind: "entry",
+            relationTo: "authors",
+          },
+          { name: "day", label: "Day", kind: "date", dateOnly: true },
+        ],
+        relations: [
+          {
+            field: "categories",
+            label: "Categories",
+            collection: "categories",
+          },
+        ],
+        declared: ["id", "title"],
+        readable: [
+          { name: "title", type: "text" },
+          {
+            name: "tags",
+            type: "relationship",
+            hasMany: true,
+            relationTo: ["a", "b"],
+          },
+        ],
       },
+      // An answer from before singular names reads as its label, with nothing to name.
+      {
+        slug: "events",
+        label: "Events",
+        singular: "Events",
+        fields: [],
+        relations: [],
+        declared: [],
+        readable: [],
+      },
+    ]);
+  });
+
+  it("keeps what the engine reads of each readable field: a time of day and a plugin type's primitive", async () => {
+    readPluginRoute.mockResolvedValue({
+      items: [
+        {
+          slug: "events",
+          label: "Events",
+          fields: [],
+          readable: [
+            {
+              name: "opensAt",
+              label: "Opens at",
+              type: "date",
+              timeOnly: true,
+            },
+            { name: "colour", type: "colour", storage: "text" },
+            // Neither key, as sent, is one the engine knows.
+            { name: "odd", type: "colour", storage: "pigment", timeOnly: 1 },
+          ],
+        },
+      ],
+      meta: {},
+    });
+    const [events] = await listLoopCollections();
+    expect(events?.readable).toEqual([
+      { name: "opensAt", label: "Opens at", type: "date", timeOnly: true },
+      { name: "colour", type: "colour", storage: "text" },
+      { name: "odd", type: "colour" },
     ]);
   });
 

@@ -150,8 +150,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * compiler emits for inputs it already accepted, not only when this file
  * changes. It costs one recompile per artifact, which is the safe direction —
  * the unbumped alternative is a stale stylesheet served indefinitely, silently.
+ *
+ * `v5`: a part may take properties from a wrapping root, and the compiler
+ * writes those declarations on the part, off the wrapper. A sheet stored
+ * before wrote a wrapped image's corners and proportion on its root, which the
+ * renderer now gives the image's look as well, so it is refused, not served.
  */
-const ENCODING = "v4";
+const ENCODING = "v5";
 
 /**
  * Whether a stored stamp was written under the current {@link ENCODING}.
@@ -541,6 +546,11 @@ function classParts(entry: unknown, reading: Reading): unknown {
     ...(entry.blockType === undefined
       ? []
       : [["look", boundedName(entry.blockType, reading)]]),
+    // A block's own look edits its type's base instead of being a class, so
+    // the mark moves the stamp. Spread, so every other class stamps as before.
+    ...(entry.isDefault === undefined
+      ? []
+      : [["own-look", structural(entry.isDefault, reading)]]),
   ] as unknown;
 }
 
@@ -718,12 +728,32 @@ function blockPartsParts(
         structural(type, reading),
         Object.keys(parts)
           .sort()
-          .map(name => [
-            structural(name, reading),
-            styleEnvelope(parts[name]?.baseStyles, reading),
-          ]),
+          .map(name => partEntry(name, parts[name], reading)),
       ];
     });
+}
+
+/**
+ * One part as the stamp reads it: its name, its defaults, and what it takes
+ * from a wrapping root, which decides the element its routed declarations land
+ * on. The route is read only when declared, so a part declaring none stamps as
+ * it did before routing existed.
+ */
+function partEntry(
+  name: string,
+  part: SharedStyleInputs["blockParts"] extends
+    | Readonly<Record<string, Readonly<Record<string, infer P>>>>
+    | undefined
+    ? P | undefined
+    : never,
+  reading: Reading
+): unknown[] {
+  const takes: unknown = part?.takesFromRoot;
+  return [
+    structural(name, reading),
+    styleEnvelope(part?.baseStyles, reading),
+    ...(takes === undefined ? [] : [structural(takes, reading)]),
+  ];
 }
 
 /** Each container type's child gap, in a fixed key order, read structurally. */

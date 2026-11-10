@@ -188,5 +188,9 @@
   "WORKFLOW_CANNOT_ATTACH": "A workflow in the configuration is attached to a collection or Single it cannot run on.",
   "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS": "A full uninstall would drop schema another owner built on the plugin's.",
   "PLUGIN_DOWN_LEFT_ELEMENTS": "A plugin's DOWN migrations ran and left a column, index, foreign key or check it added to another owner's table in place, so the uninstall was not recorded.",
-  "PLAN_CHANGED_AFTER_CONSENT": "What the command was agreed to do changed before it could act on it, so it changed nothing."
+  "PLAN_CHANGED_AFTER_CONSENT": "What the command was agreed to do changed before it could act on it, so it changed nothing.",
+  "PLUGIN_DOCUMENT_SURFACE_COLLISION": "Two plugins override the same document action on one collection.",
+  "PLUGIN_DOCUMENT_SURFACE_INVALID": "A plugin overrides a document action it may not override, or declares a document action override or panel section with nothing to draw.",
+  "ACTION_NOT_AVAILABLE": "A plugin's declared action was asked of an entry its rule does not hold for, or in a collection it is not offered on, so its route's handler did not run.",
+  "PLUGIN_ACTION_ROW_NOT_FOUND": "A plugin's declared action named a row its caller may not read, or one that does not exist, so its route's handler did not run."
 }

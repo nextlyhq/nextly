@@ -70,6 +70,7 @@ import type {
   FindSinglesArgs,
   FindMediaArgs,
   FindMediaByIDArgs,
+  FindMediaByIDsArgs,
   FindPermissionByIDArgs,
   FindPermissionsArgs,
   FindRoleByIDArgs,
@@ -129,6 +130,7 @@ import type {
   OwnerUpdateUndo,
 } from "../domains/email/services/email-template-service";
 import type { NextlyPrincipals } from "../plugins/principals/types";
+import type { PublicSiteSettings } from "../runtime/site-settings-read";
 import type { EmailProviderRecord } from "../schemas/email-providers/types";
 import type { EmailTemplateRecord } from "../schemas/email-templates/types";
 import type { UserFieldDefinitionRecord } from "../schemas/user-field-definitions/types";
@@ -354,6 +356,19 @@ export interface Nextly {
    * List all registered Single type definitions.
    */
   findSingles: (args?: FindSinglesArgs) => Promise<SingleListResult>;
+
+  /**
+   * The site's general settings a published page may show: its name, its
+   * address, its logo and its time zone, each `null` until the site sets it,
+   * and nothing else the settings hold.
+   *
+   * The block page routes read a page's site settings through the instance
+   * they are given, so a reader of one's own forwards this as it forwards
+   * `find`, or its pages show no site settings.
+   *
+   * @experimental
+   */
+  publicSiteSettings: () => Promise<PublicSiteSettings>;
 
   // ==========================================================================
   // Authentication Methods
@@ -641,6 +656,12 @@ export interface Nextly {
     upload: (args: UploadMediaArgs) => Promise<MediaFile>;
     find: (args?: FindMediaArgs) => Promise<ListResult<MediaFile>>;
     findByID: (args: FindMediaByIDArgs) => Promise<MediaFile | null>;
+    /**
+     * Up to 100 files by id in one read, judged as `findByID` judges one.
+     *
+     * @experimental
+     */
+    findByIDs: (args: FindMediaByIDsArgs) => Promise<MediaFile[]>;
     update: (args: UpdateMediaArgs) => Promise<MutationResult<MediaFile>>;
     delete: (args: DeleteMediaArgs) => Promise<MutationResult<{ id: string }>>;
     bulkDelete: (args: BulkDeleteMediaArgs) => Promise<BulkOperationResult>;

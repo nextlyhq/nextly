@@ -166,15 +166,21 @@ compiler, so every case of it is visible and testable.
 
 ### background
 
-| Property             | Flag       | Value                                                        | Tokens | Emits                          |
-| -------------------- | ---------- | ------------------------------------------------------------ | ------ | ------------------------------ |
-| `backgroundColor`    | `color`    | color                                                        | color  | `background-color`             |
-| `background`         | `image`    | composite: `url`, `position`, `size`, `repeat`, `attachment` |        | `background-image` and friends |
-| `backgroundGradient` | `gradient` | css value                                                    |        | `background-image`             |
+| Property             | Flag       | Value                                                                                      | Tokens        | Emits                                                                         |
+| -------------------- | ---------- | ------------------------------------------------------------------------------------------ | ------------- | ----------------------------------------------------------------------------- |
+| `backgroundColor`    | `color`    | color                                                                                      | color         | `background-color`                                                            |
+| `background`         | `image`    | composite: `url`, `position`, `size`, `repeat`, `attachment`, `overlay`, `overlayStrength` | color, number | `background-image` and friends, `--nx-pb-overlay`, `--nx-pb-overlay-strength` |
+| `backgroundGradient` | `gradient` | css value                                                                                  |               | `background-image`                                                            |
 
 `background.url` and `backgroundGradient` both emit `background-image`. Setting
 both on one element is ambiguous; which wins is settled by the compiler, not by
 the catalog.
+
+`background.overlay` (a colour) and `background.overlayStrength` (0 to 100) lay
+a colour over the image, under the content. Each compiles to its own custom
+property, reset on every element of the page so neither inherits, and every image `background.url` or
+`backgroundGradient` writes carries one more layer in front that reads them, so
+an overlay set at one device covers an image set at another.
 
 ### border
 
@@ -281,3 +287,15 @@ value, is a document-format migration.
 | Property        | Flag | Value                                            | Tokens | Emits             |
 | --------------- | ---- | ------------------------------------------------ | ------ | ----------------- |
 | `listStyleType` |      | keyword (`revert` restores the element's marker) |        | `list-style-type` |
+
+### disclosure
+
+Offered by a block whose children are disclosures (an Accordion). Each keyword
+also writes fixed declarations on the block's own sections, through child
+selectors (`> details > summary`), so one value reaches every section and never
+a section of an accordion nested inside one.
+
+| Property             | Flag | Value                                         | Tokens | Emits                                                                       |
+| -------------------- | ---- | --------------------------------------------- | ------ | --------------------------------------------------------------------------- |
+| `disclosureIcon`     |      | keyword: `chevron`, `plus`, `none`, `browser` |        | `--nx-pb-disclosure-icon`, and each section's title row, icon and open look |
+| `disclosurePosition` |      | keyword: `before`, `after`                    |        | `--nx-pb-disclosure-position`, and the icon's order and start margin        |

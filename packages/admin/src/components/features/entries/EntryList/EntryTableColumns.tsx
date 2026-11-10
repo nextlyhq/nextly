@@ -64,6 +64,12 @@ export interface CollectionForColumns {
    * nothing that writes to them is offered.
    */
   removedFromCode?: boolean;
+  /**
+   * Whether the admin's own Delete is withheld from this collection's entries
+   * (`admin.disableDelete`): they are deleted through an action of their own,
+   * which a plugin offers instead.
+   */
+  disableDelete?: boolean;
   /** Admin UI configuration */
   admin?: {
     /** Default columns to display in list view */
@@ -104,6 +110,8 @@ const SORTABLE_FIELD_TYPES: readonly string[] = [
   "select",
   "email",
   "checkbox",
+  // An id sorts as text, which groups icons by set and then by name.
+  "icon",
 ];
 
 /**

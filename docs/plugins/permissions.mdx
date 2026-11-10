@@ -64,6 +64,12 @@ contributes: {
 }
 ```
 
+A write made this way, as the request's own user, is recorded as the caller the
+request authenticated as: an API key's write against the key itself, not its owner,
+on the entry's content events, its history, and the webhook and activity trails, as a
+REST write by the same key is. A write as the system, or as another user, is recorded
+as that. A plugin cannot name whom a write is attributed to.
+
 `PermissionSlug` narrows to the union of real seeded slugs once you run
 `nextly generate:types` in the consuming app (D47), so typos are caught at compile time.
 

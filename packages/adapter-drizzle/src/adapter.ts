@@ -2274,7 +2274,8 @@ export abstract class DrizzleAdapter {
         if (options?.where) {
           const whereCondition = buildDrizzleWhere(
             tableObj as never,
-            options.where
+            options.where,
+            this.dialect
           );
           if (whereCondition) {
             query = query.where(whereCondition);
@@ -2316,13 +2317,24 @@ export abstract class DrizzleAdapter {
             undefined
           );
         }
+        // The shared lock is refused on the pool for the same reason.
+        if (options?.forShare && !executor) {
+          throw this.createDatabaseError(
+            "query",
+            "forShare requires a transaction executor: a lock request on the pooled connection takes no durable lock and cannot prevent a concurrent write.",
+            undefined
+          );
+        }
 
         // Row-lock the selected rows for the rest of the transaction and read the
         // latest committed values (not the transaction's snapshot). SQLite has no
         // FOR UPDATE and needs none (BEGIN IMMEDIATE serializes its writers), so
-        // it is skipped there.
+        // it is skipped there. A shared lock is the same read with a lock other
+        // readers may also hold; the exclusive one wins when both are asked.
         if (options?.forUpdate && this.dialect !== "sqlite") {
           query = query.for("update");
+        } else if (options?.forShare && this.dialect !== "sqlite") {
+          query = query.for("share");
         }
 
         return (await query) as T[];
@@ -2460,7 +2472,7 @@ export abstract class DrizzleAdapter {
       const db = (executor ??
         this.getDrizzle<CountCapableDb>()) as CountCapableDb;
       const where = options?.where
-        ? buildDrizzleWhere(tableObj as never, options.where)
+        ? buildDrizzleWhere(tableObj as never, options.where, this.dialect)
         : undefined;
       const projection = this.countProjection(tableObj, table, options);
       return projection
@@ -2652,7 +2664,11 @@ export abstract class DrizzleAdapter {
         const mappedData = this.mapDataToColumnNames(tableObj, data);
         let query = db.update(tableObj).set(mappedData);
 
-        const whereCondition = buildDrizzleWhere(tableObj as never, where);
+        const whereCondition = buildDrizzleWhere(
+          tableObj as never,
+          where,
+          this.dialect
+        );
         if (whereCondition) {
           query = query.where(whereCondition);
         }
@@ -2713,7 +2729,11 @@ export abstract class DrizzleAdapter {
         const mappedData = this.mapDataToColumnNames(tableObj, data);
         const statement = db.update(tableObj).set(mappedData);
 
-        const whereCondition = buildDrizzleWhere(tableObj as never, where);
+        const whereCondition = buildDrizzleWhere(
+          tableObj as never,
+          where,
+          this.dialect
+        );
         const result = await (whereCondition
           ? statement.where(whereCondition)
           : statement);
@@ -2764,7 +2784,11 @@ export abstract class DrizzleAdapter {
         const db = executor ?? this.getDrizzle<any>();
         let query = db.delete(tableObj);
 
-        const whereCondition = buildDrizzleWhere(tableObj as never, where);
+        const whereCondition = buildDrizzleWhere(
+          tableObj as never,
+          where,
+          this.dialect
+        );
         if (whereCondition) {
           query = query.where(whereCondition);
         }
@@ -3605,6 +3629,7 @@ export abstract class DrizzleAdapter {
       tableObj,
       data,
       where,
+      dialect: this.dialect,
       bindUnmodeled: binding.bindUnmodeled,
       returning: binding.returning,
     });

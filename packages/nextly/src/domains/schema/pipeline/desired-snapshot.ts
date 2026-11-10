@@ -15,6 +15,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import type { ExtensionSchema } from "../extension/build-extension-schema";
 import { withEntityContributions } from "../extension/entity-contributions";
 import { identifierCaseRules } from "../utils/resolve-catalog-name";
@@ -137,9 +138,9 @@ export function buildDesiredSnapshot(args: {
             {
               builtBy: builtByFor("single", s.builderOwned),
               hasStatus: s.status === true,
-              // A localized single's translatable columns live in its
-              // companion, so they are left off the main table.
-              localized: s.localized === true,
+              // A Single whose translatable columns live in its companion has them left off the
+              // main table (`storesPerLanguage`).
+              localized: storesPerLanguage(s),
             }
           )
         )
@@ -154,7 +155,8 @@ export function buildDesiredSnapshot(args: {
             dialect,
             {
               builtBy: builtByFor("fieldGroup", c.builderOwned),
-              localized: c.localized === true,
+              // Likewise for a component's translatable columns.
+              localized: storesPerLanguage(c),
               typeColumn: fieldGroupTypeColumns.get(c.tableName),
             }
           )

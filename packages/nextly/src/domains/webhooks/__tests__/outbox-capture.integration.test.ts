@@ -424,7 +424,7 @@ describe("webhook outbox capture (integration)", () => {
 
     await handler.updateEntry(
       { collectionName: "posts", entryId: id, overrideAccess: true },
-      { title: "after" }
+      { title: "after", _overwrite: true }
     );
 
     const rows = await events(current);
@@ -502,7 +502,8 @@ describe("webhook outbox capture (integration)", () => {
     await handler.bulkUpdateEntries({
       collectionName: "posts",
       ids: [id],
-      data: { title: "bulk-updated" },
+      // The acting identity is under test, not versions.
+      data: { title: "bulk-updated", _overwrite: true },
       overrideAccess: true,
       actor,
     });

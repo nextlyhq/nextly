@@ -62,6 +62,12 @@ export interface StoringGate {
  */
 const MAX_WRITE_PASSES = 5;
 
+/**
+ * How many times a store readies the work, a handler having found it changed
+ * just before the write. Work still changing after this many is refused.
+ */
+const MAX_READY_PASSES = 3;
+
 const stillWriting: DocumentActionOutcome = {
   ok: false,
   reason: "busy",
@@ -202,8 +208,9 @@ export function useStoringGate(scope: string): StoringGate {
    * again: a write retried meanwhile must not let the store go ahead without
    * what the handler did not do.
    */
-  const readyToStore = async (
-    action: string
+  const readyOnce = async (
+    action: string,
+    checks: (() => boolean)[]
   ): Promise<DocumentActionOutcome | null> => {
     let refused: DocumentActionOutcome | null = null;
     try {
@@ -212,6 +219,9 @@ export function useStoringGate(scope: string): StoringGate {
           const outcome = await writesSettled();
           refused ??= outcome;
           return outcome === null;
+        },
+        checkBeforeWrite: check => {
+          checks.push(check);
         },
       };
       for (const before of [...beforeActions.current]) {
@@ -231,6 +241,25 @@ export function useStoringGate(scope: string): StoringGate {
       };
     }
     return refused ?? writesSettled();
+  };
+
+  /**
+   * Readies the work, then makes each handler's check before the write, with
+   * nothing awaited between them and the store: the handlers ran with awaits
+   * between them, and a later one's write is settled after an earlier one has
+   * judged the work, so the work may have changed since. A check that finds
+   * it has runs every handler again, so each judges the work as stored. Work
+   * still changing after a few rounds is refused rather than chased.
+   */
+  const readyToStore = async (
+    action: string
+  ): Promise<DocumentActionOutcome | null> => {
+    for (let pass = 0; pass < MAX_READY_PASSES; pass++) {
+      const checks: (() => boolean)[] = [];
+      const outcome = await readyOnce(action, checks);
+      if (outcome !== null || checks.every(check => check())) return outcome;
+    }
+    return stillWriting;
   };
 
   /*

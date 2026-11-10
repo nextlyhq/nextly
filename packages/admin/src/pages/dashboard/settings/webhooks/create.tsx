@@ -11,7 +11,10 @@ import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { toast } from "@admin/components/ui";
 import { ROUTES } from "@admin/constants/routes";
-import { useCreateWebhook } from "@admin/hooks/queries/useWebhooks";
+import {
+  useCreateWebhook,
+  useWebhookEventTypes,
+} from "@admin/hooks/queries/useWebhooks";
 import { useCan } from "@admin/hooks/useCan";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
@@ -19,6 +22,7 @@ import { toCreateInput } from "@admin/lib/webhook-validation";
 
 const CreateWebhookContent: React.FC = () => {
   const { mutate: doCreate, isPending } = useCreateWebhook();
+  const eventTypes = useWebhookEventTypes();
   const [secret, setSecret] = useState<string | null>(null);
   // Only an updater can reveal the secret later; a create-only user cannot, so
   // the one-time dialog tells them to copy it now.
@@ -49,6 +53,8 @@ const CreateWebhookContent: React.FC = () => {
   return (
     <>
       <WebhookForm
+        eventTypes={eventTypes.data}
+        eventTypesFailed={eventTypes.isError}
         onSubmit={handleSubmit}
         isPending={isPending}
         submitLabel="Create endpoint"

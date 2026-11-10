@@ -136,8 +136,8 @@ import { builderSchemaConflict } from "../errors/areas/plugin-config";
 import { createContext, type CommandContext } from "../program";
 import type { SupportedDialect } from "../utils/adapter";
 import {
+  loadDeclaredConfigOrExit,
   requireDatabaseEnv,
-  loadConfigOrExit,
 } from "../utils/command-prerequisites";
 import {
   discoverMigrationGroups,
@@ -186,7 +186,9 @@ export async function runMigrateCheck(
   const dialect = dbValidation.dialect;
 
   // Load config.
-  const configResult = await loadConfigOrExit(
+  // The configuration with its plugin field declarations checked; an invalid
+  // one is reported and the check exits, like every other check failure.
+  const configResult = await loadDeclaredConfigOrExit(
     {
       configPath: options.config,
       cwd: options.cwd,
@@ -194,25 +196,7 @@ export async function runMigrateCheck(
     },
     logger
   );
-
-  // `loadConfig` has registered `contributes.fieldTypes` by now, which is the
-  // first moment an unknown field type can be told apart from one a plugin had
-  // not contributed yet: the `define*` validators defer that question because
-  // the config bundle is evaluated before any plugin registers. Asked here, a
-  // misspelled or wrong-surface token fails the command instead of silently
-  // generating primitive fallback types and a snapshot that production boot
-  // then refuses.
-  try {
-    assertPluginFieldDeclarations({
-      collections: configResult.config.collections,
-      singles: configResult.config.singles,
-      fieldGroups: configResult.config.fieldGroups,
-    });
-  } catch (error) {
-    // Reported and exited rather than thrown, so an invalid declaration reads
-    // like every other check failure instead of an unhandled crash.
-    exitWithError(logger, configDeclarationError(error) ?? error);
-  }
+  if (configResult === undefined) return;
 
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);

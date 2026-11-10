@@ -56,12 +56,25 @@ const adapter = vi.hoisted(() => ({
   disconnect: () => Promise.resolve(),
 }));
 
+/** The database the commands are pointed at, which is never opened. */
+const DATABASE_ENV = vi.hoisted(() => ({
+  dialect: "sqlite",
+  databaseUrl: "file:never-opened.db",
+}));
+
 vi.mock("../utils/command-prerequisites", () => ({
-  requireDatabaseEnv: () => ({
-    dialect: "sqlite",
-    databaseUrl: "file:never-opened.db",
-  }),
+  requireDatabaseEnv: () => DATABASE_ENV,
   connectOrExit: () => Promise.resolve(adapter),
+  // The shared openings the commands go through, answering as the pieces
+  // above and the config loader below answer.
+  openOrConnect: () => Promise.resolve(adapter),
+  openMigrationCommand: async () => ({
+    dbValidation: DATABASE_ENV,
+    configResult: await configResult(),
+    cwd: seen.migrationsDir,
+    migrationsDir: seen.migrationsDir,
+    adapter,
+  }),
 }));
 
 vi.mock("../utils/adapter", async importOriginal => ({
@@ -69,17 +82,21 @@ vi.mock("../utils/adapter", async importOriginal => ({
   createCliAdapter: () => Promise.resolve(adapter),
 }));
 
+/** The configuration every command loads: no collections, no plugins. */
+function configResult() {
+  return Promise.resolve({
+    config: {
+      collections: [],
+      plugins: [],
+      db: { migrationsDir: seen.migrationsDir },
+    },
+    appConfig: { collections: [], plugins: [], db: {} },
+    projectRoot: seen.migrationsDir,
+  });
+}
+
 vi.mock("../utils/config-loader", () => ({
-  loadConfig: () =>
-    Promise.resolve({
-      config: {
-        collections: [],
-        plugins: [],
-        db: { migrationsDir: seen.migrationsDir },
-      },
-      appConfig: { collections: [], plugins: [], db: {} },
-      projectRoot: seen.migrationsDir,
-    }),
+  loadConfig: () => configResult(),
 }));
 
 // prune: one collection the configuration no longer has.
@@ -104,6 +121,10 @@ vi.mock("../../domains/schema/events/schema-events-repository", () => ({
     listFileApplies() {
       return Promise.resolve(seen.ledger);
     }
+    // No migration's removal is recorded.
+    listFileRemovals() {
+      return Promise.resolve([]);
+    }
   },
 }));
 vi.mock(
@@ -122,8 +143,13 @@ vi.mock("../../domains/schema/ownership/drop-guard", async importOriginal => ({
   readLiveTables: () => Promise.resolve(new Set()),
   readLiveIndexTables: () => Promise.resolve(new Map()),
 }));
-vi.mock("../commands/migrate", () => ({
-  refuseUnresolvedAppAttempts: () => Promise.resolve(),
+// `migrate:down` asks the app's history first; here it holds, so the
+// command reaches its judgement.
+vi.mock("../commands/migrate", async importOriginal => ({
+  migrateExitCode: (
+    await importOriginal<typeof import("../commands/migrate")>()
+  ).migrateExitCode,
+  assertAppHistoryHolds: () => Promise.resolve(),
 }));
 
 // plugins uninstall: what the command hands its judgement is recorded, and

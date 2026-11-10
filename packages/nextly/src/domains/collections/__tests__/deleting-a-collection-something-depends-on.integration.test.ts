@@ -534,7 +534,7 @@ describeEachDialect("deleting a collection something depends on", dialect => {
       await t.nextly.update({
         collection: TAGS,
         id: String(tag.item.id),
-        data: { featured: post.item.id },
+        data: { featured: post.item.id, _overwrite: true },
       });
     }
   }
@@ -597,7 +597,7 @@ describeEachDialect("deleting a collection something depends on", dialect => {
         await t.nextly.update({
           collection: TAGS,
           id: String(tag.item.id),
-          data: { posts: [post.item.id] },
+          data: { posts: [post.item.id], _overwrite: true },
         });
       }
     } finally {

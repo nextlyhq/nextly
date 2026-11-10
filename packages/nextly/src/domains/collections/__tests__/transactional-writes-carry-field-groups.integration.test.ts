@@ -183,7 +183,7 @@ describe("transactional writes carry field groups (integration)", () => {
         tx,
         "pages",
         id,
-        { title: "Home 2", seo: { metaTitle: "after" } },
+        { title: "Home 2", seo: { metaTitle: "after" }, _overwrite: true },
         { overrideAccess: true }
       )
     );
@@ -215,7 +215,7 @@ describe("transactional writes carry field groups (integration)", () => {
         tx,
         "pages",
         id,
-        { title: "Draft title", seo: { metaTitle: "draft" } },
+        { title: "Draft title", seo: { metaTitle: "draft" }, _overwrite: true },
         { overrideAccess: true }
       )
     );

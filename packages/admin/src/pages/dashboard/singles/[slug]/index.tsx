@@ -60,6 +60,7 @@ import {
 } from "@admin/hooks/useSharedFieldsRecovery";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import { staleVersionOf } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
 import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
 
@@ -570,13 +571,23 @@ function useSingleSaveFailure(args: {
   });
   return useCallback(
     (error: unknown, form: RefusedForm | undefined) => {
+      // A save made from an older version: the editor's conflict tells the
+      // author who changed it and offers what to do, so no toast says it
+      // twice. The Single is read again, so the current version reaches the
+      // editor, whose form keeps the refused edits until the author chooses.
+      if (staleVersionOf(error)) {
+        void queryClient.invalidateQueries({
+          queryKey: singleDocumentKeys.detail(slug),
+        });
+        return;
+      }
       if (!recover(error, form)) {
         toast.error(
           error instanceof Error ? error.message : "Failed to save changes"
         );
       }
     },
-    [recover]
+    [recover, queryClient, slug]
   );
 }
 

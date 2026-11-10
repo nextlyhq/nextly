@@ -20,14 +20,19 @@
  */
 
 import type { JSX, ReactNode } from "react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { autosaveIntervalFrom } from "@admin/components/features/versions/autosave-interval";
+import {
+  autosaveEnabledFor,
+  autosaveIntervalFrom,
+} from "@admin/components/features/versions/autosave-interval";
 import { DocumentHistoryContext } from "@admin/components/features/versions/document-history-context";
 import {
   historyEnabledFrom,
   historyRetentionFrom,
 } from "@admin/components/features/versions/history-enabled";
+import { PREVIOUS_VERSION } from "@admin/components/features/versions/version-search-params";
+import { versionsHref } from "@admin/components/features/versions/versions-href";
 import {
   mayRecordRecovery,
   useViewedVersion,
@@ -37,6 +42,7 @@ import {
 } from "@admin/components/features/versions/viewed-version-host";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { toast } from "@admin/components/ui";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
@@ -54,6 +60,11 @@ import { useAfterRecordings } from "@admin/hooks/useSnapshotAutosave";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
+import { versionForLanguage } from "@admin/lib/document-version";
+import {
+  panelOrderFor,
+  placePanelParts,
+} from "@admin/lib/plugins/document-surfaces";
 import { cn } from "@admin/lib/utils";
 import { entryApi } from "@admin/services/entryApi";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
@@ -89,6 +100,7 @@ import { DocumentTitleBlock } from "./DocumentTitleBlock";
 import { DocumentTrail } from "./DocumentTrail";
 import { DocumentViewBody, type DocumentViewMount } from "./DocumentViewBody";
 import {
+  editedLanguageUntranslated,
   effectiveEntryStatus,
   isSlugPerLocale,
   previewLinkLocale,
@@ -108,6 +120,7 @@ import { EntryFormProvider } from "./EntryFormProvider";
 import { EntryFormSidebar } from "./EntryFormSidebar";
 import { EntryMetaStrip } from "./EntryMetaStrip";
 import { FormErrorSummary } from "./FormErrorSummary";
+import { PanelSectionsAboveForm } from "./panels";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import { readerStatusWrite, statusWritesHeld } from "./reader-status-write";
 import type { RecoveryPointState } from "./SaveStateIndicator";
@@ -128,6 +141,8 @@ import {
   type EntryData,
   type EntryFormMode,
 } from "./useEntryForm";
+import { useLockWithHeldChange } from "./useHeldDocumentChange";
+import { usePluginDocumentSurfaces } from "./usePluginDocumentSurfaces";
 import {
   heldLocaleChange,
   heldWhileRecovering,
@@ -135,6 +150,7 @@ import {
   quickEditSave,
 } from "./useRefusedForm";
 import { useResetOnReload } from "./useResetOnReload";
+import { VersionConflictDialog } from "./VersionConflictDialog";
 
 // ============================================================================
 // Types
@@ -385,6 +401,9 @@ export function EntryForm({
   // and the version on screen are known. Read by the form when a refused
   // publish's recovery runs, which writes like the handlers below do.
   const writesHeldNow = useRef(false);
+  // Read when a plugin asks whether it may write, which can be long after the
+  // render that drew it: a dialog stays open while the document changes hands.
+  const pluginWritesHeldNow = useRef(false);
   // The entry's Save that never publishes, handed up from inside its
   // document's actions, where the Save lives.
   const saveWithoutPublishing = useRef<
@@ -402,6 +421,15 @@ export function EntryForm({
     isSubmitting: savePending,
     recovering,
     isDirty,
+    versionConflict,
+    saveAnyway,
+    loadCurrentVersion,
+    versionStartedFrom,
+    adoptRecoveredVersion,
+    holdForVersionChange,
+    releaseVersionHold,
+    stopAwaitingCurrentVersion,
+    expectOwnChange,
   } = useEntryForm({
     collection,
     entry,
@@ -432,10 +460,16 @@ export function EntryForm({
   // holds for it too. Only the fields' own `disabled` follows the save alone;
   // the recovery holds them read-only through the lock, so a field keeps focus.
   const isSubmitting = savePending || recovering;
+  // Whether a change told over unsaved edits waits for the editor's answer,
+  // as the lock below last said: the edits it is about are this language's.
+  const [changeAwaiting, setChangeAwaiting] = useState(false);
   // Every switch to another language goes through here, held while a
   // refused publish's recovery runs, so its Save and take stay on the
-  // language they are for.
-  const switchLocale = heldLocaleChange(onLocaleChange, recovering);
+  // language they are for, and while a told change waits for an answer.
+  const switchLocale = heldLocaleChange(
+    onLocaleChange,
+    recovering || changeAwaiting
+  );
 
   // Content-locale context for field components — the active locale's writing
   // direction (RTL for Arabic/Hebrew/…), the collection's master localization switch (so a
@@ -453,6 +487,13 @@ export function EntryForm({
   // offered, so a create form supplies none and nothing renders.
   const publishAllEntryLocales = usePublishAllLocales({
     collectionSlug: collection.slug ?? collection.name,
+    // The copy on screen, read as the editor reads it, so a publish of every
+    // language is refused when that language changed since it opened.
+    shown: () => ({
+      version: versionStartedFrom(),
+      locale,
+      draft: readDraft ?? collection.draftsEnabled === true,
+    }),
   });
   // Publishing every language waits for the entry's recordings in flight.
   const { run: runAfterRecordings, pending: publishAllPending } =
@@ -581,7 +622,39 @@ export function EntryForm({
   // Which past version the document area is showing, the context value that
   // publishes it to the panel, and the version's own body layout — held by the
   // shared host so the Single editor answers the panel identically.
-  const viewedVersionHost = useViewedVersion(allFields, takeoverTypes);
+  // The entry's version in a language, for a restore from its history: the
+  // version this copy started from in its own language, else read.
+  const versionFor = useCallback(
+    (wanted: string | null) =>
+      versionForLanguage({
+        wanted,
+        shown: locale ?? defaultLocale ?? null,
+        startedFrom: versionStartedFrom(),
+        readIn: inLocale =>
+          entryApi.findByID(collection.name, String(entry?.id ?? ""), {
+            locale: inLocale,
+          }),
+        readShown: () =>
+          entryApi.findByID(collection.name, String(entry?.id ?? ""), {
+            locale,
+            draft: readDraft ?? collection.draftsEnabled === true,
+          }),
+      }),
+    [
+      locale,
+      defaultLocale,
+      versionStartedFrom,
+      collection.name,
+      collection.draftsEnabled,
+      entry?.id,
+      readDraft,
+    ]
+  );
+  const viewedVersionHost = useViewedVersion(
+    allFields,
+    takeoverTypes,
+    versionFor
+  );
   const {
     viewingVersion,
     documentHistory,
@@ -706,14 +779,29 @@ export function EntryForm({
     readOnlyForReader,
     readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
     latest,
+    // Every claim and beat names the copy's version, so the holder is told
+    // when someone else changes the entry. Only where the editor can load the
+    // latest copy: one that cannot would say it shows what it does not.
+    version: latest ? versionStartedFrom : undefined,
   });
-  // A gained entry's latest version starts the whole form again, whatever its
-  // `updatedAt` says, and the lock holds until it has; the document views key
-  // on the count it carries.
-  const lock = heldWhileRecovering(
-    useResetOnReload(form, lockSurface, defaultValues),
-    recovering
+  // A gained entry's latest version starts the whole form again, whatever
+  // its `updatedAt` says, and the lock holds until it has; the document views
+  // key on the count it carries. Someone else's change is said over it.
+  const lock = useLockWithHeldChange(
+    heldWhileRecovering(
+      useResetOnReload(form, lockSurface, defaultValues),
+      recovering
+    ),
+    {
+      surface: lockSurface,
+      hold: holdForVersionChange,
+      latest,
+      release: releaseVersionHold,
+    }
   );
+  useEffect(() => {
+    setChangeAwaiting(lock.changeAwaitingAnswer);
+  }, [lock.changeAwaitingAnswer]);
 
   /*
    * Delegated whole, including the decision to answer NULL when there is
@@ -778,7 +866,12 @@ export function EntryForm({
   // The quick-edit and quick-create modals save only with the update or
   // create permission their mode needs: those modals open from a related
   // field, not through the route guard the full editor sits behind.
-  const canDelete = useCan(`delete-${collectionSlug}`);
+  // A collection whose entries are deleted through an action of their own
+  // (`admin.disableDelete`) is offered no Delete of its own here, unless a
+  // plugin replaces that Delete with its action (below): the server refuses
+  // the plain delete.
+  const mayDelete = useCan(`delete-${collectionSlug}`);
+  const canDelete = mayDelete && collection.admin?.disableDelete !== true;
   // The modals send no language, so the server writes the default one: a
   // create is answered so already, and an update by its own cell.
   const canCreate = useCan(`create-${collectionSlug}`);
@@ -791,6 +884,13 @@ export function EntryForm({
   // A refused publish's recovery changes the content, so it is held exactly
   // as the content's own saves are.
   writesHeldNow.current = editsHeld;
+  // What a plugin's own write is held by at this instant: a colleague's claim,
+  // a past version on screen or a recovery, as the built-in Delete is, and a
+  // collection removed from code, where the server refuses every write and
+  // the editor offers none. A reader's page is not among them: like Delete, a
+  // plugin's action follows its own permission, which its route judges.
+  const pluginWritesHeld = writesHeld || recovering || removedFromCode;
+  pluginWritesHeldNow.current = pluginWritesHeld;
 
   /*
    * The one gate every write passes through.
@@ -843,6 +943,8 @@ export function EntryForm({
       // taken for the document.
       locale: locale ?? null,
       savedCount,
+      // A save of restored edits is judged by the version they began from.
+      onRestored: adoptRecoveredVersion,
     }),
     recovering
   );
@@ -855,6 +957,9 @@ export function EntryForm({
    */
   const unsavedWork = useFormUnsavedWork(isDirty);
   const hasUnsavedWork = unsavedWork.hasUnsavedWork;
+  // The page builder's own store included, which the form's values do not
+  // hold: what someone else's change is judged against.
+  lock.now.hasUnsavedWork = hasUnsavedWork;
 
   const autosave = useDocumentAutosave({
     scope: autosaveScope,
@@ -873,6 +978,8 @@ export function EntryForm({
     enabled: !updatesHeld && mayRecordRecovery(isSubmitting, viewingVersion),
     // The pace the collection configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(collection),
+    // Each point records the version its edits began from.
+    version: versionStartedFrom,
   });
   const linkLocale = previewLinkLocale({
     localized: collection.localized === true,
@@ -963,6 +1070,7 @@ export function EntryForm({
   const editedStatus = {
     status: effectiveEntryStatus(entry, locale, defaultLocale) ?? "draft",
     hasWorkingDraft: hasPendingWorkingDraft(entry),
+    untranslated: editedLanguageUntranslated(entry, locale, defaultLocale),
   };
   const contextDocumentStatus =
     mode === "create" ? {} : { documentStatus: editedStatus };
@@ -1010,6 +1118,38 @@ export function EntryForm({
     pendingOfferAt: recovery.offer?.savedAt ?? null,
   };
 
+  // What plugins change on this collection's document screen: the actions
+  // they hide or replace, and the sections they add to the panel. A section
+  // is told what holds the document as the fields and the writes are held.
+  const pluginSurfaces = usePluginDocumentSurfaces({
+    collectionSlug: collection.name,
+    entryId: savedEntryId,
+    documentLock: {
+      readOnly: contentHeld,
+      // The same hold `mayWrite` reads, so the two cannot disagree.
+      actionsDisabled: pluginWritesHeld,
+    },
+    mayWrite: () => !pluginWritesHeldNow.current,
+    onDeleted: onDelete,
+    onOwnChange: expectOwnChange,
+    locale,
+  });
+  // The panel's sections in the order the server placed them, with the side
+  // panel sections plugins declared for this collection's entries among them,
+  // each judged on the entry as this reader's read returned it.
+  const { contributions } = useBranding();
+  // On a phone the panel is a sheet opened only from the document's menu, so
+  // a section declared to sit above the form there moves out of the panel
+  // and above the fields, where the author meets it first.
+  const { panel: panelOrder, aboveForm: sectionsAboveForm } = useMemo(
+    () =>
+      placePanelParts(
+        panelOrderFor(contributions, collection.name, entry),
+        panel.mode === "sheet"
+      ),
+    [contributions, collection.name, entry, panel.mode]
+  );
+
   const documentActionsInput: DocumentActionBindingsInput = {
     mode,
     hasStatus,
@@ -1027,6 +1167,7 @@ export function EntryForm({
     canEdit: mayEdit,
     writesRefused: removedFromCode,
     contributedActions: documentActions,
+    actionOverrides: pluginSurfaces.actionOverrides,
     // Read when a contribution is chosen: the page above holds only the
     // saved entry, and a schedule says when edits are not saved yet.
     currentValues: () => form.getValues(),
@@ -1035,9 +1176,48 @@ export function EntryForm({
     ...storingHandlers(handleSubmit),
     onCancel: handleCancel,
     // No handler, no Delete: the action bar draws no action it cannot run.
-    ...(canDelete ? { onDelete: handleDelete } : {}),
+    // A plugin's replacement keeps the row (and its permission and holds),
+    // so it needs the built-in Delete to replace.
+    ...(canDelete ||
+    (mayDelete && pluginSurfaces.actionOverrides.delete?.kind === "replaced")
+      ? { onDelete: handleDelete }
+      : {}),
     onDiscardWorkingDraft: handleDiscardWorkingDraft,
   };
+
+  // A save refused because the entry changed since: who changed it and when,
+  // and the author's choices, over the edits it keeps. The comparison is of
+  // the change that made the save stale, where the entry keeps history.
+  const staleHistory = versionConflict?.stale.historyVersion;
+  const keepsRecoveryPoints =
+    autosaveScope !== null && autosaveEnabledFor(collection);
+  lock.now.keepsEdits = keepsRecoveryPoints;
+  // Load the current version, keeping the edits as a recovery point where the
+  // document keeps them and offering it then; elsewhere the edits are
+  // discarded, as the conflict said they would be. One way, for a refused
+  // save's dialog and for someone else's change alike.
+  lock.now.keepEditsAndLoad = async () => {
+    await loadCurrentVersion(keepsRecoveryPoints);
+    if (keepsRecoveryPoints) recovery.recheck();
+  };
+  lock.now.stopLoadingCurrent = stopAwaitingCurrentVersion;
+  const conflictDialog = (
+    <VersionConflictDialog
+      conflict={versionConflict}
+      keepsRecoveryPoints={keepsRecoveryPoints}
+      compareHref={
+        staleHistory && autosaveScope
+          ? versionsHref(
+              autosaveScope,
+              { from: PREVIOUS_VERSION, to: staleHistory.version },
+              staleHistory.locale
+            )
+          : null
+      }
+      onLoadCurrent={() => lock.now.keepEditsAndLoad()}
+      onSaveAnyway={saveAnyway}
+    />
+  );
 
   // Embedded mode: simplified single-column layout for modals
   // Note: Preview is typically not shown in embedded mode (modals)
@@ -1049,6 +1229,8 @@ export function EntryForm({
         collectionSlug={collection.name}
         isCreateMode={mode === "create"}
         {...contextDocumentStatus}
+        // The fields, so a field inside a repeater's row has an address.
+        fields={getCollectionFields(collection)}
       >
         <EntryFormProvider
           form={form}
@@ -1077,6 +1259,7 @@ export function EntryForm({
               onTakeOver={lock.takeOver}
               onRequestAccess={lock.requestAccess}
               onRetry={lock.retryLoad}
+              onChoose={lock.answerChange}
             />
             {/* No page around a modal to carry the removed-from-code notice in
                 a document banner, so the modal says it itself. */}
@@ -1125,6 +1308,8 @@ export function EntryForm({
               canSave={canSave}
             />
           </div>
+          {conflictDialog}
+          {pluginSurfaces.replacement}
         </EntryFormProvider>
       </EntryFormContextProvider>
     );
@@ -1213,6 +1398,9 @@ export function EntryForm({
                   collectionSlug={collection.name}
                   isCreateMode={mode === "create"}
                   {...contextDocumentStatus}
+                  // The fields, so a field inside a repeater's row has an
+                  // address the Page Builder and other views open it by.
+                  fields={getCollectionFields(collection)}
                   // Only where a takeover can happen. The embedded branch renders
                   // the whole body in a modal and hides nothing, so a panel there
                   // would offer a second copy of fields already on screen.
@@ -1244,6 +1432,11 @@ export function EntryForm({
                       hasUnsavedWork={hasUnsavedWork}
                       isSubmitting={isSubmitting}
                     />
+                    {/* A plugin's replacement for a document action, drawn
+                      inside the document's providers so it reads the
+                      language being edited and the document's actions as
+                      any surface of the editor does. */}
+                    {pluginSurfaces.replacement}
                     {documentView ? (
                       <DocumentViewBody
                         view={documentView}
@@ -1408,6 +1601,22 @@ export function EntryForm({
                                   panelCarriesId={panelDocked}
                                   documentId={entry?.id}
                                 />
+                                {/* A plugin's section that asks to be met
+                                  first, above the fields on a phone rather
+                                  than in the sheet. */}
+                                {mode === "edit" ? (
+                                  <PanelSectionsAboveForm
+                                    sections={sectionsAboveForm}
+                                    className={DOCUMENT_COLUMN_INSET}
+                                    {...(pluginSurfaces.sectionProps ===
+                                    undefined
+                                      ? {}
+                                      : {
+                                          pluginSectionProps:
+                                            pluginSurfaces.sectionProps,
+                                        })}
+                                  />
+                                ) : null}
 
                                 {/* The language panel, inline: the exact
                         complement of the docked panel, shown wherever that
@@ -1532,6 +1741,17 @@ export function EntryForm({
                                     }
                                     // A reader may still open the other languages.
                                     navigationDisabled={navigationHeld}
+                                    pluginSections={pluginSurfaces.sections}
+                                    {...(panelOrder === undefined
+                                      ? {}
+                                      : { panelOrder })}
+                                    {...(pluginSurfaces.sectionProps ===
+                                    undefined
+                                      ? {}
+                                      : {
+                                          pluginSectionProps:
+                                            pluginSurfaces.sectionProps,
+                                        })}
                                   />
                                 </DocumentSidePanel>
                               ) : null}
@@ -1546,6 +1766,7 @@ export function EntryForm({
             </PreviewPanes>
           </DocumentHistoryContext.Provider>
         </EntryLocaleProvider>
+        {conflictDialog}
       </UnsavedWorkProvider>
     </UnsavedChangesGuard>
   );

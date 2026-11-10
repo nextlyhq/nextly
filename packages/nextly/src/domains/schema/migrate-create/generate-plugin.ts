@@ -741,10 +741,19 @@ export interface GeneratePluginMigrationArgs extends BuildPluginMigrationArgs {
    * `CREATE INDEX CONCURRENTLY`.
    */
   handSealed?: boolean;
+  /**
+   * `--dry-run`: build the module and the barrel as a real run does, and write neither. The
+   * result names where they would be written.
+   */
+  dryRun?: boolean;
 }
 
 export interface GeneratePluginMigrationResult {
+  /** Where the module is written; on a dry run, where it would be. */
   modulePath: string;
+  /** The module's text, as it is written to `modulePath`. */
+  moduleContent: string;
+  /** Where the rewritten barrel is written; on a dry run, where it would be. */
   indexPath: string;
   moduleName: string;
   operationCounts: Record<SupportedDialect, number>;
@@ -768,7 +777,8 @@ export async function generatePluginMigration(
     args.migrationsDir,
     built.module,
     args.existing,
-    args.handSealed === true || built.handWritten.length > 0
+    args.handSealed === true || built.handWritten.length > 0,
+    args.dryRun === true
   );
   return {
     ...written,
@@ -782,7 +792,8 @@ export async function generatePluginMigration(
  * its author is about to add its SQL, plus the rewritten barrel.
  */
 export async function generateBlankPluginMigration(
-  args: BuildBlankPluginMigrationArgs & { migrationsDir: string }
+  args: BuildBlankPluginMigrationArgs &
+    Pick<GeneratePluginMigrationArgs, "migrationsDir" | "dryRun">
 ): Promise<
   Omit<GeneratePluginMigrationResult, "operationCounts" | "handWritten">
 > {
@@ -791,7 +802,8 @@ export async function generateBlankPluginMigration(
     args.migrationsDir,
     buildBlankPluginMigration(args),
     args.existing,
-    true
+    true,
+    args.dryRun === true
   );
 }
 
@@ -820,13 +832,17 @@ async function writeModuleExclusively(
   }
 }
 
-/** Write one module and the barrel listing it beside the existing ones. */
+/**
+ * Write one module and the barrel listing it beside the existing ones. A dry run writes neither
+ * and returns where they would be written.
+ */
 async function writePluginMigration(
   pluginName: string,
   migrationsDir: string,
   module: PluginMigration,
   existing: readonly PluginMigration[],
-  handSealed: boolean
+  handSealed: boolean,
+  dryRun: boolean
 ): Promise<
   Omit<GeneratePluginMigrationResult, "operationCounts" | "handWritten">
 > {
@@ -834,24 +850,30 @@ async function writePluginMigration(
   // be refused the next time the plugin loads, leaving it unloadable until
   // the file was removed by hand.
   assertModuleKeysFit(pluginName, [module]);
-  await mkdir(migrationsDir, { recursive: true });
   const modulePath = resolve(migrationsDir, `${module.name}.ts`);
-  await writeModuleExclusively(
+  const moduleContent = handSealed
+    ? formatHandSealedPluginMigrationModule(module)
+    : formatPluginMigrationModule(module);
+  const indexPath = resolve(migrationsDir, "index.ts");
+  const written = {
     modulePath,
-    handSealed
-      ? formatHandSealedPluginMigrationModule(module)
-      : formatPluginMigrationModule(module)
-  );
+    moduleContent,
+    indexPath,
+    moduleName: module.name,
+  };
+  if (dryRun) return written;
+
+  await mkdir(migrationsDir, { recursive: true });
+  await writeModuleExclusively(modulePath, moduleContent);
 
   // Rewritten whole on purpose: the barrel is the tool's own listing of the
   // modules, regenerated from them every time. It is reached only once the
   // module above was created, so a refused module leaves it untouched.
-  const indexPath = resolve(migrationsDir, "index.ts");
   await writeFile(
     indexPath,
     formatPluginMigrationsIndex([...existing, module]),
     "utf-8"
   );
 
-  return { modulePath, indexPath, moduleName: module.name };
+  return written;
 }

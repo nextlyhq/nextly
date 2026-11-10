@@ -77,6 +77,7 @@ test.describe("two editors on one page", { tag: EVERY_DIALECT }, () => {
           kind: "page",
           nodes: [heading("first", "First"), heading("second", "Second")],
         },
+        _overwrite: true,
       },
     });
     expect(stored.ok()).toBe(true);
@@ -194,6 +195,7 @@ test.describe("two editors on one page", { tag: EVERY_DIALECT }, () => {
             kind: "page",
             nodes: [heading("first", "First"), heading("saved", "Saved")],
           },
+          _overwrite: true,
         },
       });
       expect(stored.ok()).toBe(true);

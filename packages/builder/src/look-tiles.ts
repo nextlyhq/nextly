@@ -16,12 +16,14 @@ import {
   isPlainRecord,
   isTokenRef,
   resolveSiteTokens,
+  scaledTokenText,
   tokenIdentity,
   type NamedClass,
   type NodeStyles,
   type SiteTokenSet,
   type StyleValue,
   type TokenMode,
+  type TokenRef,
 } from "@nextlyhq/blocks-engine";
 
 import { classDeclarations, usableSiteClasses } from "./class-library";
@@ -151,9 +153,12 @@ export function lookChoice(
   return { kind: "apply", classes: next };
 }
 
-/** A token reference's value in one mode, or the reference left as it is. */
+/**
+ * A token reference's value in one mode, at the reference's factor as the
+ * page compiles it, or the reference left as it is.
+ */
 function tokenValue(
-  ref: { readonly $token: string },
+  ref: TokenRef,
   tokens: SiteTokenSet | undefined,
   mode: TokenMode
 ): StyleValue {
@@ -161,7 +166,13 @@ function tokenValue(
   // old display name resolves nothing there, so it resolves nothing here.
   const token = tokens?.tokens.find(each => tokenIdentity(each) === ref.$token);
   const value = token?.values[mode] ?? token?.values.light;
-  return value === undefined ? ref : value;
+  if (value === undefined) return ref;
+  // A number at its factor is the number the page's `calc()` computes; text
+  // takes the page's own spelling of the scale.
+  if (typeof value === "number") {
+    return typeof ref.times === "number" ? value * ref.times : value;
+  }
+  return typeof value === "string" ? scaledTokenText(value, ref.times) : value;
 }
 
 /** A value with every token it names resolved for one mode. */
@@ -235,6 +246,35 @@ export function lookTileStyle(
     }
   }
   return style;
+}
+
+/**
+ * The colours a look tile's stage is drawn in: the site's page background and
+ * text, for the mode the canvas shows.
+ *
+ * A look names colours from the site's palette, and those read only against
+ * that palette. On the editor's own surface they need not: the admin's theme
+ * and the canvas's mode are chosen apart, so a look's text meets the dark
+ * admin's stage in its light-mode colour and cannot be read. A colour the
+ * site's tokens give no text for stays the editor's.
+ */
+export function lookStageStyle(
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode
+): Record<string, string> {
+  const named = resolved(
+    {
+      backgroundColor: { $token: "color.background" },
+      color: { $token: "color.text" },
+    },
+    resolveSiteTokens(tokens),
+    mode
+  ) as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.entries(named).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string"
+    )
+  );
 }
 
 /**

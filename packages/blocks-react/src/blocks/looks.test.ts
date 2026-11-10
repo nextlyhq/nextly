@@ -1,5 +1,6 @@
 import {
   blockLooks,
+  blockOwnLooks,
   compilePageCss,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
@@ -27,6 +28,15 @@ describe("the looks the core blocks ship with", () => {
       ["core/image", "image-rounded", "Rounded"],
       ["core/image", "image-circle", "Circle"],
       ["core/section", "section-hero", "Hero"],
+    ]);
+  });
+
+  it("each give the block's own look as a class with no edits", () => {
+    const own = blockOwnLooks([button, image, section]);
+    expect(own.map(look => [look.slug, look.isDefault, look.styles])).toEqual([
+      ["button-primary", true, {}],
+      ["image-square", true, {}],
+      ["section-plain", true, {}],
     ]);
   });
 

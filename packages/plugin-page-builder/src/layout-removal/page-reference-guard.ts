@@ -70,7 +70,9 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 import type { Nextly } from "nextly";
 
 import { layoutExists, relationId } from "../default-layout/store";
+import { documentVersionOf, withVersionFrom } from "../document-version";
 import { statusOf } from "../unpublish-write";
+import { withinTime } from "../within-time";
 
 import {
   confirmedGone,
@@ -275,6 +277,9 @@ function pastItsFinalCheck(removal: LayoutRemoval): boolean {
   );
 }
 
+/** How many times a clear is tried while saves of the page keep landing. */
+const CLEAR_ATTEMPTS = 3;
+
 /**
  * Clear `layoutId` from the page `pageId`, where it can be cleared without
  * publishing anything: the working draft of a published page, or the row of an
@@ -286,6 +291,11 @@ function pastItsFinalCheck(removal: LayoutRemoval): boolean {
  * their own access deciding, and a page they may not edit is refused with
  * their write's own error. The read of where the page stands is the system's
  * either way: it decides only whether there is anything to clear.
+ *
+ * Sent with the version of the read it was decided on, so a save of the page
+ * in between refuses it rather than being undone. The page is then read
+ * again and judged afresh: cleared if it still names the Layout, left alone
+ * if the save changed that.
  */
 export async function clearPageReference(
   nextly: PageReads,
@@ -293,6 +303,28 @@ export async function clearPageReference(
   pageId: string,
   layoutId: string,
   writeAs?: PersonReads
+): Promise<boolean> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await clearOnce(nextly, pages, pageId, layoutId, writeAs);
+    } catch (error) {
+      if (
+        attempt >= CLEAR_ATTEMPTS ||
+        !NextlyError.isCode(error, "STALE_VERSION")
+      ) {
+        throw error;
+      }
+    }
+  }
+}
+
+/** One read of the page, and the clear it decides, as {@link clearPageReference}. */
+async function clearOnce(
+  nextly: PageReads,
+  pages: string,
+  pageId: string,
+  layoutId: string,
+  writeAs: PersonReads | undefined
 ): Promise<boolean> {
   const current = await currentPage(nextly, pages, pageId);
   if (current === null || relationId(current.layout) !== layoutId) {
@@ -307,7 +339,7 @@ export async function clearPageReference(
       nextly.update({
         collection: pages,
         id: pageId,
-        data: { layout: null },
+        data: withVersionFrom({ layout: null }, documentVersionOf(current)),
         context: { [LAYOUT_CLEAR_CONTEXT_KEY]: layoutId },
         ...(writeAs ?? { overrideAccess: true }),
       }),
@@ -487,15 +519,6 @@ export function registerPageReferenceGuard(args: PageReferenceGuardArgs): void {
 /** How long the floor waits for the fence before refusing. */
 const FLOOR_READ_TIMEOUT_MS = 5000;
 
-/** `read`, or a rejection once `ms` pass without an answer. */
-function withinTime<T>(read: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("the fence did not answer")), ms);
-  });
-  return Promise.race([read, late]).finally(() => clearTimeout(timer));
-}
-
 /**
  * The `layout` field's floor, by the rule in the module docblock. `store` is
  * read per call: the field is declared before the plugin is installed, and
@@ -517,7 +540,13 @@ export function layoutFenceFloor(
     const fence = store();
     if (fence === undefined) return true;
     try {
-      const removal = await withinTime(fence.removalOf(id), timeoutMs);
+      // Bounded by the one helper every guard reading from inside a
+      // transaction uses; what it rejects with is caught below either way.
+      const removal = await withinTime(
+        fence.removalOf(id),
+        timeoutMs,
+        () => new Error("the fence did not answer")
+      );
       return removal === null
         ? true
         : pageLayoutRefusal(fencedStateOf(removal));

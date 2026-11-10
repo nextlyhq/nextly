@@ -67,6 +67,7 @@ export type {
   AdminConfig,
   ApiKeysConfig,
   DatabaseConfig,
+  ExperimentalConfig,
   NextlyConfig,
   PluginOverride,
   RateLimitingConfig,

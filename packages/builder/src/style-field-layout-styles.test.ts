@@ -175,6 +175,13 @@ describe("the field stacks before a control runs out of room", () => {
 });
 
 describe("a segmented choice's selected state", () => {
+  /** The one rule every chosen segment and toggle is drawn by. */
+  const chosen = () =>
+    ruleBody(
+      CHROME,
+      '.nx-style-inspector__toggle > button[aria-pressed="true"],\n.nx-style-inspector__toggle > button[aria-checked="true"],\n.nx-segment__option[aria-checked="true"],\n.nx-icon-choice__option[aria-checked="true"]'
+    );
+
   it("is told by its words' weight and colour, not by its fill alone", () => {
     // The accent fill alone measured about 1.7:1 against the unselected
     // background in dark, under 3:1: "This tab" and "New tab" could not be
@@ -182,22 +189,18 @@ describe("a segmented choice's selected state", () => {
     const button = ruleBody(CHROME, ".nx-style-inspector__toggle > button");
     expect(button).toContain("font-weight: 500");
     expect(button).toContain("color: var(--nx-muted-foreground)");
-    const chosen = ruleBody(
-      CHROME,
-      '.nx-style-inspector__toggle > button[aria-pressed="true"],\n.nx-style-inspector__toggle > button[aria-checked="true"]'
-    );
-    expect(chosen).toContain("font-weight: 600");
-    expect(chosen).toContain("color: var(--nx-foreground)");
+    expect(chosen()).toContain("font-weight: 600");
   });
 
-  it("is a step lighter in dark, its fill told from the panel's black", () => {
-    expect(
-      ruleBody(
-        CHROME,
-        '.dark .nx-style-inspector__toggle > button[aria-pressed="true"],\n.dark .nx-style-inspector__toggle > button[aria-checked="true"]'
-      )
-    ).toContain(
-      "background: color-mix(in oklch, var(--nx-accent) 82%, var(--nx-foreground))"
+  it("is filled with the panel's text colour, never the brand accent", () => {
+    // The accent is the site's brand colour, set at run time: an orange one
+    // measured 1.83:1 under the white label in dark. The panel's own pair is
+    // the most contrast either mode has, for the label and the fill.
+    expect(chosen()).toContain("background: var(--nx-foreground)");
+    expect(chosen()).toContain("color: var(--nx-background)");
+    expect(chosen()).not.toContain("--nx-accent");
+    expect(CHROME).not.toContain(
+      '.dark .nx-style-inspector__toggle > button[aria-checked="true"]'
     );
   });
 });

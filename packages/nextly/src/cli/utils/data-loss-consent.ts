@@ -19,6 +19,7 @@ import {
   ACCEPT_DATA_LOSS_ENV,
   deletionKey,
   deprecationNotices,
+  describeDeletion,
   judgeDataLoss,
   resolveDataLossConsent,
   type DataLossConsent,
@@ -27,6 +28,7 @@ import {
   type EarlierSpelling,
 } from "../../domains/schema/migrate/data-loss-consent";
 import { NextlyError } from "../../errors/nextly-error";
+import type { DryRunChange } from "../dry-run";
 import { CliError } from "../errors/cli-error";
 import { dataLossRefusal } from "../errors/index";
 
@@ -139,6 +141,19 @@ export async function judgeDataLossWithGrace(args: {
     return;
   }
   requireConsented(verdict);
+}
+
+/**
+ * What a dry run of a deleting command names: each deletion the real run
+ * would ask consent for, in the words the consent's listing uses.
+ */
+export function deletionChanges(
+  deletions: readonly Deletion[]
+): DryRunChange[] {
+  return deletions.map(deletion => ({
+    action: "remove",
+    target: describeDeletion(deletion),
+  }));
 }
 
 /**

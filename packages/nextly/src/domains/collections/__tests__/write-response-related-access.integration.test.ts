@@ -109,7 +109,7 @@ describe("collection write response — related-row field access (integration)",
         routeAuthorized: true,
         depth: 1,
       },
-      { title: "Hello again" }
+      { title: "Hello again", _overwrite: true }
     );
 
     expect(result.success).toBe(true);

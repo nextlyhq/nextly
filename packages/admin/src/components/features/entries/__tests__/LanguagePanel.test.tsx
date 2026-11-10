@@ -2,6 +2,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
+import type { PublishAllPreview } from "@admin/services/publishAllPreview";
 
 import {
   EntryLocaleProvider,
@@ -85,7 +86,7 @@ const COPY_IDLE = {
   confirm: vi.fn(),
 };
 /** What the server says publishing every language does here. */
-const PREVIEW = {
+const PREVIEW: PublishAllPreview = {
   languages: [
     { locale: "en", outcome: "goes-live-with-pending-change" as const },
     { locale: "de", outcome: "stays-published" as const },
@@ -398,13 +399,30 @@ describe("LanguagePanel", () => {
     expect(ar).toHaveTextContent("rtl");
   });
 
-  it("counts translations, not languages, so the default is not one of them", () => {
-    // English is the default: the source these are translated FROM. Counting it
-    // reported "2 of 3" for a document with one translation done, and disagreed
-    // with the list's badge on the very same entry.
+  it("counts every configured language, the default included", () => {
+    // English (the default) and German carry content, Arabic none: two of
+    // the three languages a reader can be shown.
     useBranding.mockReturnValue({ locales: LOCALES });
     renderPanel({ translations: TRANSLATIONS });
-    expect(screen.getByText("1 of 2 languages translated")).toBeInTheDocument();
+    expect(screen.getByText("2 of 3 languages translated")).toBeInTheDocument();
+  });
+
+  // The language being edited holds a pending change, and the panel still
+  // tells every language as it stands. The plausible broken implementation
+  // counts only languages without a pending change, or none at all.
+  it("tells every language and counts them all while the edited one holds a pending change", () => {
+    useBranding.mockReturnValue({ locales: LOCALES });
+    renderPanel({
+      translations: {
+        en: { translated: true, status: "published", pendingChange: true },
+        de: { translated: true, status: "published" },
+      },
+    });
+    expect(screen.getByText("2 of 3 languages translated")).toBeInTheDocument();
+    const [en, de, ar] = rows();
+    expect(en).toHaveTextContent("published");
+    expect(de).toHaveTextContent("published");
+    expect(ar).toHaveTextContent("not translated");
   });
 
   it("marks the language being edited instead of offering to open it", () => {
@@ -644,7 +662,7 @@ describe("LanguagePanel", () => {
 
     // Reading is not withheld — the panel is how the author sees where the
     // document stands, and that stays true while looking at history.
-    expect(screen.getByText("1 of 2 languages translated")).toBeInTheDocument();
+    expect(screen.getByText("2 of 3 languages translated")).toBeInTheDocument();
     expect(rows()[2]).toHaveTextContent("not translated");
   });
 
@@ -887,8 +905,8 @@ describe("LanguagePanel", () => {
       },
     });
 
-    // The chip, not the state text: the phrase truncates in a 277px rail and
-    // this is the fact that must survive.
+    // The chip, not the state text: the chip is the mark that reads at a
+    // glance in a 277px rail, and this is the fact that must survive.
     expect(screen.getByText("changes")).toBeInTheDocument();
     // And the language WITHOUT pending work carries no chip — without this the
     // assertion above would pass against a panel that marked every row.

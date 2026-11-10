@@ -196,7 +196,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: DRAFTED,
         id,
-        data: { title: "secret" },
+        data: { title: "secret", _overwrite: true },
         draft: true,
       });
       // POPULATION CONTROL: a trusted read asking for the working draft is

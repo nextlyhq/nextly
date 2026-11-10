@@ -184,7 +184,7 @@ test.describe("the editor inside locked areas", () => {
     await open(page);
     await clickBlock(page, "lk-row-heading");
     // The rail's button for the panel holding the inserter.
-    await page.getByRole("button", { name: "Add" }).click();
+    await page.locator('button[data-panel="add"]').click();
     const heading = page.getByRole("option", { name: "Heading", exact: true });
     // The row refuses every block, so a tile climbs past it and says so.
     await expect(heading).toHaveAccessibleDescription(

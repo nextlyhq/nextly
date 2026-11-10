@@ -19,6 +19,7 @@ import {
   type UninstallInput,
 } from "../../../domains/schema/ownership/uninstall-plan";
 import { NextlyError } from "../../../errors/nextly-error";
+import { actionRouteRefusal } from "../../../plugins/routes/action-route-check";
 import {
   installTargetUnclear,
   pluginNotFound,
@@ -39,6 +40,28 @@ function thrown(run: () => unknown): unknown {
     return error;
   }
   throw new Error("expected the call to throw");
+}
+
+/** The check of a request to escalate ticket 42, its row read as `read` answers. */
+function actionRefusal(read: ReadonlyMap<string, unknown>): Promise<unknown> {
+  return actionRouteRefusal(
+    {
+      action: "acme-support.escalate",
+      rows: [{ collection: "tickets", id: "42" }],
+    },
+    [
+      {
+        id: "acme-support.escalate",
+        kind: "rowAction",
+        visibleWhen: { field: "status", notEquals: "closed" },
+      },
+    ],
+    {
+      self: { name: "@acme/support", collections: {}, singles: {} },
+      refusalFor: () => Promise.resolve(undefined),
+      readRows: () => Promise.resolve(read),
+    }
+  );
 }
 
 /** An uninstall of the plugin with nothing else configured, keeping nothing. */
@@ -106,6 +129,11 @@ export async function uninstallRefused(
 }
 
 export const PLUGIN_CASES = {
+  // As a route bound to a declared action answers a row its rule hides.
+  ACTION_NOT_AVAILABLE: () =>
+    actionRefusal(new Map([["42", { id: "42", status: "closed" }]])),
+  // As it answers a row its caller may not read, or one that is missing.
+  PLUGIN_ACTION_ROW_NOT_FOUND: () => actionRefusal(new Map()),
   PLUGIN_NOT_FOUND: () => pluginNotFound("@acme/sitemap"),
   PLUGIN_INSTALL_TARGET_UNCLEAR: () => installTargetUnclear(undefined),
   // As `assertEnabled` in `cli/commands/plugin-lifecycle.ts` throws it.

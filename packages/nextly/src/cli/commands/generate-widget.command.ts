@@ -5,14 +5,18 @@
  */
 import { Option, type Command } from "commander";
 
+import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
 export function registerGenerateWidgetCommand(program: Command): void {
-  program
-    .command("generate:widget [id]")
-    .description(
-      "Scaffold a dashboard widget, with its test, in this site or plugin"
-    )
+  // `--dry-run` carries the one meaning and help line it has everywhere.
+  withDryRun(
+    program
+      .command("generate:widget [id]")
+      .description(
+        "Scaffold a dashboard widget, with its test, in this site or plugin"
+      )
+  )
     .option(
       "--view <kind>",
       "figure, list, table, bars, series, or component (its own)"
@@ -25,7 +29,6 @@ export function registerGenerateWidgetCommand(program: Command): void {
     // The earlier spelling of --overwrite, honoured for one release with a
     // notice naming it, and kept out of the help.
     .addOption(new Option("--force", "Deprecated: use --overwrite").hideHelp())
-    .option("--dry-run", "Print the files and edits; write nothing")
     .action(
       lazyAction(
         async () => (await import("./generate-widget")).generateWidgetAction

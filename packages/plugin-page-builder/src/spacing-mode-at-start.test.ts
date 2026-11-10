@@ -148,6 +148,34 @@ describe("siteVerdict", () => {
     }
   });
 
+  it("calls a site existing on a Single storing blocks in one repeater row only", async () => {
+    const inRows = () =>
+      Promise.resolve({
+        ...SURVEY,
+        singles: [{ slug: "home", paths: ["sections.body"] }],
+      });
+    // The first row is empty; the second holds the page.
+    const sections = [
+      { id: "r1", body: { nodes: [] } },
+      { id: "r2", body: { nodes: [{ id: "n" }] } },
+    ];
+    for (const stored of [
+      { live: { sections } },
+      { live: { sections: JSON.stringify(sections) } },
+    ]) {
+      const { nextly } = site({}, null, { home: stored });
+      expect(await siteVerdict({ nextly, slugs: SLUGS, survey: inRows })).toBe(
+        "existing"
+      );
+    }
+    const { nextly } = site({}, null, {
+      home: { live: { sections: [sections[0]] } },
+    });
+    expect(await siteVerdict({ nextly, slugs: SLUGS, survey: inRows })).toBe(
+      "fresh"
+    );
+  });
+
   it("does not count a Single whose blocks field is empty or absent", async () => {
     const { nextly } = site({}, null, {
       home: { live: { hero: { body: { nodes: [] } } }, draft: { hero: {} } },

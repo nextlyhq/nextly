@@ -18,6 +18,7 @@ import type { JSX } from "react";
 import { useVersionDocumentTitle } from "@admin/components/features/versions/useVersionDocumentTitle";
 import {
   readLocaleParam,
+  readFromParam,
   readVersionParam,
 } from "@admin/components/features/versions/version-search-params";
 import { VersionComparePage } from "@admin/components/features/versions/VersionComparePage";
@@ -69,7 +70,7 @@ export default function SingleVersionsPage({
       // viewer would land on permission-denied by a longer route. The dashboard
       // is reachable by anyone who can reach this page at all.
       readOnlyHref={ROUTES.DASHBOARD}
-      from={readVersionParam(searchParams?.from)}
+      from={readFromParam(searchParams?.from)}
       to={readVersionParam(searchParams?.to)}
       locale={locale}
     />

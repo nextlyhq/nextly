@@ -943,8 +943,8 @@ describe("the label the stamp is taken over", () => {
     // Both surfaces, because they can disagree — the label is what the stamp is
     // taken over, so a version reaching one and not the other would key
     // artifacts on a value the label never carried.
-    expect(JSON.parse(sharedStyleInputsLabel(inputs()))[0]).toBe("v4");
-    expect(sharedStyleInputsId(inputs())).toMatch(/^v4:[0-9a-z]+$/);
+    expect(JSON.parse(sharedStyleInputsLabel(inputs()))[0]).toBe("v5");
+    expect(sharedStyleInputsId(inputs())).toMatch(/^v5:[0-9a-z]+$/);
   });
 
   it("refuses every sheet stored before blocks lost their outer margins", () => {
@@ -957,7 +957,18 @@ describe("the label the stamp is taken over", () => {
     const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
     const before = `v3:${hashId(JSON.stringify(["v3", ...label.slice(1)]))}`;
     expect(now).not.toBe(before);
-    expect(now?.startsWith("v4:")).toBe(true);
+    expect(now?.startsWith("v5:")).toBe(true);
+  });
+
+  it("refuses every sheet stored before parts took properties from a wrapping root", () => {
+    // `v5` writes a wrapped image's corners and proportion on its picture. A
+    // `v4` sheet wrote them on the figure or link, where the image's look now
+    // sits too, so it would round the box around a caption: recompiled, not
+    // served. Rebuilt from the label the old compiler wrote.
+    const now = sharedStyleInputsId(inputs());
+    const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
+    const before = `v4:${hashId(JSON.stringify(["v4", ...label.slice(1)]))}`;
+    expect(now).not.toBe(before);
   });
 
   it("moves when a container's child gap moves", () => {

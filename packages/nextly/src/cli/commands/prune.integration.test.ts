@@ -79,6 +79,55 @@ describe("nextly prune (D14)", () => {
   });
 });
 
+describe.each(getConfiguredTestDialects())(
+  "nextly prune --dry-run (%s)",
+  dialect => {
+    it("names what a real prune drops, asks nothing, and drops nothing", async () => {
+      const slug = `p2_prune_plan_${randomBytes(3).toString("hex")}`;
+      const plugin = definePlugin({
+        name: "@t/prune-plan",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: {
+          collections: [
+            defineCollection({ slug, fields: [text({ name: "v" })] }),
+          ],
+        },
+      });
+      current = await createTestNextly({ dialect, plugins: [plugin] });
+      const registry = current.getService(
+        "collectionRegistryService"
+      ) as CollectionRegistryService;
+      const tableName = (await registry.getCollectionBySlug(slug))!.tableName;
+      const tablesBefore = (await current.adapter.listTables()).sort();
+      let asked = false;
+
+      const result = await runPrune({
+        registry,
+        adapter: current.adapter,
+        currentSlugs: [],
+        approve: async () => {
+          asked = true;
+          return true;
+        },
+        // A dry run takes no lock: one that fails when taken proves it.
+        lock: () => Promise.reject(new Error("a dry run took the schema lock")),
+        dryRun: true,
+      });
+
+      expect(asked).toBe(false);
+      expect(
+        result.planned.map(
+          deletion => deletion.kind === "table" && deletion.table
+        )
+      ).toContain(tableName);
+      expect(result.dropped).toEqual([]);
+      expect((await current.adapter.listTables()).sort()).toEqual(tablesBefore);
+      expect(await registry.getCollectionBySlug(slug)).not.toBeNull();
+    });
+  }
+);
+
 /** The insert and delete surface of a Drizzle handle, for the archive rows below. */
 interface ArchiveWriteDb {
   insert(table: unknown): { values(rows: unknown): Promise<unknown> };

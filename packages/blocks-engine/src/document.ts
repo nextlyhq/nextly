@@ -52,14 +52,18 @@ export const DOCUMENT_KINDS = [
 export type DocumentKind = (typeof DOCUMENT_KINDS)[number];
 
 /**
- * Document-level settings. Deliberately minimal: SEO and publishing state are
- * core-entry concerns, not document concerns. Page-level presentation that has
- * no owning node (e.g. a page background) lives here rather than on a fake
- * root block.
+ * Document-level settings. Deliberately minimal: an entry's own SEO fields
+ * and its publishing state are core-entry concerns, not document concerns.
+ * Page-level presentation that has no owning node (e.g. a page background)
+ * lives here rather than on a fake root block, and so does the metadata a
+ * document states for the page as a whole (`seo`), which a collection
+ * template binds per entry.
  */
 export interface DocumentSettings {
   /** Page-scoped styles with no owning node; same envelope as node styles. */
   styles?: NodeStyles;
+  /** The page's own title, description and social image. */
+  seo?: DocumentSeo;
   /**
    * Document-scoped custom CSS, as the author wrote it.
    *
@@ -73,6 +77,42 @@ export interface DocumentSettings {
    */
   customCss?: string;
 }
+
+/**
+ * One piece of a metadata text value: literal text, or a binding whose value
+ * is joined in its place. Literal text is used as written: nothing in it is
+ * read as a placeholder, so a value is never a template string.
+ */
+export type SeoTextSegment = string | SeoBinding;
+
+/**
+ * A binding in a document's own metadata: any binding but one to a list
+ * item, since the metadata is read once for the page, outside any list.
+ */
+export type SeoBinding = Binding & {
+  source?: Exclude<BindingSource, "item">;
+};
+
+/**
+ * The metadata a document states for its page.
+ *
+ * A text value is a sequence of segments joined in order, so one value can
+ * mix literal text with bound fields: an entry's title, then the site's name.
+ * A collection template is the reason: one design draws every entry, and a
+ * literal title would give each the same one. The social image is one
+ * binding, to a media field or a URL field.
+ */
+export interface DocumentSeo {
+  title?: SeoTextSegment[];
+  description?: SeoTextSegment[];
+  image?: SeoBinding;
+}
+
+/** The most segments one metadata text value holds. */
+export const MAX_SEO_SEGMENTS = 32;
+
+/** The longest literal segment, in UTF-16 code units. */
+export const MAX_SEO_TEXT_LENGTH = 1000;
 
 /**
  * The stored value of a `blocks` field and the body of every builder document.
@@ -858,6 +898,13 @@ export type BreakpointId = string;
  */
 export interface TokenRef {
   $token: string;
+  /**
+   * A factor the token's value is scaled by, for a length or a number: a
+   * button's Small padding is its padding token times 0.75. Written as
+   * `calc(var(<token>) * times)`, so it follows the site's token and its
+   * prefix wherever either changes. From 0.25 to 4.
+   */
+  times?: number;
 }
 
 /**
@@ -892,6 +939,21 @@ export type NodeStyles = Partial<
 export interface BlockPart {
   /** Shared default styles for this part on every instance of the block type. */
   baseStyles?: NodeStyles;
+  /**
+   * Style properties this part takes from the block's root when the root is
+   * one of the named wrapper parts: an image's picture takes its corners,
+   * proportion and fit from a figure or a link around it. Every tier styling
+   * the node (a look, a shared style, its own values) then writes those
+   * properties on this part, never on the wrapper's box.
+   *
+   * @experimental
+   */
+  takesFromRoot?: {
+    /** Style keys, as the catalog names them (`borderRadius`). */
+    readonly properties: readonly string[];
+    /** The wrapper parts the root may be (`frame`, `link`). */
+    readonly whenRootIs: readonly string[];
+  };
 }
 
 /** True if a style value is a design-token reference. */
@@ -1079,6 +1141,16 @@ export const MAX_CLASSES_PER_NODE = 64;
  * would be reimplemented by the other three.
  */
 export const COMPONENT_INSTANCE_TYPE = "nextly/component-instance";
+
+/**
+ * The type an editor draws in place of a block its visibility conditions hide
+ * for the entry being previewed: a marker naming the block and why. Never
+ * stored, and reserved, so no registered block can be drawn as the marker
+ * nor the marker as a registered block.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export const CONDITION_HIDDEN_TYPE = "nextly/condition-hidden";
 
 /** The props a component-instance node stores. */
 export interface ComponentInstanceProps {

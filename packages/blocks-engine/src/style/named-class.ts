@@ -85,6 +85,18 @@ export interface NamedClass {
    * @experimental
    */
   blockType?: string;
+  /**
+   * Set on the look that IS its block type's own look (a button's Primary): its `styles` are the
+   * site's edits to that type's base styles, laid over the base for every block of the type.
+   * Absent, never `false`, on any other class, and usable only with a `blockType`.
+   *
+   * Never written as a class: no node wears it, it claims no name or id, and a page reads it only
+   * through {@link blockDefaultsOf}. So a block's own look comes before its other looks, its
+   * shared style and its own values, as its base does.
+   *
+   * @experimental
+   */
+  isDefault?: true;
 }
 
 /**
@@ -93,6 +105,59 @@ export interface NamedClass {
  */
 export function isLook(cls: NamedClass): boolean {
   return isBlockType((cls as { blockType?: unknown } | null)?.blockType);
+}
+
+/**
+ * Whether a class is its block type's own look, which edits the type's base rather than being
+ * worn. Read from data that may not be a record, as {@link isLook} is.
+ *
+ * @experimental
+ */
+export function isDefaultLook(cls: NamedClass): boolean {
+  return (
+    isLook(cls) && (cls as { isDefault?: unknown } | null)?.isDefault === true
+  );
+}
+
+/**
+ * The site's edits to its block types' own looks, keyed by type: each default look's styles, read
+ * from the part of the library the compiler reads, in its order. Where two default looks name one
+ * type, the first in that order is read, as the first of two classes sharing an id is.
+ *
+ * The one reading of a default look, so a renderer laying them over the bases and anything asking
+ * what a block's own look holds see the same styles.
+ *
+ * @experimental
+ */
+export function blockDefaultsOf(library: unknown): Record<string, NodeStyles> {
+  const defaults: Record<string, NodeStyles> = {};
+  for (const cls of ownLooksRead(library)) {
+    defaults[cls.blockType as string] = cls.styles;
+  }
+  return defaults;
+}
+
+/**
+ * The own looks {@link blockDefaultsOf} reads, one per block type at most: what a check asking
+ * whether a stored own look takes effect asks, since an own look is never written as a class.
+ *
+ * @experimental
+ */
+export function ownLooksRead(library: unknown): NamedClass[] {
+  // The library is one site-settings record, read whether or not anything validated it, so a
+  // non-array is no edits rather than a throw on every page.
+  if (!Array.isArray(library)) return [];
+  const read = namedClassesRead(library as readonly NamedClass[]);
+  const types = new Set<string>();
+  const own: NamedClass[] = [];
+  for (const cls of orderedNamedClasses(read)) {
+    if (!isUsableNamedClass(cls) || !isDefaultLook(cls)) continue;
+    const type = cls.blockType as string;
+    if (types.has(type)) continue;
+    types.add(type);
+    own.push(cls);
+  }
+  return own;
 }
 
 /**
@@ -123,14 +188,18 @@ export function isUsableNamedClass(value: unknown): value is NamedClass {
     isPlainRecord(candidate.styles) &&
     // A binding is a block type, or absent: a look bound to nothing a block
     // can be would sit in the look tier and apply to no node.
-    (candidate.blockType === undefined || isBlockType(candidate.blockType))
+    (candidate.blockType === undefined || isBlockType(candidate.blockType)) &&
+    // The own-look mark is `true` or absent, and only on a look: an own look of no block type
+    // would edit no base.
+    (candidate.isDefault === undefined ||
+      (candidate.isDefault === true && isBlockType(candidate.blockType)))
   );
 }
 
 /**
- * The part of a class library the compiler reads: its first `MAX_NAMED_CLASSES` shared styles
- * and its first `MAX_LOOKS` looks, in library order, before any ordering or claim rule. An entry
- * past either cap is never read, so it neither renders nor takes a slug or an id from an entry
+ * The part of a class library the compiler reads: its first `MAX_NAMED_CLASSES` shared styles,
+ * its first `MAX_LOOKS` worn looks and its first `MAX_OWN_LOOKS` own looks, in library order,
+ * before any ordering or claim rule. An entry past its cap is never read, so it neither renders nor takes a slug or an id from an entry
  * that does.
  *
  * The one statement of the cap's reading, so a caller asking which classes a page can use asks
@@ -144,13 +213,22 @@ export function namedClassesRead(
   // the cap keeps every style it had. Read in library order, and no further
   // than both quotas allow, so an oversized stored library is never scanned
   // past them.
+  // Own looks have an allowance of their own too: they are never written as
+  // classes, so seeding one per block type never takes a worn look's place.
   const read: NamedClass[] = [];
   let shared = 0;
   let looks = 0;
-  const scan = Math.min(library.length, MAX_NAMED_CLASSES + MAX_LOOKS);
+  let own = 0;
+  const scan = Math.min(
+    library.length,
+    MAX_NAMED_CLASSES + MAX_LOOKS + MAX_OWN_LOOKS
+  );
   for (let at = 0; at < scan; at += 1) {
     const entry = library[at];
-    if (isLook(entry)) {
+    if (isDefaultLook(entry)) {
+      if (own < MAX_OWN_LOOKS) read.push(entry);
+      own += 1;
+    } else if (isLook(entry)) {
       if (looks < MAX_LOOKS) read.push(entry);
       looks += 1;
     } else {
@@ -168,6 +246,9 @@ export function namedClassesRead(
  * above what any site's blocks declare, so only data already wrong reaches it.
  */
 const MAX_LOOKS = 512;
+
+/** How many own looks the compiler reads, one per block type a site could hold, apart from looks. */
+const MAX_OWN_LOOKS = 512;
 
 /**
  * The classes the engine will actually use, in the order they override one another.
@@ -212,6 +293,8 @@ export function usableNamedClassPositions(
     for (const position of ordered) {
       const cls = classes[position];
       if (!isUsableNamedClass(cls) || isLook(cls) !== looks) continue;
+      // A block's own look edits its base and is never worn, so it claims no name or id.
+      if (isDefaultLook(cls)) continue;
       if (takenSlugs.has(cls.slug)) continue;
       // An id claimed twice is as unusable as a name claimed twice, and quieter about it. A
       // document references a class by id, so two entries sharing one make that reference

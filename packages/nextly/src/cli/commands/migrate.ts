@@ -50,7 +50,10 @@ import {
 } from "../../domains/i18n/migration/step-windows";
 import { isPluginLedgerRow } from "../../domains/schema/events/ledger-scope";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
-import { migrationStanding } from "../../domains/schema/events/migration-state";
+import {
+  removedOnPurpose,
+  standingsByFilename,
+} from "../../domains/schema/events/migration-state";
 import { ensureSchemaEventsTable } from "../../domains/schema/events/schema-events-ddl";
 import {
   SchemaEventsRepository,
@@ -171,7 +174,7 @@ import type { UserConfig } from "../../users/config/types";
 import { CliError, exitWithError } from "../errors";
 import type { CommandContext } from "../program";
 import {
-  createCliAdapter,
+  openCommandAdapter,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
   type SupportedDialect,
@@ -220,8 +223,7 @@ export { installRegistryResolver };
  */
 export interface MigrateCommandOptions {
   /**
-   * Show what would be migrated without executing.
-   * @default false
+   * Show what would be migrated without executing; unset means a real run.
    */
   dryRun?: boolean;
 
@@ -394,11 +396,18 @@ export async function runMigrate(
 
   let adapter: CLIDatabaseAdapter;
   try {
-    adapter = await createCliAdapter({
-      dialect: dbValidation.dialect,
-      databaseUrl: dbValidation.databaseUrl,
-      logger: options.verbose ? logger : undefined,
-    });
+    const opened = await openCommandAdapter(
+      {
+        dialect: dbValidation.dialect,
+        databaseUrl: dbValidation.databaseUrl,
+        logger: options.verbose ? logger : undefined,
+        dryRun: options.dryRun,
+      },
+      logger
+    );
+    // A dry run whose database is not there has said so, and ends here.
+    if (opened === undefined) return;
+    adapter = opened;
     logger.success("Database connected");
   } catch (error) {
     fail(error);
@@ -835,6 +844,8 @@ export interface MigrateCoreDeps {
   assertAppliedFilesUnchangedFn?: typeof assertAppliedFilesUnchanged;
   /** The old Builder files' marks; injected for tests (`markOldBuilderFiles`). */
   markOldBuilderFilesFn?: typeof markOldBuilderFiles;
+  /** Injected for tests; the default is `assertAppliedFilesPresent`. */
+  assertAppliedFilesPresentFn?: typeof assertAppliedFilesPresent;
   /** Junction tables the config names outright; see `runFileMigrations`. */
   knownJunctions?: ReadonlySet<string>;
   /** What the declared schema names, which old Builder files are judged against. */
@@ -1010,6 +1021,7 @@ export async function previewMigrate(args: {
   );
   await previewOldBuilderFiles({ ...args, logger });
   if (hasLedger) await previewChangedFiles(rows, args, logger);
+  await previewAppHistory(args, logger);
   if (pendingModules.length + pendingFiles.length > 0) {
     await previewEventTriggers(args, logger);
   }
@@ -1083,6 +1095,30 @@ async function previewOldBuilderFiles(
  * An applied file edited since it ran stops a real run before it applies
  * anything (`assertAppliedFilesUnchanged`), so the preview names it.
  */
+/**
+ * The app history checks a real run makes before it applies anything, in its
+ * order (`assertAppHistoryHolds`), read-only: an applied migration the folder
+ * lacks (exit 3), then an unresolved attempt; the first that refuses is named
+ * as the real run's refusal. An applied file edited since it ran is named by
+ * `previewChangedFiles`, in its own words.
+ */
+async function previewAppHistory(
+  args: AppHistoryArgs,
+  logger: CommandContext["logger"]
+): Promise<void> {
+  const history = { ...args, command: "nextly migrate" };
+  try {
+    await assertAppliedFilesPresent(history);
+    await refuseUnresolvedAppAttempts(history);
+  } catch (error) {
+    const refusal = historyRefusalOf(error);
+    if (refusal === undefined) throw error;
+    logger.info(
+      `  ✖ a real run would refuse before applying anything (exit code ${String(migrateExitCode(error))}): ${refusal}`
+    );
+  }
+}
+
 async function previewChangedFiles(
   rows: Parameters<typeof appliedChecksums>[1],
   args: {
@@ -1892,8 +1928,28 @@ export async function migrateCore(
   // merely carries the signature never vanishes without a word. Information:
   // the run does what it would without the file. The boot hands its own log.
   await nameOldBuilderFiles(deps);
-  // Before the lock: taking it creates the lock's own table on a database
-  // that has none, and a refused run leaves the schema as it was.
+  // The app's history, before the lock and anything else, in
+  // `assertAppHistoryHolds`'s order: an older build stops with exit 3 while
+  // the ledger records an app migration its folder lacks, an unresolved
+  // attempt is named before any consent is asked, and an edited applied
+  // file stops with exit 2. Read-only here, recording no checksum; asked
+  // again under the lock, below, where no other run changes the ledger.
+  const assertFilesPresent =
+    deps.assertAppliedFilesPresentFn ?? assertAppliedFilesPresent;
+  const refuseAttempts =
+    deps.refuseUnresolvedAttemptsFn ?? refuseUnresolvedAppAttempts;
+  const assertFilesUnchanged =
+    deps.assertAppliedFilesUnchangedFn ?? assertAppliedFilesUnchanged;
+  const historyArgs = {
+    ...deps,
+    command: deps.lockCommand ?? "nextly migrate",
+  };
+  await assertFilesPresent(historyArgs);
+  await refuseAttempts(historyArgs);
+  await assertFilesUnchanged({ ...historyArgs, recordChecksums: false });
+  // Before the lock as well: taking it creates the lock's own table on a
+  // database that has none, and a refused run leaves the schema as it was. A
+  // file another run records meanwhile is only refused once more.
   const refuseUnrecognised =
     deps.refuseUnrecognisedBuilderFilesFn ?? refuseUnrecognisedBuilderFiles;
   if (deps.refuseUnrecognisedBuilderFiles === true) {
@@ -1931,11 +1987,10 @@ export async function migrateCore(
       // at a release that never ran.
       await assertPluginHistoriesHold(deps);
       // Under the lock, so the ledger read is the one no other run changes
-      // before this one writes, and before Phase 1's first write.
-      await (deps.refuseUnresolvedAttemptsFn ?? refuseUnresolvedAppAttempts)({
-        ...deps,
-        command: deps.lockCommand ?? "nextly migrate",
-      });
+      // before this one writes, and before Phase 1's first write: the
+      // history checks of `assertAppHistoryHolds`, in its order.
+      await assertFilesPresent(historyArgs);
+      await refuseAttempts(historyArgs);
       // And again under the lock, before anything writes (the checksum check
       // below records a missing checksum): a file changed while this run
       // waited for the lock is judged as it now reads.
@@ -2138,7 +2193,7 @@ export async function migrateCore(
  *
  * A database with no ledger yet has no attempt to refuse on.
  */
-export async function refuseUnresolvedAppAttempts(args: {
+async function refuseUnresolvedAppAttempts(args: {
   adapter: CLIDatabaseAdapter;
   db: unknown;
   dialect: SupportedDialect;
@@ -2398,6 +2453,8 @@ async function readAppHistory(args: AppHistoryArgs): Promise<
   | {
       files: ParsedMigration[];
       rows: SchemaEventRow[];
+      /** The files whose removal `migrate:resolve --removed` recorded. */
+      removed: ReadonlySet<string>;
       repo: SchemaEventsRepository;
       oldBuilder: OldBuilderLedger;
     }
@@ -2424,7 +2481,131 @@ async function readAppHistory(args: AppHistoryArgs): Promise<
     "app",
     args.declared
   );
-  return { files, rows, repo, oldBuilder };
+  // A removal stands for the applied outcome it was recorded after.
+  const removed = removedOnPurpose(rows, await repo.listFileRemovals());
+  return { files, rows, removed, repo, oldBuilder };
+}
+
+/**
+ * Every check of the app's history a command that runs, records or rolls back
+ * app migrations, or changes core tables, makes before its first write, in
+ * the order an older build's operator needs them: an applied migration the
+ * folder lacks (exit 3), an unresolved attempt, then an applied file edited
+ * since it ran (exit 2). `recordChecksums` false (a dry run) leaves the
+ * checksum of an applied row that has none unrecorded, so nothing is written.
+ */
+export async function assertAppHistoryHolds(
+  args: AppHistoryArgs & {
+    /** The command refusing, as the operator typed it. */
+    command: string;
+    recordChecksums?: boolean;
+  }
+): Promise<void> {
+  await assertAppliedFilesPresent(args);
+  await refuseUnresolvedAppAttempts(args);
+  await assertAppliedFilesUnchanged(args);
+}
+
+/**
+ * Refuses, before the run's first write, while the ledger holds an app
+ * migration this build's folder lacks that is applied, or that has an
+ * unresolved attempt: a newer build migrated the database, or tried to, or the
+ * file was removed. The command exits with code 3 (`migrateExitCode`), naming
+ * each one. A migration's state is its latest outcome (`migrationStanding`);
+ * an applied one whose removal `migrate:resolve --removed` recorded is not
+ * missing, and a plugin's rows are never an app migration's.
+ */
+export async function assertAppliedFilesPresent(
+  args: AppHistoryArgs & {
+    /** The command refusing, as the operator typed it. */
+    command: string;
+  }
+): Promise<void> {
+  const history = await readAppHistory(args);
+  if (history !== undefined) refuseMissing(history, args.command);
+}
+
+/**
+ * `assertAppliedFilesPresent`'s judgement of one read of the ledger and the
+ * folder, so a check reading them again for its own question (the checksums)
+ * judges presence from the same read.
+ */
+function refuseMissing(
+  history: NonNullable<Awaited<ReturnType<typeof readAppHistory>>>,
+  command: string
+): void {
+  const inFolder = new Set(history.files.map(m => `${m.name}.sql`));
+  // The app's rows the folder has no file for, each migration's standing read
+  // as every rule reads it; a plugin's rows are its own stream's.
+  const absent = standingsByFilename(
+    history.rows.filter(
+      row =>
+        row.filename !== null &&
+        !isPluginLedgerRow(row.filename) &&
+        !inFolder.has(row.filename)
+    )
+  );
+  const missing: string[] = [];
+  const tried: string[] = [];
+  for (const filename of [...absent.keys()].sort()) {
+    const standing = absent.get(filename);
+    if (standing?.unresolvedAttempt !== undefined) tried.push(filename);
+    else if (standing?.state === "applied" && !history.removed.has(filename)) {
+      missing.push(filename);
+    }
+  }
+  if (missing.length > 0 || tried.length > 0) {
+    throw appliedFilesMissing(command, missing, tried);
+  }
+}
+
+/** Each file named in backticks, separated by commas. */
+function namedFiles(files: readonly string[]): string {
+  return files.map(f => `\`${f}\``).join(", ");
+}
+
+/**
+ * The refusal for app migrations the folder lacks (`MIGRATION_MISSING`):
+ * `missing`, applied, and `tried`, with an unresolved attempt a newer build
+ * left, each said with its own reason and its own way out.
+ */
+export function appliedFilesMissing(
+  command: string,
+  missing: readonly string[],
+  tried: readonly string[]
+): CliError {
+  const whats: string[] = [];
+  const whys: string[] = [];
+  const nexts: string[] = [];
+  if (missing.length > 0) {
+    whats.push(
+      `the ledger records ${formatCount(missing.length, "applied migration")} this build's migrations folder lacks (${namedFiles(missing)})`
+    );
+    whys.push(
+      "A newer build has migrated this database, or a file was removed from the folder after it ran."
+    );
+    nexts.push(
+      "Deploy the build that holds the files, or put them back. If a file was removed on purpose, record that with `nextly migrate:resolve --removed <file>`: the migration stays applied, and is never run again if its file returns."
+    );
+  }
+  if (tried.length > 0) {
+    whats.push(
+      `${formatCount(tried.length, "migration")} this build's folder lacks ${tried.length === 1 ? "has" : "have"} an unresolved attempt (${namedFiles(tried)})`
+    );
+    whys.push(
+      "A newer build tried it and did not finish, so the database may hold part of it."
+    );
+    nexts.push(
+      "Deploy the build that holds the file and let it finish; or reverse what of it ran and record it with `nextly migrate:resolve --rolled-back <file> --file-missing`."
+    );
+  }
+  const what = whats.join("; and ");
+  return new CliError("MIGRATION_MISSING", {
+    what: `${what.charAt(0).toUpperCase()}${what.slice(1)}, so \`${command}\` ran nothing.`,
+    why: whys.join(" "),
+    next: nexts.join(" "),
+    context: { files: [...missing], unresolved: [...tried] },
+  });
 }
 
 /**
@@ -2549,10 +2730,15 @@ export async function assertAppliedFilesUnchanged(
   args: AppHistoryArgs & {
     /** The command refusing, as the operator typed it. */
     command: string;
+    /** False (a dry run): refuse as a run would, recording no checksum. */
+    recordChecksums?: boolean;
   }
 ): Promise<void> {
   const history = await readAppHistory(args);
   if (history === undefined) return;
+  // Presence judged again from the folder this check reads: a file removed
+  // since the earlier check would otherwise drop out of the comparison.
+  refuseMissing(history, args.command);
   // A marked old Builder file that no longer carries the signature: its mark's
   // checksum is its recorded one, so a change of content is an edited applied
   // file; with the content as marked, the snapshot beside it is the change.
@@ -2567,6 +2753,7 @@ export async function assertAppliedFilesUnchanged(
     history.rows
   );
   if (changed.length > 0) throw appliedFilesChanged(args.command, changed);
+  if (args.recordChecksums === false) return;
   for (const row of unrecorded) {
     await history.repo.recordChecksum(
       row.outcomeId,
@@ -2631,59 +2818,43 @@ function appliedFilesChanged(
   });
 }
 
+/** The codes the app history checks refuse with (`assertAppHistoryHolds`). */
+const HISTORY_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  "MIGRATION_MISSING",
+  "MIGRATION_TAMPERED",
+  "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+]);
+
 /**
- * Refuses, before the run's first write, while the ledger holds an applied
- * app migration this build's folder lacks: a newer build migrated the
- * database, or the file was removed. The command exits with code 3
- * (`migrateExitCode`), naming each file.
- *
- * A row is judged by its mark, never by its file name: the rows of a marked
- * old Schema Builder file are not an app migration's and are never missing,
- * while a row with no mark, or a withdrawn one, is missing whatever its name.
- * The one check of its kind, for each command that runs the history checks.
+ * The refusal `check` (one of the app history checks) makes, as a dry run
+ * reports it: its message, or undefined when the history holds. Any other
+ * error travels.
  */
-export async function assertAppliedFilesPresent(
-  args: AppHistoryArgs & {
-    /** The command refusing, as the operator typed it. */
-    command: string;
+export async function historyRefusalIn(
+  check: () => Promise<void>
+): Promise<string | undefined> {
+  try {
+    await check();
+    return undefined;
+  } catch (error) {
+    const refusal = historyRefusalOf(error);
+    if (refusal === undefined) throw error;
+    return refusal;
   }
-): Promise<void> {
-  const history = await readAppHistory(args);
-  if (history === undefined) return;
-  const inFolder = new Set(history.files.map(m => `${m.name}.sql`));
-  const byFilename = new Map<string, SchemaEventRow[]>();
-  for (const row of history.rows) {
-    if (row.filename === null || isPluginLedgerRow(row.filename)) continue;
-    if (inFolder.has(row.filename)) continue;
-    byFilename.set(row.filename, [
-      ...(byFilename.get(row.filename) ?? []),
-      row,
-    ]);
-  }
-  const missing = [...byFilename]
-    .filter(([, rows]) => migrationStanding(rows).state === "applied")
-    .map(([filename]) => filename)
-    .sort();
-  if (missing.length > 0) throw appliedFilesMissing(args.command, missing);
 }
 
-/** The refusal for applied migrations the folder lacks (`MIGRATION_MISSING`). */
-function appliedFilesMissing(
-  command: string,
-  missing: readonly string[]
-): CliError {
-  return new CliError("MIGRATION_MISSING", {
-    what: `The ledger records ${formatCount(missing.length, "applied migration")} this build's migrations folder lacks (${missing.map(f => `\`${f}\``).join(", ")}), so \`${command}\` ran nothing.`,
-    why: "Either a newer build has migrated this database, or a file was removed from the folder after it ran.",
-    next: "Deploy the build that holds the file, or put the file back. If it was removed on purpose, record that with `nextly migrate:resolve`; if it was an old Schema Builder file deleted before this release recorded it, `nextly migrate:resolve` records its removal the same way, after which runs proceed.",
-    context: { files: [...missing] },
-  });
+/** A history check's refusal (`HISTORY_REFUSAL_CODES`) as a dry run reports it: its message; undefined for any other error. */
+export function historyRefusalOf(error: unknown): string | undefined {
+  return NextlyError.is(error) && HISTORY_REFUSAL_CODES.has(error.code)
+    ? error.publicMessage
+    : undefined;
 }
 
 /**
- * The exit code `nextly migrate` ends with on `error`: 2 for an applied file
- * edited since it ran and 3 for one the folder lacks, the codes the guide
- * documents, so a deploy script can tell them from any other failure (1).
+ * The exit code a command that checks the app's history ends with on `error`:
+ * 2 for an applied file edited since it ran, 3 for an app migration the
+ * folder lacks, the codes the guide documents, so a deploy script can tell
+ * them from any other failure (1).
  */
 export function migrateExitCode(error: unknown): 1 | 2 | 3 {
   if (!(error instanceof CliError)) return 1;

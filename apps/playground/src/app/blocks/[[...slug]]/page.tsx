@@ -35,25 +35,15 @@
 import { createPublicBlocksPage } from "@nextlyhq/blocks-react/next";
 
 import { blockPagesRoute } from "../../../lib/block-pages-route";
+import { pathsOrRoot } from "../../../lib/static-params";
 
 const route = createPublicBlocksPage(blockPagesRoute);
 
-/**
- * The paths built ahead of time: every published block page, or the
- * collection's root when there is none yet.
- *
- * Never empty, because Cache Components refuses an exported
- * `generateStaticParams` that names no path, and a fresh install has no
- * published page. The root then renders the not-found page, as it would on
- * request.
- */
+/** The paths built ahead of time: every published block page, or the root when there is none. */
 export async function generateStaticParams(): Promise<
   Array<{ slug: string[] }>
 > {
-  // A build against a database that cannot answer yet (a fresh one, before
-  // its plugins are installed) builds the root alone, as an empty one does.
-  const params = await route.generateStaticParams().catch(() => []);
-  return params.length > 0 ? params : [{ slug: [] }];
+  return pathsOrRoot(route);
 }
 
 export const { generateMetadata } = route;

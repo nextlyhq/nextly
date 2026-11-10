@@ -153,6 +153,8 @@ const PRINTABLE_FIELD_TYPES: ReadonlySet<string> = new Set([
   "select",
   "email",
   "code",
+  // A non-empty icon id is a string the naming rule prints as it is.
+  "icon",
   "radio",
 ]);
 

@@ -61,9 +61,10 @@ import {
   reloadDocument,
   useSharedFieldsRecovery,
 } from "@admin/hooks/useSharedFieldsRecovery";
+import { staleVersionOf } from "@admin/lib/document-version";
 import {
-  createServerErrorHandler,
   parseServerErrorMessage,
+  placeServerRefusal,
 } from "@admin/lib/errors/error-mapping";
 import {
   toastMutationResult,
@@ -76,6 +77,8 @@ import {
 } from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
 
+import { drawnFieldPath } from "./drawn-field-path";
+import { refreshAfterEntryChange } from "./entry-cache";
 import { refreshRemovedFromCodeSchema } from "./removed-from-code-refusal";
 
 /**
@@ -123,6 +126,11 @@ export interface UseUpdateEntryOptions<
    * fields names them by; their names are used without them.
    */
   fields?: readonly { name?: string; label?: unknown }[];
+  /**
+   * Reads the form's value at a path, for the conditions that decide whether
+   * a field is drawn when a refusal arrives.
+   */
+  valueAt?: (path: string) => unknown;
   /**
    * The editor's form. A publish refused over out-of-date shared fields
    * offers to take the live values only with it: the action saves the form as
@@ -263,6 +271,7 @@ export function useUpdateEntry<
   draft,
   translationStatus = false,
   fields,
+  valueAt,
   refusedForm,
 }: UseUpdateEntryOptions<T, TFieldValues>): UseMutationResult<
   MutationResult<T>,
@@ -363,13 +372,25 @@ export function useUpdateEntry<
         queryClient.setQueryData(localeKey, context.previousEntry);
       }
 
-      // Try to map server errors to form fields
-      let handledByForm = false;
-
-      if (setError) {
-        const errorHandler = createServerErrorHandler(setError);
-        handledByForm = errorHandler(error);
+      // A save made from an older version: the editor's conflict tells the
+      // author who changed it and offers what to do, so no toast says it
+      // twice. The entry is read again, so the current version reaches the
+      // editor, whose form keeps the refused edits until the author chooses.
+      if (staleVersionOf(error)) {
+        void queryClient.invalidateQueries({
+          queryKey: entryKeys.detail(collectionSlug, entryId),
+        });
+        onError?.(error);
+        return;
       }
+
+      // Each reason on the field it names, where the form draws that field;
+      // the form keeps the author's values. Reasons no field can show are
+      // said by the toast below instead.
+      const placed = placeServerRefusal(error, setError, {
+        isFormField: drawnFieldPath(fields, valueAt),
+      });
+      let handledByForm = placed.handled;
 
       // The out-of-date refusal reports itself, with the action that
       // resolves it, which works on the editor's form, wherever that form
@@ -381,9 +402,10 @@ export function useUpdateEntry<
       // Show generic toast only if errors weren't mapped to form
       if (showToast && !handledByForm) {
         const message =
-          parseServerErrorMessage(error) ||
-          error.message ||
-          "Failed to update entry";
+          placed.toastMessage ??
+          (parseServerErrorMessage(error) ||
+            error.message ||
+            "Failed to update entry");
         toast.error(message);
       }
 
@@ -418,18 +440,9 @@ export function useUpdateEntry<
         });
       }
 
-      // Invalidate entry list queries for this collection
-      void queryClient.invalidateQueries({
-        queryKey: entryKeys.listsByCollection(collectionSlug),
-      });
-
-      // Invalidate this specific entry detail
-      void queryClient.invalidateQueries({
-        queryKey: entryKeys.detail(collectionSlug, entryId),
-      });
-
-      // Invalidate dashboard caches so recent-entries refresh immediately
-      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      // Its lists, its own read and the dashboard refetch, as after every
+      // change to an entry.
+      void refreshAfterEntryChange(queryClient, collectionSlug, entryId);
 
       if (showToast) {
         // The row IS saved even when a post-commit hook failed, so this stays a

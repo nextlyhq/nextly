@@ -217,6 +217,21 @@ async function singleNameAsCaller(
 }
 
 /**
+ * What the person asking knows each of `hosts` by, by document key, for the
+ * ones they may read, on the installed site: the names a removal's dry run
+ * gives, so an undo names what it could not put back the same way.
+ */
+export async function nameDocumentsOnSite(
+  install: RemovalSite,
+  ctx: Pick<PluginRouteContext, "caller">,
+  hosts: readonly HostAddress[]
+): Promise<ReadonlyMap<string, string>> {
+  const site = install.site();
+  if (site === null || hosts.length === 0) return new Map();
+  return namesAsCaller(install, site, ctx, hosts);
+}
+
+/**
  * What removing `removed` (id to label) would drop on the installed site, the
  * documents named as the person asking.
  */
@@ -226,7 +241,9 @@ export async function countRemovalOnSite(
     readonly self: { collections: Record<string, string | undefined> };
   },
   removed: ReadonlyMap<string, string>,
-  classes: readonly NamedClass[]
+  classes: readonly NamedClass[],
+  /** When the walk stops and answers what it has; a dry run's own by default. */
+  deadline: Date = new Date(Date.now() + WALK_MS)
 ): Promise<RemovalDryRun> {
   const site = install.site();
   if (site === null) {
@@ -253,6 +270,6 @@ export async function countRemovalOnSite(
       savedTitlesAsCaller(site, ctx, hosts, deadline),
     limits: install.limits(),
     classes,
-    deadline: new Date(Date.now() + WALK_MS),
+    deadline,
   });
 }

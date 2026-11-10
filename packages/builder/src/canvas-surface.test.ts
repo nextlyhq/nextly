@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { CANVAS_FRAME_SHEET } from "./canvas-frame-sheet";
+import { EMPTY_CONTAINER_SELECTOR } from "./empty-slot";
+import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 /**
  * The canvas is drawn on the PAGE's surface, not on the editor's.
@@ -38,8 +40,16 @@ const CHROME = readFileSync(
 const STANDALONE_CANVAS =
   ":where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *))";
 
-/** The token scopes' selector list: the shell's two, and a lone canvas. */
-const TOKENS = `.nx-builder-tokens,\n.nx-builder-chrome,\n${STANDALONE_CANVAS}`;
+/**
+ * The layer the editor draws over the canvas, mounted without the shell: it
+ * sits in the host's document beside the frame, so it needs the tokens of its
+ * own, on the same terms as the lone canvas.
+ */
+const STANDALONE_LAYER =
+  ":where(.nx-canvas-layer:not(:is(.nx-builder-tokens, .nx-builder-chrome) *))";
+
+/** The token scopes' selector list: the shell's two, a lone canvas and a lone layer. */
+const TOKENS = `.nx-builder-tokens,\n.nx-builder-chrome,\n${STANDALONE_CANVAS},\n${STANDALONE_LAYER}`;
 
 /**
  * Every place a rule is written under exactly `selector` in `css`: at the
@@ -187,12 +197,14 @@ describe("the canvas surface is the site's, not the admin's", () => {
     expect(declared(rule, "color-scheme")).toBe("light");
   });
 
-  it("paints the page with no admin token: only a Layout region's chrome reads them", () => {
+  it("paints the page with no admin token: only the admin's own chrome reads them", () => {
     /*
      * The admin's tokens would repaint the page whenever the admin changed
-     * theme, so the page's own rules name only the site's tokens. The one
-     * exception is a Layout region's badge and tag, which are the admin's
-     * words on the page and take the tokens the frame hands it.
+     * theme, so the page's own rules name only the site's tokens. The
+     * exceptions are the admin's words on the page, which take the tokens the
+     * frame hands them: a Layout region's badge and tag, a collection list's
+     * note to its author and its "When empty" tag, and the danger hue of an
+     * Entry content block's failed note to its author.
      */
     expect(CANVAS_FRAME_SHEET).toContain("var(--nx-canvas-site-ground");
     const naming = [
@@ -211,7 +223,7 @@ describe("the canvas surface is the site's, not the admin's", () => {
       // content is, by the same handed token.
       for (const part of selectors) {
         expect(part, "a rule painting with an admin token").toMatch(
-          /^(\.nx-canvas-region|\[data-nx-site-chrome\])/
+          /^(\.nx-canvas-region|\[data-nx-site-chrome\]|\[data-nx-list-diagnostic|\.nx-canvas \[data-nx-list-|\[data-nx-entry-content-note="failed"\])/
         );
       }
     }
@@ -476,6 +488,7 @@ describe("a canvas mounted outside the editor shell", () => {
       "--nx-builder-region-opacity"
     );
     expect(scope).toContain(STANDALONE_CANVAS);
+    expect(scope).toContain(STANDALONE_LAYER);
   });
 
   it("takes the dark picks under the admin's dark theme, as the shell does", () => {
@@ -489,15 +502,12 @@ describe("a canvas mounted outside the editor shell", () => {
 
 describe("a Layout region drawn in the canvas frame", () => {
   it("is styled by the frame's own sheet, in the admin's tokens, at the admin's size", () => {
-    const badge = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__badge");
-    expect(declared(badge, "background")).toBe(
+    const lock = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__lock");
+    expect(declared(lock, "background")).toBe(
       "var(--nx-builder-surface-raised)"
     );
-    expect(declared(badge, "color")).toBe("var(--nx-builder-text-muted)");
-    const words = ruleIn(
-      CANVAS_FRAME_SHEET,
-      ".nx-canvas-region__badge,\n.nx-canvas-region__tag"
-    );
+    expect(declared(lock, "color")).toBe("var(--nx-builder-text-muted)");
+    const words = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__mark-body");
     expect(declared(words, "zoom")).toBe("calc(1 / var(--nx-canvas-zoom, 1))");
     expect(declared(words, "font-family")).toBe(
       "var(--font-sans, system-ui), sans-serif"
@@ -541,5 +551,192 @@ describe("a refused drop's notice", () => {
       expect(declared(rule, "background"), place).toBe(undefined);
       expect(declared(rule, "background-color"), place).toBe(undefined);
     }
+  });
+});
+
+describe("a collection list's notes and tag in the canvas frame", () => {
+  it("draws a fallen-back sort amber and a failed read red, in the editor's own names", () => {
+    const amber = ruleIn(
+      CANVAS_FRAME_SHEET,
+      '[data-nx-list-diagnostic="sort-fallback"]'
+    );
+    expect(declared(amber, "background")).toContain("var(--nx-builder-warning");
+    const red = ruleIn(
+      CANVAS_FRAME_SHEET,
+      '[data-nx-list-diagnostic="query-failed"]'
+    );
+    expect(declared(red, "background")).toContain("var(--nx-builder-danger");
+    // A note about the list spans its row, never one entry's cell.
+    const note = ruleIn(CANVAS_FRAME_SHEET, "[data-nx-list-diagnostic]");
+    expect(declared(note, "grid-column")).toBe("1 / -1");
+    expect(declared(note, "flex-basis")).toBe("100%");
+    // Read at the admin's size on a page drawn small.
+    expect(declared(note, "font-size")).toBe(
+      "calc(0.8125rem / var(--nx-canvas-zoom, 1))"
+    );
+    // Each is the theme's own, so it follows light and dark.
+    expect(ruleFor(TOKENS)).toContain(
+      "--nx-builder-warning: var(--nx-warning)"
+    );
+  });
+
+  it("tags a list drawing its empty state with why, at the admin's size", () => {
+    const tagged = (because: string) =>
+      declared(
+        ruleIn(
+          CANVAS_FRAME_SHEET,
+          `.nx-canvas [data-nx-list-empty-because="${because}"]::before`
+        ),
+        "content"
+      );
+    expect(tagged("chosen")).toBe('"When empty"');
+    expect(tagged("none")).toBe('"No entries match · showing When empty"');
+    expect(tagged("failed")).toBe('"Showing When empty"');
+    const tag = ruleIn(
+      CANVAS_FRAME_SHEET,
+      ".nx-canvas [data-nx-list-shows]::before"
+    );
+    expect(declared(tag, "zoom")).toBe("calc(1 / var(--nx-canvas-zoom, 1))");
+    expect(declared(tag, "background")).toBe(
+      "var(--nx-builder-select, Highlight)"
+    );
+  });
+
+  it("keeps the tag inside the list, so it covers nothing above it", () => {
+    const tag = ruleIn(
+      CANVAS_FRAME_SHEET,
+      ".nx-canvas [data-nx-list-shows]::before"
+    );
+    // In the list's own flow, first, spanning a grid's row from its start
+    // and sized to its words: never lifted out above the list's top edge,
+    // where it lay over whatever the page draws there.
+    expect(declared(tag, "position")).toBeUndefined();
+    expect(declared(tag, "inset-block-end")).toBeUndefined();
+    expect(declared(tag, "grid-column")).toBe("1 / -1");
+    expect(declared(tag, "justify-self")).toBe("start");
+    expect(declared(tag, "inline-size")).toBe("max-content");
+    // Over an empty list's area, whose words are centred, it sits at the
+    // inside of the top edge.
+    const over = ruleIn(
+      CANVAS_FRAME_SHEET,
+      `${EMPTY_CONTAINER_SELECTOR}[data-nx-list-shows]::before`
+    );
+    expect(declared(over, "position")).toBe("absolute");
+    expect(declared(over, "inset-block-start")).toBe("0");
+    expect(declared(over, "inset-inline-start")).toBe("0");
+  });
+
+  it("draws an empty list's empty state as a roomy area that says what it is for", () => {
+    const area = ruleIn(
+      CANVAS_FRAME_SHEET,
+      `${EMPTY_CONTAINER_SELECTOR}[data-nx-list-shows]`
+    );
+    // Room at the admin's size, whatever the zoom, so the words centred in
+    // it and the spacing badges on its edges never meet.
+    expect(declared(area, "min-height")).toBe(
+      "calc(7.5rem / var(--nx-canvas-zoom, 1))"
+    );
+    expect(declared(area, "position")).toBe("relative");
+    expect(declared(area, "justify-content")).toBe("center");
+    const line = ruleIn(
+      CANVAS_FRAME_SHEET,
+      `${EMPTY_CONTAINER_SELECTOR}[data-nx-list-shows]::after`
+    );
+    expect(declared(line, "content")).toBe(
+      '"Visitors see this when no entry matches. Left empty, the list shows nothing."'
+    );
+    expect(declared(line, "zoom")).toBe("calc(1 / var(--nx-canvas-zoom, 1))");
+  });
+});
+
+describe("the Source menu's note where no related source is offered", () => {
+  it("sets its heading where the list's group headings sit", () => {
+    // The list's rows sit inside its own padding, and a group's heading
+    // inside that; the note, drawn above the list, takes the same two
+    // steps, so "Related entries" lines up with "Collections".
+    const list = ruleFor(".nx-font-pick__list");
+    const note = ruleFor(".nx-list-query__menu-note");
+    expect(declared(note, "padding-inline")).toBe(declared(list, "padding"));
+    const words = ruleFor(".nx-list-query__menu-text");
+    // The words under it start where an option's words do.
+    expect(declared(words, "padding-inline")).toBe(
+      declared(ruleFor(".nx-font-pick__option"), "padding")?.split(" ")[1]
+    );
+  });
+});
+
+describe("the hidden-block marker drawn in the canvas frame", () => {
+  // The line a block its conditions hide is drawn as, while they are
+  // applied. It sits in the page, so the canvas zoom paints it; the frame's
+  // sheet holds its words at a size the author can read at any zoom.
+  const body = ruleIn(
+    CANVAS_FRAME_SHEET,
+    `.${CANVAS_ROOT_CLASS} .nx-condition-hidden`
+  );
+
+  it("is never under 11px on screen, and its own 13px at full size, in pixels whatever the site's root size", () => {
+    // max(13px, 11px / zoom): at zoom 1 the first wins; at a Fit of 58% the
+    // second, which the zoom then paints at 11px. Pixels, so a site setting
+    // its root below 16px lowers neither.
+    expect(declared(body, "font-size")).toBe(
+      "max(13px, calc(11px / var(--nx-canvas-zoom, 1)))"
+    );
+  });
+
+  it("keeps its shape at every zoom, its spacing in its own text's units", () => {
+    expect(declared(body, "gap")).toBe("0.6em");
+    expect(declared(body, "padding")).toBe("0.45em 0.75em");
+  });
+
+  it("is one row, its icon centred before its words, wherever it is drawn", () => {
+    // A list entry's marker is made as the page is drawn, so the page's
+    // sheet holds none of its defaults: the frame's sheet lays it out.
+    expect(declared(body, "display")).toBe("flex");
+    expect(declared(body, "align-items")).toBe("center");
+    const icon = ruleIn(
+      CANVAS_FRAME_SHEET,
+      `.${CANVAS_ROOT_CLASS} .nx-condition-hidden > svg`
+    );
+    expect(declared(icon, "display")).toBe("inline-block");
+    expect(declared(icon, "flex")).toBe("none");
+  });
+
+  it("wears its look in the site's tokens, at no specificity, so a page marker's compiled defaults win", () => {
+    const look = ruleIn(
+      CANVAS_FRAME_SHEET,
+      `:where(.${CANVAS_ROOT_CLASS} .nx-condition-hidden)`
+    );
+    expect(declared(look, "border")).toBe(
+      "1px dashed var(--site-color-border-strong, color-mix(in srgb, currentColor 35%, transparent))"
+    );
+    expect(declared(look, "background-color")).toBe(
+      "var(--site-color-surface, color-mix(in srgb, currentColor 6%, transparent))"
+    );
+    expect(declared(look, "color")).toBe(
+      "var(--site-color-muted, color-mix(in srgb, currentColor 70%, transparent))"
+    );
+    expect(declared(look, "line-height")).toBe("1.35");
+  });
+});
+
+describe("a list drawn as a visitor reads it", () => {
+  const VISITORS = "[data-nx-list-visitors]:not([data-nx-list-still])::before";
+
+  it("wears its tag quietly, in the list's flow, at the admin's size", () => {
+    const tag = ruleIn(CANVAS_FRAME_SHEET, `.${CANVAS_ROOT_CLASS} ${VISITORS}`);
+    expect(declared(tag, "content")).toBe("attr(data-nx-list-visitors)");
+    expect(declared(tag, "color")).toBe(
+      "var(--nx-builder-text-muted, GrayText)"
+    );
+    expect(declared(tag, "zoom")).toBe("calc(1 / var(--nx-canvas-zoom, 1))");
+  });
+
+  it("sits inside an empty area's dashed edge, clear of it", () => {
+    const over = ruleIn(
+      CANVAS_FRAME_SHEET,
+      `${EMPTY_CONTAINER_SELECTOR}[data-nx-list-shows]${VISITORS}`
+    );
+    expect(declared(over, "inset-block-start")).toBe("0.25rem");
+    expect(declared(over, "inset-inline-start")).toBe("0.25rem");
   });
 });

@@ -299,30 +299,24 @@ describe.each(SURFACES)(
       return { db: pick(ctx), settings: ctx.settings as PluginSettingsApi };
     }
 
-    it("completes instead of waiting on the transaction it is inside", async () => {
-      // The settings store opens its own adapter transaction; queued behind
-      // the plugin's, it hung both and every later write on the instance.
-      const { db, settings } = await bootWithSettings();
-
-      await db.transaction(async write => {
-        await write("a");
-        await settings.set({ port: 8443 });
-      });
-
-      expect(await db.stored()).toEqual(["a"]);
-      expect((await settings.get()).port).toBe(8443);
-    });
-
-    it("is rolled back with the transaction it ran inside", async () => {
+    // A settings write is refused inside the plugin's transaction on every
+    // dialect (`plugin-settings-in-transaction.integration.test.ts`), so it no
+    // longer joins this one as a savepoint. What stays to hold here, through
+    // both surfaces, is that it refuses at once rather than waiting on the
+    // transaction it is inside: the store opens its own adapter transaction,
+    // and queued behind the plugin's it hung both and every later write.
+    it("is refused instead of waiting on the transaction it is inside", async () => {
       const { db, settings } = await bootWithSettings();
 
       await expect(
-        db.transaction(async () => {
+        db.transaction(async write => {
+          await write("a");
           await settings.set({ port: 8443 });
-          throw new Error("later step failed");
         })
-      ).rejects.toThrow("later step failed");
+      ).rejects.toBeInstanceOf(NextlyError);
 
+      // The refusal rolled the transaction back, its own write with it.
+      expect(await db.stored()).toEqual([]);
       expect((await settings.get()).port).toBe(443);
     });
   }

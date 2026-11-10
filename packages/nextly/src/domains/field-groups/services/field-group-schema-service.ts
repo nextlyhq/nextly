@@ -3,6 +3,7 @@
  * Supports PostgreSQL, MySQL, and SQLite dialects.
  */
 
+import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   text as mysqlText,
@@ -41,6 +42,7 @@ import {
   isTextareaField,
   isRichTextField,
   isEmailField,
+  isIconField,
   isPasswordField,
   isCodeField,
   isNumberField,
@@ -62,6 +64,7 @@ import type {
 } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
 import { env } from "../../../lib/env";
+import { sqliteTimestamp } from "../../../schemas/_internal/sqlite-timestamp";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import type { ExtensionColumn } from "../../schema/extension/types";
@@ -72,7 +75,9 @@ import {
   componentRelationIsSingleReference,
   componentRelationshipHoldsReferenceList,
   componentRelationshipStoresJson,
+  getComponentRowColumnDescriptor,
   usesJunctionTable,
+  type ColumnDescriptor,
 } from "../../schema/services/field-column-descriptor";
 import {
   MAX_INDEX_NAME_LENGTH,
@@ -85,9 +90,9 @@ import {
 } from "../../schema/services/plugin-codegen";
 import {
   addContributedDrizzleColumns,
+  buildUserDrizzleColumn,
   contributedColumnsFor,
   contributedSqliteChecks,
-  sqliteTimestampColumns,
 } from "../../schema/services/runtime-schema-generator";
 
 import { componentFieldHasColumn } from "./field-group-utils";
@@ -162,6 +167,16 @@ const TIMESTAMP_DEFAULT: Record<SupportedDialect, string> = {
   mysql: "DEFAULT CURRENT_TIMESTAMP",
   sqlite: "DEFAULT (strftime('%s', 'now'))",
 };
+
+/**
+ * The timestamp DEFAULT's value without its keyword, as a comparison and a
+ * Drizzle `.default()` need it. The CREATE below and the SQLite runtime table
+ * both read it here, so the default a table is created with and the one
+ * drizzle-kit is told about cannot differ.
+ */
+function timestampDefaultValue(dialect: SupportedDialect): string {
+  return TIMESTAMP_DEFAULT[dialect].replace(/^DEFAULT\s+/, "");
+}
 
 /**
  * What `generateRuntimeSchema` needs beyond the fields.
@@ -492,13 +507,7 @@ export class FieldGroupSchemaService {
       updated_at: pgTimestamp("updated_at").defaultNow().notNull(),
     };
 
-    for (const field of this.columnFields(fields)) {
-      const column = this.mapFieldToPostgresColumn(this.asMappableField(field));
-      if (column) {
-        columns[field.name] = column;
-      }
-    }
-    addContributedDrizzleColumns(columns, contributed, "postgresql");
+    this.addFieldColumns(columns, fields, contributed);
 
     // Required by Drizzle: pgTable() is generic over the column shape, and
     // our columns map is dynamic (Record<string, unknown>). The index
@@ -541,13 +550,7 @@ export class FieldGroupSchemaService {
       updated_at: mysqlTimestamp("updated_at").defaultNow().notNull(),
     };
 
-    for (const field of this.columnFields(fields)) {
-      const column = this.mapFieldToMySQLColumn(this.asMappableField(field));
-      if (column) {
-        columns[field.name] = column;
-      }
-    }
-    addContributedDrizzleColumns(columns, contributed, "mysql");
+    this.addFieldColumns(columns, fields, contributed);
 
     return mysqlTable(
       tableName,
@@ -574,16 +577,19 @@ export class FieldGroupSchemaService {
       _parent_field: sqliteText(STORAGE_FORMAT.columns.parentField).notNull(),
       _order: sqliteInteger(STORAGE_FORMAT.columns.order).default(0),
       [STORAGE_FORMAT.columns.type]: sqliteText(typeColumn),
-      ...sqliteTimestampColumns(),
+      // Stamped by the application as every SQLite timestamp is, and declared
+      // with the DEFAULT the CREATE above writes. Without it drizzle-kit,
+      // comparing this table with the live one, saw a default to add and
+      // rebuilt every field-group table on a push that never touched them.
+      created_at: sqliteTimestamp("created_at").default(
+        sql.raw(timestampDefaultValue("sqlite"))
+      ),
+      updated_at: sqliteTimestamp("updated_at").default(
+        sql.raw(timestampDefaultValue("sqlite"))
+      ),
     };
 
-    for (const field of this.columnFields(fields)) {
-      const column = this.mapFieldToSQLiteColumn(this.asMappableField(field));
-      if (column) {
-        columns[field.name] = column;
-      }
-    }
-    addContributedDrizzleColumns(columns, contributed, "sqlite");
+    this.addFieldColumns(columns, fields, contributed);
 
     return sqliteTable(
       tableName,
@@ -707,11 +713,8 @@ export class FieldGroupSchemaService {
    */
   structuralColumnDefaults(): ReadonlyMap<string, string> {
     // The timestamp keyword carries its own `DEFAULT ` prefix in the DDL table; the VALUE is what a
-    // comparison needs, so the prefix is stripped once, here.
-    const timestamp = TIMESTAMP_DEFAULT[this.dialect].replace(
-      /^DEFAULT\s+/,
-      ""
-    );
+    // comparison needs, so the prefix is stripped once, in `timestampDefaultValue`.
+    const timestamp = timestampDefaultValue(this.dialect);
     return new Map([
       [STORAGE_FORMAT.columns.order, "0"],
       ["created_at", timestamp],
@@ -804,9 +807,60 @@ export class FieldGroupSchemaService {
     };
   }
 
+  /**
+   * The canonical descriptor's column for a field type this service does not map itself, or null
+   * for a type it still maps below.
+   *
+   * An icon's column is read from the descriptor for the SQL and the Drizzle table alike, so a
+   * field group's icon column is the column the desired schema and the diff compare against on
+   * every dialect: `text` on PostgreSQL and SQLite, `varchar(255)` on MySQL.
+   */
+  private canonicalColumn(field: DataFieldConfig): ColumnDescriptor | null {
+    if (!isIconField(field) || !field.name) return null;
+    return getComponentRowColumnDescriptor(field, this.dialect, "fieldGroup");
+  }
+
+  /**
+   * Adds each field's runtime column to a table's columns, keyed by the field's name, and then the
+   * columns a schema hook contributed, the same way for every dialect.
+   */
+  private addFieldColumns(
+    columns: Record<string, unknown>,
+    fields: FieldConfig[],
+    contributed: readonly ExtensionColumn[]
+  ): void {
+    for (const field of this.columnFields(fields)) {
+      const column = this.drizzleColumnFor(field);
+      if (column) {
+        columns[field.name] = column;
+      }
+    }
+    addContributedDrizzleColumns(columns, contributed, this.dialect);
+  }
+
+  /**
+   * A field's runtime Drizzle column: built from the descriptor where it names the column, and by
+   * this dialect's own mapper otherwise, so the runtime table and the CREATE read one answer.
+   */
+  private drizzleColumnFor(field: DataFieldConfig): unknown {
+    const mappable = this.asMappableField(field);
+    const canonical = this.canonicalColumn(mappable);
+    if (canonical) return buildUserDrizzleColumn(canonical, this.dialect);
+    switch (this.dialect) {
+      case "postgresql":
+        return this.mapFieldToPostgresColumn(mappable);
+      case "mysql":
+        return this.mapFieldToMySQLColumn(mappable);
+      case "sqlite":
+        return this.mapFieldToSQLiteColumn(mappable);
+    }
+  }
+
   private getColumnType(field: DataFieldConfig): string | null {
     const types = SQL_COLUMN_TYPES[this.dialect];
 
+    const canonical = this.canonicalColumn(field);
+    if (canonical) return canonical.dialectType;
     if (isTextField(field)) {
       return field.maxLength ? types.varchar(field.maxLength) : types.text;
     }

@@ -37,6 +37,8 @@ import {
   isEmailField,
   isPasswordField,
   isCodeField,
+  isIconField,
+  isIconIdShape,
   isRichTextField,
   isNumberField,
   isCheckboxField,
@@ -330,6 +332,8 @@ function fieldToZodSchema(
     schema = convertPasswordFieldToZod(field);
   } else if (isCodeField(field)) {
     schema = convertCodeFieldToZod(field);
+  } else if (isIconField(field)) {
+    schema = convertIconFieldToZod();
   } else if (isRichTextField(field)) {
     schema = convertRichTextFieldToZod();
   } else if (isNumberField(field)) {
@@ -646,6 +650,20 @@ function convertPasswordFieldToZod(field: PasswordFieldConfig): z.ZodTypeAny {
 
 function convertCodeFieldToZod(field: CodeFieldConfig): z.ZodTypeAny {
   return constrainedStringSchema(field, "");
+}
+
+/**
+ * An icon field holds an icon id, `lucide:star`. The shape is checked with the
+ * predicate the server validates with; whether the set still draws the icon is
+ * not, because a stored id the set has dropped is kept and shown as missing
+ * rather than blocking the save.
+ */
+function convertIconFieldToZod(): z.ZodTypeAny {
+  // Empty passes here so a required field reports "required" (its own
+  // check, added after this one) rather than a malformed id.
+  return z
+    .string()
+    .refine(value => value === "" || isIconIdShape(value), "Not an icon id");
 }
 
 function convertRichTextFieldToZod(): z.ZodTypeAny {

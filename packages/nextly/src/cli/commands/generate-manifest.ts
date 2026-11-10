@@ -35,7 +35,7 @@
  */
 
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { resolve, dirname, join } from "node:path";
+import { resolve, dirname, join, relative, sep } from "node:path";
 
 import type { Command } from "commander";
 
@@ -47,10 +47,12 @@ import {
 } from "../../plugins/codegen/block-manifest";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { generatedTypesFile } from "../../shared/lib/generated-output-paths";
+import { reportDryRun, type DryRunChange } from "../dry-run";
 import { exitWithError } from "../errors";
 import { blockManifestStale } from "../errors/areas/commands";
 import { createContext, type CommandContext } from "../program";
 import { loadConfig } from "../utils/config-loader";
+import type { Logger } from "../utils/logger";
 
 /**
  * What generation would leave on disk, next to what is there now.
@@ -89,6 +91,25 @@ export async function readBlockManifestState(
   return { path, expected: artifact?.code ?? null, actual: await read(path) };
 }
 
+/** What making disk agree with `expected` does to the manifest. */
+type BlockManifestChange =
+  | { action: "write"; code: string }
+  | { action: "remove" };
+
+/**
+ * The change that makes disk agree with `expected`: write it, remove it, or
+ * `undefined` when it already agrees. The one decision both the apply step and
+ * a dry run's report are made from, so the two cannot disagree.
+ */
+function blockManifestChange(
+  state: BlockManifestState
+): BlockManifestChange | undefined {
+  if (state.expected === state.actual) return undefined;
+  return state.expected === null
+    ? { action: "remove" }
+    : { action: "write", code: state.expected };
+}
+
 /**
  * Make disk agree with `expected`. Returns whether anything changed, so a
  * caller can report "already current" rather than implying it rewrote a file.
@@ -96,14 +117,29 @@ export async function readBlockManifestState(
 export async function applyBlockManifestState(
   state: BlockManifestState
 ): Promise<boolean> {
-  if (state.expected === state.actual) return false;
-  if (state.expected === null) {
+  const change = blockManifestChange(state);
+  if (change === undefined) return false;
+  if (change.action === "remove") {
     await rm(state.path, { force: true });
     return true;
   }
   await mkdir(dirname(state.path), { recursive: true });
-  await writeFile(state.path, state.expected, "utf-8");
+  await writeFile(state.path, change.code, "utf-8");
   return true;
+}
+
+/**
+ * The change a dry run names for the manifest: the one the apply step would
+ * make, or none when the file already agrees.
+ */
+export function blockManifestDryRunChanges(
+  state: BlockManifestState,
+  cwd: string
+): DryRunChange[] {
+  const change = blockManifestChange(state);
+  return change === undefined
+    ? []
+    : [{ action: change.action, target: shownPath(cwd, state.path) }];
 }
 
 /** A one-line account of a mismatch, for a CI log read without the diff. */
@@ -140,6 +176,14 @@ async function read(path: string): Promise<string | null> {
   }
 }
 
+/**
+ * A path as a dry run names it: relative to the project, "/"-separated, as
+ * the developer would type it there.
+ */
+export function shownPath(cwd: string, path: string): string {
+  return relative(cwd, path).split(sep).join("/");
+}
+
 /** A filesystem error meaning the path holds nothing, rather than something unreadable. */
 function isMissingFile(error: unknown): boolean {
   return (
@@ -152,6 +196,8 @@ function isMissingFile(error: unknown): boolean {
 interface GenerateManifestOptions {
   output?: string;
   check?: boolean;
+  /** Report the write or removal the run would make, and make none. */
+  dryRun?: boolean;
   config?: string;
   verbose?: boolean;
   quiet?: boolean;
@@ -184,17 +230,36 @@ export async function runGenerateManifest(
   );
 
   if (options.check) {
-    if (state.expected === state.actual) {
-      logger.success(
-        state.expected === null
-          ? "No blocks are declared, and no manifest is committed."
-          : `Block manifest is current: ${state.path}`
-      );
-      return;
-    }
-    exitWithError(logger, blockManifestStale(describeManifestDrift(state)));
+    checkBlockManifest(state, logger);
+    return;
   }
 
+  if (options.dryRun) {
+    reportDryRun(logger, { changes: blockManifestDryRunChanges(state, cwd) });
+    return;
+  }
+
+  await settleBlockManifest(state, logger);
+}
+
+/** `--check`: say the manifest is current, or end the run naming the drift. */
+function checkBlockManifest(state: BlockManifestState, logger: Logger): void {
+  if (blockManifestChange(state) === undefined) {
+    logger.success(
+      state.expected === null
+        ? "No blocks are declared, and no manifest is committed."
+        : `Block manifest is current: ${state.path}`
+    );
+    return;
+  }
+  exitWithError(logger, blockManifestStale(describeManifestDrift(state)));
+}
+
+/** Make disk agree with the config, and say what that did. */
+async function settleBlockManifest(
+  state: BlockManifestState,
+  logger: Logger
+): Promise<void> {
   const changed = await applyBlockManifestState(state);
   if (state.expected === null) {
     logger.success(

@@ -250,147 +250,156 @@ test.afterAll(async () => {
   await admin?.dispose();
 });
 
-test("edits the placement's exposed headline on the canvas and saves it to the page", async () => {
-  await openBuilder(page, seeded.pageId);
+// The page builder's composition exit test 2, run in CI against the production
+// build this suite serves; the other six are `production/composition-exit.spec.ts`.
+test.describe("exit test 2: only a placed header's exposed fields, with page-editing and component-reading rights", () => {
+  test("edits the placement's exposed headline on the canvas and saves it to the page", async () => {
+    await openBuilder(page, seeded.pageId);
 
-  const text = await headline(page);
-  await text.dblclick();
-  await expect(text).toHaveAttribute("contenteditable", /.+/);
-  await page.keyboard.type("Acme launch");
-  await page.keyboard.press("Enter");
-  await expect(await headline(page)).toHaveText("Acme launch");
+    const text = await headline(page);
+    await text.dblclick();
+    await expect(text).toHaveAttribute("contenteditable", /.+/);
+    await page.keyboard.type("Acme launch");
+    await page.keyboard.press("Enter");
+    await expect(await headline(page)).toHaveText("Acme launch");
 
-  const saved = page.waitForResponse(
-    response =>
-      new URL(response.url()).pathname.endsWith(`/entries/${seeded.pageId}`) &&
-      ["PATCH", "PUT"].includes(response.request().method())
-  );
-  await pressSave(page);
-  expect((await saved).status()).toBe(200);
-
-  const stored = await storedNodes(admin, seeded.pageId);
-  expect(stored.p1?.props.overrides).toEqual({ headline: "Acme launch" });
-  const component = await storedComponent(admin, seeded.componentId);
-  expect(component).toContain("Site name");
-  expect(component).not.toContain("Acme launch");
-});
-
-test("is offered no way into the component's design from the page", async () => {
-  await openBuilder(page, seeded.pageId);
-
-  // CONTROL: a block of the page's own has a Style tab for this author, so the
-  // placement's having none below is about the placement.
-  await (await canvasRoot(page)).getByText("On the page").click();
-  await expect(
-    page.getByTestId("inspector").getByRole("tab", { name: "Style" })
-  ).toBeVisible();
-
-  await selectPlacement(page);
-  const inspector = page.getByTestId("inspector");
-  await expect(inspector.getByRole("tab", { name: "Style" })).toHaveCount(0);
-  await expect(
-    page
-      .getByRole("toolbar", { name: "Block actions" })
-      .getByRole("button", { name: "Edit component" })
-  ).toHaveCount(0);
-  await expect(
-    page.getByRole("button", { name: "Edit component" })
-  ).toHaveCount(0);
-});
-
-test("cannot reach a part of the component it does not expose", async () => {
-  await openBuilder(page, seeded.pageId);
-
-  const own = await strap(page);
-  await own.dblclick();
-  await expect(page.getByText(/^Part of Rights header\./)).toBeVisible();
-  await expect(own).not.toHaveAttribute("contenteditable", /.+/);
-  await page.keyboard.type("Rewritten");
-  await expect(await strap(page)).toHaveText("Made with care");
-
-  // The panel offers the exposed fields and nothing of the strap.
-  await expect(
-    page.getByRole("heading", { name: new RegExp(COMPONENT_TITLE) })
-  ).toBeVisible();
-  const labels = page
-    .getByTestId("inspector")
-    .locator(".nx-inspector__field--exposed label");
-  await expect(labels).toHaveText([
-    "Headline",
-    "Heading level",
-    "Button link",
-    "Button shown",
-  ]);
-  const values = await page
-    .getByTestId("inspector")
-    .getByRole("textbox")
-    .evaluateAll(fields =>
-      fields.map(field => (field as HTMLInputElement).value)
+    const saved = page.waitForResponse(
+      response =>
+        new URL(response.url()).pathname.endsWith(
+          `/entries/${seeded.pageId}`
+        ) && ["PATCH", "PUT"].includes(response.request().method())
     );
-  expect(values).not.toContain("Made with care");
-});
+    await pressSave(page);
+    expect((await saved).status()).toBe(200);
 
-test("cannot change the component's own design, in its builder or through the API", async () => {
-  await gotoAdmin(
-    page,
-    `/collections/components/${seeded.componentId}/builder?field=content`
-  );
-  // Opened read-only: the component is drawn, with no canvas to edit it in.
-  await expect(page.getByText("Made with care").first()).toBeVisible({
-    timeout: 30_000,
+    const stored = await storedNodes(admin, seeded.pageId);
+    expect(stored.p1?.props.overrides).toEqual({ headline: "Acme launch" });
+    const component = await storedComponent(admin, seeded.componentId);
+    expect(component).toContain("Site name");
+    expect(component).not.toContain("Acme launch");
   });
-  await expect(page.getByRole("region", { name: "Canvas" })).toHaveCount(0);
 
-  // A cookie-authenticated write names its origin and token, as a browser's
-  // does.
-  const csrf = await author.context.request.get("/admin/api/auth/csrf");
-  const { token } = (await csrf.json()) as { token: string };
-  const headers = { "x-csrf-token": token, origin: new URL(csrf.url()).origin };
-  const redesigned = {
-    ...headerDefinition(),
-    nodes: headerDefinition().nodes.map(node =>
-      node.id === "strap"
-        ? { ...node, props: { text: "Rewritten by the author" } }
-        : node
-    ),
-  };
+  test("is offered no way into the component's design from the page", async () => {
+    await openBuilder(page, seeded.pageId);
 
-  const refused = await author.context.request.patch(
-    `${COMPONENTS}/${seeded.componentId}`,
-    { headers, data: { content: redesigned } }
-  );
-  expect(refused.status(), await refused.text()).toBe(403);
-  const component = await storedComponent(admin, seeded.componentId);
-  expect(component).toContain("Made with care");
-  expect(component).not.toContain("Rewritten by the author");
+    // CONTROL: a block of the page's own has a Style tab for this author, so the
+    // placement's having none below is about the placement.
+    await (await canvasRoot(page)).getByText("On the page").click();
+    await expect(
+      page.getByTestId("inspector").getByRole("tab", { name: "Style" })
+    ).toBeVisible();
 
-  // CONTROL: the same author, the same way, may write the page that places
-  // it, so the refusal above is about the component.
-  const pageWrite = await author.context.request.patch(
-    `${PAGES}/${seeded.pageId}`,
-    {
-      headers,
-      data: {
-        content: {
-          formatVersion: 1,
-          kind: "page",
-          nodes: [
-            {
-              id: "p1",
-              type: "nextly/component-instance",
-              version: 1,
-              props: {
-                componentId: seeded.componentId,
-                overrides: { headline: "Through the API" },
+    await selectPlacement(page);
+    const inspector = page.getByTestId("inspector");
+    await expect(inspector.getByRole("tab", { name: "Style" })).toHaveCount(0);
+    await expect(
+      page
+        .getByRole("toolbar", { name: "Block actions" })
+        .getByRole("button", { name: "Edit component" })
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Edit component" })
+    ).toHaveCount(0);
+  });
+
+  test("cannot reach a part of the component it does not expose", async () => {
+    await openBuilder(page, seeded.pageId);
+
+    const own = await strap(page);
+    await own.dblclick();
+    await expect(page.getByText(/^Part of Rights header\./)).toBeVisible();
+    await expect(own).not.toHaveAttribute("contenteditable", /.+/);
+    await page.keyboard.type("Rewritten");
+    await expect(await strap(page)).toHaveText("Made with care");
+
+    // The panel offers the exposed fields and nothing of the strap.
+    await expect(
+      page.getByRole("heading", { name: new RegExp(COMPONENT_TITLE) })
+    ).toBeVisible();
+    const labels = page
+      .getByTestId("inspector")
+      .locator(".nx-inspector__field--exposed label");
+    await expect(labels).toHaveText([
+      "Headline",
+      "Heading level",
+      "Button link",
+      "Button shown",
+    ]);
+    const values = await page
+      .getByTestId("inspector")
+      .getByRole("textbox")
+      .evaluateAll(fields =>
+        fields.map(field => (field as HTMLInputElement).value)
+      );
+    expect(values).not.toContain("Made with care");
+  });
+
+  test("cannot change the component's own design, in its builder or through the API", async () => {
+    await gotoAdmin(
+      page,
+      `/collections/components/${seeded.componentId}/builder?field=content`
+    );
+    // Opened read-only: the component is drawn, with no canvas to edit it in.
+    await expect(page.getByText("Made with care").first()).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(page.getByRole("region", { name: "Canvas" })).toHaveCount(0);
+
+    // A cookie-authenticated write names its origin and token, as a browser's
+    // does.
+    const csrf = await author.context.request.get("/admin/api/auth/csrf");
+    const { token } = (await csrf.json()) as { token: string };
+    const headers = {
+      "x-csrf-token": token,
+      origin: new URL(csrf.url()).origin,
+    };
+    const redesigned = {
+      ...headerDefinition(),
+      nodes: headerDefinition().nodes.map(node =>
+        node.id === "strap"
+          ? { ...node, props: { text: "Rewritten by the author" } }
+          : node
+      ),
+    };
+
+    const refused = await author.context.request.patch(
+      `${COMPONENTS}/${seeded.componentId}`,
+      { headers, data: { content: redesigned, _overwrite: true } }
+    );
+    expect(refused.status(), await refused.text()).toBe(403);
+    const component = await storedComponent(admin, seeded.componentId);
+    expect(component).toContain("Made with care");
+    expect(component).not.toContain("Rewritten by the author");
+
+    // CONTROL: the same author, the same way, may write the page that places
+    // it, so the refusal above is about the component.
+    const pageWrite = await author.context.request.patch(
+      `${PAGES}/${seeded.pageId}`,
+      {
+        headers,
+        data: {
+          content: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "p1",
+                type: "nextly/component-instance",
+                version: 1,
+                props: {
+                  componentId: seeded.componentId,
+                  overrides: { headline: "Through the API" },
+                },
               },
-            },
-          ],
+            ],
+          },
+          _overwrite: true,
         },
-      },
-    }
-  );
-  expect(pageWrite.status(), await pageWrite.text()).toBe(200);
-  expect((await storedNodes(admin, seeded.pageId)).p1?.props.overrides).toEqual(
-    { headline: "Through the API" }
-  );
+      }
+    );
+    expect(pageWrite.status(), await pageWrite.text()).toBe(200);
+    expect(
+      (await storedNodes(admin, seeded.pageId)).p1?.props.overrides
+    ).toEqual({ headline: "Through the API" });
+  });
 });

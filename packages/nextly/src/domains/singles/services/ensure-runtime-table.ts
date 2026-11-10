@@ -42,6 +42,10 @@ import { tableNotRegisteredError } from "@nextlyhq/adapter-drizzle/types";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import type { Logger } from "../../../shared/types";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import { resolveCompanionReadiness } from "../../i18n/runtime/companion-readiness";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 import { generateRuntimeSchema } from "../../schema/services/runtime-schema-generator";
@@ -110,7 +114,7 @@ function shapeSignature(
   meta: SingleRuntimeTableMeta,
   fields: { name: string; type: string; localized?: boolean }[]
 ): string {
-  const shape = `${meta.localized === true}:${meta.status === true}`;
+  const shape = `${storesPerLanguage(meta)}:${meta.status === true}`;
   return meta.schemaVersion !== undefined
     ? `v${meta.schemaVersion}:${shape}`
     : `f${JSON.stringify(fields)}:${shape}`;
@@ -162,7 +166,8 @@ export async function ensureSingleRuntimeTable(
       Array.isArray(singleMeta.fields) ? singleMeta.fields : []
     ) as { name: string; type: string; localized?: boolean }[];
     const dialect = adapter.dialect;
-    const localized = singleMeta.localized === true;
+    // Where the Single's translatable columns live, for its table and its companion alike.
+    const localized = storesPerLanguage(singleMeta);
     const status = singleMeta.status === true;
     const companionName = `${singleMeta.tableName}_locales`;
 
@@ -283,7 +288,8 @@ export async function ensureSingleRuntimeTable(
         fields,
         dialect,
         localized: true,
-        status,
+        // A per-language `_status` only where the Single publishes each language on its own.
+        status: publishesPerLanguage(singleMeta),
       });
       if (companion) {
         resolver.registerDynamicSchema(

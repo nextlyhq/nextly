@@ -75,8 +75,14 @@ import {
   resolveKnownTypeColumns,
   resolveTypeColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
+import { stopGrantsExpiryRetry } from "../domains/flush-content-change";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import { LanguageRegistry } from "../domains/i18n/language-registry";
+import {
+  publishesPerLanguage,
+  setPerLanguageStorage,
+  storesPerLanguage,
+} from "../domains/i18n/per-language-storage";
 import { LanguageSettingsService } from "../domains/i18n/services/language-settings-service";
 import { storedLanguageReader } from "../domains/i18n/stored-language-reader";
 import type {
@@ -123,6 +129,7 @@ import type {
 } from "../domains/singles/services/single-registry-service";
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import type { VersionsService } from "../domains/versions/versions-service";
+import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { storedWebhookRecording } from "../domains/webhooks/builder-webhooks";
 import { resetWebhookActivation } from "../domains/webhooks/recording-activation";
 import {
@@ -201,6 +208,7 @@ import {
   resolveTransformedPlugins,
 } from "../plugins/resolve";
 import { collectRoles } from "../plugins/roles/collect-roles";
+import { boundActionsOf } from "../plugins/routes/action-binding";
 import {
   collectPluginRoutes,
   type CollectedRoute,
@@ -291,6 +299,7 @@ import {
   type RestoredRegistrations,
 } from "./container";
 import { withDevelopmentStartSchemaLock } from "./development-start-schema-lock";
+import { readLayoutScanEntities } from "./layout-scan-entities";
 import {
   type LoadedBuilderEntity,
   loadBuilderEntities,
@@ -532,6 +541,15 @@ export interface NextlyServiceConfig {
    * Carried from the sanitized config; absent when built without app config.
    */
   webhookAuditEnabled?: boolean;
+
+  /**
+   * Whether every translatable field is kept per language from the start
+   * (`experimental.perLanguageStorage`). Carried from the sanitized config; absent, which is off,
+   * when built without app config.
+   *
+   * @experimental
+   */
+  perLanguageStorage?: boolean;
 }
 
 // ============================================================
@@ -932,6 +950,12 @@ async function registerServicesOnce(
   // made outside a request record theirs into it, for every instance.
   installTagExpiryLedger(adapter);
 
+  // Published before the schema registry registers a single table, since registration already
+  // decides where translatable values are stored, and chosen here once: a reload refuses to change
+  // it. A site restarted over the database it laid out would otherwise register its tables as if
+  // the setting were off, naming translatable columns its main tables do not have.
+  setPerLanguageStorage(transformedConfig.perLanguageStorage === true);
+
   const bootExtensionSchema = await prepareBootSchema(
     adapter,
     transformedConfig,
@@ -1071,6 +1095,16 @@ async function registerServicesOnce(
         resolvedLogger
       );
 
+      // Before any schema work, a database laid out for the other choice of the setting is refused:
+      // with it on, the push that follows would plan to drop translatable columns a database laid
+      // out before the setting still holds on its main tables; with it off, reads would ask main
+      // tables for columns the setting kept per language.
+      await refuseMixedStorageInConfig(
+        adapter,
+        transformedConfig,
+        transformedConfig.perLanguageStorage === true
+      );
+
       // ----------------------------------------
       // Layer 3: Domain Service Registrations
       // ----------------------------------------
@@ -1083,6 +1117,9 @@ async function registerServicesOnce(
         languages: new LanguageRegistry({
           configured: transformedConfig.localization,
           reader: storedLanguageReader(adapter),
+          // A site keeping every translatable field per language stores its values under one
+          // language even before it declares any.
+          implicitLanguage: transformedConfig.perLanguageStorage === true,
         }),
         schemasDir,
         migrationsDir,
@@ -3085,13 +3122,15 @@ async function initializeSchemaRegistry(
         "../services/field-groups/field-group-schema-service"
       );
       const compSchemaService = new FieldGroupSchemaService(dialect);
+      // Where the component's translatable columns live, for its table and its companion alike.
+      const perLanguage = storesPerLanguage({ localized });
       const runtimeTable = compSchemaService.generateRuntimeSchema(
         tableName,
         fields,
-        { localized, typeColumn }
+        { localized: perLanguage, typeColumn }
       );
       registry.registerDynamicSchema(tableName, runtimeTable);
-      if (localized) {
+      if (perLanguage) {
         const { ensureCompanionTable } = await import(
           "../domains/i18n/runtime/companion-io"
         );
@@ -3682,7 +3721,8 @@ async function syncCodeFirstCollections(
           // table descriptor matches what the pipeline applied — the main table
           // omits translatable columns (they live in the companion), keeping config
           // and runtime in lockstep.
-          const localized = desired.localized === true;
+          // Where the translatable columns live, for the table and its companion alike.
+          const localized = storesPerLanguage(desired);
           const { table: runtimeTable } = generateRuntimeSchema(
             tableName,
             fields,
@@ -3717,7 +3757,7 @@ async function syncCodeFirstCollections(
               tableName,
               fields,
               dialect: syncDialect,
-              status: desired.status === true,
+              status: publishesPerLanguage(desired),
             });
             const { buildCompanionRuntimeTable } = await import(
               "../domains/i18n/runtime/companion-registration"
@@ -3728,7 +3768,7 @@ async function syncCodeFirstCollections(
               fields,
               dialect: syncDialect,
               localized: true,
-              status: desired.status === true,
+              status: publishesPerLanguage(desired),
             });
             if (companion) {
               resolver.registerDynamicSchema(
@@ -3847,8 +3887,9 @@ async function syncCodeFirstComponents(
 
     // i18n: a localized component omits its translatable columns from the main comp_
     // table and gets a companion `comp_<slug>_locales` (created below).
-    const compLocalized =
-      (compConfig as { localized?: boolean }).localized === true;
+    // Where its translatable columns live: its companion, for a translatable component or for every
+    // component on a site that keeps every translatable field per language.
+    const compLocalized = storesPerLanguage(compConfig);
 
     // A missing table is created by the pipeline, in the one boot apply shared
     // with collections and singles, so it carries every column the desired
@@ -4126,8 +4167,10 @@ async function reconcileSingleTablesForBoot(
       single: { slug: string; tableName: string },
       fields: FieldDefinition[],
       hasStatus: boolean,
-      localized: boolean
+      entityLocalized: boolean
     ): Promise<void> => {
+      // Where the Single's translatable columns live, for its table and its companion alike.
+      const localized = storesPerLanguage({ localized: entityLocalized });
       try {
         const { generateRuntimeSchema: genRt } = await import(
           "../domains/schema/services/runtime-schema-generator"
@@ -4162,7 +4205,10 @@ async function reconcileSingleTablesForBoot(
               tableName: single.tableName,
               fields: fields,
               dialect,
-              status: hasStatus,
+              status: publishesPerLanguage({
+                localized: entityLocalized,
+                status: hasStatus,
+              }),
             });
             const { buildCompanionRuntimeTable } = await import(
               "../domains/i18n/runtime/companion-registration"
@@ -4173,7 +4219,10 @@ async function reconcileSingleTablesForBoot(
               fields: fields,
               dialect,
               localized: true,
-              status: hasStatus,
+              status: publishesPerLanguage({
+                localized: entityLocalized,
+                status: hasStatus,
+              }),
             });
             if (companion) {
               resolver.registerDynamicSchema(
@@ -4505,6 +4554,9 @@ async function initializePlugins(
       | EmailService
       | VersionsService
       | SingleRegistryService
+      | SingleEntryService
+      | CollectionRegistryService
+      | FieldGroupRegistryService
       | DatabaseInstance
       | AnyRelations
       | SupportedDialect
@@ -4513,6 +4565,8 @@ async function initializePlugins(
       | AdapterTransactions
       | JobRegistry
       | JobsPassDatabase
+      | WebhookFastDrainScheduler
+      | null
   > = {
     collectionService: () =>
       services.container.get<CollectionService>("collectionService"),
@@ -4524,6 +4578,16 @@ async function initializePlugins(
       services.container.get<VersionsService>("versionsService"),
     singleRegistryService: () =>
       services.container.get<SingleRegistryService>("singleRegistryService"),
+    singleEntryService: () =>
+      services.container.get<SingleEntryService>("singleEntryService"),
+    collectionRegistryService: () =>
+      services.container.get<CollectionRegistryService>(
+        "collectionRegistryService"
+      ),
+    fieldGroupRegistryService: () =>
+      services.container.get<FieldGroupRegistryService>(
+        "fieldGroupRegistryService"
+      ),
     db: () => adapterDrizzleDb,
     // The adapter's own answer. Everything that turns a plugin's settings into
     // SQL picks its table metadata and its upsert spelling from this, and the
@@ -4546,6 +4610,15 @@ async function initializePlugins(
     // on the instance its context belongs to.
     jobRegistry: () => services.container.get<JobRegistry>("jobRegistry"),
     jobsDatabase: () => services.container.get<JobsPassDatabase>("adapter"),
+    // Through the same box, so a plugin's committed webhook event is offered
+    // to this registration's drain, never the next one's; null where
+    // webhooks are not registered.
+    webhookFastDrainScheduler: () =>
+      services.container.has("webhookFastDrainScheduler")
+        ? services.container.get<WebhookFastDrainScheduler>(
+            "webhookFastDrainScheduler"
+          )
+        : null,
   };
 
   const getServiceForPlugin = <T extends PluginServiceName>(name: T) =>
@@ -4754,13 +4827,21 @@ async function initializePlugins(
   const routeRegistry = getPluginRouteRegistry();
   routeRegistry.clear();
   if (collectedRoutes.length > 0) {
-    const contextByPlugin = new Map(
-      teardown.map(t => [t.plugin.name, t.context])
-    );
+    const byPlugin = new Map(teardown.map(t => [t.plugin.name, t]));
     for (const collected of collectedRoutes) {
-      const context = contextByPlugin.get(collected.pluginName);
-      if (context) {
-        routeRegistry.register(collected.pluginName, collected.route, context);
+      const entry = byPlugin.get(collected.pluginName);
+      if (entry) {
+        // The declared actions that run the route, read from the definition
+        // it was collected from, so a plugin list rewritten after boot cannot
+        // make a bound route read as unbound.
+        routeRegistry.register(
+          collected.pluginName,
+          collected.route,
+          entry.context,
+          // Through every configured plugin, disabled ones included: their
+          // collections are still served, under their renamed slugs.
+          boundActionsOf(entry.plugin, collected.route, plugins)
+        );
       }
     }
     logger.info?.(`Registered ${collectedRoutes.length} plugin route(s)`);
@@ -4916,6 +4997,10 @@ export async function shutdownServices(): Promise<void> {
 async function releaseServices(opts: {
   disconnectAdapter: boolean;
 }): Promise<void> {
+  // This registration's retries of grants expiries flush through the services
+  // released below, so they stop first; what they owe stays queued for the
+  // next registration's jobs runs.
+  stopGrantsExpiryRetry();
   // Before the adapter disconnects, so destroy can still use db.
   await destroyRegisteredPlugins();
   // Before the adapter disconnects, so a sweep under way finishes with it.
@@ -4975,6 +5060,8 @@ async function releaseServices(opts: {
  * tears them down in reverse before it initialises any plugin.
  */
 export function clearServices(): void {
+  // Stopped first, for the reason `releaseServices` gives.
+  stopGrantsExpiryRetry();
   // Plugins still running are torn down at the next registration, and their
   // `destroy` may still need the services they were started with: those move
   // aside for them rather than vanish, their contexts re-pointed at them for
@@ -5065,5 +5152,98 @@ function handleUnresolvedExtends(
         `It is neither a code/plugin entity nor a Builder collection/single/component. ` +
         `Fix the slug or remove the extend (set NEXTLY_STRICT_PLUGIN_TARGETS=1 to fail fast).`
     );
+  }
+}
+
+/**
+ * Refuses the boot of a site keeping every translatable field per language over a database whose
+ * main tables still hold the translatable columns of an entity: one its configuration declares, or
+ * one the Schema Builder made, read from the registries (`readLayoutScanEntities`).
+ */
+async function refuseMixedStorageInConfig(
+  adapter: DrizzleAdapter,
+  config: NextlyServiceConfig,
+  // Which layout the setting chooses: a database laid out in the other is refused.
+  perLanguage: boolean
+): Promise<void> {
+  const [
+    { refuseMixedStorage },
+    { resolveSingleTableName },
+    { resolveCollectionTableName, resolveComponentTableName },
+  ] = await Promise.all([
+    import("../domains/i18n/per-language-storage-layout"),
+    import("../domains/singles/services/resolve-single-table-name"),
+    import("../domains/schema/utils/resolve-table-name"),
+  ]);
+  type Entity = Parameters<typeof refuseMixedStorage>[1][number];
+  const fieldsOf = (entity: { fields?: unknown }) =>
+    (entity.fields ?? []) as Entity["fields"];
+  const entities: Entity[] = [
+    ...(config.collections ?? []).map(
+      (c): Entity => ({
+        kind: "collection",
+        slug: c.slug,
+        tableName: resolveCollectionTableName(
+          c.slug,
+          (c as { dbName?: string }).dbName
+        ),
+        fields: fieldsOf(c),
+        localized: (c as { localized?: unknown }).localized,
+      })
+    ),
+    ...(config.singles ?? []).map(
+      (s): Entity => ({
+        kind: "single",
+        slug: s.slug,
+        tableName: resolveSingleTableName({
+          slug: s.slug,
+          dbName: (s as { dbName?: string }).dbName,
+        }),
+        fields: fieldsOf(s),
+        localized: (s as { localized?: unknown }).localized,
+      })
+    ),
+    ...(config.fieldGroups ?? []).map(
+      (g): Entity => ({
+        kind: "component",
+        slug: g.slug,
+        tableName: resolveComponentTableName(g.slug),
+        fields: fieldsOf(g),
+        localized: (g as { localized?: unknown }).localized,
+      })
+    ),
+  ];
+  // The Schema Builder's entities, by their registered tables; one the configuration also declares
+  // is judged as the configuration describes it.
+  entities.push(
+    ...(await readLayoutScanEntities(
+      adapter,
+      new Set(entities.map(entity => entity.tableName))
+    ))
+  );
+  await refuseMixedStorage(adapter, entities, perLanguage);
+  // With no languages declared in the configuration or in Settings, the site would serve the
+  // implicit language alone: refused where its per-language tables hold others, so translations
+  // never read as gone after a `localization` block is removed.
+  if (perLanguage && config.localization === undefined) {
+    const [
+      { refuseUndeclaredLanguages },
+      { IMPLICIT_LANGUAGE, localizationFromStoredLanguages },
+      { storedLanguageReader },
+    ] = await Promise.all([
+      import("../domains/i18n/per-language-storage-layout"),
+      import("../domains/i18n/config/stored-languages"),
+      import("../domains/i18n/stored-language-reader"),
+    ]);
+    const stored = localizationFromStoredLanguages(
+      await storedLanguageReader(adapter).rows()
+    );
+    if (stored === undefined) {
+      await refuseUndeclaredLanguages(
+        adapter,
+        entities,
+        IMPLICIT_LANGUAGE.code
+      );
+    }
   }
 }

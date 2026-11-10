@@ -76,6 +76,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     read => () =>
       read
   )(() => Promise.resolve(null)),
+  // The Fallback picker's library search, finding nothing: no case here
+  // opens it. One function for every call, as the admin's own hook keeps it.
+  useMediaSearcher: (
+    search => () =>
+      search
+  )(() => Promise.resolve([])),
   // Present because the mock REPLACES the module wholesale: an export the
   // subject imports and this omits is a missing-export error rather than an
   // unused stub.
@@ -94,6 +100,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     slug: "pages",
     documentId: "p1",
   }),
+  // The field's address as the admin gives it outside repeaters: its form
+  // path. No case here draws a field inside a repeater's row.
+  useFieldAddress: (_control: unknown, path: string) => ({ address: path }),
   // Recorded, so a case can tell a plain click handled within the admin from
   // one left to the browser.
   navigateTo: (href: string) => {
