@@ -179,7 +179,6 @@ function measureCards(
     cards.push({
       id: row.placementId,
       span: drawnSpan(size.w, dashboardWidth),
-      rows: size.h,
       rect: {
         left: rect.left - box.left,
         top: rect.top - box.top,

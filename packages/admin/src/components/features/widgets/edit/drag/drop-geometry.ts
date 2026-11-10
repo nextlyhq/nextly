@@ -14,12 +14,7 @@
 
 import { GRID_COLUMNS } from "nextly/config";
 
-import {
-  cardHeightPx,
-  columnGapPx,
-  ROW_GAP_PX,
-  ROW_HEIGHT_PX,
-} from "../../sizes";
+import { columnGapPx, ROW_GAP_PX } from "../../sizes";
 
 /** The grid's columns, which a row's spans fill. */
 const COLUMNS = GRID_COLUMNS;
@@ -31,13 +26,11 @@ const COLUMNS = GRID_COLUMNS;
  */
 const VERTICAL_WEIGHT = 4;
 
-/** A card as drawn: its rectangle relative to the grid, its span and its rows. */
+/** A card as drawn: its rectangle relative to the grid, and its span. */
 export interface DrawnCard {
   id: string;
   /** The columns it spans at this width. */
   span: number;
-  /** The rows it spans, its `h`: the same in every band. */
-  rows: number;
   rect: { left: number; top: number; right: number; bottom: number };
 }
 
@@ -97,49 +90,43 @@ export interface GridCell {
 
 /**
  * Where each card in `order` is placed, as the grid's own auto-placement does it: in order and
- * never backfilled (the grid is not `dense`), each card at the first place at or after the last
- * one's where its span and rows are free. Rows as well as columns: after a tall half and a short
- * half, the next half fits beside the tall one, under the short one, which a count of columns
- * alone would start on a row of its own.
- *
- * Reads only each card's span and rows, so the grid's other questions about where its cards
- * land (which cards share rows, `row-bands`) are answered by this same walk.
+ * never backfilled (the grid is not `dense`), each card one row high, on the row after the last
+ * one's where its span no longer fits beside it.
  */
 export function gridPlacements(
-  order: readonly Pick<DrawnCard, "span" | "rows">[]
+  order: readonly Pick<DrawnCard, "span">[]
 ): GridCell[] {
-  const taken = new Set<string>();
-  const free = (column: number, row: number, span: number, rows: number) => {
-    for (let r = row; r < row + rows; r++) {
-      for (let c = column; c < column + span; c++) {
-        if (taken.has(`${r}:${c}`)) return false;
-      }
-    }
-    return true;
-  };
   const cells: GridCell[] = [];
   let cursor = { column: 0, row: 0 };
   for (const card of order) {
-    // Held to what the grid can draw, so the walk below always finds a place: a span of one to
-    // twelve columns and at least one row.
+    // Held to what the grid can draw: a span of one to twelve columns.
     const span = Math.min(Math.max(Math.trunc(card.span) || 1, 1), COLUMNS);
-    const rows = Math.max(Math.trunc(card.rows) || 1, 1);
-    let { column, row } = cursor;
-    // Along the cursor's row, then down a row from the first column, as the grid moves on.
-    while (column + span > COLUMNS || !free(column, row, span, rows)) {
-      column += 1;
-      if (column + span > COLUMNS) {
-        column = 0;
-        row += 1;
-      }
-    }
-    for (let r = row; r < row + rows; r++) {
-      for (let c = column; c < column + span; c++) taken.add(`${r}:${c}`);
-    }
-    cells.push({ column, row });
-    cursor = { column: column + span, row };
+    const cell =
+      cursor.column + span > COLUMNS
+        ? { column: 0, row: cursor.row + 1 }
+        : cursor;
+    cells.push(cell);
+    cursor = { column: cell.column + span, row: cell.row };
   }
   return cells;
+}
+
+/**
+ * How tall each row of `order` placed at `cells` is drawn: as its tallest card, each card as tall
+ * as it is drawn now. A card keeps its width wherever it moves, so its content's height, which a
+ * card is drawn at, moves with it.
+ */
+function rowHeights(
+  order: readonly DrawnCard[],
+  cells: readonly GridCell[]
+): number[] {
+  const heights: number[] = [];
+  order.forEach((card, index) => {
+    const row = cells[index]?.row ?? 0;
+    const height = Math.max(card.rect.bottom - card.rect.top, 0);
+    heights[row] = Math.max(heights[row] ?? 0, height);
+  });
+  return Array.from(heights, height => height ?? 0);
 }
 
 /**
@@ -160,22 +147,25 @@ export function dropLineFor(
   if (moved === undefined || final === from) return undefined;
   const order = cards.filter((_, index) => index !== from);
   order.splice(final, 0, moved);
-  const cell = gridPlacements(order)[final];
+  const cells = gridPlacements(order);
+  const cell = cells[final];
   if (cell === undefined) return undefined;
   // The place the card will take, in pixels, by the grid's own measures: twelve columns with
-  // the gap across that this width draws (`columnGapPx`), and rows of `ROW_HEIGHT_PX` with
-  // `ROW_GAP_PX` between them.
+  // the gap across that this width draws (`columnGapPx`), and rows as tall as their tallest card
+  // with `ROW_GAP_PX` between them.
   const gap = columnGapPx(gridWidth);
   const columnWidth = (gridWidth - (COLUMNS - 1) * gap) / COLUMNS;
-  const rowPitch = ROW_HEIGHT_PX + ROW_GAP_PX;
-  const top = cell.row * rowPitch;
+  const heights = rowHeights(order, cells);
+  const top = heights
+    .slice(0, cell.row)
+    .reduce((sum, height) => sum + height + ROW_GAP_PX, 0);
   if (cell.column > 0) {
     // Beside the card before it on its row: centred in the gap across, as tall as it will be.
     return {
       orientation: "vertical",
       x: Math.round(cell.column * (columnWidth + gap) - gap / 2),
       top,
-      length: cardHeightPx(Math.max(Math.trunc(moved.rows) || 1, 1)),
+      length: heights[cell.row] ?? 0,
     };
   }
   // It starts a row: the line runs across the grid, centred in the gap above that row.

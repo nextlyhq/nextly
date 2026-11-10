@@ -48,13 +48,13 @@ describe("a card's menu at rest", () => {
     });
     const { menu } = await open();
     const names = itemNames(menu);
-    expect(names).toHaveLength(5);
+    expect(names).toHaveLength(4);
     expect(names[0]).toMatch(/^Settings/);
-    // Size is the card's width and height, each a submenu of its choices.
+    // Size is the card's width alone, a submenu of its choices: a card is as tall as its
+    // content, so there is no Height.
     expect(names[1]).toMatch(/^Width/);
-    expect(names[2]).toMatch(/^Height/);
-    expect(names[3]).toBe("Refresh");
-    expect(names[4]).toBe("Remove");
+    expect(names[2]).toBe("Refresh");
+    expect(names[3]).toBe("Remove");
   });
 
   it("opens the card's settings", async () => {
@@ -90,9 +90,6 @@ describe("a card's menu at rest", () => {
       "33% width",
       "50% width",
       "66% width",
-      "2 rows",
-      "3 rows",
-      "4 rows",
     ]);
     // By keyboard: jsdom has no geometry for a pointer to cross the items.
     within(menu).getByRole("menuitemradio", { name: "50% width" }).focus();

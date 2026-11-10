@@ -38,34 +38,3 @@ export function useReportedPlacements(): {
   }, []);
   return { placements, report };
 }
-
-/** A cell saying how many rows it is drawn across, or `undefined` for its stored rows. */
-export type SpanReport = (
-  placementId: string,
-  rows: number | undefined
-) => void;
-
-const NO_SPANS: ReadonlyMap<string, number> = new Map();
-
-/**
- * The rows each cell reported it is drawn across where that is not its stored rows (grown to
- * show more, or collapsed to one line), and the report that keeps them: a cell absent from the
- * map spans its stored rows, so the map and the stored sizes give every card's current span. A
- * report that changes nothing keeps the same map, as the set above does.
- */
-export function useReportedSpans(): {
-  spans: ReadonlyMap<string, number>;
-  report: SpanReport;
-} {
-  const [spans, setSpans] = useState<ReadonlyMap<string, number>>(NO_SPANS);
-  const report = useCallback<SpanReport>((placementId, rows) => {
-    setSpans(current => {
-      if (current.get(placementId) === rows) return current;
-      const next = new Map(current);
-      if (rows === undefined) next.delete(placementId);
-      else next.set(placementId, rows);
-      return next;
-    });
-  }, []);
-  return { spans, report };
-}

@@ -81,16 +81,20 @@ A widget declared with `defineWidget` draws one of those with its own component,
 `view: { component }`, handed its `load`'s data. `access` gates the whole card: nothing in a
 declaration gates one item inside it.
 
-A widget's size is `{ w, h }` on a grid 12 columns wide, with rows of one fixed height: `w` is
-from 1 to 12 columns and `h` from 2 to 12 rows. It declares the size a card starts at and, if it
-likes, the smallest and largest a reader may resize it to:
+A widget's size is `{ w, h }` on a grid 12 columns wide: `w` is from 1 to 12 columns and `h`
+from 2 to 12. It declares the size a card starts at and, if it likes, the smallest and largest a
+reader may resize it to:
 `size: { default: { w: 6, h: 3 }, min: { w: 4, h: 2 }, max: { w: 12, h: 6 } }`. The minimum
-defaults to the default, and the maximum to the full width at the default's height. On the
+defaults to the default, and the maximum to the full width at the default's `h`. On the
 dashboard, cards sit in one ordered list, filling rows left to right and wrapping, each spanning
-its `w` columns and `h` rows, and a reader can change a card's width and height from its menu
-within the widget's bounds. Columns follow the dashboard's own width rather than the window's:
-from 640 to 1,023 pixels a card of 6 columns or fewer is drawn at 6 and a wider one at 12, and
-below 640 pixels every card is drawn at the full width. A card keeps its height at every width. A reader can arrange the dashboard at every width.
+its `w` columns, and a reader can change a card's width from its menu within the widget's
+bounds. A card is as tall as its content, and the cards that share a row are drawn as tall as the
+tallest of them; nothing inside a card is cut off or scrolls. `h` no longer sets a card's height:
+it is kept in the declaration and in saved layouts, and `rowsThatFit` still reads it for how many
+list rows a load asks for (below). Columns follow the dashboard's own width rather than the
+window's: from 640 to 1,023 pixels a card of 6 columns or fewer is drawn at 6 and a wider one at
+12, and below 640 pixels every card is drawn at the full width. A reader can arrange the
+dashboard at every width.
 Where it shows more than one column, a card is dragged by its handle, with the pointer or the
 keyboard, and a line shows where it will land; below 640 pixels, where every card is full width,
 cards are moved, resized and removed from their menu instead. The arrangement applies at every
@@ -176,7 +180,7 @@ export const recentOrders = defineWidget({
 });
 ```
 
-`rowsThatFit(size, { density })` counts the list rows that fit in a card of that height. It
+`rowsThatFit(size, { density })` counts the list rows a card of that `h` draws. It
 uses the same formula as core's own list cards, so a load reads exactly the rows the card
 draws. `density` is `"default"` or `"compact"`, the values a list card's Density setting takes.
 Compact rows are shorter, so the same card holds more of them.
