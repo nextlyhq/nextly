@@ -22,6 +22,7 @@ import { getUnstableRethrow } from "../../actions/next-runtime";
 import { NextlyError } from "../../errors/nextly-error";
 import {
   capabilityProvider,
+  capabilityProviderIdentity,
   capabilityProvidersRecorded,
 } from "../../plugins/capabilities";
 import { buildPluginServicesNamespace } from "../../plugins/services/plugin-services-registry";
@@ -279,7 +280,13 @@ export async function pageMetadataFor(
       derived: request.derived ?? {},
     };
     const answer = await cachedFind(async () => await resolver.resolve(input), {
-      keyParts: ["nextly-page-metadata", answerKey(input)],
+      // The provider and its version too, so a replaced or upgraded provider
+      // never reads an answer another one cached for the same page.
+      keyParts: [
+        "nextly-page-metadata",
+        capabilityProviderIdentity(PAGE_METADATA_CAPABILITY) ?? "",
+        answerKey(input),
+      ],
       // The page's own tags first, so the one every write to its document
       // expires is never the one Next.js's per-read limit drops.
       tags: readTags(request.tags, resolver.tags?.(input) ?? []),

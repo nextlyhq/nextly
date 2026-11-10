@@ -45,17 +45,22 @@ const { pageMetadataFor } = await import("../page-metadata");
 
 const PROVIDER = "@test/seo";
 
-function provide(resolver: PageMetadataResolver): void {
+function provide(
+  resolver: PageMetadataResolver,
+  name = PROVIDER,
+  version = "1.0.0"
+): void {
+  clearPluginServices();
   recordCapabilityProviders([
     {
-      name: PROVIDER,
-      version: "1.0.0",
+      name,
+      version,
       nextly: ">=0.0.0",
       provides: ["page-metadata"],
       contributes: { services: { pageMetadata: () => resolver } },
     } as PluginDefinition,
   ]);
-  registerPluginService(PROVIDER, "pageMetadata", () => resolver);
+  registerPluginService(name, "pageMetadata", () => resolver);
 }
 
 const page = {
@@ -285,6 +290,17 @@ describe("pageMetadataFor with a provider", () => {
     const keys = cacheCalls.map(call => call.keyParts.join("|"));
     expect(keys[0]).not.toBe(keys[1]);
     expect(keys[0]).toBe(keys[2]);
+  });
+
+  it("keys the cached answer by its provider and version, so a replaced provider never reads another's answer", async () => {
+    provide({ resolve: () => ({ title: "First" }) });
+    await pageMetadataFor({ ...page, code: undefined, tags: [] });
+    provide({ resolve: () => ({ title: "Second" }) }, "@other/seo");
+    await pageMetadataFor({ ...page, code: undefined, tags: [] });
+    provide({ resolve: () => ({ title: "Upgraded" }) }, PROVIDER, "2.0.0");
+    await pageMetadataFor({ ...page, code: undefined, tags: [] });
+    const keys = cacheCalls.map(call => call.keyParts.join("|"));
+    expect(new Set(keys).size).toBe(3);
   });
 
   it("serves the route's own metadata when the provider fails", async () => {

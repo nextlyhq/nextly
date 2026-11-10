@@ -664,8 +664,14 @@ export function resolveProvides(
   return provided;
 }
 
+/** A recorded provider: the started plugin's name and its version. */
+interface RecordedProvider {
+  plugin: string;
+  version: string;
+}
+
 const globalForCapabilityProviders = globalThis as unknown as {
-  __nextly_capabilityProviders?: ReadonlyMap<string, string>;
+  __nextly_capabilityProviders?: ReadonlyMap<string, RecordedProvider>;
 };
 
 /**
@@ -706,9 +712,17 @@ export function recordCapabilityProviders(started: PluginDefinition[]): void {
       );
     }
   }
-  globalForCapabilityProviders.__nextly_capabilityProviders = new Map(
-    [...provided].map(([capability, { plugin }]) => [capability, plugin])
-  );
+  globalForCapabilityProviders.__nextly_capabilityProviders = provided;
+}
+
+/**
+ * Forget the recorded providers, for a process whose services have been
+ * cleared. Back to unknown rather than none: until the next boot records its
+ * own, a route asking must not take "no provider" for an answer and skip a
+ * provider that boot is about to start.
+ */
+export function forgetCapabilityProviders(): void {
+  globalForCapabilityProviders.__nextly_capabilityProviders = undefined;
 }
 
 /**
@@ -718,7 +732,23 @@ export function recordCapabilityProviders(started: PluginDefinition[]): void {
 export function capabilityProvider(capability: string): string | undefined {
   return globalForCapabilityProviders.__nextly_capabilityProviders?.get(
     capability
-  );
+  )?.plugin;
+}
+
+/**
+ * The started provider of `capability` as one string, its name and version
+ * (`name@version`), or undefined when none is recorded. What an answer cached
+ * from a provider is keyed by, so a replaced or upgraded provider never reads
+ * the answer another one cached.
+ */
+export function capabilityProviderIdentity(
+  capability: string
+): string | undefined {
+  const recorded =
+    globalForCapabilityProviders.__nextly_capabilityProviders?.get(capability);
+  return recorded === undefined
+    ? undefined
+    : `${recorded.plugin}@${recorded.version}`;
 }
 
 /**

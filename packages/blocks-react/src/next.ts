@@ -4499,6 +4499,14 @@ function blocksSingleConfig(
             routeConfig.buildMetadata?.(document, contextFor(context)) ?? {},
         }
       : {}),
+    // What the Single's blocks say, worked out as the page route does, so a
+    // plugin that provides page metadata hears it for a Single as for a page.
+    ...(routeConfig.derivedMetadata
+      ? {
+          derivedMetadata: (document: SingleDocument, context: SingleContext) =>
+            routeConfig.derivedMetadata?.(document, contextFor(context)) ?? {},
+        }
+      : {}),
   };
 }
 

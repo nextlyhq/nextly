@@ -42,6 +42,7 @@ import {
   knownNoPageMetadataProvider,
   pageMetadataFor,
 } from "../seo/page-metadata";
+import type { PageMetadataValues } from "../seo/page-metadata-contract";
 
 import { deferToRequest } from "./defer-to-request";
 import { isMissOrDenied } from "./miss-or-denied";
@@ -180,6 +181,16 @@ export interface SingleRouteConfig<TNode> {
     document: SingleDocument,
     context: SingleContext
   ) => Metadata | Promise<Metadata>;
+  /**
+   * @experimental What the Single's own content offers for its head, such as
+   * the title and image a Page Builder page's blocks show. Asked only where a
+   * plugin provides page metadata, and handed to it as the level below every
+   * value somebody set, as a content route's `derivedMetadata` is.
+   */
+  derivedMetadata?: (
+    document: SingleDocument,
+    context: SingleContext
+  ) => PageMetadataValues | Promise<PageMetadataValues>;
   /**
    * A booted Nextly instance. Defaults to the runtime singleton, which requires
    * services to be registered — pass one explicitly (the value from
@@ -441,12 +452,19 @@ function buildSingleRoute<TNode>(
       const code = buildMetadata
         ? await buildMetadata(document, context)
         : undefined;
+      // Worked out only where a provider may be asked: with none known, the
+      // route's own metadata is served and the content is not walked for it.
+      const derived =
+        config.derivedMetadata && !knownNoPageMetadataProvider()
+          ? await config.derivedMetadata(document, context)
+          : undefined;
       // A Single route is mounted by the app and never told where, so the
       // provider is asked without a path and finds the Single's address itself.
       return pageMetadataFor({
         ...(context.locale === undefined ? {} : { locale: context.locale }),
         source: { kind: "single", slug: config.slug, document },
         code,
+        ...(derived === undefined ? {} : { derived }),
         // The tags the document's own read carries, so a write to the Single
         // expires its head as it expires its body.
         tags: readTags(nextlySingleTags(config.slug), config.tags),

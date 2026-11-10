@@ -219,6 +219,22 @@ describe("a Single route with a page-metadata provider", () => {
     });
   });
 
+  it("hands the provider what the Single's content offers", async () => {
+    const asked = provide(() => ({}));
+    const route = createSingleRoute({
+      slug: "homepage",
+      nextly: singleReader(),
+      render: () => "home",
+      derivedMetadata: document => ({
+        title: `Drawn ${String(document.title)}`,
+      }),
+    });
+
+    await route.generateMetadata();
+
+    expect(asked[0]?.derived).toEqual({ title: "Drawn Home" });
+  });
+
   it("serves the route's own metadata exactly with no provider", async () => {
     recordCapabilityProviders([]);
     const own = { title: "Own home" };

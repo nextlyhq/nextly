@@ -10,7 +10,10 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { capabilityProvider } from "../capabilities";
+import {
+  capabilityProvider,
+  capabilityProvidersRecorded,
+} from "../capabilities";
 import { definePlugin } from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
 
@@ -42,6 +45,9 @@ describe("the capability providers a boot records", () => {
     await current.destroy();
     current = undefined;
     expect(capabilityProvider("page-metadata")).toBeUndefined();
+    // Not known, rather than known to be none: until the next boot records
+    // its providers, a route must not take "no provider" for an answer.
+    expect(capabilityProvidersRecorded()).toBe(false);
   });
 
   it("refuses to boot a page-metadata provider with no resolver service", async () => {

@@ -174,7 +174,10 @@ import { startCompanionReadinessWarmUp } from "../init/warm-companion-readiness"
 import { env } from "../lib/env";
 import type { RateLimitStore } from "../middleware/rate-limit";
 import { maskingServiceLogger } from "../observability/mask-emails";
-import { recordCapabilityProviders } from "../plugins/capabilities";
+import {
+  forgetCapabilityProviders,
+  recordCapabilityProviders,
+} from "../plugins/capabilities";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { warnUndescribedPlugins } from "../plugins/describe-check";
@@ -5056,9 +5059,10 @@ function clearActiveHookRegistry(): void {
   // Nothing is initialized in a process whose services have been cleared, and a
   // stale list would let the next reload treat a plugin as started.
   setInitializedPlugins([]);
-  // Nor does any plugin provide a capability: a provider left recorded would be
-  // asked for pages by the next instance, through services it no longer has.
-  recordCapabilityProviders([]);
+  // Nor is any provider known: one left recorded would be asked for pages by
+  // the next instance, through services it no longer has, and an empty record
+  // would tell a route there is none before the next boot says.
+  forgetCapabilityProviders();
   clearPluginDependencies();
 }
 

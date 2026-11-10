@@ -11,11 +11,16 @@
  */
 import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
-import type { ContentRouteConfig, RenderContext } from "nextly/runtime";
+import type {
+  ContentRouteConfig,
+  RenderContext,
+  SingleRouteConfig,
+} from "nextly/runtime";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const handed: ContentRouteConfig<ReactElement>[] = [];
+const handedSingles: SingleRouteConfig<ReactElement>[] = [];
 
 vi.mock("nextly/runtime", async importOriginal => {
   const actual = await importOriginal<typeof import("nextly/runtime")>();
@@ -29,10 +34,14 @@ vi.mock("nextly/runtime", async importOriginal => {
       handed.push(config);
       return actual.createPublicContentRoute(config);
     },
+    createSingleRoute: (config: SingleRouteConfig<ReactElement>) => {
+      handedSingles.push(config);
+      return actual.createSingleRoute(config);
+    },
   };
 });
 
-const { createBlocksPage } = await import("./next");
+const { createBlocksPage, createSinglePage } = await import("./next");
 const { coreBlocks } = await import("./blocks");
 const { createBlockResolver } = await import("./resolver");
 
@@ -73,6 +82,7 @@ function reader() {
 
 beforeEach(() => {
   handed.length = 0;
+  handedSingles.length = 0;
 });
 
 describe("a Page Builder route's offer for the head", () => {
@@ -113,5 +123,24 @@ describe("a Page Builder route's offer for the head", () => {
     expect(offered).toMatchObject({ title: "Pricing" });
     expect(afterOne).toBeGreaterThan(0);
     expect(lookups.mock.calls.length).toBe(afterOne);
+  });
+});
+
+describe("a Page Builder Single's offer for the head", () => {
+  it("hands the Single route what the blocks say", async () => {
+    createSinglePage({
+      slug: "homepage",
+      field: "content",
+      nextly: reader() as never,
+      blocks: createBlockResolver(coreBlocks),
+    });
+
+    const config = handedSingles[0];
+    expect(
+      await config?.derivedMetadata?.(
+        { id: "s1", content: PRICING },
+        { slug: "homepage" }
+      )
+    ).toEqual({ title: "Pricing", description: "Plans for every team." });
   });
 });
