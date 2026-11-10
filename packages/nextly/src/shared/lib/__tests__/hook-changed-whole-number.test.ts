@@ -42,14 +42,22 @@ describe("hookChangedWholeNumberIssues", () => {
     const fields: ValidatableField[] = [
       // The walk reads the descriptor's raw opt-in off the config, which
       // carries more than ValidatableField declares.
-      { name: "price", type: "number", dbType: "decimal" } as unknown as ValidatableField,
+      {
+        name: "price",
+        type: "number",
+        dbType: "decimal",
+      } as unknown as ValidatableField,
     ];
     expect(hookChangedWholeNumberIssues({ price: 2.5 }, fields)).toEqual([]);
   });
 
   it("keeps a float-format field's fraction", () => {
     const fields: ValidatableField[] = [
-      { name: "ratio", type: "number", options: { format: "float" } } as unknown as ValidatableField,
+      {
+        name: "ratio",
+        type: "number",
+        options: { format: "float" },
+      } as unknown as ValidatableField,
     ];
     expect(hookChangedWholeNumberIssues({ ratio: 2.5 }, fields)).toEqual([]);
   });
@@ -111,7 +119,11 @@ describe("hookChangedWholeNumberIssues", () => {
     // carries more than ValidatableField declares; the walk takes it as the
     // validator's own fields arrive.
     const fields: ValidatableField[] = [
-      { name: "banner", type: "component", component: "cta" } as unknown as ValidatableField,
+      {
+        name: "banner",
+        type: "component",
+        component: "cta",
+      } as unknown as ValidatableField,
     ];
     const componentFields: ValidatableField[] = [
       { name: "weight", type: "number", label: "Weight" },
@@ -131,12 +143,104 @@ describe("hookChangedWholeNumberIssues", () => {
     ]);
   });
 
+  it("compares a wholly restored container's unchanged descendants through its one snapshot", () => {
+    // The rules denied the whole group, so the restore recorded one snapshot
+    // at the container's own path. A hook edited a different child: the
+    // container's comparison fails and the walk goes inside, where the
+    // unchanged legacy fraction still compares against what the snapshot
+    // holds at that path — the row's own, not this write's production.
+    const fields: ValidatableField[] = [
+      {
+        name: "locked",
+        type: "group",
+        fields: [
+          { name: "label", type: "text" },
+          { name: "rating", type: "number" },
+        ],
+      },
+    ];
+    const storedPaths = new Set(["locked"]);
+    const storedValues = new Map([["locked", { label: "kept", rating: 2.5 }]]);
+    expect(
+      hookChangedWholeNumberIssues(
+        { locked: { label: "hook-edited", rating: 2.5 } },
+        fields,
+        "",
+        undefined,
+        storedPaths,
+        storedValues
+      )
+    ).toEqual([]);
+    // The stored child itself changed: judged, snapshot or no snapshot at
+    // its own path.
+    expect(
+      hookChangedWholeNumberIssues(
+        { locked: { label: "kept", rating: 3.5 } },
+        fields,
+        "",
+        undefined,
+        storedPaths,
+        storedValues
+      )
+    ).toEqual([
+      {
+        path: "locked.rating",
+        code: "INVALID_TYPE",
+        message: "rating must be a whole number.",
+      },
+    ]);
+  });
+
+  it("compares a wholly restored repeater's unchanged rows through its one snapshot", () => {
+    const fields: ValidatableField[] = [
+      {
+        name: "rows",
+        type: "repeater",
+        fields: [{ name: "n", type: "number" }],
+      },
+    ];
+    const storedPaths = new Set(["rows"]);
+    const storedValues = new Map([["rows", [{ n: 1 }, { n: 2.5 }]]]);
+    // A hook edited another row: the legacy row's fraction rides.
+    expect(
+      hookChangedWholeNumberIssues(
+        { rows: [{ n: 4 }, { n: 2.5 }] },
+        fields,
+        "",
+        undefined,
+        storedPaths,
+        storedValues
+      )
+    ).toEqual([]);
+    // The legacy row itself changed: judged.
+    expect(
+      hookChangedWholeNumberIssues(
+        { rows: [{ n: 1 }, { n: 3.5 }] },
+        fields,
+        "",
+        undefined,
+        storedPaths,
+        storedValues
+      )
+    ).toEqual([
+      {
+        path: "rows[1].n",
+        code: "INVALID_TYPE",
+        message: "n must be a whole number.",
+      },
+    ]);
+  });
+
   it("leaves a component alone when no resolver is handed, as the gate left it unjudged", () => {
     // The walk reads the component reference off the raw config, which
     // carries more than ValidatableField declares; the walk takes it as the
     // validator's own fields arrive.
     const fields: ValidatableField[] = [
-      { name: "banner", type: "component", component: "cta" } as unknown as ValidatableField,
+      {
+        name: "banner",
+        type: "component",
+        component: "cta",
+      } as unknown as ValidatableField,
     ];
     expect(
       hookChangedWholeNumberIssues({ banner: { weight: 1.5 } }, fields)

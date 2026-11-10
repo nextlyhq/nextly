@@ -394,6 +394,43 @@ function isStoredProvenancePath(
 }
 
 /**
+ * The stored value a path's comparison reads: the path's own snapshot, or
+ * the one its nearest recorded ancestor holds at that path. A restore
+ * records one snapshot at a container the rules denied whole, and a hook
+ * that edits a different child sends the walk inside it — where each
+ * unchanged descendant still compares against what the ancestor's snapshot
+ * holds, rather than against nothing and reading as this write's own.
+ */
+function storedValueAtPath(
+  path: string,
+  stored: ReadonlyMap<string, unknown> | undefined
+): unknown {
+  if (!stored) return undefined;
+  if (stored.has(path)) return stored.get(path);
+  let upto = path;
+  // Up one segment at a time — `rows[1].rating` to `rows[1]`, then `rows` —
+  // until an ancestor recorded a snapshot to read the rest of the path from.
+  for (;;) {
+    const cut = Math.max(upto.lastIndexOf("."), upto.lastIndexOf("["));
+    if (cut <= 0) return undefined;
+    upto = upto.slice(0, cut);
+    if (stored.has(upto)) {
+      return valueAlong(stored.get(upto), path.slice(upto.length));
+    }
+  }
+}
+
+/** The value `rest` (`[1].rating`, `.label`) addresses inside `root`. */
+function valueAlong(root: unknown, rest: string): unknown {
+  let value: unknown = root;
+  for (const token of rest.match(/[^.[\]]+/g) ?? []) {
+    if (value === null || typeof value !== "object") return undefined;
+    value = (value as Record<string, unknown>)[token];
+  }
+  return value;
+}
+
+/**
  * The whole-number floor, judged over the document the write will store,
  * after the beforeChange hooks have had their turn.
  *
@@ -449,7 +486,11 @@ export function hookChangedWholeNumberIssues(
     // the hook changed there is this write's production, judged like any
     // other. Without the values the skip is whole, as the gate judged it.
     if (isStoredProvenancePath(childPath, storedPaths)) {
-      const stored = storedValues?.get(childPath);
+      // Through the nearest recorded ancestor when the path's own snapshot
+      // is not there: the whole container's comparison already failed, so
+      // the walk is inside it, and an unchanged descendant of the row's own
+      // content is still the row's, not this write's production.
+      const stored = storedValueAtPath(childPath, storedValues);
       if (storedValues === undefined || isDeepStrictEqual(data[key], stored)) {
         continue;
       }
