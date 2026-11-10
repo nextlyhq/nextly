@@ -1,6 +1,6 @@
 import { connection } from "next/server";
 import { Suspense } from "react";
-import { getBrandingCss } from "nextly/config";
+import { adminMetadata, getBrandingCss } from "nextly/config";
 import { checkAdminComponents } from "nextly/runtime";
 
 import config from "../../../../nextly.config";
@@ -8,6 +8,12 @@ import { registeredComponentPaths } from "../../../types/plugin-admin-components
 import { AdminShell } from "../../admin-shell";
 
 const brandingCss = getBrandingCss(config.admin?.branding);
+
+/**
+ * The admin is never a page for search results: `noindex, nofollow` in the
+ * head of the first HTML the server sends, whatever plugins the site runs.
+ */
+export const metadata = adminMetadata;
 
 /**
  * The panel's own shell, mounted here rather than at the app root so the public

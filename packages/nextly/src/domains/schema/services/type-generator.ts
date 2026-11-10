@@ -221,6 +221,17 @@ export interface TypeGeneratorOptions {
    * @default "nextly"
    */
   moduleToAugment?: string;
+  /**
+   * The language codes the configuration locks, as configured: a read matches the code it is
+   * given against them as written. Absent, or empty, where Settings manages the languages or
+   * there are none, so a language is any code, checked at run time.
+   */
+  locales?: readonly string[];
+  /**
+   * Old codes a read still accepts for one release after their conversion, each with the code to
+   * use instead. Written marked deprecated.
+   */
+  deprecatedLocales?: Readonly<Record<string, string>>;
 }
 
 // ============================================================
@@ -267,6 +278,8 @@ export class TypeGenerator {
   private readonly generateModuleAugmentation: boolean;
   private readonly filename: string;
   private readonly moduleToAugment: string;
+  private readonly locales: readonly string[];
+  private readonly deprecatedLocales: Readonly<Record<string, string>>;
 
   /**
    * Expressions the plugin callbacks returned during this run.
@@ -327,6 +340,8 @@ export class TypeGenerator {
       options.filename ??
       DEFAULT_TYPESCRIPT_CONFIG.outputFile.replace(/^.*\//, "");
     this.moduleToAugment = options.moduleToAugment ?? "nextly";
+    this.locales = options.locales ?? [];
+    this.deprecatedLocales = options.deprecatedLocales ?? {};
   }
 
   // ============================================================
@@ -1522,6 +1537,11 @@ ${properties}
       lines.push("  };");
     }
 
+    // Languages section: the codes the configuration locks, and old codes still accepted. Emitted
+    // only when there are some, as the permissions and events above are: an empty map would type
+    // every read's language as `never`, where none written leaves it any code.
+    lines.push(...this.localesConfigSection());
+
     // Workflows section: each attached workflow's stage and step names, by
     // collection and Single. Emitted only when one is attached, as the
     // permissions and events above are.
@@ -1533,6 +1553,33 @@ ${properties}
     lines.push("}");
 
     return lines.join("\n");
+  }
+
+  /**
+   * The `Config` lines naming the site's languages: `locales`, the codes the configuration locks,
+   * exactly as configured; and `deprecatedLocales`, each old code still accepted with the code to
+   * use, marked deprecated. Sorted for deterministic output; none of either where there are none.
+   */
+  private localesConfigSection(): string[] {
+    const lines: string[] = [];
+    const codes = uniqueSorted([...this.locales]);
+    if (codes.length > 0) {
+      lines.push("  locales: {");
+      for (const code of codes)
+        lines.push(`    ${JSON.stringify(code)}: true;`);
+      lines.push("  };");
+    }
+    const old = uniqueSorted(Object.keys(this.deprecatedLocales));
+    if (old.length > 0) {
+      lines.push("  deprecatedLocales: {");
+      for (const code of old) {
+        const current = JSON.stringify(this.deprecatedLocales[code]);
+        lines.push(`    /** @deprecated Use ${current}. */`);
+        lines.push(`    ${JSON.stringify(code)}: ${current};`);
+      }
+      lines.push("  };");
+    }
+    return lines;
   }
 
   // ============================================================

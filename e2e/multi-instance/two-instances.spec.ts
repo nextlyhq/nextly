@@ -18,6 +18,7 @@ import {
   loggedKind,
   noteOn,
   NOT_SHARED_KIND,
+  PLUGIN_NOTE_ROUTE,
   servedWithin,
   useLeg,
 } from "./checks";
@@ -138,6 +139,41 @@ for (const leg of LEGS) {
         type: "fresh after the write",
         description: `A ${String(tookA)} ms, B ${String(tookB)} ms`,
       });
+    });
+
+    test("a plugin's expiry through one instance is served by both, and nothing else expires its read", async ({
+      request,
+    }) => {
+      const { a, b } = running();
+      // Filled now, under the plugin's tag alone.
+      const before = await noteOn(request, a, PLUGIN_NOTE_ROUTE);
+      expect(await noteOn(request, b, PLUGIN_NOTE_ROUTE)).toBe(before);
+      expect(before).not.toBe("plugin-data");
+      running().writeOutsideRequest("plugin-data", true);
+      // The control: with no expiry, past the lookup interval, both still
+      // serve what they cached.
+      await new Promise(resolve => setTimeout(resolve, 6_000));
+      expect(await noteOn(request, a, PLUGIN_NOTE_ROUTE)).toBe(before);
+      expect(await noteOn(request, b, PLUGIN_NOTE_ROUTE)).toBe(before);
+
+      const since = Date.now();
+      const res = await request.post(`${a.url}${PLUGIN_NOTE_ROUTE}`, {
+        headers: { "x-fixture-secret": WRITE_SECRET },
+      });
+      expect(res.status()).toBe(200);
+      await Promise.all(
+        [a, b].map(instance =>
+          servedWithin(
+            request,
+            instance,
+            "plugin-data",
+            since,
+            FRESH_WITHIN_MS,
+            250,
+            PLUGIN_NOTE_ROUTE
+          )
+        )
+      );
     });
 
     test("neither instance warns that the cache handlers are not shared", () => {

@@ -2184,13 +2184,19 @@ export class CollectionMutationService extends BaseService {
   /**
    * The translated fields of a collection written in place, for the approvals a save withdraws
    * (`recordSaveHistory`): every field a language keeps on its own, or null when the collection
-   * keeps no translations.
+   * keeps no translations. `collection` is the collection's record as the write read it, which
+   * `readCollectionWriteMeta` hands over untyped, so its `localized` flag is read by a guard.
    */
   private translatedFieldsOf(
-    collection: { localized?: unknown },
+    collection: unknown,
     fields: readonly FieldDefinition[]
   ): string[] | null {
-    if (collection.localized !== true) return null;
+    const localized =
+      typeof collection === "object" &&
+      collection !== null &&
+      "localized" in collection &&
+      collection.localized === true;
+    if (!localized) return null;
     return resolveLocalizedFieldNames([...fields], true);
   }
 

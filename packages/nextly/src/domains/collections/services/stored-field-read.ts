@@ -60,6 +60,10 @@ import { addressableFields } from "../../../shared/addressable-fields";
 import type { EntryWriteContext } from "../../../shared/lib/entry-validation";
 import type { LocalizedFieldRef } from "../../i18n/companion-join";
 import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
+import {
   buildCompanionSchema,
   type CompanionSchema,
 } from "../../i18n/runtime/companion-io";
@@ -675,7 +679,7 @@ function groupKeptPerLanguage(
 ): boolean {
   return depth === 0
     ? companionFieldOf(entity, group.name) !== undefined
-    : entity.localized && group.localized === true;
+    : entity.storedPerLanguage && group.localized === true;
 }
 
 /**
@@ -761,6 +765,12 @@ interface StoredEntity {
   readonly localized: boolean;
   /** Whether it has a draft/published status, kept per language as well. */
   readonly status: boolean;
+  /**
+   * Whether its translatable values are kept per language: when it is translated, or for every
+   * entity under `experimental.perLanguageStorage`. Where a value is read from; `localized` stays
+   * whether its drafts are kept per language.
+   */
+  readonly storedPerLanguage: boolean;
 }
 
 /**
@@ -796,6 +806,7 @@ async function storedEntity(
       tableName: single.tableName,
       localized: single.localized === true,
       status: (single as { status?: unknown }).status === true,
+      storedPerLanguage: storesPerLanguage(single),
     };
   }
   const collection = await records(target.collection);
@@ -810,6 +821,7 @@ async function storedEntity(
     tableName: collectionTableName(collection, target.collection),
     localized: (collection as { localized?: unknown }).localized === true,
     status: (collection as { status?: unknown }).status === true,
+    storedPerLanguage: storesPerLanguage(collection),
   };
 }
 
@@ -855,13 +867,16 @@ function companionFieldOf(
  * `null` for an entity that keeps nothing per language.
  */
 function companionOf(entity: StoredEntity): CompanionSchema | null {
-  if (!entity.localized) return null;
+  // Where its translatable values are kept: per language when it is translated, or for every
+  // entity under `experimental.perLanguageStorage`.
+  if (!entity.storedPerLanguage) return null;
   return buildCompanionSchema({
     slug: entity.slug,
     tableName: entity.tableName,
     fields: entity.fields as unknown as { name: string; type: string }[],
     dialect: getService("adapter").dialect,
-    status: entity.status,
+    // A `_status` of each language only where each language publishes on its own.
+    status: publishesPerLanguage(entity),
   });
 }
 

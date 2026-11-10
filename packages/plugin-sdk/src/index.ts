@@ -309,7 +309,8 @@ export type {
 /**
  * The runtime surfaces a plugin receives when it declares them, and the
  * declarations that ask for them.
- * @experimental `PluginSettingsApi` (`ctx.settings`), `PluginAuditApi`
+ * @experimental `PluginSettingsApi` (`ctx.settings`), `PluginCacheApi`
+ *   (`ctx.cache`), `PluginAuditApi`
  *   (`ctx.audit`), `PluginAuthApi` and `CompleteLoginOptions` (`ctx.auth`),
  *   `PluginCapabilities` (`capabilities`), `PluginAuditDeclaration`
  *   (`contributes.audit`) and `PluginHookPointDeclaration`
@@ -318,6 +319,7 @@ export type {
  */
 export type {
   PluginSettingsApi,
+  PluginCacheApi,
   PluginAuditApi,
   PluginAuthApi,
   CompleteLoginOptions,
@@ -641,6 +643,14 @@ export type {
 export { getCachedNextly } from "nextly";
 
 /**
+ * @experimental The cache tag `ctx.cache.tag(part)` gives, for code that
+ * renders a plugin's data outside its context (a route an app owns), so the
+ * read it caches carries the tag `ctx.cache.expire(part)` clears. Intended to
+ * be stable once a first-party plugin expires its pages through `ctx.cache`.
+ */
+export { pluginCacheTag } from "nextly";
+
+/**
  * @experimental The canonical response envelopes, and the trusted-client-IP
  *   facade. Graduates per D55 once `plugin-form-builder`'s public form routes
  *   ship in a release.
@@ -869,7 +879,7 @@ export type {
  * Contributions a plugin adds to admin places (`contributes.admin.contributions`):
  * blocks, tabs, list columns, row and bulk actions and side panel sections,
  * each ordered at its place, with a declared visibility rule and permission.
- * @experimental The admin draws blocks and tabs at four places so far (see
+ * @experimental The admin draws blocks and tabs at five places so far (see
  * STABILITY.md).
  */
 export type {
