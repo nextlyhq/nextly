@@ -105,7 +105,11 @@ import {
   readClientWhere,
   toNumber,
 } from "../helpers/validation";
-import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
+import {
+  restoreFieldsOf,
+  versionInputOf,
+  versionInputOfQuery,
+} from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
 import { readAccessCallerForDispatch } from "./read-access-caller";
@@ -332,6 +336,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         request,
         // The version the restore was made from, judged as its update is.
         version: versionInputOf(body),
+        // The fields chosen; every field the version holds when none are.
+        fields: restoreFieldsOf(body),
       });
       return respondAction("Version restored.", result);
     },

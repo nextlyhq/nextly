@@ -701,6 +701,8 @@ export async function restoreVersionForDocument(
     request?: Request;
     /** `_rev` and `_overwrite` from the request: see `restoreVersion`. */
     version?: Readonly<Record<string, unknown>>;
+    /** The fields to restore; every field the version holds when absent. */
+    fields?: readonly string[];
   }
 ): Promise<RestoreVersionResult> {
   const caller = readAccessCallerForDispatch(args.user);
@@ -749,6 +751,7 @@ export async function restoreVersionForDocument(
     request: args.request,
     // Judged as the update the restore makes is.
     version: args.version,
+    ...(args.fields ? { fields: args.fields } : {}),
   });
 }
 

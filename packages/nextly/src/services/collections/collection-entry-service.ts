@@ -55,6 +55,7 @@ import {
 } from "../../domains/i18n/localization-source";
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import type { RetentionRunner } from "../../domains/retention/runner";
+import type { FieldSources } from "../../domains/versions/restored-from";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import { errorEnvelopeFields } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
@@ -915,6 +916,13 @@ export class CollectionEntryService extends BaseService {
        * version it captures.
        */
       sourceVersionNo?: number;
+      /**
+       * The fields this write restored, and the version each came from,
+       * recorded per field on the version it captures (see `restored-from`).
+       *
+       * @experimental
+       */
+      restoredFrom?: FieldSources;
       /**
        * The caller's authenticated scope. For a scoped API-key REST write the
        * publish/unpublish transition gate judges the key's OWN grants.
