@@ -5,7 +5,7 @@ import { cn } from "@admin/lib/utils";
 
 import { usePanelFold } from "../PanelFold";
 
-import { HeaderTrail } from "./HeaderTrail";
+import { HeaderTrail, useHasHeaderTrail } from "./HeaderTrail";
 
 interface DashboardHeaderProps {
   className?: string;
@@ -20,18 +20,28 @@ interface DashboardHeaderProps {
  * account menu are at the foot of the icon rail, and Docs, GitHub, Discord,
  * the theme and plugins' header items are in that menu, so the bar's width
  * belongs to the page.
+ *
+ * Below the width where the rail shows, the phone header above it already
+ * holds the logo and the menu, so the bar is drawn only while it has a trail
+ * or the panel toggle to show, rather than as an empty band. Both are
+ * declared in layout effects, so this is settled before the first paint.
  */
 export function DashboardHeader({
   className,
 }: DashboardHeaderProps): JSX.Element {
+  const hasTrail = useHasHeaderTrail();
+  const { declared } = usePanelFold();
+  const empty = !hasTrail && !declared;
   return (
     <header
+      data-empty={empty || undefined}
       className={cn(
         "h-16 border-b border-border bg-background/80 backdrop-blur-md sticky top-0 z-40 w-full",
         "flex items-center px-6",
         // A container, so the trail answers to the bar's own width: a sidebar
         // narrows it as much as a small window does.
         "@container/topbar",
+        empty && "max-lg:hidden",
         className
       )}
     >

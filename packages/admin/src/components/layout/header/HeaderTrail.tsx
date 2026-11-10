@@ -104,6 +104,11 @@ export function useHeaderTrail(trail: HeaderTrailValue): void {
   }, [key, register]);
 }
 
+/** Whether a mounted page has put a trail in the top bar. */
+export function useHasHeaderTrail(): boolean {
+  return useContext(HeaderTrailContext).trail !== null;
+}
+
 /**
  * Widths at which the bar keeps only the way back. Measured on the bar itself
  * (`@container/topbar`, declared by the top bar), so a sidebar narrowing it
