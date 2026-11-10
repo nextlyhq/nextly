@@ -724,8 +724,13 @@ for (const theme of ["light", "dark"] as Theme[]) {
 
     await dashboardAtRest(page, theme);
     await expect(page.getByTestId("notification-bell-badge")).toHaveText("9+");
+    // The row for the entry just written, so the header's own avatar can't stand in.
     await expect(
-      page.locator('[data-slot="avatar-fallback"]').first()
+      page
+        .locator("li")
+        .filter({ hasText: `Activity ${tag}` })
+        .locator('[data-slot="avatar-fallback"]')
+        .first()
     ).toBeVisible();
     await scan(page, "the bell's count and Team activity's initials");
   });
