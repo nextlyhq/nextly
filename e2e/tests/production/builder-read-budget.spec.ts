@@ -17,10 +17,9 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "../support/admin";
 import { test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 /** The seeded user the production suite signs in as. */
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
-
 const PAGES = "/admin/api/collections/pages/entries";
 const POSTS = "/admin/api/collections/posts/entries";
 
@@ -121,18 +120,6 @@ async function seedPublished(
   });
   expect(response.ok(), await response.text()).toBe(true);
   return ((await response.json()) as { item: { id: string } }).item.id;
-}
-
-/** Sign in through the real form; dev auto-login is blocked here. */
-async function signIn(page: Page): Promise<void> {
-  await page.goto("/admin");
-  await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-  // By role, not label: "Show password" also matches a password label.
-  await page
-    .getByRole("textbox", { name: /password/i })
-    .fill(DEV_USER.password);
-  await page.getByRole("button", { name: /sign in|log in/i }).click();
-  await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
 }
 
 async function openBuilder(page: Page, id: string, at?: string): Promise<void> {

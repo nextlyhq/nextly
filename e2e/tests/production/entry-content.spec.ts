@@ -9,6 +9,7 @@ import {
 } from "../support/entry-articles";
 import { LOCK } from "../support/locks";
 import { test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 /**
  * A template's Entry content block on a PRODUCTION build: it draws the
@@ -28,8 +29,6 @@ import { test } from "../support/visible";
 
 // The fixture's one template is written here; see support/locks.ts.
 test.describe.configure({ lock: [LOCK.entryArticlesTemplate] });
-
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 
 /** Distinctive per run, so finding a text cannot be a coincidence. */
 const STAMP = Date.now().toString(36);
@@ -75,14 +74,8 @@ test.describe("a template's Entry content on a published page", () => {
     page,
     request,
   }) => {
-    // 1. Sign in through the real form; dev auto-login is blocked here.
-    await page.goto("/admin");
-    await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-    await page
-      .getByRole("textbox", { name: /password/i })
-      .fill(DEV_USER.password);
-    await page.getByRole("button", { name: /sign in|log in/i }).click();
-    await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+    // 1. Signed in as the file's one sign-in; dev auto-login is blocked here.
+    await signIn(page);
     const api = page.request;
     const cookie = (await page.context().cookies())
       .map(each => `${each.name}=${each.value}`)
@@ -107,7 +100,7 @@ test.describe("a template's Entry content on a published page", () => {
     expect(control.status).toBe(200);
     expect(control.html).toContain(TITLE);
     expect(control.payload).toContain(PUBLIC_WORDS);
-    expect(control.html).toMatch(/class="[^"]*nx-b-core--entry-content/);
+    expect(control.html).toMatch(/class="[^"]*nx-bt-core--entry-content/);
     expect(control.html).not.toContain(SECRET);
 
     // 4. Drawing `membersOnly`, which the public may not read: the page is
@@ -132,7 +125,7 @@ test.describe("a template's Entry content on a published page", () => {
       // And no Entry content element: the block draws nothing at all. Asked
       // of class attributes, since the page's stylesheet may name the class.
       expect(shown.html, who).not.toMatch(
-        /class="[^"]*nx-b-core--entry-content/
+        /class="[^"]*nx-bt-core--entry-content/
       );
     }
   });

@@ -299,16 +299,15 @@ describe("the stored documents, read on the write's transaction", () => {
     );
     const readStored = vi.fn(async () => ({
       kind: "value" as const,
-      value: "uses t-spare",
+      // A stored document, as the field holds one: a bare string is no value.
+      value: { uses: "t-spare" },
     }));
     const documents = storedDocumentsOnTransaction(
       sourceOf(reads, { readStored })
     );
 
     const uses = await storedUsesOf(["t-spare"], documents, stored =>
-      typeof stored === "string" && stored.includes("t-spare")
-        ? ["t-spare"]
-        : []
+      JSON.stringify(stored)?.includes("t-spare") === true ? ["t-spare"] : []
     );
 
     expect(uses).toEqual([{ kind: "collection", slug: "pages", id: "p1" }]);

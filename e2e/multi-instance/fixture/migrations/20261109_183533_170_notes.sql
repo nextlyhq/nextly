@@ -2,7 +2,7 @@
 -- Collections: notes
 -- Entity scope: touched
 -- Settings: notes: added
--- Generated at: 2026-10-31T17:09:30.233Z
+-- Generated at: 2026-11-09T18:35:33.170Z
 -- Dialect: PostgreSQL
 
 -- UP
@@ -11,6 +11,11 @@ CREATE TABLE "dc_notes" (
   "created_at" timestamp DEFAULT now(),
   "updated_at" timestamp DEFAULT now(),
   "created_by" text,
+  "_revision" int4 NOT NULL DEFAULT 1,
+  "_changed_by_kind" varchar,
+  "_changed_by_id" text,
+  "_changed_by_principal_kind" varchar,
+  "_changed_at" timestamp,
   "title" text NOT NULL,
   "slug" text NOT NULL,
   "value" text NOT NULL

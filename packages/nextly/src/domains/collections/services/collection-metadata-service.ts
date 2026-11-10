@@ -1569,10 +1569,12 @@ function assertHeldAsLoaded(
     .filter(({ slug, collection }) => {
       const id = held.get(slug);
       if (id === undefined) return true;
+      // A registry id is a string or a number; anything else was loaded
+      // without one and is compared by its presence alone.
+      const loaded = collection.id;
       return (
-        collection.id !== undefined &&
-        collection.id !== null &&
-        String(collection.id) !== id
+        (typeof loaded === "string" || typeof loaded === "number") &&
+        String(loaded) !== id
       );
     })
     .map(({ slug }) => slug);

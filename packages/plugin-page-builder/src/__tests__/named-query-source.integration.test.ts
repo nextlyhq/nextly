@@ -190,7 +190,15 @@ const composer = definePlugin({
   },
 });
 
-function list(id: string, props: Record<string, unknown>): BlockNode {
+/**
+ * A collection list whose items show `fields`: by default a title and the
+ * note the upcoming query's rows declare, which a collection's entries lack.
+ */
+function list(
+  id: string,
+  props: Record<string, unknown>,
+  fields: readonly string[] = ["title", "note"]
+): BlockNode {
   const heading = (headingId: string, field: string): BlockNode =>
     ({
       id: headingId,
@@ -205,10 +213,7 @@ function list(id: string, props: Record<string, unknown>): BlockNode {
     version: 1,
     props,
     slots: {
-      children: [
-        heading(`${id}-title`, "title"),
-        heading(`${id}-note`, "note"),
-      ],
+      children: fields.map(field => heading(`${id}-${field}`, field)),
       empty: [],
     },
   };
@@ -322,7 +327,9 @@ describe.each(getConfiguredTestDialects())(
       return created(t, "pages", {
         title: "Home",
         slug: unique("home"),
-        content: page(list("list", props)),
+        // Starts as a list of the collection, so its items show what the
+        // collection's entries hold, and a custom source's rows hold too.
+        content: page(list("list", props, ["title"])),
       });
     }
 

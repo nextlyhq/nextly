@@ -11,8 +11,9 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
+import { loadDialectTables } from "../../../database/dialect-tables";
 import { BaseService } from "../../base-service";
 import { consoleLogger } from "../../types";
 import {
@@ -26,6 +27,14 @@ import {
 } from "../read-transaction-scope";
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
+
+// A service's `db` reads its dialect's loaded relations; the stand-ins answer
+// as these dialects, and the unit setup loads only the run's own.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql"].map(dialect => loadDialectTables(dialect))
+  );
+});
 
 const POOL = { on: "pool" };
 const TX = { on: "transaction" };

@@ -10,6 +10,7 @@ import {
 import { gotoAdmin } from "../support/admin";
 import { settleTransitions } from "../support/axe-scan.mjs";
 import { test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 /**
  * Delete component, against a PRODUCTION build: the one way a component is
@@ -31,8 +32,6 @@ import { test } from "../support/visible";
  * @module tests/production/builder-component-delete
  */
 
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
-
 const API = "/admin/api";
 const COMPONENTS = `${API}/collections/components/entries`;
 const PAGES = `${API}/collections/pages/entries`;
@@ -51,19 +50,6 @@ const stamp = () =>
 // The delete walks every document on the site in steps, so a test gives it
 // room; one worker runs the file's tests in order.
 test.describe.configure({ timeout: 240_000 });
-
-/** Sign in through the real form; dev auto-login is blocked here. */
-async function signIn(page: Page): Promise<APIRequestContext> {
-  await page.goto("/admin");
-  await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-  // By role, not label: "Show password" also matches a password label.
-  await page
-    .getByRole("textbox", { name: /password/i })
-    .fill(DEV_USER.password);
-  await page.getByRole("button", { name: /sign in|log in/i }).click();
-  await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
-  return page.request;
-}
 
 /** Fail with the server's message rather than with a bare status code. */
 async function idOf(response: APIResponse, what: string): Promise<string> {

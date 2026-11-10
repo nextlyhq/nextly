@@ -308,6 +308,8 @@ exports[`plugin-sdk public export surface > \`./db\` surface is unchanged 1`] = 
 
 exports[`plugin-sdk public export surface > \`./routing\` surface is unchanged 1`] = `
 [
+  "LIST_PAGE_SEGMENT (value)",
+  "listPageNumber (value)",
   "slugToStaticParam (value)",
 ]
 `;

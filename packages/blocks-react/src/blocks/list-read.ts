@@ -52,6 +52,8 @@ import type {
   PageContext,
 } from "../context";
 
+import { readWasRefused } from "./list-read-refusal";
+
 /** How many entries a list shows when it stores no limit. */
 const DEFAULT_LIMIT = 10;
 
@@ -391,22 +393,6 @@ async function entryRelatedIds(
     };
   }
   return { ids: idsIn(row[field]) };
-}
-
-/** Whether a read failed because the reader refused it, before or as it read. */
-function readWasRefused(error: unknown): boolean {
-  const code = (error as { code?: unknown } | null)?.code;
-  if (code === "INVALID_INPUT") return true;
-  const errors = (error as { publicData?: { errors?: unknown } } | null)
-    ?.publicData?.errors;
-  return (
-    Array.isArray(errors) &&
-    errors.length > 0 &&
-    errors.every(
-      problem =>
-        (problem as { code?: unknown } | null)?.code === "FIELD_NOT_SORTABLE"
-    )
-  );
 }
 
 /** The sort keys a refusal names, when it names them. */

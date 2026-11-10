@@ -8,7 +8,7 @@
  * back on. No playground Single has a field the public may not read, and
  * adding one would change what it is for in every development run.
  */
-import { defineSingle, text } from "nextly/config";
+import { defineSingle, text, upload } from "nextly/config";
 
 export const ContactDetails = defineSingle({
   slug: "contact-details",
@@ -23,5 +23,8 @@ export const ContactDetails = defineSingle({
       label: "Internal note",
       access: { read: ({ user }) => user !== null },
     }),
+    // Visitors may read it, so a builder's binding pickers list it: the
+    // browser test of an image bound to an upload field reads this one.
+    upload({ name: "logo", label: "Logo", relationTo: "media" }),
   ],
 });

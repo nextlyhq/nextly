@@ -1999,8 +1999,11 @@ function useFocusOnAsk(
   const answered = React.useRef<number | undefined>(undefined);
   React.useEffect(() => {
     if (asked === undefined || asked === answered.current) return;
-    answered.current = asked;
     const timer = setTimeout(() => {
+      // Answered once it has run, not once it is scheduled: an effect run
+      // again (React's StrictMode does so at once) clears the timer first, and
+      // an ask already marked answered would then never be answered at all.
+      answered.current = asked;
       const root = group.current;
       if (root === null) return;
       const target =

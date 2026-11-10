@@ -30,7 +30,7 @@ import { gotoAdmin } from "./support/admin";
 import { canvasBlock } from "./support/canvas-frame";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
 import { LOCK } from "./support/locks";
-import { fileAccount, test } from "./support/test";
+import { fileAccount, freeDocumentAt, test } from "./support/test";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.postsTemplate] });
@@ -323,6 +323,13 @@ test.describe("previewing a template with a real entry", () => {
     test("sees the same words, without New, and the canvas's fallbacks", async () => {
       // A post exists that they may not read.
       await post(admin, `TR${Date.now().toString(36)} Unreadable`, "published");
+      // The tests before this one held the template open as another author,
+      // and a document someone else holds opens read-only, with no strip.
+      await freeDocumentAt(
+        admin,
+        { scopeKind: "collection", slug: "templates", entryId: templateId },
+        "template"
+      );
       const page = await author.context.newPage();
       await openTemplate(page, templateId);
 

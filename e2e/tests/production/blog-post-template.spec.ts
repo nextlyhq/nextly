@@ -30,6 +30,7 @@ import {
   type SeededJournal,
 } from "../support/blog-post-template";
 import { includingHidden, test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 /**
  * The blog template's post page, rebuilt with a collection template and
@@ -71,8 +72,6 @@ import { includingHidden, test } from "../support/visible";
  * @module tests/production/blog-post-template
  */
 
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
-
 /** Distinctive per run, so finding a text cannot be a coincidence. */
 const STAMP = Date.now().toString(36);
 
@@ -85,18 +84,6 @@ const HAND_WRITTEN_DATE: Intl.DateTimeFormatOptions = {
   // page leaves it to the server, which is UTC on every machine this runs.
   timeZone: "UTC",
 };
-
-/** Sign in through the real form; dev auto-login is blocked here. */
-async function signIn(page: Page): Promise<APIRequestContext> {
-  await page.goto("/admin");
-  await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-  await page
-    .getByRole("textbox", { name: /password/i })
-    .fill(DEV_USER.password);
-  await page.getByRole("button", { name: /sign in|log in/i }).click();
-  await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
-  return page.request;
-}
 
 /** A post as the hand-written page reads it: its relations populated. */
 async function stored(

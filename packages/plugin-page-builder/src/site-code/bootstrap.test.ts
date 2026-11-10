@@ -221,19 +221,16 @@ describe("the loader, in order and kept out of the admin", () => {
   });
 
   it("waits on no nomodule script where modules run, which is never fetched there", async () => {
-    // A loader that never answers for the legacy bundle, as a module-capable
-    // browser never fetches it: no load or error ever comes.
+    // A loader that fetches nothing for the legacy bundle, as a module-capable
+    // browser never fetches it: no load or error ever comes. Answering with
+    // a promise that never settles would hold jsdom's own script queue, which
+    // knows nothing of `nomodule`, and stop the next script for that reason.
     class NeverForLegacy extends ResourceLoader {
       override fetch(
         url: string,
         options: Parameters<ResourceLoader["fetch"]>[1]
       ) {
-        if (url.includes("legacy")) {
-          return Object.assign(new Promise<Buffer>(() => undefined), {
-            abort: () => undefined,
-          });
-        }
-        return super.fetch(url, options);
+        return url.includes("legacy") ? null : super.fetch(url, options);
       }
     }
     const head = JSON.stringify({

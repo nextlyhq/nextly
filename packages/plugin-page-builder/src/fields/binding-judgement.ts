@@ -48,6 +48,7 @@ import {
   TEMPLATE_TARGET_UNKNOWN,
   writeSettingOf,
   type TemplateTargets,
+  type WriteTarget,
 } from "./list-query-judgement";
 
 /**
@@ -142,7 +143,7 @@ function entryOf(
  * ({@link entryOf}).
  */
 async function bindingEntryOf(
-  write: PluginFieldWrite,
+  write: WriteTarget,
   document: unknown,
   data: Readonly<Record<string, unknown>>,
   templates: TemplateTargets | undefined
@@ -366,13 +367,12 @@ export async function currentBindingProblems(
  * Whether a write's bindings are judged at all: the schema is read through
  * the pool, which inside a transaction is another connection. It can wait
  * behind the one the transaction holds, and nothing a validation is handed
- * reads the registry on the transaction's own. So a write in a transaction (an
- * action route, a batch, an import) is not judged here, as its breakpoints
- * are not; the page still falls back by the same rule where it renders.
+ * reads the registry on the transaction's own. So a write in a transaction (a
+ * batch, an import, a page action's dry run) is not judged here, as its
+ * breakpoints are not; the page still falls back by the same rule where it
+ * renders, and a page action judges its bindings before its transaction opens.
  */
-function judges(
-  write: PluginFieldWrite | undefined
-): write is PluginFieldWrite {
+function judges(write: WriteTarget | undefined): write is WriteTarget {
   return write !== undefined && !write.inTransaction;
 }
 
@@ -383,7 +383,9 @@ function judges(
  */
 export async function newBindingIssues(
   value: unknown,
-  args: PluginFieldValidateArgs,
+  args: Pick<PluginFieldValidateArgs, "data" | "path"> & {
+    readonly write?: WriteTarget | undefined;
+  },
   label: string,
   site: BindingJudging
 ): Promise<PluginFieldIssue[]> {

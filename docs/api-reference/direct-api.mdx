@@ -833,6 +833,8 @@ An `update` by `where` is the exception: it does not pass `locale` on, so it wri
 default language whatever `locale` says. To write another language, update by `id`.
 
 ```ts
+declare const id: string;
+
 // Spanish, falling back as the site configures it.
 const { items } = await nextly.find({ collection: "posts", locale: "es" });
 

@@ -44,6 +44,7 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { useBoundFieldOf } from "./binding-controls";
 import {
   contentControlFor,
   MediaField,
@@ -51,9 +52,7 @@ import {
   useMediaSummary,
   type ContentServices,
 } from "./content-controls";
-import { useBoundFieldOf } from "./binding-controls";
 import { HeldByLock } from "./held-by-lock";
-import { useVisitorUnreadable } from "./visitor-unreadable-context";
 import {
   addressChanges,
   ALT_MODE_LABELS,
@@ -72,6 +71,7 @@ import {
 import { propLabel, type EditableProp } from "./inspector";
 import type { BindableWrapper } from "./prop-groups";
 import { useStoredDraft } from "./stored-draft";
+import { useVisitorUnreadable } from "./visitor-unreadable-context";
 
 /** What both image controls are given. */
 interface ImageGroupFieldProps {

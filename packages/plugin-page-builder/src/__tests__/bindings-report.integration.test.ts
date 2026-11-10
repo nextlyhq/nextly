@@ -177,7 +177,7 @@ describe.each(getConfiguredTestDialects())(
       const rows = await t.adapter.select<Record<string, unknown>>(TABLE);
       // The key as the store spells it, through the one function that does.
       const key = documentKeyOf({ kind: "collection", slug: ARTICLES, id });
-      return rows.find(row => row.document_key === key);
+      return rows.find(row => row.documentKey === key);
     }
 
     /** The codes a row's stored issues carry. */

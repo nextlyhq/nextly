@@ -28,7 +28,7 @@ import { describe, expect, it } from "vitest";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import type { BlockRenderArgs, PageContext } from "@nextlyhq/blocks-react";
 import type { BlockNode, NestingSource } from "@nextlyhq/blocks-engine";
-import { validateDocument } from "@nextlyhq/blocks-engine";
+import { ENTRY_CONTENT_TYPE, validateDocument } from "@nextlyhq/blocks-engine";
 
 import {
   KITCHEN_SINK_DOCUMENT,
@@ -154,8 +154,14 @@ describe("the kitchen-sink document", () => {
      * showing three blocks is perfectly valid, and this page is only useful if
      * it shows all of them. A block added to `coreBlocks` is missing from the
      * page until it is added here, and nothing else would say so.
+     *
+     * Entry content is the one block a page can't show: a save refuses it
+     * anywhere but a template, and this document is a page.
      */
-    const present = new Set(NODES.map(node => node.type));
+    const present = new Set([
+      ...NODES.map(node => node.type),
+      ENTRY_CONTENT_TYPE,
+    ]);
     const missing = DEFINITIONS.map(block => block.name).filter(
       name => !present.has(name)
     );

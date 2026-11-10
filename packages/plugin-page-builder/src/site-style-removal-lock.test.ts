@@ -157,7 +157,9 @@ describe("a site style write dropping a variable or a shared style", () => {
       "postgresql"
     );
     expect(variableUses).toHaveBeenCalledWith(["t-accent"], expect.anything());
-    expect(order).toEqual(["lock", "variable uses"]);
+    // The Single is read first, on the write's own transaction, to judge what
+    // the write leaves there: no other document is asked before the lock.
+    expect(order).toEqual(["site style", "lock", "variable uses"]);
   });
 
   it("refuses dropping a variable a stored document uses, with the routes' in-use refusal", async () => {

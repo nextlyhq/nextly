@@ -459,7 +459,11 @@ describe.each(getConfiguredTestDialects())(
           formatVersion: 1,
           kind: "page",
           nodes: [
-            heading("lead", "Lead"),
+            // Shown on a condition, so clearing its conditions changes it.
+            {
+              ...heading("lead", "Lead"),
+              visibility: { conditions: [[{ field: "title", op: "exists" }]] },
+            },
             {
               id: "inst",
               type: COMPONENT_INSTANCE_TYPE,

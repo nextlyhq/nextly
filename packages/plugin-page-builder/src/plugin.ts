@@ -193,6 +193,7 @@ import {
 import { readLayoutSettings } from "./default-layout/store";
 import { definitionActionsRoute } from "./definition-actions-route";
 import { entriesRoute, titleFieldIn } from "./entries-route";
+import type { BindingJudging } from "./fields/binding-judgement";
 import type {
   CompositionSetup,
   LayersLockUnjudged,
@@ -1278,10 +1279,11 @@ export async function registeredCollectionSlugs(
  * plugin was installed, used to decide whether an index covering the site as it
  * is now is complete.
  */
-function installContext(
+export function installContext(
   ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
   opts: PageBuilderOptions
 ): BackfillHost {
+  const nextly = async () => (await import("nextly/runtime")).requireNextly();
   return {
     /*
      * Imported at CALL time, not at module scope, for the reason the preview
@@ -1297,7 +1299,7 @@ function installContext(
      * job wants: a pass that ran too early fails and is re-queued rather than
      * reading a database whose schema is unverified.
      */
-    nextly: async () => (await import("nextly/runtime")).requireNextly(),
+    nextly,
     // The LIVE registry, not the configured list. `class-usage-hook` opens by
     // saying the set of collections is not known when a plugin is wired — which
     // is why the write path registers on the wildcard — because the Schema
@@ -1321,6 +1323,10 @@ function installContext(
       (await resolvedCollectionDraftSplit(resolvedCollectionView(collection)))
         .eligible,
     singles: () => singlesDeclaringBlocks(ctx),
+    // Through the rewrite's own reader, so the index and the rewrite answer
+    // "what does this field group hold" the same way, from the registry a
+    // reload and the admin both write to.
+    fieldGroups: siteFieldGroups(ctx, nextly),
     locales: () =>
       ctx.config.localization?.locales.map(locale => locale.code) ?? [],
     // The SAME bounds the renderer draws under, for the reason the write path
@@ -1641,7 +1647,7 @@ function configuredSingles(ctx: {
  */
 function siteFieldGroups(
   ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
-  nextly: () => Promise<RewriteDirectApi>
+  nextly: () => Promise<Pick<RewriteDirectApi, "fieldGroups">>
 ): () => Promise<(slug: string) => { readonly fields?: unknown } | undefined> {
   const inCode = declaredFieldGroups(ctx);
   return () =>
@@ -1906,6 +1912,21 @@ export const pageBuilder = (
    * the library through.
    */
   let composition: CompositionSetup | undefined;
+
+  /**
+   * What a page action's bindings are judged with, as a save judges them;
+   * nothing until the plugin is installed.
+   */
+  const pageActionBindings = (): BindingJudging | undefined => {
+    if (composition?.bindingShapes === undefined) return undefined;
+    const { bindingShapes, templates, namedQueries, limits } = composition;
+    return {
+      shapesOf: bindingShapes,
+      maxNodes: limits.maxNodes,
+      ...(templates === undefined ? {} : { templates }),
+      ...(namedQueries === undefined ? {} : { namedQueries }),
+    };
+  };
 
   /**
    * What the component-delete rewrite needs from the installed plugin,
@@ -3611,6 +3632,7 @@ export const pageBuilder = (
             readRetired: readRetiredFor,
             templates: templateActions,
             namedQueries: namedQueryDeclarations,
+            bindings: pageActionBindings,
           }),
         // Who holds a path, for the site's one content route: a page, or a
         // collection's entry under its template address. Read as committed,
@@ -3876,6 +3898,7 @@ export const pageBuilder = (
         pageActionsRoute({
           store: componentStoreOf(opts),
           limits: () => opts.limits ?? DEFAULT_LIMITS,
+          bindings: pageActionBindings,
         }),
         definitionActionsRoute({
           store: componentStoreOf(opts),

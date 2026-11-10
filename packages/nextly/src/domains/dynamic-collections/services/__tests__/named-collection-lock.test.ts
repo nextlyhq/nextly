@@ -18,8 +18,9 @@ import { createHash } from "node:crypto";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { SQL } from "drizzle-orm";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
+import { loadDialectTables } from "../../../../database/dialect-tables";
 import {
   DynamicCollectionRegistryService,
   legacyCollectionLockName,
@@ -31,6 +32,12 @@ import {
 function oldReleaseName(slug: string): string {
   return `nextly:collection:${createHash("sha256").update(slug).digest("hex").slice(0, 40)}`;
 }
+
+// The hold reads the registry table of the service's dialect, and the unit
+// setup loads only the run's own dialect.
+beforeAll(async () => {
+  await loadDialectTables("mysql");
+});
 
 describe("a collection's named lock", () => {
   it("is named apart for one slug in two databases", () => {

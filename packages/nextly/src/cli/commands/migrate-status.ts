@@ -631,9 +631,12 @@ export function ledgerRecords(
         ? standing.outcome
         : standing.unresolvedAttempt;
     if (r === undefined) continue;
-    records.push(
-      recordOf(r, standing.state === "applied" && removed.has(r.filename))
-    );
+    // A filename only a file's own ledger rows have can be listed as removed.
+    const fileRemoved =
+      standing.state === "applied" &&
+      r.filename !== null &&
+      removed.has(r.filename);
+    records.push(recordOf(r, fileRemoved));
   }
   return records;
 }

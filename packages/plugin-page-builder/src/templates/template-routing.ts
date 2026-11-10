@@ -62,21 +62,20 @@ export const MANAGE_TEMPLATE_ROUTING_DECLARATION: {
  */
 export { TEMPLATE_ADDRESS_FIELD };
 
-/** The parts of a field rule's context the routing rule reads. */
+/** The part of a field rule's context the routing rule reads. */
 interface RuleCaller {
-  readonly roles?: readonly string[];
   readonly permissions?: readonly string[];
 }
 
 /**
  * The address field's create and update rule: the caller holds the routing
- * permission, as the role screen grants it. A super admin holds every
- * permission, and is admitted as core's gate admits one. Anyone else's value
- * is taken out of the write, so the stored address stays as it was.
+ * permission, as the role screen grants it. Decided by the permission and
+ * never by a role's name, as every shipped rule is: the super-admin role is
+ * granted each permission a plugin declares as it is seeded. Anyone else's
+ * value is taken out of the write, so the stored address stays as it was.
  */
 export function mayManageTemplateRouting(context: RuleCaller): boolean {
   return (
-    context.roles?.includes("super-admin") === true ||
     context.permissions?.includes(MANAGE_TEMPLATE_ROUTING_PERMISSION) === true
   );
 }

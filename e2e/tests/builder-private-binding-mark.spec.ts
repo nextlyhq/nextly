@@ -19,6 +19,7 @@ import { test } from "./support/test";
 
 const PAGES = "/admin/api/collections/pages/entries";
 
+const SPACER = "00000000-0000-4000-8000-0000001000c0";
 const PUBLIC = "00000000-0000-4000-8000-0000001000c1";
 const PRIVATE = "00000000-0000-4000-8000-0000001000c2";
 
@@ -36,6 +37,14 @@ async function seed(api: APIRequestContext, mark: string): Promise<string> {
         formatVersion: 1,
         kind: "page",
         nodes: [
+          // Above the marked heading, so its badge has room on the screen to
+          // sit on the outline's top edge rather than inside its corner.
+          {
+            id: SPACER,
+            type: "core/heading",
+            version: 1,
+            props: { text: "Contact", level: "h1" },
+          },
           {
             id: PUBLIC,
             type: "core/heading",
@@ -54,6 +63,9 @@ async function seed(api: APIRequestContext, mark: string): Promise<string> {
             type: "core/heading",
             version: 1,
             props: { text: "Note", level: "h2" },
+            // Narrower than the page, so the badge's right edge is the
+            // outline's rather than held in by the edge of the screen.
+            styles: { base: { base: { width: "50%" } } },
             bindings: {
               text: {
                 $bind: "internalNote",
