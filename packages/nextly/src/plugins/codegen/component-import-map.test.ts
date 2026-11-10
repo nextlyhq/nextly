@@ -1282,6 +1282,13 @@ describe("parity with the contributions a reader is sent", () => {
             component: "@acme/places/admin#Block",
           },
           {
+            // A default export: a path with no `#`, as the map reads it.
+            id: "acme-places.banner",
+            kind: "block",
+            place: "dashboard",
+            component: "@acme/places/admin/banner",
+          },
+          {
             id: "acme-places.tab",
             kind: "tab",
             place: "settings",
@@ -1322,16 +1329,20 @@ describe("parity with the contributions a reader is sent", () => {
   } as unknown as PluginDefinition;
 
   /**
-   * Every string in what a reader is sent that is shaped as a component path,
-   * `<module>#<export>`, whatever key holds it. Found by its shape rather
-   * than by the keys the collector reads, so a contribution kind that later
-   * names its component under a new key shows up here, and fails the check
-   * below until the collector learns it.
+   * Every string in what a reader is sent that names one of this plugin's
+   * modules, whatever key holds it: each component path here, with an export
+   * after `#` or none for a default export, is under the plugin's own module
+   * prefix, and nothing else it sends is (ids are `acme-places.*`, labels are
+   * words). Found by that rather than by the keys or the path grammar the
+   * collector reads, so a contribution kind that later names its component
+   * under a new key, or in a form the collector skips, shows up here and fails
+   * the check below.
    */
-  const COMPONENT_PATH = /^[^\s#]+#[A-Za-z_$][\w$]*$/;
+  const MODULE_PREFIX = "@acme/places/";
   function sentPaths(sent: unknown): string[] {
-    if (typeof sent === "string")
-      return COMPONENT_PATH.test(sent) ? [sent] : [];
+    if (typeof sent === "string") {
+      return sent.startsWith(MODULE_PREFIX) ? [sent] : [];
+    }
     if (Array.isArray(sent)) return sent.flatMap(sentPaths);
     if (sent === null || typeof sent !== "object") return [];
     return Object.values(sent).flatMap(sentPaths);
@@ -1353,6 +1364,7 @@ describe("parity with the contributions a reader is sent", () => {
       "@acme/places/admin#RowDialog",
       "@acme/places/admin#Section",
       "@acme/places/admin#Tab",
+      "@acme/places/admin/banner",
     ]);
     const collected = new Set(collectAdminComponentPaths(p));
     for (const path of paths) {
@@ -1364,6 +1376,8 @@ describe("parity with the contributions a reader is sent", () => {
     const code = buildComponentImportMap([p]);
     expect(code).toContain('import * as _p0 from "@acme/places/admin";');
     expect(code).toContain('"@acme/places/admin#RowDialog": _p0.RowDialog');
+    // The default export registers under its path as declared.
+    expect(componentImportMapPaths([p])).toContain("@acme/places/admin/banner");
     expect(
       componentImportMapEntries([p]).every(each => each.use === "contribution")
     ).toBe(true);
