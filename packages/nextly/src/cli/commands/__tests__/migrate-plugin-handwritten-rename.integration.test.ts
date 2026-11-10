@@ -242,10 +242,14 @@ describe.each(getConfiguredTestDialects())(
         { id: "c2", label: "second" },
       ]);
 
-      expect((await ledgerFor(plugin)).map(row => row.filename)).toEqual([
+      // Both rows reached the applied state, not merely a recorded attempt:
+      // the ledger's rows alone decide whether the next run skips a module.
+      const ledger = await ledgerFor(plugin);
+      expect(ledger.map(row => row.filename)).toEqual([
         `plugin:rnt/${v1.name}`,
         `plugin:rnt/${rename.name}`,
       ]);
+      expect(ledger.map(row => row.status)).toEqual(["applied", "applied"]);
       const owner = (await owners().read(["rnt__customers"])).find(
         record => (record.elementKind ?? "table") === "table"
       );
@@ -308,10 +312,14 @@ describe.each(getConfiguredTestDialects())(
         { id: "e2", title: "second" },
       ]);
 
-      expect((await ledgerFor(plugin)).map(row => row.filename)).toEqual([
+      // As above: rows that reached the applied state, not attempts in
+      // progress.
+      const ledger = await ledgerFor(plugin);
+      expect(ledger.map(row => row.filename)).toEqual([
         `plugin:rnc/${v1.name}`,
         `plugin:rnc/${rename.name}`,
       ]);
+      expect(ledger.map(row => row.status)).toEqual(["applied", "applied"]);
     });
   }
 );
