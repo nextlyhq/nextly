@@ -4,8 +4,9 @@
  * A step or an assignment says who it names ({@link NamedNotice}): the assignee of a part, or the
  * person accountable for the stage a part left when it was approved or sent back. Each is given a
  * notice in their own list (`workflow-notices`), recorded with the move's transaction, so the
- * notice stands only if the move does. Its occurrence is the part and its new review-state
- * revision, so a move recorded twice gives one notice, and the next move on the part another.
+ * notice stands only if the move does. Its occurrence is the part, its review cycle (the review
+ * state's row, made afresh when a part enters review again after a discard) and its new revision,
+ * so a move recorded twice gives one notice, and the next move on the part another.
  *
  * Nobody is told of their own act (a key's act is its owner's), nor where the person's account is
  * gone: a notice belongs to a person who exists, and writing one for an account that does not
@@ -36,7 +37,10 @@ import { registeredNoticeKind, type NoticeKind } from "../notices/notice-kinds";
 import type { NoticesService } from "../notices/notices-service";
 import { VersionsRepository } from "../versions/versions-repository";
 
-import type { ReviewDocument } from "./review-state-repository";
+import {
+  readReviewStateId,
+  type ReviewDocument,
+} from "./review-state-repository";
 import {
   documentSubjectId,
   WORKFLOW_APPROVED_NOTICE,
@@ -286,13 +290,20 @@ async function tellOne(
   telling: NoticeTelling,
   notice: NamedNotice
 ): Promise<void> {
+  // The review cycle the move is in: the part's review-state row, made afresh each cycle (a
+  // discard removes it, and the next entry into review starts again at revision 1), so its id
+  // tells this cycle's moves from an earlier cycle's at the same revision.
+  const cycle = await readReviewStateId(tx, {
+    ...notice.document,
+    part: notice.part,
+  });
   const recorded = await telling.service.record(
     {
       kind: KIND_OF[notice.trigger],
       userId: notice.userId,
       subjectId: documentSubjectId(notice.document),
-      // The part and its new revision: each part's move is its own occurrence.
-      occurrence: JSON.stringify([notice.part, notice.revision]),
+      // The part, its review cycle and its new revision: each part's move is its own occurrence.
+      occurrence: JSON.stringify([notice.part, cycle, notice.revision]),
       data: await dataOf(tx, telling, notice),
     },
     tx

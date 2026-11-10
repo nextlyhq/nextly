@@ -214,6 +214,47 @@ async function postInLegal(): Promise<string> {
 describe.each(getConfiguredTestDialects())(
   "workflow notices to named people (%s)",
   dialect => {
+    it("tells a person again when a part enters review again after its draft was discarded", async () => {
+      await boot(dialect);
+      const dave = await person(app(), "dave", [["update", "posts"]]);
+      await person(app(), "bob", [["sign-off", "posts"]]);
+      const post = await entry(app(), "posts");
+      await saveIn(app(), "posts", post, "en", { status: "published" });
+      const draftInReviewFor = async (title: string) => {
+        await saveIn(app(), "posts", post, "en", { title });
+        await seedState(app(), partOf("posts", post, "en"), "legal", {
+          enteredBy: "alice",
+          definitionHash: EDITORIAL,
+        });
+        await assign("posts", post, "en", { kind: "user", id: "bob" }, dave);
+      };
+      await draftInReviewFor("Pending");
+
+      // The draft discarded: its review closes, and the next draft's review starts afresh.
+      const handler = app().getService(
+        "collectionsHandler"
+      ) as CollectionsHandler;
+      expect(
+        await handler.discardWorkingDraftCounted({
+          collectionName: "posts",
+          entryId: post,
+          locale: "en",
+          // A discard names the version it read or says it overwrites; this one read none.
+          version: { _overwrite: true },
+        })
+      ).toBe(1);
+      expect(await stateOf(app(), partOf("posts", post, "en"))).toBeNull();
+      await draftInReviewFor("Pending again");
+
+      // Each cycle's assignment is its own: the second is told, though its revision repeats.
+      expect(
+        (await workflowNotices()).filter(
+          notice =>
+            notice.userId === "bob" && notice.kind === "workflows.assigned"
+        )
+      ).toHaveLength(2);
+    });
+
     it("tells a person a part was assigned to them, with its email, and the email names the document", async () => {
       await boot(dialect);
       const dave = await person(app(), "dave", [["update", "posts"]]);
