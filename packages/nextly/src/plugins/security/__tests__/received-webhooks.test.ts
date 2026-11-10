@@ -119,12 +119,14 @@ describe("claimDelivery's refusals", () => {
 
     const real = verifiedAnswer();
     const long = "p".repeat(192);
-    for (const provider of ["", long, "bad\uD800"]) {
+    // NUL is well-formed Unicode, but PostgreSQL text cannot hold it: refused
+    // on every dialect, so a claim does not fail on one alone.
+    for (const provider of ["", long, "bad\uD800", "nul\u0000name"]) {
       expect(
         (await refusal(webhooks.claimDelivery(real, { provider }))).code
       ).toBe("INVALID_INPUT");
     }
-    for (const id of ["", long, "bad\uDC00"]) {
+    for (const id of ["", long, "bad\uDC00", "evt\u0000_1"]) {
       expect(
         (await refusal(webhooks.claimDelivery(real, { provider: "acme", id })))
           .code

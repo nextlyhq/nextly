@@ -48,7 +48,7 @@ import {
   type VerifiedFacts,
 } from "./inbound-webhooks";
 import { pluginWriter } from "./plugin-write";
-import { isWellFormed } from "./well-formed";
+import { isStorableText } from "./well-formed";
 
 /** What claiming needs from the database adapter. */
 export type ReceivedWebhooksAdapter = Pick<
@@ -250,7 +250,7 @@ function checkName(name: string, value: unknown): string {
     typeof value !== "string" ||
     value.length === 0 ||
     value.length > MAX_NAME_LENGTH ||
-    !isWellFormed(value)
+    !isStorableText(value)
   ) {
     throw NextlyError.invalidInput({
       message: `${name} must be a well-formed string of 1 to ${MAX_NAME_LENGTH} characters.`,
@@ -348,7 +348,7 @@ export function createPluginReceivedWebhooks(
 
   return {
     verify(request, verifyOptions) {
-      return verifyWebhookRequest(request, verifyOptions, now());
+      return verifyWebhookRequest(request, verifyOptions, now);
     },
 
     async claimDelivery(verified, claimOptions: ClaimDeliveryOptions) {

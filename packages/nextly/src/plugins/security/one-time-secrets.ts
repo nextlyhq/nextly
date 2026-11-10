@@ -51,7 +51,7 @@ import type { PluginTransaction } from "../database/plugin-database";
 import { linkedTransaction } from "../database/plugin-transaction-link";
 
 import { pluginWriter } from "./plugin-write";
-import { isWellFormed } from "./well-formed";
+import { isStorableText } from "./well-formed";
 
 /** @experimental A secret's data: stored in clear, at most 1 KB serialised. */
 export type SecretData = Record<string, string | number | boolean | null>;
@@ -736,10 +736,10 @@ function checkSubject(subject: string): string {
     typeof subject === "string" &&
     subject.length > 0 &&
     subject.length <= BOUNDS.subjectLength &&
-    !subject.includes("\u0000") &&
-    // Lone surrogates all encode to one replacement character, so two such
-    // subjects would share a key and reach each other's secrets.
-    isWellFormed(subject)
+    // No NUL, which PostgreSQL cannot store, and no lone surrogates, which all
+    // encode to one replacement character, so two such subjects would share a
+    // key and reach each other's secrets.
+    isStorableText(subject)
   ) {
     return subject;
   }

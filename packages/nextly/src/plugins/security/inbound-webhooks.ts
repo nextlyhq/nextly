@@ -399,13 +399,15 @@ async function readBounded(
 }
 
 /**
- * Verify `request` at `now`, reading a copy of its body no longer than the
- * options allow: what `ctx.security.webhooks.verify` does.
+ * Verify `request`, reading a copy of its body no longer than the options
+ * allow: what `ctx.security.webhooks.verify` does. The clock is read once the
+ * body is whole, so a body that trickles in is judged by when it arrived, not
+ * by when its request began.
  */
 export async function verifyWebhookRequest(
   request: Request,
   options: VerifyWebhookOptions,
-  now: Date
+  now: () => Date
 ): Promise<WebhookVerification> {
   const maxBytes = finiteAtLeast(
     options.maxBytes ?? DEFAULT_MAX_BYTES,
@@ -417,6 +419,6 @@ export async function verifyWebhookRequest(
   return verifyWebhookDelivery(
     { headers: request.headers, bytes },
     options,
-    now
+    now()
   );
 }
