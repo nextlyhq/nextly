@@ -18,8 +18,13 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../errors/nextly-error";
+import type { FieldDefinition } from "../../schemas/dynamic-collections";
 
 import { queryLiveColumnTypes } from "./pipeline/live-column-types";
+import {
+  getColumnDescriptor,
+  type ColumnOrigin,
+} from "./services/field-column-descriptor";
 
 /** Where a comment that starts at `i` ends (the index after it), or -1 when none starts there. */
 function commentEnd(sql: string, i: number): number {
@@ -167,7 +172,7 @@ export function renameTargetTakenMessage({ move, table }: TakenMove): string {
  *
  * @throws NextlyError `VALIDATION_ERROR` with one `RENAME_TARGET_TAKEN` entry per refused move
  */
-export async function refuseMovesOntoTakenColumns(
+async function refuseMovesOntoTakenColumns(
   adapter: DrizzleAdapter,
   moves: readonly ColumnMove[],
   logContext: Record<string, unknown>
@@ -202,4 +207,85 @@ export async function refuseMovesOntoTakenColumns(
       moves: taken,
     },
   });
+}
+
+/**
+ * A schema change as the rename check reads it: the fields before and after, the entity's main
+ * table (a translated field's values sit in `<mainTable>_locales`), and whether the entity keeps
+ * translatable values per language before and after.
+ */
+export interface RenamedFieldChange {
+  previousFields: FieldDefinition[];
+  fields: FieldDefinition[];
+  mainTable: string;
+  wasLocalized: boolean;
+  isLocalized: boolean;
+  dialect: SupportedDialect;
+  /** What built the entity's tables, which decides the column a field names. */
+  builtBy: ColumnOrigin;
+}
+
+/**
+ * The move a schema change makes of the field it renames, or `null` when it renames none or the
+ * rename keeps the column. The renamed field is the one the main table's rule
+ * (`detectFieldRename`) finds on the whole field lists, as every Builder road finds it. Its values
+ * move from the table holding it before the change to the one holding it after: the companion for
+ * a translated field, the main table otherwise (`isFieldLocalized`). The columns are the ones each
+ * spelling names (`getColumnDescriptor`), which a companion column mirrors.
+ *
+ * A dialog asks this of the field lists rather than of the renames it was answered with: when the
+ * new column is already there, the change is never offered as a rename at all, only as the old
+ * column dropped beside a field kept on the column that is there.
+ */
+async function renamedFieldMove(
+  change: RenamedFieldChange
+): Promise<ColumnMove | null> {
+  const { DynamicCollectionSchemaService } = await import(
+    "../dynamic-collections/services/dynamic-collection-schema-service"
+  );
+  const rename = new DynamicCollectionSchemaService(
+    undefined,
+    change.dialect
+  ).detectFieldRename(change.previousFields, change.fields);
+  if (!rename) return null;
+  const fromColumn = getColumnDescriptor(
+    rename.from,
+    change.dialect,
+    change.builtBy
+  )?.name;
+  const toColumn = getColumnDescriptor(
+    rename.to,
+    change.dialect,
+    change.builtBy
+  )?.name;
+  if (!fromColumn || !toColumn || fromColumn === toColumn) return null;
+  const { isFieldLocalized } = await import("../i18n/classify-fields");
+  const companionTable = `${change.mainTable}_locales`;
+  return {
+    field: rename.to.name,
+    fromTable: isFieldLocalized(rename.from, change.wasLocalized)
+      ? companionTable
+      : change.mainTable,
+    fromColumn,
+    toTable: isFieldLocalized(rename.to, change.isLocalized)
+      ? companionTable
+      : change.mainTable,
+    toColumn,
+  };
+}
+
+/**
+ * Refuse the field a schema change renames when the column it moves to is already there, before
+ * anything of the change is written: the one call every road that applies a change makes.
+ *
+ * @throws NextlyError `VALIDATION_ERROR` with a `RENAME_TARGET_TAKEN` entry naming the table and
+ *   both columns
+ */
+export async function refuseRenamedFieldOntoTakenColumn(
+  adapter: DrizzleAdapter,
+  change: RenamedFieldChange,
+  logContext: Record<string, unknown>
+): Promise<void> {
+  const move = await renamedFieldMove(change);
+  if (move) await refuseMovesOntoTakenColumns(adapter, [move], logContext);
 }

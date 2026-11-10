@@ -89,6 +89,7 @@ import { RegexRenameDetector } from "../pipeline/rename-detector";
 import type { Resolution } from "../pipeline/resolution/types";
 import { recoverInterruptedSqliteRebuilds } from "../pipeline/sqlite-rebuild-recovery";
 import type { DesiredCollection, DesiredSchema } from "../pipeline/types";
+import { refuseRenamedFieldOntoTakenColumn } from "../rename-target";
 
 import { DrizzleStatementExecutor } from "./drizzle-statement-executor";
 import { toSnakeCase } from "./field-column-descriptor";
@@ -621,6 +622,23 @@ async function applyHoldingSchemaLock(
       tableName,
     });
   }
+
+  // A field renamed onto a column that is already there is refused before anything changes. In
+  // the dialog such a change is never offered as a rename, only as the old column dropped beside
+  // a field kept on the column that is there, so it is found from the field lists.
+  await refuseRenamedFieldOntoTakenColumn(
+    adapter,
+    {
+      previousFields: (collection.fields ?? []) as unknown as FieldDefinition[],
+      fields,
+      mainTable: tableName,
+      wasLocalized,
+      isLocalized,
+      dialect,
+      builtBy: "collection",
+    },
+    { collection: slug }
+  );
 
   // The FULL desired schema (collections, singles and field groups), so drizzle-kit sees every
   // managed table: without the others, tables of other entity types in the live database are
