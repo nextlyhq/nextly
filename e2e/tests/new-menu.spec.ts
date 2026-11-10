@@ -1,14 +1,15 @@
 /**
- * The dashboard header's New split button on a phone, in a browser: with a type whose name is
- * far longer than a 390 px header, the button stays inside the header, its label cut short and
- * its caret whole and on screen, and opening its menu neither runs off the screen nor scrolls
- * the page sideways.
+ * The "+ New" menu in a browser: one flat list of every type the reader may
+ * create, with a search and no headings; and on a 390 px phone, with a type
+ * whose name is far longer than the screen, the button stays on screen and
+ * the menu opens inside it without scrolling the page sideways.
  *
- * The long name is the collections list's answer rewritten in flight, every collection's
- * singular label made long, so whichever type the button leads with has it. The label is checked
- * to be cut short, so a run whose rewrite never reached the button cannot pass as one that fits.
+ * The long name is the collections list's answer rewritten in flight, every
+ * collection's singular label made long. The menu's options are checked to
+ * carry it, so a run whose rewrite never reached the menu cannot pass as one
+ * that fits.
  *
- * @module tests/dashboard-new-button.spec
+ * @module tests/new-menu.spec
  */
 import { expect, type Page, type Route } from "@playwright/test";
 
@@ -54,40 +55,49 @@ async function sideways(page: Page): Promise<{ room: number; at: number }> {
   });
 }
 
-test("on a 390 px phone, a long type name is cut short, the caret stays on screen, and the menu widens nothing", async ({
+test("lists every creatable type once, flat, with a search that narrows it", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  const trigger = page.getByTestId("new-menu-trigger");
+  await expect(trigger).toHaveAccessibleName("New");
+  await trigger.click();
+  const menu = page.getByRole("dialog", { name: "Create" });
+  await expect(menu).toBeVisible();
+  const search = menu.getByRole("combobox", { name: "Search what to create" });
+  await expect(search).toBeFocused();
+  const options = menu.getByRole("option");
+  const all = await options.allTextContents();
+  expect(all.length).toBeGreaterThan(1);
+  expect(new Set(all).size).toBe(all.length);
+  // No group headings and no Recent section: one list.
+  await expect(menu.locator("[cmdk-group-heading]")).toHaveCount(0);
+  await search.fill(all[0]!.slice(0, 3));
+  await expect.poll(() => options.count()).toBeLessThanOrEqual(all.length);
+  for (const text of await options.allTextContents()) {
+    expect(text.toLowerCase()).toContain(all[0]!.slice(0, 3).toLowerCase());
+  }
+});
+
+test("on a 390 px phone, the button stays on screen and the menu widens nothing, even with a long type name", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await lengthenTypeNames(page);
   await gotoAdmin(page, "/");
 
-  const label = page.getByTestId("dashboard-new-primary-label");
-  const caret = page.getByTestId("dashboard-new-more");
-  await expect(caret).toBeVisible();
-  // The control: the long name reached the button, and the button cut it short.
-  await expect(page.getByTestId("dashboard-new-primary")).toHaveAttribute(
-    "title",
-    `New ${LONG_NAME}`
-  );
-  expect(
-    await label.evaluate(element => element.scrollWidth > element.clientWidth)
-  ).toBe(true);
-
-  // Inside the header, and the header inside the screen.
-  const header = await page.getByTestId("dashboard-header").boundingBox();
-  const caretBox = await caret.boundingBox();
-  expect(header).not.toBeNull();
-  expect(caretBox).not.toBeNull();
-  expect(caretBox!.x + caretBox!.width).toBeLessThanOrEqual(
-    header!.x + header!.width + 0.5
-  );
-  expect(caretBox!.x + caretBox!.width).toBeLessThanOrEqual(390);
+  const trigger = page.getByTestId("new-menu-trigger");
+  await expect(trigger).toBeVisible();
+  const box = await trigger.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390);
   expect(await sideways(page)).toEqual({ room: 0, at: 0 });
 
-  // The menu opens inside the screen, and the page has still nowhere to scroll sideways.
-  await caret.click();
-  const menu = page.locator('[data-slot="popover-content"]');
+  await trigger.click();
+  const menu = page.getByRole("dialog", { name: "Create" });
   await expect(menu).toBeVisible();
+  // The control: the long name reached the menu.
+  await expect(menu.getByRole("option").first()).toHaveText(LONG_NAME);
   const menuBox = await menu.boundingBox();
   expect(menuBox).not.toBeNull();
   expect(menuBox!.x).toBeGreaterThanOrEqual(0);
