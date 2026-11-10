@@ -5330,6 +5330,21 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The top-level paths of an assembled going-live document that this write's
+   * caller did not name: what goes live under them is the row's own content,
+   * which the whole-number floor leaves to the row, as the gate judged the
+   * document before this write. The caller's own keys — the patch's, the
+   * component and relation values lifted out of it, the write locale's split
+   * values — are absent, so a value under one is judged like any write's.
+   */
+  private rowOwnedPathsOf(
+    document: Record<string, unknown>,
+    callerNamed: ReadonlySet<string>
+  ): Set<string> {
+    return new Set(Object.keys(document).filter(key => !callerNamed.has(key)));
+  }
+
+  /**
    * The document a publish puts live when no working draft is promoted into
    * it: the stored row, the write locale's translations, and the caller's
    * fields on top, in the logical shape the validator reads.
@@ -19544,26 +19559,28 @@ export class CollectionMutationService extends BaseService {
       // explicit override bypasses.
       // With the field groups this entry stores inline, by their own rules,
       // and every denied value inside a container kept as the row holds it.
-      const { storedPaths, storedValues } = await this.keepDeniedFieldsAtStored({
-        data: finalData,
-        storedId: String(existingEntry.id),
-        collectionName: params.collectionName,
-        stored: await this.storedForCarryForward({
-          row: existingEntry,
-          fields,
-          tableName,
+      const { storedPaths, storedValues } = await this.keepDeniedFieldsAtStored(
+        {
+          data: finalData,
+          storedId: String(existingEntry.id),
           collectionName: params.collectionName,
-          entryId,
-          // A transactional update writes the default language.
-          tx,
-          overrideAccess: params.overrideAccess,
-        }),
-        tableName,
-        fields,
-        params,
-        // Still inside the caller-owned transaction.
-        executor: tx.getDrizzle(),
-      });
+          stored: await this.storedForCarryForward({
+            row: existingEntry,
+            fields,
+            tableName,
+            collectionName: params.collectionName,
+            entryId,
+            // A transactional update writes the default language.
+            tx,
+            overrideAccess: params.overrideAccess,
+          }),
+          tableName,
+          fields,
+          params,
+          // Still inside the caller-owned transaction.
+          executor: tx.getDrizzle(),
+        }
+      );
 
       // Field-level beforeValidate hooks transform values ahead of the
       // validation gate (functions resolved via the field-level registry).
@@ -19930,34 +19947,48 @@ export class CollectionMutationService extends BaseService {
         (localizedUpdate?.hasStatus !== true ||
           previousCompanionStatus === "published");
       if (publishes && !alreadyLive) {
+        const goingLive = await this.storedDocumentGoingLive({
+          row: existingEntry,
+          // The locale split moved the translatable values out of the patch.
+          patch: {
+            ...finalData,
+            ...localizedUpdate?.localizedFieldValues,
+          },
+          fields,
+          collectionName: params.collectionName,
+          entryId,
+          locale: this.localization?.defaultLocale,
+          // Read for this entry alone, under the lock taken above.
+          tx,
+          relations: {
+            tableName,
+            manyToManyFields,
+            componentFieldData,
+            manyToManyData,
+            componentSchemas: null,
+          },
+        });
         await this.assertEntryValid({
-          data: await this.storedDocumentGoingLive({
-            row: existingEntry,
-            // The locale split moved the translatable values out of the patch.
-            patch: {
-              ...finalData,
-              ...localizedUpdate?.localizedFieldValues,
-            },
-            fields,
-            collectionName: params.collectionName,
-            entryId,
-            locale: this.localization?.defaultLocale,
-            // Read for this entry alone, under the lock taken above.
-            tx,
-            relations: {
-              tableName,
-              manyToManyFields,
-              componentFieldData,
-              manyToManyData,
-              componentSchemas: null,
-            },
-          }),
+          data: goingLive,
           fields,
           collectionName: params.collectionName,
           mode: "update",
           user: params.user,
           reader: params,
-          assembledFromStorage: true,
+          // The document mixes the row's own content with this write's: only
+          // what the caller named — the patch, the component and relation
+          // values lifted out of it, the write locale's split values — is
+          // this write's to judge; everything else it carries is the row's,
+          // and a legacy stored fraction under it rides as stored.
+          storedProvenancePaths: this.rowOwnedPathsOf(
+            goingLive,
+            new Set([
+              ...Object.keys(finalData),
+              ...Object.keys(localizedUpdate?.localizedFieldValues ?? {}),
+              ...Object.keys(componentFieldData),
+              ...Object.keys(manyToManyData),
+            ])
+          ),
           id: entryId,
           tx,
           goesLive: true,
@@ -20357,11 +20388,24 @@ export class CollectionMutationService extends BaseService {
       // Component rows are live content like the junction rows above, so a
       // held edit keeps them in the draft (stored above) rather than here.
       if (!storeAsWorkingDraft) {
-        await this.saveComponentFieldDataInTx(tx, {
+        // Which component values a publish carries are the row's own: only
+        // those a denied rule kept from storage ride exempt from the
+        // whole-number floor, as the gate judged the assembled document. The
+        // caller's own are judged like any write's, for the entry gate judged
+        // the document that goes live, not this write's patch alone.
+        const callerComponents: Record<string, unknown> = {};
+        const restoredComponents: Record<string, unknown> = {};
+        for (const name of Object.keys(componentFieldData)) {
+          if (publishes && !alreadyLive && storedPaths.has(name)) {
+            restoredComponents[name] = componentFieldData[name];
+          } else {
+            callerComponents[name] = componentFieldData[name];
+          }
+        }
+        const componentSave = {
           parentId: entryId,
           tableName,
           fields,
-          data: componentFieldData,
           user: params.user,
           access: this.fieldGroupAccess(params),
           write: this.validationWrite(
@@ -20376,14 +20420,20 @@ export class CollectionMutationService extends BaseService {
               localizedUpdate
             )
           ),
-          // A write that promotes or publishes carries the row's own content
-          // in its component values — the merged document the gate judged
-          // assembled — so the instances' own pass leaves a legacy stored
-          // fraction to the row, as the gate did.
-          ...(publishes && !alreadyLive
-            ? { assembledFromStorage: true }
-            : {}),
+        };
+        await this.saveComponentFieldDataInTx(tx, {
+          ...componentSave,
+          data: callerComponents,
         });
+        if (Object.keys(restoredComponents).length > 0) {
+          await this.saveComponentFieldDataInTx(tx, {
+            ...componentSave,
+            data: restoredComponents,
+            // The row's own content, carried by the assembled document the
+            // gate judged: a legacy stored fraction under it is the row's.
+            assembledFromStorage: true,
+          });
+        }
         // Which media items the entry uses now, from what this update stored.
         // A held edit stored nothing, so it changes nothing here either.
         await this.recordEntryMediaUsage(tx, {

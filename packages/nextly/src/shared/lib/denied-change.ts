@@ -286,6 +286,18 @@ export function storedProvenance(
   return { paths, values };
 }
 
+/**
+ * A value recorded as the row's own, for the hook walk to compare the write
+ * against: DETACHED, because the same object was assigned into the write's
+ * payload. A `beforeChange` hook mutates a whole-number child in place, so a
+ * snapshot sharing the payload's references would change with it, and the
+ * comparison would report the container unchanged — the very change the walk
+ * exists to judge.
+ */
+function storedSnapshot(value: unknown): unknown {
+  return detachData(value);
+}
+
 /** One stored-provenance walk: {@link storedProvenance} over one level. */
 function storedPaths(
   before: unknown,
@@ -312,7 +324,7 @@ function storedListPaths(
   if (!Array.isArray(after)) {
     if (prefix !== "") {
       paths.add(prefix);
-      values.set(prefix, before);
+      values.set(prefix, storedSnapshot(before));
     }
     return;
   }
@@ -322,7 +334,7 @@ function storedListPaths(
     const paired = pairing(index);
     if (paired === undefined) {
       paths.add(at);
-      values.set(at, row);
+      values.set(at, storedSnapshot(row));
       return;
     }
     storedPaths(row, after[paired], at, paths, values);
@@ -341,7 +353,7 @@ function storedRecordPaths(
   if (!isRecord(after)) {
     if (prefix !== "") {
       paths.add(prefix);
-      values.set(prefix, before);
+      values.set(prefix, storedSnapshot(before));
     }
     return;
   }
@@ -349,7 +361,7 @@ function storedRecordPaths(
     const path = prefix ? `${prefix}.${key}` : key;
     if (!hasOwn(after, key)) {
       paths.add(path);
-      values.set(path, before[key]);
+      values.set(path, storedSnapshot(before[key]));
       continue;
     }
     storedPaths(before[key], after[key], path, paths, values);
