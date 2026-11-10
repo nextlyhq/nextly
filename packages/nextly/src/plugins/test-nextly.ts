@@ -303,6 +303,12 @@ export interface CreateTestNextlyOptions {
   /** Content-localization config (i18n). Normalized and wired so localized reads resolve. */
   localization?: LocalizationConfig;
   /**
+   * The config's `db` block, for a test of where the Schema Builder's
+   * definition file and migrations go: both paths resolve below `basePath`.
+   * Absent, the defaults (`./ui-schema.json`, `./migrations`).
+   */
+  db?: { migrationsDir: string; uiSchemaFile: string };
+  /**
    * Keep every translatable field per language from the start, as a config's
    * `experimental.perLanguageStorage` does. Off by default.
    *
@@ -888,6 +894,7 @@ async function bootServices(
         : {}),
       singles: opts.singles,
       fieldGroups: opts.fieldGroups,
+      ...(opts.db === undefined ? {} : { db: opts.db }),
       localization: opts.localization
         ? normalizeLocalization(opts.localization)
         : undefined,

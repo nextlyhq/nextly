@@ -337,6 +337,17 @@ export type {
 } from "nextly";
 
 /**
+ * @experimental The settings a plugin field type declares in
+ * `contributes.fieldTypes[].settings`: drawn in the Schema Builder's settings
+ * panel for every field of the type and stored in its `pluginOptions`.
+ * Experimental with the settings panel they are drawn in.
+ */
+export type {
+  PluginFieldTypeSetting,
+  PluginFieldTypeSettingBase,
+} from "nextly/field-catalog";
+
+/**
  * The runtime surfaces a plugin receives when it declares them, and the
  * declarations that ask for them.
  * @experimental `PluginSettingsApi` (`ctx.settings`), `PluginCacheApi`

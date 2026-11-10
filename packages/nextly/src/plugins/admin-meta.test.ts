@@ -80,6 +80,38 @@ describe("buildPluginAdminMeta", () => {
     });
   });
 
+  it("serves a field type's declared settings as declared, for the settings panel", () => {
+    const settings = [
+      { key: "max", label: "Most stars", control: "number" },
+      {
+        key: "shape",
+        label: "Shape",
+        control: "select",
+        tab: "display",
+        options: [{ label: "Star", value: "star" }],
+      },
+    ];
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            fieldTypes: [
+              {
+                type: "rating",
+                storage: "number",
+                component: "@acme/p/admin#Rating",
+                settings,
+              },
+            ],
+          },
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0].fieldTypes?.[0].settings).toEqual(settings);
+  });
+
   it("omits presentation and surfaces keys a field type does not declare", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([

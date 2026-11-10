@@ -23,12 +23,21 @@ import {
 // The installed plugins the panel sees, so a test can contribute a field type
 // the way /admin-meta does. Empty unless a test sets it.
 const branding = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
+// Whether the workspace metadata (the plugin list) has answered: settled by
+// default, so a missing plugin is a fact unless a test says otherwise.
+const brandingStatus = vi.hoisted(() => ({
+  current: { isPending: false, isUnavailable: false, retry: () => {} },
+}));
 
 vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
   ...(await importOriginal<
     typeof import("@admin/context/providers/BrandingProvider")
   >()),
   useBranding: () => branding.current,
+  useBrandingStatus: () => ({
+    ...brandingStatus.current,
+    isBrandingUnavailable: false,
+  }),
 }));
 
 // What the link and field-group editors list to choose from: two of each, so
@@ -447,7 +456,401 @@ describe("FieldSettingsPanel", () => {
     expect(onChange.mock.lastCall?.[0]).not.toHaveProperty("blocks");
   });
 
-  it("a test plugin's field type", () => {
+  it("a test plugin's field type", async () => {
+    const user = userEvent.setup();
+    branding.current = {
+      plugins: [
+        {
+          name: "rating-plugin",
+          enabled: true,
+          fieldTypes: [
+            {
+              type: "star-rating",
+              component: "rating-plugin/StarRating",
+              storage: "number",
+              label: "Star rating",
+              settings: [
+                { key: "max", label: "Most stars", control: "number" },
+                {
+                  key: "caption",
+                  label: "Caption",
+                  control: "text",
+                  help: "Shown under the stars.",
+                },
+                {
+                  key: "shape",
+                  label: "Shape",
+                  control: "select",
+                  tab: "display",
+                  options: [
+                    { label: "Star", value: "star" },
+                    { label: "Heart", value: "heart" },
+                  ],
+                },
+                {
+                  key: "half",
+                  label: "Half stars",
+                  control: "boolean",
+                  tab: "advanced",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    try {
+      let current: BuilderField = {
+        id: "f-rating",
+        name: "rating",
+        label: "Rating",
+        type: "star-rating",
+        pluginOptions: { shape: "star" },
+      };
+      render(
+        <Host
+          initial={current}
+          onChange={next => {
+            current = next;
+          }}
+        />
+      );
+
+      // The settings the type declares for General come first, as its own.
+      const general = screen.getByRole("tabpanel");
+      const own = within(general).getByRole("group", {
+        name: "Star rating settings",
+      });
+      expect(
+        own.compareDocumentPosition(within(general).getByLabelText(/^Label$/)) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+      expect(screen.queryByText(/has no settings of its own/)).toBeNull();
+      expect(within(own).getByLabelText("Caption")).toHaveAccessibleDescription(
+        "Shown under the stars."
+      );
+
+      // Each one is kept in the field's own options, under its key.
+      await user.type(within(own).getByLabelText("Most stars"), "5");
+      await user.type(within(own).getByLabelText("Caption"), "Rate it");
+      expect(current.pluginOptions).toMatchObject({
+        max: 5,
+        caption: "Rate it",
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Display" }));
+      await user.click(screen.getByRole("combobox", { name: "Shape" }));
+      await user.click(await screen.findByRole("option", { name: "Heart" }));
+      expect(current.pluginOptions?.shape).toBe("heart");
+
+      await user.click(screen.getByRole("tab", { name: "Advanced" }));
+      await user.click(screen.getByRole("switch", { name: "Half stars" }));
+      expect(current.pluginOptions?.half).toBe(true);
+
+      // Emptying a box removes the setting rather than storing an empty value.
+      await user.click(screen.getByRole("tab", { name: "General" }));
+      await user.clear(screen.getByLabelText("Caption"));
+      expect(current.pluginOptions).not.toHaveProperty("caption");
+    } finally {
+      branding.current = {};
+    }
+  });
+
+  it("keeps a declared number's sign and decimal point while it is typed", async () => {
+    const user = userEvent.setup();
+    branding.current = {
+      plugins: [
+        {
+          name: "rating-plugin",
+          enabled: true,
+          fieldTypes: [
+            {
+              type: "star-rating",
+              component: "rating-plugin/StarRating",
+              storage: "number",
+              label: "Star rating",
+              settings: [{ key: "offset", label: "Offset", control: "number" }],
+            },
+          ],
+        },
+      ],
+    };
+    try {
+      let current: BuilderField = {
+        id: "f-rating",
+        name: "rating",
+        label: "Rating",
+        type: "star-rating",
+      };
+      render(
+        <Host
+          initial={current}
+          onChange={next => {
+            current = next;
+          }}
+        />
+      );
+      const offset = screen.getByLabelText("Offset");
+      await user.type(offset, "-5");
+      expect(current.pluginOptions?.offset).toBe(-5);
+      await user.clear(offset);
+      expect(current.pluginOptions?.offset).toBeUndefined();
+      await user.type(offset, "1.5");
+      expect(current.pluginOptions?.offset).toBe(1.5);
+      expect(offset).toHaveValue("1.5");
+    } finally {
+      branding.current = {};
+    }
+  });
+
+  describe("a plugin type's declared settings, edited and undone", () => {
+    const withSettings = (settings: unknown[]) => ({
+      plugins: [
+        {
+          name: "rating-plugin",
+          enabled: true,
+          fieldTypes: [
+            {
+              type: "star-rating",
+              component: "rating-plugin/StarRating",
+              storage: "number",
+              label: "Star rating",
+              settings,
+            },
+          ],
+        },
+      ],
+    });
+    const rating: BuilderField = {
+      id: "f-rating",
+      name: "rating",
+      label: "Rating",
+      type: "star-rating",
+    };
+
+    it("leaves no empty options behind when the only setting is cleared", async () => {
+      const user = userEvent.setup();
+      branding.current = withSettings([
+        { key: "caption", label: "Caption", control: "text" },
+      ]);
+      try {
+        let current = rating;
+        render(
+          <Host
+            initial={rating}
+            onChange={next => {
+              current = next;
+            }}
+          />
+        );
+        const caption = screen.getByLabelText("Caption");
+        await user.type(caption, "x");
+        await user.clear(caption);
+        expect(current).not.toHaveProperty("pluginOptions");
+        expect(countDirtyFields([rating], [current])).toBe(0);
+      } finally {
+        branding.current = {};
+      }
+    });
+
+    it("clears a chosen option back to none", async () => {
+      const user = userEvent.setup();
+      branding.current = withSettings([
+        {
+          key: "shape",
+          label: "Shape",
+          control: "select",
+          options: [
+            { label: "Star", value: "star" },
+            { label: "Heart", value: "heart" },
+          ],
+        },
+      ]);
+      try {
+        let current: BuilderField = {
+          ...rating,
+          pluginOptions: { shape: "heart" },
+        };
+        render(
+          <Host
+            initial={current}
+            onChange={next => {
+              current = next;
+            }}
+          />
+        );
+        await user.click(screen.getByRole("button", { name: "Clear Shape" }));
+        expect(current).not.toHaveProperty("pluginOptions");
+        expect(
+          screen.queryByRole("button", { name: "Clear Shape" })
+        ).toBeNull();
+      } finally {
+        branding.current = {};
+      }
+    });
+
+    it("takes a switched setting back to unset, not only to off", async () => {
+      const user = userEvent.setup();
+      branding.current = withSettings([
+        { key: "half", label: "Half stars", control: "boolean" },
+      ]);
+      try {
+        let current = rating;
+        render(
+          <Host
+            initial={rating}
+            onChange={next => {
+              current = next;
+            }}
+          />
+        );
+        expect(
+          screen.queryByRole("button", { name: "Clear Half stars" })
+        ).toBeNull();
+        const half = screen.getByRole("switch", { name: "Half stars" });
+        await user.click(half);
+        await user.click(half);
+        // Off is a value the plugin can tell from never set.
+        expect(current.pluginOptions?.half).toBe(false);
+        await user.click(
+          screen.getByRole("button", { name: "Clear Half stars" })
+        );
+        expect(current).not.toHaveProperty("pluginOptions");
+        expect(countDirtyFields([rating], [current])).toBe(0);
+      } finally {
+        branding.current = {};
+      }
+    });
+
+    it("shows the next field's own number when the host switches fields without remounting", async () => {
+      const user = userEvent.setup();
+      branding.current = withSettings([
+        { key: "max", label: "Most stars", control: "number" },
+      ]);
+      try {
+        const first: BuilderField = {
+          ...rating,
+          id: "f-a",
+          pluginOptions: { max: 5 },
+        };
+        const second: BuilderField = {
+          ...rating,
+          id: "f-b",
+          pluginOptions: { max: 9 },
+        };
+        const onChange = vi.fn();
+        // One panel instance given another field, as a host that does not key
+        // the panel by field would do.
+        const view = render(
+          <FieldSettingsPanel
+            surface={entries}
+            field={first}
+            ancestors={[]}
+            siblings={[]}
+            saved
+            onChange={onChange}
+          />
+        );
+        expect(screen.getByLabelText("Most stars")).toHaveValue("5");
+        view.rerender(
+          <FieldSettingsPanel
+            surface={entries}
+            field={second}
+            ancestors={[]}
+            siblings={[]}
+            saved
+            onChange={onChange}
+          />
+        );
+        const max = screen.getByLabelText("Most stars");
+        expect(max).toHaveValue("9");
+        // An edit there changes the field being shown, from its own value.
+        await user.type(max, "1");
+        expect(onChange.mock.lastCall?.[0]).toMatchObject({
+          id: "f-b",
+          pluginOptions: { max: 91 },
+        });
+      } finally {
+        branding.current = {};
+      }
+    });
+
+    it("says a number it cannot read is not saved, and shows the saved one again on leaving", async () => {
+      const user = userEvent.setup();
+      branding.current = withSettings([
+        { key: "max", label: "Most stars", control: "number" },
+      ]);
+      try {
+        let current = rating;
+        render(
+          <Host
+            initial={rating}
+            onChange={next => {
+              current = next;
+            }}
+          />
+        );
+        const max = screen.getByLabelText("Most stars");
+        await user.type(max, "12x");
+        expect(current.pluginOptions?.max).toBe(12);
+        expect(max).toHaveAttribute("aria-invalid", "true");
+        expect(max).toHaveAccessibleDescription(/not a number/i);
+        await user.tab();
+        expect(max).toHaveValue("12");
+        expect(max).not.toHaveAttribute("aria-invalid", "true");
+      } finally {
+        branding.current = {};
+      }
+    });
+  });
+
+  describe("a plugin type whose plugin list has not arrived", () => {
+    const rating: BuilderField = {
+      id: "f-rating",
+      name: "rating",
+      label: "Rating",
+      type: "star-rating",
+    };
+
+    it("says its settings are loading, not that it has none", () => {
+      brandingStatus.current = { ...brandingStatus.current, isPending: true };
+      try {
+        render(<Host initial={rating} />);
+        expect(
+          screen.getByText(/loading this type's settings/i)
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/has no settings of its own/)).toBeNull();
+      } finally {
+        brandingStatus.current = {
+          ...brandingStatus.current,
+          isPending: false,
+        };
+      }
+    });
+
+    it("says its settings could not be loaded, with a retry, when the list never came", async () => {
+      const user = userEvent.setup();
+      const retry = vi.fn();
+      brandingStatus.current = { isPending: false, isUnavailable: true, retry };
+      try {
+        render(<Host initial={rating} />);
+        expect(
+          screen.getByText(/settings could not be loaded/i)
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/has no settings of its own/)).toBeNull();
+        await user.click(screen.getByRole("button", { name: "Retry" }));
+        expect(retry).toHaveBeenCalledTimes(1);
+      } finally {
+        brandingStatus.current = {
+          isPending: false,
+          isUnavailable: false,
+          retry: () => {},
+        };
+      }
+    });
+  });
+
+  it("a test plugin's field type that declares no settings", () => {
     branding.current = {
       plugins: [
         {

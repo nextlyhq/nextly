@@ -2029,6 +2029,31 @@ describe("reloadNextlyConfig", () => {
       // previous config compiled — not the one this reload compiled.
       expect(getActiveExtensionSchema("sqlite")).toBe(previous);
     });
+
+    it("puts back the fields a scope held back when the reload does not land", async () => {
+      const { currentWithheldScopeFields, publishWithheldScopeFields } =
+        await import("../../domains/schema/pipeline/withheld-scope-fields");
+      // What the running configuration's fold held back: a type switched off.
+      const previous = new Map([
+        ["collection:pages", [{ name: "seo", type: "text" }]],
+      ]);
+      publishWithheldScopeFields(previous as never);
+      // The edited configuration switches it on again; its fold, run by the
+      // load, publishes that nothing is held back.
+      loadConfigSpy.mockImplementation(async () => {
+        publishWithheldScopeFields(new Map());
+        return { config: withPluginTable };
+      });
+      introspectSpy.mockRejectedValue(new Error("connection refused"));
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      // The previous configuration still runs, so its type stays off and its
+      // column stays kept.
+      expect(currentWithheldScopeFields()).toBe(previous);
+      publishWithheldScopeFields(new Map());
+    });
   });
 
   /**
