@@ -16,6 +16,11 @@ import { pluginFieldTypeCatalogEntries } from "@admin/lib/builder/plugin-field-t
  * against the installed plugins. Merge these after a surface's built-in
  * catalog (built-ins win on a type-id collision). Returns an empty array when
  * no plugin contributes a field type for the surface.
+ *
+ * @deprecated Use `FieldPicker` from `@nextlyhq/plugin-sdk/admin` instead;
+ *   its `config.surface` joins that surface's plugin types to the picker.
+ *   Removed no earlier than 0.0.2-alpha.75, and only once the Form Builder
+ *   and user custom fields use the shared picker and panel.
  */
 export function usePluginFieldTypeEntries(
   surface: FieldSurface

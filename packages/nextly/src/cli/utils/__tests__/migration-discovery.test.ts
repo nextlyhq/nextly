@@ -233,6 +233,34 @@ describe("migration-discovery", () => {
       expect(folder.partialBuilderFiles.map(f => f.file)).toContain(OLD);
     });
 
+    // The Builder never wrote a dialect variant. A base file with one beside
+    // it is one migration with the variant, so it stays in its group: taken
+    // out, its ledger name would hide the variant's rows, and another
+    // dialect would fall back to running the variant written for MySQL.
+    it("keeps an old Builder name with a dialect variant beside it", async () => {
+      const VARIANT = "1730000000000_create_posts.mysql.sql";
+      await createMigrationFile(
+        VARIANT,
+        "CREATE TABLE `dc_posts` (`id` varchar(36) PRIMARY KEY);"
+      );
+      for (const dialect of ["postgresql", "mysql"] as const) {
+        const folder = await readMigrationFolder(testDir, dialect);
+        const group = folder.groups.get("1730000000000_create_posts");
+        expect(selectVariant(group?.variants ?? [], "postgresql")).toBe(OLD);
+        expect(selectVariant(group?.variants ?? [], "mysql")).toBe(VARIANT);
+        expect(folder.oldBuilderFiles).toEqual([]);
+        // Both the base and the variant lack the variant's absence (on MySQL
+        // the base's Postgres quoting is out of scope too): each is checked
+        // as a migration, and neither is ignored.
+        const lacking = new Map(
+          folder.partialBuilderFiles.map(f => [f.file, f.lacks])
+        );
+        expect([...lacking.keys()].sort()).toEqual([OLD, VARIANT, HAND].sort());
+        expect(lacking.get(OLD)).toContain("variant");
+        expect(lacking.get(VARIANT)).toContain("variant");
+      }
+    });
+
     // A snapshot that cannot be checked is not a missing one: reading it as
     // absent would set the file aside as an old Builder file. Windows ignores
     // the mode, and root reads past it, so neither can make the folder unreadable.

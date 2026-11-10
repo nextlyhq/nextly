@@ -49,7 +49,15 @@ import {
   runFileMigrations,
   runMigrate,
 } from "../migrate";
+import {
+  _resetBootMigrationsGateForTest,
+  assertBootMigrationsNotRefused,
+} from "../../../init/boot-migrations-gate";
+import { runProdMigrationsIfEnabled } from "../../../init/prod-migrations";
+import { runMigrateBaseline } from "../migrate-baseline";
 import { runMigrateCheck } from "../migrate-check";
+import { runMigrateDown } from "../migrate-down";
+import { runMigrateResolve } from "../migrate-resolve";
 import { runMigrateStatus } from "../migrate-status";
 
 /** The config the commands load. */
@@ -304,13 +312,15 @@ describe.each(getConfiguredTestDialects())(
         `-- Migration: keep\n\n-- UP\nCREATE TABLE ${q}dc_keep${q} (${q}id${q} varchar(36) PRIMARY KEY);\n\n-- DOWN\nDROP TABLE ${q}dc_keep${q};\n`
       );
       expect((await migrate()).code).toBeUndefined();
+      // Named as the Builder names a delete of `keep` and `other`: the count,
+      // then the first 12 hex digits of the SHA-256 of "keep,other".
       writeFileSync(
         join(
           dir,
           "migrations",
-          "1761732000000_drop_1_collections_0123456789ab.sql"
+          "1761732000000_drop_2_collections_b7078bfa1774.sql"
         ),
-        `DROP TABLE IF EXISTS ${q}dc_keep${q};`
+        `-- Drop dynamic collections: keep, other\nDROP TABLE IF EXISTS ${q}dc_keep${q};`
       );
 
       const { code, said } = await migrate();
@@ -537,5 +547,144 @@ describe.each(getConfiguredTestDialects())(
       rmSync(path);
       await expect(assertAppliedFilesPresent(args)).resolves.toBeUndefined();
     });
+
+    // A marked file keeps the identity its mark recorded, whatever is declared
+    // since. Here `dc_posts_dc_tags` reads as a posts junction until a
+    // collection whose table has that name is declared; the file's bytes stay
+    // as they were, so every reader that has the ledger still ignores it
+    // rather than refusing it as edited. The control changes a byte.
+    describe("a marked file once a collection is declared that its tables read as", () => {
+      const FILE = "1761732000020_update_posts.sql";
+      const declaring = (extra: Record<string, unknown> = {}) =>
+        defineConfig({
+          collections: [
+            {
+              slug: "posts-dc-tags",
+              fields: [{ name: "title", type: "text" }],
+            },
+          ] as never,
+          db: { migrationsDir: "./migrations", ...extra },
+        });
+
+      beforeEach(async () => {
+        writeFileSync(
+          join(dir, "migrations", FILE),
+          `ALTER TABLE ${q}dc_posts_dc_tags${q} ADD COLUMN ${q}x${q} text;\n`
+        );
+        await appliedEarlier(instance!, dialect, FILE);
+        const marked = await migrate();
+        expect(marked.code, marked.said.join("\n")).toBeUndefined();
+        expect(await marksOf(instance!, dialect, FILE)).toHaveLength(1);
+        loaded.config = declaring();
+      });
+
+      /** Whether `said` refuses the file as changed since it was marked. */
+      const refusesAsChanged = (said: readonly string[]) =>
+        new RegExp(`${FILE}.* has changed since it was recognised`).test(
+          said.join("\n")
+        );
+
+      it("nextly migrate still ignores it", async () => {
+        const run = await migrate();
+        expect(refusesAsChanged(run.said), run.said.join("\n")).toBe(false);
+        expect(run.said).toContain(`${FILE}: ${IGNORED}`);
+      });
+
+      it("nextly migrate refuses it once a byte of it changes", async () => {
+        appendFileSync(join(dir, "migrations", FILE), "\n");
+        const run = await migrate();
+        expect(run.code, run.said.join("\n")).toBe(2);
+        expect(refusesAsChanged(run.said)).toBe(true);
+      });
+
+      // A boot catches a refusal so the app still starts; it logs it and
+      // closes the gate serving waits on, so both are read.
+      it("a production boot still ignores it", async () => {
+        const logged: string[] = [];
+        const keep = (message: unknown) => {
+          logged.push(String(message));
+        };
+        vi.stubEnv("NODE_ENV", "production");
+        try {
+          await runProdMigrationsIfEnabled({
+            config: declaring({
+              runMigrationsOnBoot: true,
+              migrationsDir: join(dir, "migrations"),
+              uiSchemaFile: join(dir, "ui-schema.json"),
+            }) as never,
+            adapter: Object.assign(instance!.adapter, { dialect }) as never,
+            logger: { debug: keep, info: keep, warn: keep, error: keep },
+          }).catch(keep);
+          expect(refusesAsChanged(logged), logged.join("\n")).toBe(false);
+          expect(() => assertBootMigrationsNotRefused()).not.toThrow();
+        } finally {
+          vi.unstubAllEnvs();
+          _resetBootMigrationsGateForTest();
+        }
+      });
+
+      it("migrate:down still ignores it", async () => {
+        const { context, said } = command();
+        const code = await exitCode(() =>
+          runMigrateDown({ cwd: dir }, context)
+        );
+        expect(refusesAsChanged(said), said.join("\n")).toBe(false);
+        expect(code, said.join("\n")).toBeUndefined();
+      });
+
+      it("migrate:status still lists it as ignored, and as no migration", async () => {
+        const stdout: string[] = [];
+        vi.spyOn(console, "log").mockImplementation(message => {
+          stdout.push(String(message));
+        });
+        vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+        const { context } = command();
+        await runMigrateStatus({ cwd: dir, json: true }, context);
+        const document = JSON.parse(stdout.join("\n")) as {
+          migrations: { name: string }[];
+          ignoredOldBuilderFiles: string[];
+        };
+        expect(document.ignoredOldBuilderFiles).toEqual([FILE]);
+        expect(document.migrations.map(m => m.name)).toEqual([]);
+      });
+
+      it("migrate:baseline still ignores it", async () => {
+        const { context, said } = command();
+        await exitCode(() =>
+          runMigrateBaseline({ cwd: dir, dryRun: true }, context)
+        );
+        expect(refusesAsChanged(said), said.join("\n")).toBe(false);
+      });
+    });
+
+    // `migrate:resolve` reads the folder with nothing declared, so an index
+    // name a longer table could also explain is never traced there: this file
+    // is marked by `nextly migrate`, which declares no such table, and resolve
+    // read it as a migration to record, withdrawing the mark. With the marks
+    // it reads the file as every other reader does. MySQL's index drop names
+    // its table, a shape no old Builder file is recognised in.
+    it.skipIf(dialect === "mysql")(
+      "migrate:resolve finds no migration in a marked file as it was marked, and leaves its mark",
+      async () => {
+        const FILE = "1761732000021_update_posts.sql";
+        writeFileSync(
+          join(dir, "migrations", FILE),
+          `DROP INDEX IF EXISTS ${q}idx_dc_posts_publish_date${q};\n`
+        );
+        await appliedEarlier(instance!, dialect, FILE);
+        const marked = await migrate();
+        expect(marked.code, marked.said.join("\n")).toBeUndefined();
+        expect(await marksOf(instance!, dialect, FILE)).toHaveLength(1);
+
+        const { context } = command();
+        // Refused, as for any file every reader ignores; the refusal is not
+        // what is under test, the mark is.
+        await exitCode(() =>
+          runMigrateResolve({ cwd: dir, applied: FILE }, context)
+        ).catch(() => undefined);
+        const marks = await marksOf(instance!, dialect, FILE);
+        expect(marks.map(m => m.status)).toEqual(["applied"]);
+      }
+    );
   }
 );

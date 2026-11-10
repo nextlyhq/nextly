@@ -49,7 +49,9 @@ import {
   isRecordedChecksum,
 } from "../../domains/schema/migrate/applied-checksums";
 import {
+  markedFileChange,
   readOldBuilderLedger,
+  withOldBuilderMarks,
   type ChangedOldBuilderFile,
 } from "../../domains/schema/migrate/old-builder-ledger";
 import {
@@ -342,12 +344,18 @@ export async function runMigrateStatus(
 
     logger.debug(`Scanning migrations in ${migrationsDir}...`);
 
-    // Read as `nextly migrate` reads the folder. A manifest that cannot be
-    // read is the registry check's to report; until then none is declared.
-    const declared = await declaredNamesOf(
-      { ...configResult, projectRoot: cwd },
-      { orNone: true }
-    );
+    // Read as `nextly migrate` reads the folder, under the ledger's old
+    // Builder marks. A manifest that cannot be read is the registry check's
+    // to report; until then none is declared.
+    const { declared } = await withOldBuilderMarks({
+      adapter,
+      db: (adapter as unknown as DrizzleAdapter).getDrizzle(),
+      dialect,
+      declared: await declaredNamesOf(
+        { ...configResult, projectRoot: cwd },
+        { orNone: true }
+      ),
+    });
 
     const migrationFiles = await migrationEntries({
       plugin: options.plugin,
@@ -485,9 +493,7 @@ async function nameOldBuilderFiles(args: {
  * signature, and the part it lacks: every history check refuses it.
  */
 function changedOldBuilderFileLine(file: ChangedOldBuilderFile): string {
-  const change =
-    file.change === "content" ? "has changed" : "has a snapshot beside it";
-  return `${file.file} ${change} since it was recognised as a file an earlier Schema Builder wrote, and lacks: ${file.lacks.join(", ")}. \`nextly migrate\` refuses it until it is restored, deleted or accepted with \`nextly migrate:resolve --applied ${file.file}\`.`;
+  return `${file.file} ${markedFileChange(file)} since it was recognised as a file an earlier Schema Builder wrote, and lacks: ${file.lacks.join(", ")}. \`nextly migrate\` refuses it until it is restored, deleted or accepted with \`nextly migrate:resolve --applied ${file.file}\`.`;
 }
 
 export async function migrationEntries(args: {

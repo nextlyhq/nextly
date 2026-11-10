@@ -20,8 +20,6 @@
  * ```
  */
 
-import { createHash } from "node:crypto";
-
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { NextlyError } from "../../../errors/nextly-error";
@@ -79,25 +77,13 @@ import {
 import { quoteExpressionSqlDefault } from "../../schema/utils/sql-literal";
 
 import type { CollectionTables } from "./collection-tables";
+// The drop file's name and first line, spelled where the old-Builder reading
+// checks a file against them too.
+import { dropFileHeader, dropFileLabel } from "./drop-file-name";
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
 
 /** A field-group field renamed with no column of its own: its instances move with it. */
 type AssociationRename = { from: FieldDefinition; to: FieldDefinition };
-
-/**
- * What a drop file's name says it drops: the collection, or for several, how
- * many and a digest of which. A name listing every slug grows with the
- * selection, and past the filesystem's limit on one name the file cannot be
- * written at all.
- */
-function dropFileLabel(names: readonly string[]): string {
-  if (names.length === 1) return names[0];
-  const digest = createHash("sha256")
-    .update(names.join(","))
-    .digest("hex")
-    .slice(0, 12);
-  return `${String(names.length)}_collections_${digest}`;
-}
 
 /**
  * Field types this service stores in a JSON array column (see its column-type
@@ -2946,7 +2932,7 @@ ${allColumnDefs.join(",\n")}
     // One statement per breakpoint, as every other file this service writes:
     // the runner splits on the breakpoint line, and MySQL refuses several
     // statements sent as one.
-    const migrationSQL = `-- Drop dynamic collection${names.length === 1 ? "" : "s"}: ${names.join(", ")}\n${[
+    const migrationSQL = `${dropFileHeader(names)}\n${[
       ...junctions,
       ...tables,
     ].join("\n--> statement-breakpoint\n")}`;

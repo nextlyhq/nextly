@@ -37,10 +37,19 @@ function createFile(
   ].join(BREAK);
 }
 
+// A bulk delete as the Builder names it: how many collections, then the first
+// 12 hex digits of the SHA-256 of their names joined by commas, the names
+// listed in its first line. The digests are pinned, so a change of the
+// format fails here rather than agreeing with itself.
+const BULK_HEADER = "-- Drop dynamic collections: ";
+const POSTS_PAGES = "1730000000007_drop_2_collections_2ea79a92430d.sql";
+const POSTS_TAGS = "1730000000016_drop_2_collections_a1124e786bf5.sql";
+
 const facts = (
   over: Partial<MigrationFileFacts> & { name: string; content: string }
 ): MigrationFileFacts => ({
   hasSnapshot: false,
+  hasDialectVariant: false,
   dialect: "postgresql",
   ...over,
 });
@@ -197,6 +206,31 @@ describe.each<Dialect>(["postgresql", "mysql"])(
       });
     });
 
+    // The Builder never wrote a dialect variant: one with its name is never
+    // its file, so it is partial and refused as any, never ignored; a base
+    // file with one beside it is the variant's migration too.
+    it("reads a dialect variant of a Builder name as partial, lacking that", () => {
+      const kind = old(
+        "1730000000000_create_posts.mysql.sql",
+        createFile("posts", dialect)
+      );
+      expect(kind.kind).toBe("partial");
+      expect(kind.kind === "partial" && kind.lacks).toContain("variant");
+    });
+
+    it("(b) a dialect variant beside it makes it partial, lacking only that", () => {
+      expect(
+        classifyMigrationFile(
+          facts({
+            name: "1730000000000_create_posts.sql",
+            content: createFile("posts", dialect),
+            dialect,
+            hasDialectVariant: true,
+          })
+        )
+      ).toEqual({ kind: "partial", lacks: ["variant"] });
+    });
+
     it("names every part a file lacks, not only the first", () => {
       expect(
         classifyMigrationFile(
@@ -250,16 +284,16 @@ describe.each<Dialect>(["postgresql", "mysql"])("drop files on %s", dialect => {
   const drop = (...tables: string[]) =>
     tables.map(t => `DROP TABLE IF EXISTS ${q(t, dialect)};`).join("\n");
 
-  it("recognises a bulk delete that drops only Builder collections' tables", () => {
+  it("recognises a bulk delete that drops only its named collections' tables", () => {
     expect(
       old(
-        "1730000000007_drop_2_collections_0123456789ab.sql",
-        drop(
+        POSTS_PAGES,
+        `${BULK_HEADER}posts, pages\n${drop(
           "dc_authors_dc_posts_tags",
           "dc_posts_locales",
           "dc_posts",
           "dc_pages"
-        )
+        )}`
       ).kind
     ).toBe("old-builder");
   });
@@ -271,10 +305,48 @@ describe.each<Dialect>(["postgresql", "mysql"])("drop files on %s", dialect => {
       () =>
         `${drop("dc_posts")}\nALTER TABLE ${q("dc_pages", dialect)} ADD COLUMN ${q("x", dialect)} text;`,
     ],
+    // A collection's table the header does not name: another collection's.
+    ["a collection it does not name", () => drop("dc_posts", "dc_comments")],
   ])("a bulk delete with %s is partial", (_name, content) => {
     expect(
-      old("1730000000007_drop_2_collections_0123456789ab.sql", content())
+      old(POSTS_PAGES, `${BULK_HEADER}posts, pages\n${content()}`)
     ).toEqual({
+      kind: "partial",
+      lacks: ["scope"],
+    });
+  });
+
+  // The name's count and digest are derived from the header's names, so a
+  // file whose three disagree was not written by the Builder: it may drop
+  // anything under a name that looks like a bulk delete.
+  it.each([
+    [
+      "the digest of other names",
+      POSTS_TAGS,
+      `${BULK_HEADER}comments, pages\n`,
+      ["dc_comments", "dc_pages"],
+    ],
+    ["no header", POSTS_TAGS, "", ["dc_comments"]],
+    [
+      "a header naming more collections than its count",
+      POSTS_TAGS,
+      `${BULK_HEADER}posts, tags, comments\n`,
+      ["dc_posts", "dc_tags", "dc_comments"],
+    ],
+    [
+      "a count other than its names'",
+      "1730000000007_drop_3_collections_a1124e786bf5.sql",
+      `${BULK_HEADER}posts, tags\n`,
+      ["dc_posts", "dc_tags"],
+    ],
+    [
+      "one collection, which the Builder names by its slug",
+      "1730000000007_drop_1_collections_a44f1b975171.sql",
+      "-- Drop dynamic collection: posts\n",
+      ["dc_posts"],
+    ],
+  ])("a bulk delete with %s is partial", (_name, name, header, tables) => {
+    expect(old(name, `${header}${drop(...tables)}`)).toEqual({
       kind: "partial",
       lacks: ["scope"],
     });
@@ -601,8 +673,10 @@ describe("a bulk delete with a custom junction", () => {
   const bulk = (...tables: string[]) =>
     classifyMigrationFile(
       facts({
-        name: "1730000000016_drop_2_collections_0123456789ab.sql",
-        content: tables.map(t => `DROP TABLE IF EXISTS "${t}";`).join("\n"),
+        name: POSTS_TAGS,
+        content: `${BULK_HEADER}posts, tags\n${tables
+          .map(t => `DROP TABLE IF EXISTS "${t}";`)
+          .join("\n")}`,
       })
     );
 
@@ -682,6 +756,33 @@ describe("a junction-shaped name that is another collection's table", () => {
     expect(update(new Set(["dc_posts"]))).toEqual({
       kind: "old-builder",
       entity: "posts",
+    });
+  });
+
+  // A mark records the reading made when the file was recognised. With the
+  // file's bytes as marked, what is declared since cannot undo it; a snapshot
+  // or a dialect variant beside it still does, as for any file.
+  describe("in a file as its mark recorded", () => {
+    const marked = (over: Partial<MigrationFileFacts> = {}) =>
+      classifyMigrationFile(
+        facts({
+          name: "1730000000018_update_posts.sql",
+          content: `ALTER TABLE "dc_posts_dc_comments_secret" ADD COLUMN "x" text;`,
+          declaredTables: new Set(["dc_posts", "dc_posts_dc_comments_secret"]),
+          markedAsIs: true,
+          ...over,
+        })
+      );
+
+    it("keeps the entity's identity while that table is declared", () => {
+      expect(marked()).toEqual({ kind: "old-builder", entity: "posts" });
+    });
+
+    it.each([
+      ["a snapshot", { hasSnapshot: true }, "snapshot"],
+      ["a dialect variant", { hasDialectVariant: true }, "variant"],
+    ] as const)("is partial with %s beside it", (_n, over, part) => {
+      expect(marked(over)).toEqual({ kind: "partial", lacks: [part] });
     });
   });
 });

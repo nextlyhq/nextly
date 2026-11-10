@@ -550,7 +550,8 @@ Two things to know before relying on it:
   written by an earlier Schema Builder", so run `nextly migrate:create` to write the change as a
   migration with its snapshot, and commit that pair. Only a file with the whole signature is
   ignored. A file with the Builder's name and no snapshot that lacks another part of it, for
-  example one that also changes another entity's tables, is refused by `nextly migrate` and a
+  example one that also changes another entity's tables or has a dialect variant
+  (`.mysql.sql`) beside it, is refused by `nextly migrate` and a
   production boot, as `BUILDER_MIGRATION_SNAPSHOT_MISSING`, naming the part it lacks: replace it
   with the migration `migrate:create` writes, or delete it. `nextly migrate:check` names it too.
   Keep the files an earlier Builder wrote until the first `nextly migrate` after upgrading has

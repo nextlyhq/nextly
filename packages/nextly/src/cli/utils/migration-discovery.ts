@@ -15,6 +15,7 @@ import { basename, resolve } from "node:path";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { checksumOf } from "../../domains/schema/migrate/applied-checksums";
+import { dialectVariantOf } from "../../domains/schema/migrate/dialect-variant";
 import {
   classifyMigrationFile,
   hasOldBuilderName,
@@ -52,6 +53,14 @@ export interface DeclaredNames {
   /** Each collection's custom junction names, by its slug. */
   junctions?: ReadonlyMap<string, ReadonlySet<string>>;
   tables?: ReadonlySet<string>;
+  /**
+   * The checksum each current old Schema Builder mark records, by file name,
+   * from the ledger (`withOldBuilderMarks`). A file whose bytes are as marked
+   * keeps the identity its mark recorded, whatever the names above say now.
+   * Omitted by a reader that has no database (`migrate:check`, `build`), which
+   * judges every file afresh.
+   */
+  marks?: ReadonlyMap<string, string>;
 }
 
 /** A file an earlier Schema Builder wrote, which every reader treats as absent. */
@@ -118,6 +127,13 @@ export async function readMigrationFolder(
     throw error;
   }
   const kept: string[] = [];
+  // The base files a dialect variant stands beside, by their file name.
+  const varied = new Set(
+    files.flatMap(file => {
+      const variant = dialectVariantOf(file);
+      return variant === undefined ? [] : [`${variant.baseName}.sql`];
+    })
+  );
   for (const file of files.filter(f => f.endsWith(".sql"))) {
     if (!hasOldBuilderName(file)) {
       kept.push(file);
@@ -129,10 +145,13 @@ export async function readMigrationFolder(
       "meta",
       `${basename(file, ".sql")}.snapshot.json`
     );
+    const checksum = checksumOf(content);
     const kind = classifyMigrationFile({
       name: file,
       content,
       hasSnapshot: await exists(snapshot),
+      hasDialectVariant: varied.has(file),
+      markedAsIs: declared?.marks?.get(file) === checksum,
       dialect,
       ...(declared?.junctions === undefined
         ? {}
@@ -141,7 +160,6 @@ export async function readMigrationFolder(
         ? {}
         : { declaredTables: declared.tables }),
     });
-    const checksum = checksumOf(content);
     if (kind.kind === "old-builder") {
       folder.oldBuilderFiles.push({ file, entity: kind.entity, checksum });
       continue;
@@ -167,6 +185,7 @@ export function oldBuilderFileLine(file: OldBuilderFile): string {
 /** What each part of the signature a file lacks says about it. */
 const LACKS: Record<OldBuilderSignaturePart, string> = {
   snapshot: "has a snapshot beside it",
+  variant: "is a dialect variant or has one beside it",
   header: "holds a line `migrate:create` writes",
   scope:
     "has a statement on a table that is not its own entity's, or one that cannot be read",
@@ -302,21 +321,11 @@ function groupMigrationFiles(
   const migrationGroups = new Map<string, MigrationGroup>();
 
   for (const file of sqlFiles) {
-    // Check if file has a dialect suffix (e.g., .mysql.sql, .sqlite.sql)
-    const dialectMatch = file.match(/(.*)\.(mysql|sqlite|postgresql)\.sql$/);
-
-    let baseName: string;
-    let dialect: SupportedDialect | undefined;
-
-    if (dialectMatch) {
-      // This is a dialect-specific file
-      baseName = dialectMatch[1];
-      dialect = dialectMatch[2] as SupportedDialect;
-    } else {
-      // This is a base file (no dialect suffix)
-      baseName = basename(file, ".sql");
-      dialect = undefined;
-    }
+    // A dialect suffix (`.mysql.sql`) names a variant of its base's group;
+    // read once, as the old-Builder reading reads it.
+    const variant = dialectVariantOf(file);
+    const baseName = variant?.baseName ?? basename(file, ".sql");
+    const dialect = variant?.dialect;
 
     // Get or create the group for this base name
     let group = migrationGroups.get(baseName);

@@ -36,6 +36,7 @@
  * @module di/registrations/register-widgets
  */
 
+import type { CollectionConfig } from "../../collections/config/define-collection";
 import { registerReleasesWidgetSource } from "../../domains/releases/releases-widget-source";
 import { registerVersionsWidgetSource } from "../../domains/versions/versions-widget-source";
 import {
@@ -98,7 +99,10 @@ import { registerSystemHealthSource } from "../../services/dashboard/system-heal
 export function resetWidgetRegistries(
   plugins: readonly PluginDefinition[] = [],
   // The site config's `admin.dashboard`, as given: startup checks it.
-  dashboard?: unknown
+  dashboard?: unknown,
+  // The site config's collections after every plugin's setup(), for the
+  // admin's component-map check alone.
+  collections?: readonly CollectionConfig[]
 ): void {
   clearWidgets();
   // Cleared with the registry it publishes into, so a reload's declarations
@@ -132,7 +136,7 @@ export function resetWidgetRegistries(
   // The resolved list the admin's component-map check reads, so it judges
   // the generated map against the plugins this boot runs, and the dashboard
   // as registered here, a widget a plugin's setup() adds included.
-  setAdminComponentPlugins(plugins, dashboard);
+  setAdminComponentPlugins(plugins, dashboard, collections);
 
   // The domains that answer a source of their own publish it here, after the
   // stores are empty and BEFORE core's widgets: a widget's settings are

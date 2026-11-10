@@ -11,6 +11,8 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { registryRowKeys } from "../ui-schema/registry-row-keys";
+
 import {
   cursorOf,
   StatementCursor,
@@ -43,23 +45,31 @@ function oneTable(cursor: StatementCursor): string[] | undefined {
 }
 
 /**
- * The table an ALTER TABLE's clauses rename it to, read from the tokens after
- * its table: undefined when no clause renames the table, null when one does
- * to a name not read here (schema-qualified). `RENAME TO x`, `RENAME AS x`
+ * The tables an ALTER TABLE's clauses rename it to, read from the tokens after
+ * its table: every RENAME clause, since MySQL takes several in one ALTER, so
+ * none past the first goes unread. Null when one renames the table to a name
+ * not read here (schema-qualified), or when a clause changes another table
+ * (MySQL's `EXCHANGE PARTITION … WITH TABLE`). `RENAME TO x`, `RENAME AS x`
  * and MySQL's bare `RENAME x` rename the table; `RENAME COLUMN`, `INDEX`,
  * `KEY` and `CONSTRAINT` rename something on it.
  */
-function renameDestination(
+function renameDestinations(
   tokens: readonly StatementToken[]
-): string | null | undefined {
-  const at = tokens.indexOf("RENAME");
-  if (at === -1) return undefined;
-  const clause = new StatementCursor(tokens.slice(at + 1));
-  if (["COLUMN", "INDEX", "KEY", "CONSTRAINT"].some(w => clause.isWord(w))) {
-    return undefined;
+): string[] | null {
+  if (tokens.includes("EXCHANGE")) return null;
+  const destinations: string[] = [];
+  for (let at = 0; at < tokens.length; at += 1) {
+    if (tokens[at] !== "RENAME") continue;
+    const clause = new StatementCursor(tokens.slice(at + 1));
+    if (["COLUMN", "INDEX", "KEY", "CONSTRAINT"].some(w => clause.isWord(w))) {
+      continue;
+    }
+    if (!clause.accept("TO")) clause.accept("AS");
+    const name = clause.name();
+    if (name === undefined) return null;
+    destinations.push(name);
   }
-  if (!clause.accept("TO")) clause.accept("AS");
-  return clause.name() ?? null;
+  return destinations;
 }
 
 /** The table a CREATE TABLE or CREATE [UNIQUE] INDEX … ON names, read after CREATE. */
@@ -77,17 +87,41 @@ function createdOn(cursor: StatementCursor): string[] | undefined {
 }
 
 /**
- * After `ALTER TABLE`: the table altered, and the one it is renamed to where a
- * clause renames it; undefined when either cannot be read.
+ * After `ALTER TABLE`: the table altered, and each one it is renamed to where
+ * a clause renames it; undefined when any of them cannot be read.
  */
 function alteredTables(cursor: StatementCursor): string[] | undefined {
   cursor.acceptCondition();
   cursor.accept("ONLY");
   const table = cursor.name();
   if (table === undefined) return undefined;
-  const renamedTo = renameDestination(cursor.rest());
+  const renamedTo = renameDestinations(cursor.rest());
   if (renamedTo === null) return undefined;
-  return renamedTo === undefined ? [table] : [table, renamedTo];
+  return [table, ...renamedTo];
+}
+
+/**
+ * The one table an UPDATE changes, read after UPDATE: its table followed at
+ * once by SET. MySQL's multi-table UPDATE (`UPDATE a, b SET …`, `UPDATE a
+ * JOIN b … SET …`) changes every table it names, so anything between the
+ * table and SET, a modifier or an alias included, is unreadable here rather
+ * than read as its first table alone.
+ */
+function updatedTable(cursor: StatementCursor): string[] | undefined {
+  const table = cursor.name();
+  return table !== undefined && cursor.isWord("SET") ? [table] : undefined;
+}
+
+/**
+ * The one table a DELETE FROM changes, read after DELETE FROM: its table
+ * followed by WHERE or by nothing. MySQL's `DELETE FROM a, b USING …` and
+ * `DELETE FROM a USING …` reach tables past the first, so they are unreadable
+ * here, as is any other text after the table.
+ */
+function deletedFromTable(cursor: StatementCursor): string[] | undefined {
+  const table = cursor.name();
+  if (table === undefined) return undefined;
+  return cursor.done() || cursor.isWord("WHERE") ? [table] : undefined;
 }
 
 /**
@@ -110,8 +144,8 @@ export function tablesChangedIn(
     return oneTable(cursor);
   }
   if (cursor.accept("INSERT", "INTO")) return oneTable(cursor);
-  if (cursor.accept("UPDATE")) return oneTable(cursor);
-  if (cursor.accept("DELETE", "FROM")) return oneTable(cursor);
+  if (cursor.accept("UPDATE")) return updatedTable(cursor);
+  if (cursor.accept("DELETE", "FROM")) return deletedFromTable(cursor);
   return undefined;
 }
 
@@ -240,9 +274,10 @@ function setsPlainValues(assignments: StatementToken[][]): boolean {
  * - `INSERT INTO t (columns) VALUES (values)`, one row whose `slug` value is a
  *   string read exactly, with nothing after it, or PostgreSQL's
  *   `ON CONFLICT (slug) DO NOTHING` / `DO UPDATE SET …`, or MySQL's
- *   `ON DUPLICATE KEY UPDATE …`. MySQL's form fires on any unique key, which
- *   writes this slug's row only because a registry row's other unique keys,
- *   its id and table name, are derived from its slug.
+ *   `ON DUPLICATE KEY UPDATE …`. MySQL's form fires on any unique key, so it
+ *   is read only where the row's other unique keys, its id and table name, are
+ *   the ones the registry derives from its slug; otherwise the row it updates
+ *   may be another entity's.
  * - `UPDATE t SET … WHERE slug = '…'`, with nothing else in the WHERE.
  *
  * No assignment may set `slug` or `id`, which would rename the row into
@@ -264,22 +299,47 @@ export function registryRowWrittenBy(
 function insertedRow(cursor: StatementCursor): RegistryRowWrite | undefined {
   const table = cursor.name();
   if (table === undefined || !cursor.accept("(")) return undefined;
-  const slug = insertedSlug(cursor);
-  if (slug === undefined || !upsertKeepsSlug(cursor)) return undefined;
+  const row = insertedValues(cursor);
+  const slug = stringText(row?.get("slug") ?? []);
+  if (row === undefined || slug === undefined) return undefined;
+  if (!upsertKeepsSlug(cursor, ownsUniqueKeys(table, slug, row))) {
+    return undefined;
+  }
   return { table, slug };
 }
 
 /**
- * The `slug` value of an INSERT's one row, read from its column list to the
- * end of its VALUES, or undefined when the row is not one read here.
+ * An INSERT's one row as its value for each column, read from its column list
+ * to the end of its VALUES, or undefined when the row is not one read here.
  */
-function insertedSlug(cursor: StatementCursor): string | undefined {
+function insertedValues(
+  cursor: StatementCursor
+): Map<string, StatementToken[]> | undefined {
   const columns = cursor.names();
   if (columns === undefined || !cursor.accept(")")) return undefined;
   if (!cursor.accept("VALUES", "(")) return undefined;
   const values = parenthesised(cursor);
   if (values?.length !== columns.length) return undefined;
-  return stringText(values[columns.indexOf("slug")] ?? []);
+  return new Map(columns.map((column, i) => [column, values[i]]));
+}
+
+/**
+ * Whether the row's other unique keys, its `id` and `table_name`, are the ones
+ * the registry derives from its slug (`registryRowKeys`), each a string read
+ * exactly. MySQL's upsert updates whichever row any unique key meets, so only
+ * then is the row it meets this slug's own. A table that is not a registry
+ * has no derived keys, and nothing is proved.
+ */
+function ownsUniqueKeys(
+  table: string,
+  slug: string,
+  row: ReadonlyMap<string, StatementToken[]>
+): boolean {
+  const keys = registryRowKeys(table, slug);
+  if (keys === undefined) return false;
+  return Object.entries(keys).every(
+    ([column, value]) => stringText(row.get(column) ?? []) === value
+  );
 }
 
 /**
@@ -304,11 +364,15 @@ function parenthesised(
   return undefined;
 }
 
-/** Whether what follows an INSERT's row is nothing, or an upsert on its slug. */
-function upsertKeepsSlug(cursor: StatementCursor): boolean {
+/**
+ * Whether what follows an INSERT's row is nothing, or an upsert on its slug.
+ * MySQL's upsert is one only where `ownsKeys` holds: it fires on any unique
+ * key, not the slug alone.
+ */
+function upsertKeepsSlug(cursor: StatementCursor, ownsKeys: boolean): boolean {
   if (cursor.done()) return true;
   if (cursor.accept("ON", "DUPLICATE", "KEY", "UPDATE")) {
-    return setsInsertedValues(cursor.clauses());
+    return ownsKeys && setsInsertedValues(cursor.clauses());
   }
   if (!cursor.accept("ON", "CONFLICT", "(")) return false;
   if (cursor.name() !== "slug" || !cursor.accept(")", "DO")) return false;
@@ -392,7 +456,8 @@ function archiveInsert(cursor: StatementCursor): ArchiveWrite | undefined {
 
 /**
  * Every table a query's FROM and JOIN clauses name, in order, once each, or
- * undefined when one names something else (a subquery, a qualified name).
+ * undefined when one names something else (a subquery, a qualified name), or
+ * names more than one table (`FROM a, b`), whose second would go unread.
  * `IS [NOT] DISTINCT FROM` compares values and names no table.
  */
 function tablesReadIn(tokens: readonly StatementToken[]): string[] | undefined {
@@ -401,9 +466,25 @@ function tablesReadIn(tokens: readonly StatementToken[]): string[] | undefined {
     const token = tokens[at];
     if (token !== "FROM" && token !== "JOIN") continue;
     if (token === "FROM" && tokens[at - 1] === "DISTINCT") continue;
-    const table = new StatementCursor(tokens.slice(at + 1)).name();
-    if (table === undefined) return undefined;
+    const source = new StatementCursor(tokens.slice(at + 1));
+    const table = source.name();
+    if (table === undefined || !oneSource(source)) return undefined;
     if (!tables.includes(table)) tables.push(table);
   }
   return tables;
+}
+
+/**
+ * Whether a FROM or JOIN's table, read up to here, is its only one: after an
+ * optional alias (`t a`, `t AS a`), no comma lists another.
+ */
+function oneSource(cursor: StatementCursor): boolean {
+  if (cursor.accept("AS")) {
+    if (cursor.name() === undefined) return false;
+  } else if (!cursor.isWord(",") && !cursor.done()) {
+    // A bare alias is a name that is not the clause's next keyword; a keyword
+    // is read as a name too, which leaves the comma check below just as strict.
+    cursor.name();
+  }
+  return !cursor.isWord(",");
 }

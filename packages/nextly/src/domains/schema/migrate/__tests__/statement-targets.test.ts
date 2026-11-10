@@ -83,8 +83,62 @@ describe.each(["postgresql", "mysql"] as const)(
       ],
       ["a function body", () => "SELECT 1"],
       ["an empty statement", () => ""],
+      // MySQL's multi-table DML changes every table it names; a reading of the first alone would
+      // let a file change another entity's table unseen.
+      [
+        "an UPDATE of several tables",
+        () =>
+          `UPDATE ${q("dc_posts")}, ${q("dc_comments")} SET ${q("dc_comments")}.${q("flag")} = 1`,
+      ],
+      [
+        "an UPDATE over a JOIN",
+        () =>
+          `UPDATE ${q("dc_posts")} JOIN ${q("dc_comments")} ON ${q("dc_comments")}.${q("post")} = ${q("dc_posts")}.${q("id")} SET ${q("dc_comments")}.${q("flag")} = 1`,
+      ],
+      [
+        "an UPDATE with a modifier before its table",
+        () => `UPDATE LOW_PRIORITY ${q("dc_posts")} SET ${q("x")} = 1`,
+      ],
+      [
+        "an UPDATE of an aliased table",
+        () => `UPDATE ${q("dc_posts")} AS p SET ${q("x")} = 1`,
+      ],
+      [
+        "a DELETE FROM several tables",
+        () =>
+          `DELETE FROM ${q("dc_posts")}, ${q("dc_comments")} USING ${q("dc_posts")} JOIN ${q("dc_comments")} ON ${q("dc_comments")}.${q("post")} = ${q("dc_posts")}.${q("id")}`,
+      ],
+      [
+        "a DELETE FROM … USING",
+        () =>
+          `DELETE FROM ${q("dc_posts")} USING ${q("dc_posts")} JOIN ${q("dc_comments")} ON ${q("dc_comments")}.${q("post")} = ${q("dc_posts")}.${q("id")}`,
+      ],
+      [
+        "a DELETE naming its tables before FROM",
+        () =>
+          `DELETE ${q("dc_posts")}, ${q("dc_comments")} FROM ${q("dc_posts")} JOIN ${q("dc_comments")} ON ${q("dc_comments")}.${q("post")} = ${q("dc_posts")}.${q("id")}`,
+      ],
+      [
+        "an ALTER TABLE exchanging a partition with another table",
+        () =>
+          `ALTER TABLE ${q("dc_posts")} EXCHANGE PARTITION p0 WITH TABLE ${q("dc_comments")}`,
+      ],
     ])("does not read %s", (_form, sql) => {
       expect(read(sql())).toBeUndefined();
+    });
+
+    it.each([
+      [
+        "an UPDATE … SET … WHERE",
+        () =>
+          `UPDATE ${q("dc_posts")} SET ${q("x")} = 1 WHERE ${q("id")} = 'a'`,
+      ],
+      [
+        "a DELETE FROM … WHERE",
+        () => `DELETE FROM ${q("dc_posts")} WHERE ${q("id")} = 'a'`,
+      ],
+    ])("reads the one table of %s", (_form, sql) => {
+      expect(read(sql())).toEqual(["dc_posts"]);
     });
   }
 );
@@ -307,6 +361,53 @@ describe("registryRowWrittenBy on postgresql only", () => {
   });
 });
 
+// MySQL's upsert updates whichever row any unique key meets: a registry row's id and table name
+// are unique too, so the upsert writes this slug's row only where both are the ones its slug
+// derives. Built by the Builder's own writer, with one value taken from another slug's row.
+describe("registryRowWrittenBy on a MySQL upsert", () => {
+  const upsertOf = (slug: string) =>
+    buildCollectionMetadataUpsert(
+      { slug, fields: [{ name: "title", type: "text" }] },
+      "mysql"
+    );
+  const posts = upsertOf("posts");
+  // The id literal is the first value the writer puts in the row.
+  const idOf = (sql: string) => /VALUES \('([^']+)'/.exec(sql)?.[1] ?? "";
+
+  it("reads the Builder's own upsert", () => {
+    expect(registryRowWrittenBy(posts, "mysql")).toEqual({
+      table: "dynamic_collections",
+      slug: "posts",
+    });
+  });
+
+  it.each([
+    [
+      "another slug's id",
+      () => posts.replace(idOf(posts), idOf(upsertOf("comments"))),
+    ],
+    [
+      "another slug's table name",
+      () => posts.replace("'dc_posts'", "'dc_comments'"),
+    ],
+    [
+      "no id",
+      () =>
+        "INSERT INTO `dynamic_collections` (`slug`, `table_name`) VALUES ('posts', 'dc_posts') " +
+        "ON DUPLICATE KEY UPDATE `table_name` = VALUES(`table_name`)",
+    ],
+    [
+      "a registry whose keys are not derived here",
+      () =>
+        "INSERT INTO `r` (`id`, `slug`, `table_name`) VALUES ('1', 'posts', 'dc_posts') " +
+        "ON DUPLICATE KEY UPDATE `table_name` = VALUES(`table_name`)",
+    ],
+  ])("reads nothing from an upsert carrying %s", (_n, sql) => {
+    expect(sql()).not.toEqual(posts);
+    expect(registryRowWrittenBy(sql(), "mysql")).toBeUndefined();
+  });
+});
+
 // A table rename creates its destination's address, so the destination is a
 // target too; a column, index or constraint rename changes the table alone.
 describe.each(["postgresql", "mysql"] as const)("a rename on %s", dialect => {
@@ -328,6 +429,13 @@ describe.each(["postgresql", "mysql"] as const)("a rename on %s", dialect => {
       () =>
         `ALTER TABLE ${q("dc_posts")} RENAME CONSTRAINT ${q("a")} TO ${q("b")}`,
       ["dc_posts"],
+    ],
+    // Each RENAME clause is read, not the first alone: MySQL takes several in one ALTER.
+    [
+      "a table rename after a column rename",
+      () =>
+        `ALTER TABLE ${q("dc_posts")} RENAME COLUMN ${q("a")} TO ${q("b")}, RENAME TO ${q("dc_comments")}`,
+      ["dc_posts", "dc_comments"],
     ],
   ])("reads %s", (_n, sql, tables) => {
     expect(tablesChangedIn(sql(), dialect)).toEqual(tables);
@@ -414,6 +522,15 @@ describe("archiveWriteOf", () => {
     `DELETE FROM "nextly_i18n_archive" WHERE "collection" = 'posts'`,
     `INSERT INTO "nextly_i18n_archive" ("collection") VALUES ('posts')`,
     `INSERT INTO "dc_posts" ("id") SELECT 'x' FROM "dc_posts_locales"`,
+    // A FROM listing several tables reads each; one read past its first is not read here.
+    insert("posts", "dc_posts_locales").replace(
+      `FROM "dc_posts_locales" src`,
+      `FROM "dc_posts_locales" src, "dc_comments_locales" c`
+    ),
+    insert("posts", "dc_posts_locales").replace(
+      `FROM "dc_posts_locales" src`,
+      `FROM "dc_posts_locales", "dc_comments_locales" src`
+    ),
   ])("reads nothing from %s", sql => {
     expect(archiveWriteOf(sql, "postgresql")).toBeUndefined();
   });

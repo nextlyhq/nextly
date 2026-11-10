@@ -18,6 +18,7 @@ function judge(over: Partial<OldBuilderLedgerInput>) {
     partialBuilderFiles: [],
     namedByRows: new Set(),
     marks: new Map(),
+    migrations: new Set(),
     ...over,
   });
 }
@@ -85,6 +86,33 @@ describe("judgeOldBuilderLedger", () => {
     expect(result.changed).toEqual([
       { file: OLD, change: "snapshot", lacks: ["snapshot"] },
     ]);
+  });
+
+  // A ledger row names a migration by its group's name, which a dialect
+  // variant shares with the base file. Where the folder still keeps a
+  // migration of that name, the rows are that migration's: never ignored, and
+  // a mark on the name is no longer the file's alone.
+  it("ignores no rows of a marked name a kept migration claims", () => {
+    const result = judge({
+      marks: new Map([[OLD, mark("a")]]),
+      migrations: new Set([OLD]),
+    });
+    expect([...result.ignoredRows]).toEqual([]);
+    expect(result.changed).toEqual([
+      { file: OLD, change: "variant", lacks: ["variant"] },
+    ]);
+  });
+
+  it("names the variant when the content is as marked", () => {
+    const result = judge({
+      partialBuilderFiles: [{ file: OLD, lacks: ["variant"], checksum: "a" }],
+      marks: new Map([[OLD, mark("a")]]),
+      migrations: new Set([OLD]),
+    });
+    expect(result.changed).toEqual([
+      { file: OLD, change: "variant", lacks: ["variant"] },
+    ]);
+    expect([...result.ignoredRows]).toEqual([]);
   });
 
   it("does not name a partial file no current mark names", () => {

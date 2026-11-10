@@ -96,6 +96,7 @@
     "nextly-schema-slug-collision",
     "no-transaction-needs-blank",
     "old-builder-file-snapshot-added",
+    "old-builder-file-variant-added",
     "ownership-takeover-refused",
     "package-install-failed",
     "password-clear-unconfirmed",
