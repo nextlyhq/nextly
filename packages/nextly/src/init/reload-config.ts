@@ -25,7 +25,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { SQL } from "drizzle-orm";
 
-import type { CollectionHooks } from "../collections/config/define-collection";
+import type {
+  CollectionConfig,
+  CollectionHooks,
+} from "../collections/config/define-collection";
 import { loadBuilderEntities } from "../di/load-dynamic-tables";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { CollectionDbOptions } from "../domains/collections/services/collection-db-options";
@@ -1866,7 +1869,9 @@ async function applyReloadHolding(
       setAdminComponentPlugins(
         newConfig.plugins,
         newConfig.admin?.dashboard,
-        newConfig.collections
+        // The loader's collections, which this function's own type reads only
+        // in part: the check lists the views their `admin` names.
+        newConfig.collections as readonly CollectionConfig[] | undefined
       );
     }
     publishCollectionDbOptions(
