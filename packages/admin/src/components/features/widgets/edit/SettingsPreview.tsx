@@ -125,7 +125,9 @@ function PreviewCard({
       aria-hidden={hidden || undefined}
       data-testid="settings-preview"
       data-scale={scale}
-      className={hidden ? "invisible" : undefined}
+      // Still drawn while the notice stands in for it, so its state is read, but out of the
+      // room's flow, which the notice then sizes.
+      className={hidden ? "invisible absolute top-0 left-0" : undefined}
       style={{
         ...(cardWidth === undefined ? {} : { width: cardWidth }),
         ...(scale === 1 ? {} : { transform: `scale(${scale})` }),
@@ -151,11 +153,20 @@ function PreviewCard({
 /** What the preview says in the card's place while the panel's filters match nothing. */
 function NoMatchNotice({
   onClearFilters,
+  minHeight,
 }: {
   onClearFilters: (() => void) | undefined;
+  /** The scaled card's height, which the notice stands in for: at least that tall. */
+  minHeight: number | undefined;
 }) {
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-lg border border-border bg-card p-4 text-center">
+    // In the room's flow, so the room is as tall as the notice's own text and button wherever
+    // the scaled card would be shorter than they are; never clipped by the room.
+    <div
+      data-testid="settings-preview-no-match"
+      className="flex flex-col items-center justify-center gap-2 rounded-lg border border-border bg-card p-4 text-center"
+      style={minHeight === undefined ? undefined : { minHeight }}
+    >
       <p role="status" className="text-sm text-foreground">
         {NO_FILTER_MATCH}
       </p>
@@ -222,7 +233,13 @@ export function SettingsPreview(props: {
       <div
         ref={roomRef}
         className="relative w-full overflow-hidden"
-        style={height === undefined ? undefined : { height: height * scale }}
+        // The scaled card's height; while the notice stands in for the card, the notice's own,
+        // at least as tall.
+        style={
+          height === undefined || noMatch
+            ? undefined
+            : { height: height * scale }
+        }
         data-testid="settings-preview-room"
       >
         <PreviewCard
@@ -230,7 +247,10 @@ export function SettingsPreview(props: {
           hidden={noMatch}
         />
         {noMatch ? (
-          <NoMatchNotice onClearFilters={props.onClearFilters} />
+          <NoMatchNotice
+            onClearFilters={props.onClearFilters}
+            minHeight={height === undefined ? undefined : height * scale}
+          />
         ) : null}
       </div>
     </section>
