@@ -432,4 +432,33 @@ describe("DynamicCollectionSchemaService — a required relation added over rows
       add({ relationTo: "authors", hasMany: true, minRows: 1 })
     ).toThrow();
   });
+
+  // The value an apply binds follows the same decision as the literal above: a column the
+  // preflight accepts is one the apply can fill, and one it refuses gets no fill.
+  it.each([
+    ["sqlite", { relationTo: "authors", hasMany: true }, "[]"],
+    ["postgresql", { relationTo: "authors", hasMany: true }, "[]"],
+    ["mysql", { relationTo: "authors", hasMany: true }, "[]"],
+    ["postgresql", { relationTo: ["authors", "tags"] }, undefined],
+    [
+      "postgresql",
+      { relationTo: "authors", hasMany: true, minRows: 1 },
+      undefined,
+    ],
+  ] as const)(
+    "binds the fill the literal states on %s for %j",
+    (dialect, field, fill) => {
+      const service = new DynamicCollectionSchemaService(undefined, dialect);
+      const writers = {
+        name: "writers",
+        type: "relationship",
+        required: true,
+        ...field,
+      } as FieldDefinition;
+      expect(service.addedColumnFillValue(writers, new Date(0))).toBe(fill);
+      expect(service.addedColumnBackfill(writers) !== null).toBe(
+        fill !== undefined
+      );
+    }
+  );
 });

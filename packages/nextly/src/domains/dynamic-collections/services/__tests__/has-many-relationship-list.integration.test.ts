@@ -496,6 +496,68 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await authorOf(t, empty)).toEqual([]);
     });
 
+    it("adds a required hasMany relationship over rows, filling each with an empty list before requiring it", async () => {
+      const t = await boot();
+      await postsWithAuthors(t, false);
+      const existing = (
+        await t.nextly.create({ collection: "posts", data: { title: "P1" } })
+      ).item.id as string;
+
+      // The Builder's collection save: its preflight accepts the column by the backfill literal,
+      // and its apply binds the fill between adding the column optional and requiring it. Both
+      // come from one storage decision, so a list of ids with no `minRows` is filled with `[]`.
+      const stored = await storedPosts(database.adapter);
+      const outcome = await inDevelopment(() =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "updateCollection",
+          { collectionName: "posts" },
+          {
+            // The fields as the save stores them, each relationship naming its target, as
+            // `postsWithAuthors` creates them.
+            fields: [
+              ...stored.fields,
+              {
+                name: "writers",
+                type: "relationship",
+                relationTo: "authors",
+                hasMany: true,
+                required: true,
+                options: { target: "authors", relationType: "manyToOne" },
+              },
+            ],
+          }
+        )
+      ).then(
+        () => "accepted",
+        // A refused save names its reason in the service's own message, which the envelope
+        // carries in the log context behind the generic public one.
+        (error: unknown) => {
+          const e = error as {
+            logContext?: { legacyMessage?: string };
+            message?: string;
+          };
+          return String(e.logContext?.legacyMessage ?? e.message);
+        }
+      );
+      expect(outcome).toBe("accepted");
+
+      const [row] = await database.adapter.executeQuery<{ writers: unknown }>(
+        `SELECT writers FROM dc_posts WHERE id = '${existing}'`
+      );
+      const writers = row?.writers;
+      expect(
+        typeof writers === "string" ? JSON.parse(writers) : writers
+      ).toEqual([]);
+      const live = await introspectLiveSnapshot(
+        database.adapter.getDrizzle(),
+        dialect,
+        ["dc_posts"]
+      );
+      const column = live.tables[0]?.columns.find(c => c.name === "writers");
+      expect(column?.nullable).toBe(false);
+    });
+
     it("refuses switching to one while a row holds several, before anything changes", async () => {
       const t = await boot();
       const { a, b } = await postsWithAuthors(t, true);

@@ -1082,7 +1082,9 @@ export class DynamicCollectionSchemaService {
         type: field.type,
         field,
         dialect: this.dialect,
-        jsonArrayTypes: COLLECTION_JSON_ARRAY_TYPES,
+        // The same list decision as the SQL literal `requiredColumnBackfill` writes, so a
+        // required hasMany the preflight accepts is filled with `[]` here too.
+        jsonArrayTypes: this.backfillJsonArrayTypes(field.type, field),
       },
       now
     );
@@ -3779,25 +3781,39 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
     type: string,
     field?: Partial<FieldDefinition>
   ): string {
-    // The shared backfill decision; this path stores `chips` as a JSON array, and a relationship
-    // holding a list of ids too, whose empty is an empty list rather than no reference. Only such
-    // a list, and only one with no minimum: a relation to several collections holds one
-    // `{ relationTo, value }` reference, and a list that must hold entries holds none in `[]`, so
-    // each keeps the refusal a required relation without a backfill gets.
-    const storesList =
-      field !== undefined &&
-      relationStorageShape(field) === "list" &&
-      !((field.minRows ?? 0) > 0);
     return backfillDefaultForType({
       type,
       field,
       dialect: this.dialect,
       formatDefaultValue: (value, storageToken) =>
         this.formatDefaultValue(value, storageToken),
-      jsonArrayTypes: storesList
-        ? new Set([...COLLECTION_JSON_ARRAY_TYPES, type])
-        : COLLECTION_JSON_ARRAY_TYPES,
+      jsonArrayTypes: this.backfillJsonArrayTypes(type, field),
     });
+  }
+
+  /**
+   * The types this path backfills with an empty JSON list: `chips`, and a relationship holding a
+   * list of ids, whose empty is an empty list rather than no reference. Only such a list, and only
+   * one with no minimum: a relation to several collections holds one `{ relationTo, value }`
+   * reference, and a list that must hold entries holds none in `[]`, so each keeps the refusal a
+   * required relation without a backfill gets.
+   *
+   * The one answer behind both renderings of an added column's fill: the SQL literal
+   * (`getDefaultValueForType`) the preflight accepts, and the value the apply binds
+   * (`addedColumnFillValue`). Decided apart, the preflight would accept a column the apply then
+   * cannot fill.
+   */
+  private backfillJsonArrayTypes(
+    type: string,
+    field?: Partial<FieldDefinition>
+  ): ReadonlySet<string> {
+    const storesList =
+      field !== undefined &&
+      relationStorageShape(field) === "list" &&
+      !((field.minRows ?? 0) > 0);
+    return storesList
+      ? new Set([...COLLECTION_JSON_ARRAY_TYPES, type])
+      : COLLECTION_JSON_ARRAY_TYPES;
   }
 
   /**
