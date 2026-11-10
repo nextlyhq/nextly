@@ -76,12 +76,14 @@ export function FieldSettingsPanel({
   const [tab, setTab] = useState<FieldSettingsTab>("general");
   const headingId = useId();
   const typeLabel = useFieldTypeLabel(surface.surface)(field.type);
-  const lookup = useFieldTypeSettings(field.type, surface.typeSettings);
+  const lookup = useFieldTypeSettings(field.type, surface);
   const typeSettings = lookup.status === "known" ? lookup.settings : undefined;
   const typeFixedReason = fixedReason(surface.fixed, "type", saved);
 
   const control: FieldSettingsControlProps = { field, readOnly, onChange };
-  const surfaceControl = { ...control, ancestors, siblings };
+  // A field is never its own sibling: no condition or setting may name it.
+  const others = siblings.filter(sibling => sibling.id !== field.id);
+  const surfaceControl = { ...control, ancestors, siblings: others };
 
   // What the type and the surface add to one tab, the type's first.
   const additions = (which: FieldSettingsTab): ReactNode[] => {

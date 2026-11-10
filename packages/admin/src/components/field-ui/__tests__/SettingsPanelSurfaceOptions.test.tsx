@@ -121,9 +121,7 @@ describe("a surface's own conditions editor", () => {
       />
     );
     await openTab("Conditions");
-    expect(
-      screen.getByText("Own editor beside Subject, Other")
-    ).toBeInTheDocument();
+    expect(screen.getByText("Own editor beside Other")).toBeInTheDocument();
     expect(screen.queryByText(/show this field only when/i)).toBeNull();
     expect(screen.queryByText(/always shown/i)).toBeNull();
   });
@@ -177,6 +175,17 @@ describe("a surface's own type settings", () => {
     expect(screen.queryByText(/allow multiple/i)).toBeNull();
   });
 
+  it("never reads an inherited member as a type the surface set", () => {
+    render(
+      <Host
+        initial={field("toString")}
+        surface={{ ...entries, typeSettings: { checkbox: {} } }}
+      />
+    );
+    // A plugin's type, so it waits for the plugin list like any other.
+    expect(screen.getByText(/loading this type/i)).toBeInTheDocument();
+  });
+
   it("leaves the core settings where the surface names none", () => {
     render(
       <Host initial={field("checkbox", { options: [] })} surface={entries} />
@@ -207,5 +216,26 @@ describe("the forms and user-fields surfaces' built-in types", () => {
           element?.tagName === "P" && element.textContent === `Type: ${label}`
       )
     ).toBeInTheDocument();
+  });
+
+  it.each([
+    ["entries", "url"],
+    ["entries", "file"],
+    ["users", "file"],
+    ["users", "hidden"],
+  ] as const)(
+    "leave %s's %s to the plugin that declares it",
+    (surface, type) => {
+      render(<Host initial={field(type)} surface={{ ...entries, surface }} />);
+      // Not built in there, so the panel waits for the plugin list.
+      expect(screen.getByText(/loading this type/i)).toBeInTheDocument();
+    }
+  );
+
+  it("know users' url as built in", () => {
+    render(
+      <Host initial={field("url")} surface={{ ...entries, surface: "users" }} />
+    );
+    expect(screen.queryByText(/loading this type/i)).toBeNull();
   });
 });

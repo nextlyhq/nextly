@@ -29,9 +29,10 @@ import { usePluginFieldTypeEntries } from "@admin/components/field-ui/usePluginF
 
 /**
  * The built-in types a surface adds to the entries catalog (a form's URL or
- * file upload), named from that surface's own catalog.
+ * file upload), named from that surface's own catalog. Only the surface that
+ * offers one knows it as built in: on any other, the same id is a plugin's.
  */
-function surfaceCatalog(
+export function surfaceCatalog(
   surface: FieldSurface
 ): readonly { type: string; label: string }[] {
   if (surface === "forms") return FORM_FIELD_TYPE_CATALOG;

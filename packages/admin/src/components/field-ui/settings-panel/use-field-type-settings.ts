@@ -1,8 +1,10 @@
 /**
- * A field type's own settings, wherever they are declared: a built-in type's
- * from the core table, any other type's from the settings its plugin declared.
- * The one lookup the settings panel uses, so a type's settings are found the
- * same way whichever surface the panel is on.
+ * A field type's own settings, wherever they are declared: the surface's own
+ * first, then a built-in type's from the core table, then a type the surface's
+ * own catalog lists (a form's URL or file upload, which have none), and any
+ * other type's from the settings its plugin declared. The one lookup the
+ * settings panel uses, so a type's settings are found the same way whichever
+ * surface the panel is on.
  */
 import { useMemo } from "react";
 
@@ -10,11 +12,12 @@ import {
   useBranding,
   useBrandingStatus,
 } from "@admin/context/providers/BrandingProvider";
+import { surfaceCatalog } from "@admin/lib/builder/field-type-label";
 import { pluginFieldTypeSettings } from "@admin/lib/builder/plugin-field-type-entries";
 
 import { coreFieldTypeSettings } from "./core-type-settings";
 import { declaredTypeSettings } from "./DeclaredTypeSettings";
-import type { FieldTypeSettings } from "./types";
+import type { FieldSettingsSurface, FieldTypeSettings } from "./types";
 
 /**
  * What is known of a type's settings. A plugin's type is only known once the
@@ -33,8 +36,9 @@ export type FieldTypeSettingsLookup =
  */
 export function useFieldTypeSettings(
   type: string,
-  // The surface's own settings by type, which win over the core table's.
-  surfaceTypes?: Readonly<Partial<Record<string, FieldTypeSettings>>>
+  // The surface asked about: its own settings by type win over the core
+  // table's, and its catalog's built-in types are known without a plugin.
+  surface: Pick<FieldSettingsSurface, "surface" | "typeSettings">
 ): FieldTypeSettingsLookup {
   const declared = pluginFieldTypeSettings(useBranding().plugins, type);
   const { isPending, isUnavailable, retry } = useBrandingStatus();
@@ -43,12 +47,27 @@ export function useFieldTypeSettings(
     [declared]
   );
 
-  const own = surfaceTypes?.[type];
+  const own = ownEntry(surface.typeSettings, type);
   if (own) return { status: "known", settings: own };
   const core = coreFieldTypeSettings(type);
   if (core) return { status: "known", settings: core };
+  if (surfaceCatalog(surface.surface).some(entry => entry.type === type))
+    return { status: "known", settings: {} };
   if (fromPlugin) return { status: "known", settings: fromPlugin };
   if (isPending) return { status: "loading" };
   if (isUnavailable) return { status: "unavailable", retry };
   return { status: "known", settings: undefined };
+}
+
+/**
+ * The surface's settings for the type, only when the surface names it: a type
+ * spelled like an inherited member (`toString`) is not one the surface set.
+ */
+function ownEntry(
+  table: FieldSettingsSurface["typeSettings"],
+  type: string
+): FieldTypeSettings | undefined {
+  return table && Object.prototype.hasOwnProperty.call(table, type)
+    ? table[type]
+    : undefined;
 }
