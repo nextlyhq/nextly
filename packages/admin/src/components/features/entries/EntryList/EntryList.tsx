@@ -760,6 +760,20 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
           ]}
         />
       </div>
+      {/* Why nothing here can be changed, and the next step: above the
+          place, not in its `table` part, so a plugin that replaces the list
+          cannot take the warning with it. */}
+      {removedFromCode && (
+        <RemovedFromCodeNotice
+          entity={{
+            kind: "collection",
+            label: labels.plural,
+            slug: collectionSlug,
+          }}
+          state={collection?.removedFromCodeState}
+          className="mb-6"
+        />
+      )}
       {/* The list's own parts are the place's built-ins, `toolbar` (the
           header) and `table` (the list itself): plugins' blocks draw around
           them in the order sent. */}
@@ -805,19 +819,6 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
           ),
           table: (
             <>
-              {/* Above the list: why nothing here can be changed, and the next step. */}
-              {removedFromCode && (
-                <RemovedFromCodeNotice
-                  entity={{
-                    kind: "collection",
-                    label: labels.plural,
-                    slug: collectionSlug,
-                  }}
-                  state={collection?.removedFromCodeState}
-                  className="mb-6"
-                />
-              )}
-
               {/* BeforeListTable injection point */}
               {beforeListTablePath && (
                 <PluginSlot path={beforeListTablePath} props={injectionProps} />
