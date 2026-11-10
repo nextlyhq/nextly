@@ -11,8 +11,8 @@
  * and save the document. Stopping them here keeps a plugin's submit its own.
  *
  * Only contributed components are wrapped, never a page's own parts, so a
- * page with nothing contributed has the DOM it had; `display: contents` keeps
- * the wrapper out of the layout where something is.
+ * page with nothing contributed has the DOM it had; `contents` (display:
+ * contents) keeps the wrapper out of the layout where something is.
  *
  * @module components/shared/target-slot/IsolatedContribution
  */
@@ -26,7 +26,7 @@ export function IsolatedContribution({
   children: ReactNode;
 }): ReactNode {
   return (
-    <div style={{ display: "contents" }} onSubmit={stop} onReset={stop}>
+    <div className="contents" onSubmit={stop} onReset={stop}>
       {children}
     </div>
   );
