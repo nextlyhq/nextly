@@ -81,6 +81,11 @@ export interface DispatchOptions {
   batch?: number;
   /** For the backoff's jitter; injectable for tests. */
   random?: () => number;
+  /**
+   * Told of stuck deliveries after each pass, to warn about them at a pace
+   * of its own (`createStuckWarnings`).
+   */
+  warnings?: { check(adapter: DispatchAdapter, now: Date): Promise<void> };
 }
 
 /** What one pass did. */
@@ -238,7 +243,8 @@ export async function dispatchDurableEvents(
     ],
   };
   const dueWhere: DueWhere = [
-    { column: "status", op: "=" as const, value: "pending" },
+    // Held deliveries too: one whose subscriber is registered again runs.
+    { column: "status", op: "IN" as const, value: ["pending", "held"] },
     { column: "nextAttemptAt", op: "<=" as const, value: at },
     leaseFree,
   ];
@@ -265,6 +271,7 @@ export async function dispatchDurableEvents(
     });
     if (outcome !== "skipped") result[outcome] += 1;
   }
+  await options.warnings?.check(adapter, now());
   return result;
 }
 
@@ -329,8 +336,10 @@ async function runDelivery(
         PLUGIN_EVENT_DELIVERIES_TABLE,
         {
           ...released,
+          // Held, which says why it waits: its last failure, if any, is kept
+          // as the record of what went wrong.
+          status: "held",
           nextAttemptAt: ceilToSecond(at.getTime() + HOLD_MS),
-          lastError: `The subscriber "${delivery.subscriber}" is not registered.`,
         },
         { and: mine }
       )
@@ -368,7 +377,12 @@ async function runDelivery(
       tx.updateCount(
         PLUGIN_EVENT_DELIVERIES_TABLE,
         next.outcome === "retry"
-          ? { ...recorded, nextAttemptAt: ceilToSecond(next.at.getTime()) }
+          ? {
+              ...recorded,
+              // A held delivery whose subscriber came back is pending again.
+              status: "pending",
+              nextAttemptAt: ceilToSecond(next.at.getTime()),
+            }
           : { ...recorded, status: "failed" },
         { and: mine }
       )
@@ -377,47 +391,66 @@ async function runDelivery(
   }
 
   // Delivered: and when it was the event's last open delivery, the event is
-  // finished. Under the event's lock, so two deliveries of one event
-  // finishing at once still see each other.
-  await adapter.transaction(async tx => {
-    await lockEvent(tx, run.dialect, delivery.eventId);
-    const done = await tx.updateCount(
-      PLUGIN_EVENT_DELIVERIES_TABLE,
-      {
-        ...released,
-        status: "delivered",
-        attemptCount: attempt,
-        finishedAt: at,
-      },
-      { and: mine }
-    );
-    // The lease ran out and another took it: that one records the outcome.
-    if (done === 0) return;
-    const open = await tx.select<{ id: string }>(
-      PLUGIN_EVENT_DELIVERIES_TABLE,
-      {
-        columns: ["id"],
-        where: {
-          and: [
-            { column: "eventId", op: "=", value: delivery.eventId },
-            { column: "status", op: "IN", value: ["pending", "failed"] },
-          ],
+  // finished.
+  await adapter.transaction(tx =>
+    settleDelivery(tx, run.dialect, delivery.eventId, at, () =>
+      tx.updateCount(
+        PLUGIN_EVENT_DELIVERIES_TABLE,
+        {
+          ...released,
+          status: "delivered",
+          attemptCount: attempt,
+          finishedAt: at,
         },
-        limit: 1,
+        // Only while this dispatcher holds the lease: if it ran out and
+        // another took it, that one records the outcome.
+        { and: mine }
+      )
+    )
+  );
+  return "delivered";
+}
+
+/** The statuses a delivery is still owed in: its event is not finished. */
+const OPEN_STATUSES = ["pending", "held", "failed"];
+
+/**
+ * Close one delivery of `eventId` with `close`, and when it was the event's
+ * last open delivery, finish the event. Under the event's lock, taken first,
+ * so two deliveries of one event closing at once still see each other, and in
+ * the same order (event, then delivery) as every other writer here. Whether
+ * `close` changed a row.
+ */
+export async function settleDelivery(
+  tx: TransactionContext,
+  dialect: SupportedDialect,
+  eventId: string,
+  at: Date,
+  close: () => Promise<number>
+): Promise<boolean> {
+  await lockEvent(tx, dialect, eventId);
+  if ((await close()) === 0) return false;
+  const open = await tx.select<{ id: string }>(PLUGIN_EVENT_DELIVERIES_TABLE, {
+    columns: ["id"],
+    where: {
+      and: [
+        { column: "eventId", op: "=", value: eventId },
+        { column: "status", op: "IN", value: OPEN_STATUSES },
+      ],
+    },
+    limit: 1,
+  });
+  if (open.length === 0) {
+    await tx.updateCount(
+      PLUGIN_EVENTS_TABLE,
+      { finishedAt: at },
+      {
+        and: [
+          { column: "id", op: "=", value: eventId },
+          { column: "finishedAt", op: "IS NULL" },
+        ],
       }
     );
-    if (open.length === 0) {
-      await tx.updateCount(
-        PLUGIN_EVENTS_TABLE,
-        { finishedAt: at },
-        {
-          and: [
-            { column: "id", op: "=", value: delivery.eventId },
-            { column: "finishedAt", op: "IS NULL" },
-          ],
-        }
-      );
-    }
-  });
-  return "delivered";
+  }
+  return true;
 }

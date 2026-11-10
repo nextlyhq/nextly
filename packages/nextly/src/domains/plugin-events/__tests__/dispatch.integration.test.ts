@@ -24,11 +24,14 @@ import {
 } from "../../../plugins/__tests__/helpers/two-instances";
 import { definePlugin } from "../../../plugins/plugin-context";
 import { getConfiguredTestDialects } from "../../../plugins/test-nextly";
+import { abandonDurableDeliveries } from "../abandon";
 import { dispatchDurableEvents } from "../dispatch";
 import {
   createDurableEventRecorder,
   durableEventNames,
 } from "../durable-events";
+import { prunePluginEvents } from "../prune";
+import { createStuckWarnings, reportStuckDeliveries } from "../report";
 import {
   createDurableSubscribers,
   getDurableSubscribers,
@@ -47,8 +50,10 @@ const EVENTS = [{ name: PAID, durable: true as const }];
 /** A whole second, as SQLite keeps it. */
 const T0 = new Date("2026-10-15T00:00:00.000Z");
 const SECOND = 1000;
+const DAY = 24 * 3600 * SECOND;
 
 interface DeliveryRow {
+  id: string;
   eventId: string;
   subscriber: string;
   status: string;
@@ -99,13 +104,18 @@ describe.each(getConfiguredTestDialects())(
       });
       const dispatch = (
         subscribers: DurableSubscribers,
-        options: { on?: DrizzleAdapter; maxAttempts?: number } = {}
+        options: {
+          on?: DrizzleAdapter;
+          maxAttempts?: number;
+          warnings?: ReturnType<typeof createStuckWarnings>;
+        } = {}
       ) =>
         dispatchDurableEvents({
           adapter: options.on ?? first,
           subscribers,
           now,
           random: () => 0,
+          ...(options.warnings ? { warnings: options.warnings } : {}),
           ...(options.maxAttempts === undefined
             ? {}
             : { maxAttempts: options.maxAttempts }),
@@ -299,8 +309,8 @@ describe.each(getConfiguredTestDialects())(
       expect(await deliveries()).toHaveLength(2);
     });
 
-    it("a delivery whose subscriber is gone is kept, neither run nor given to another", async () => {
-      const { events, dispatch, deliveries, eventRows } = await boot();
+    it("a delivery whose subscriber was removed is kept and reported, then abandoned and pruned", async () => {
+      const { first, events, dispatch, deliveries, eventRows } = await boot();
       const before = createDurableSubscribers();
       before.register("@test/loyalty", PAID, "award", () => {
         throw new Error("the points service is down");
@@ -323,10 +333,14 @@ describe.each(getConfiguredTestDialects())(
       const award = (await deliveries()).find(
         row => row.subscriber === "@test/loyalty:award"
       );
-      // Kept as it was, owed to its own subscriber, its next look put off a
-      // quarter of an hour, so it is not read again on every pass.
-      expect(award).toMatchObject({ status: "pending", attemptCount: 1 });
-      expect(award?.lastError).toContain("not registered");
+      // Held, owed to its own subscriber, its last failure kept as the record
+      // of what went wrong, its next look put off a quarter of an hour, so it
+      // is not read again on every pass.
+      expect(award).toMatchObject({
+        status: "held",
+        attemptCount: 1,
+        lastError: "the points service is down",
+      });
       expect(msOf(award?.nextAttemptAt)).toBeGreaterThanOrEqual(
         clock.getTime() + 15 * 60 * SECOND
       );
@@ -341,6 +355,159 @@ describe.each(getConfiguredTestDialects())(
       expect(await dispatch(after)).toMatchObject({ held: 1 });
       clock = new Date(clock.getTime() + 60 * SECOND);
       expect(await dispatch(after)).toMatchObject({ held: 0 });
+
+      // The report names it, as the CLI shows it.
+      expect(await reportStuckDeliveries(first)).toEqual([
+        {
+          id: award?.id,
+          eventId: award?.eventId,
+          subscriber: "@test/loyalty:award",
+          status: "held",
+          attemptCount: 1,
+          lastError: "the points service is down",
+        },
+      ]);
+
+      // Abandoned: kept with its record, never looked at again, its event
+      // finished.
+      const abandonedAt = clock;
+      expect(
+        await abandonDurableDeliveries(
+          first,
+          { subscriber: "@test/loyalty:award" },
+          { now }
+        )
+      ).toMatchObject([{ id: award?.id }]);
+      const [gone] = (await deliveries()).filter(
+        row => row.subscriber === "@test/loyalty:award"
+      );
+      expect(gone).toMatchObject({
+        status: "abandoned",
+        attemptCount: 1,
+        lastError: "the points service is down",
+      });
+      expect(await reportStuckDeliveries(first)).toEqual([]);
+      clock = new Date(clock.getTime() + DAY);
+      expect(await dispatch(after)).toMatchObject({ held: 0 });
+      const [finished] = await eventRows();
+      expect(msOf(finished?.finishedAt)).toBe(abandonedAt.getTime());
+
+      // Pruned after 30 days, with its deliveries.
+      expect(
+        await prunePluginEvents(first, new Date(abandonedAt.getTime() + 30 * DAY))
+      ).toMatchObject({ removed: 0 });
+      expect(
+        await prunePluginEvents(
+          first,
+          new Date(abandonedAt.getTime() + 30 * DAY + SECOND)
+        )
+      ).toMatchObject({ removed: 1 });
+      expect(await eventRows()).toEqual([]);
+      expect(await deliveries()).toEqual([]);
+    });
+
+    it("a held delivery runs on its next due pass once its subscriber is back, and never goes to another", async () => {
+      const { events, dispatch, deliveries, eventRows } = await boot();
+      // Fanned out and tried once by an instance that has the subscriber,
+      // then looked at by one that does not.
+      const before = createDurableSubscribers();
+      before.register("@test/loyalty", PAID, "award", () => {
+        throw new Error("the points service is down");
+      });
+      await events.record(PAID, { order: "o-10" });
+      expect(await dispatch(before)).toMatchObject({ retried: 1 });
+      clock = new Date(T0.getTime() + 2 * SECOND);
+      const without = createDurableSubscribers();
+      let others = 0;
+      without.register("@test/other", PAID, "award", () => {
+        others += 1;
+      });
+      expect(await dispatch(without)).toMatchObject({ held: 1 });
+      expect((await deliveries())[0]).toMatchObject({ status: "held" });
+
+      // Its subscriber registered again: run on the pass it is next due.
+      const calls: number[] = [];
+      const back = createDurableSubscribers();
+      back.register("@test/loyalty", PAID, "award", event => {
+        calls.push(event.attempt);
+      });
+      clock = new Date(T0.getTime() + 15 * 60 * SECOND);
+      expect(await dispatch(back)).toMatchObject({ held: 0, delivered: 0 });
+      clock = new Date(T0.getTime() + 16 * 60 * SECOND);
+      expect(await dispatch(back)).toMatchObject({ delivered: 1 });
+      expect(calls).toEqual([2]);
+      expect(others).toBe(0);
+      const rows = await deliveries();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        subscriber: "@test/loyalty:award",
+        status: "delivered",
+      });
+      expect(msOf((await eventRows())[0]?.finishedAt)).toBe(clock.getTime());
+    });
+
+    it("a stuck subscriber is warned about once, not on the next pass, and again an hour later", async () => {
+      const { events, dispatch } = await boot();
+      const warned: string[] = [];
+      const warnings = createStuckWarnings({
+        warn: message => {
+          warned.push(message);
+        },
+      });
+      const subscribers = createDurableSubscribers();
+      subscribers.register("@test/email", PAID, "receipt", () => {
+        throw new Error("the address is refused");
+      });
+      await events.record(PAID, { order: "o-11" });
+      await dispatch(subscribers, { maxAttempts: 1, warnings });
+      expect(warned).toHaveLength(1);
+      expect(warned[0]).toContain('"@test/email:receipt"');
+      expect(warned[0]).toContain("0 held");
+      expect(warned[0]).toContain("1 out of attempts");
+      expect(warned[0]).toContain("nextly events report");
+      expect(warned[0]).toContain(
+        "nextly events abandon --subscriber @test/email:receipt"
+      );
+
+      clock = new Date(T0.getTime() + 60 * SECOND);
+      await dispatch(subscribers, { maxAttempts: 1, warnings });
+      expect(warned).toHaveLength(1);
+      clock = new Date(T0.getTime() + 3600 * SECOND);
+      await dispatch(subscribers, { maxAttempts: 1, warnings });
+      expect(warned).toHaveLength(2);
+    });
+
+    it("finished events are pruned after 30 days, with their deliveries, and unfinished ones kept", async () => {
+      const { first, events, dispatch, deliveries, eventRows } = await boot();
+      const subscribers = createDurableSubscribers();
+      subscribers.register("@test/email", PAID, "receipt", event => {
+        if (event.payload.order === "o-13") throw new Error("still down");
+      });
+      // Finished at T0, by its delivery.
+      await events.record(PAID, { order: "o-12" });
+      // Never finished: its delivery keeps failing.
+      await events.record(PAID, { order: "o-13" });
+      await dispatch(subscribers);
+      // Finished later, a day after.
+      clock = new Date(T0.getTime() + DAY);
+      await events.record(PAID, { order: "o-14" });
+      await dispatch(subscribers);
+      expect(await deliveries()).toHaveLength(3);
+
+      expect(
+        await prunePluginEvents(first, new Date(T0.getTime() + 30 * DAY + SECOND))
+      ).toMatchObject({ removed: 1, started: true });
+      const kept = await eventRows();
+      expect(kept).toHaveLength(2);
+      const keptDeliveries = await deliveries();
+      expect(keptDeliveries).toHaveLength(2);
+      expect(
+        keptDeliveries.every(row => kept.some(e => e.id === row.eventId))
+      ).toBe(true);
+      // Still unfinished a year on: never pruned.
+      await prunePluginEvents(first, new Date(T0.getTime() + 365 * DAY));
+      expect(await eventRows()).toHaveLength(1);
+      expect((await deliveries())[0]).toMatchObject({ status: "pending" });
     });
 
     it("a handler that fails slowly is tried again its backoff after it failed", async () => {
@@ -399,8 +566,8 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
-    it("a delivery that runs out of attempts is kept as failed", async () => {
-      const { events, dispatch, deliveries, eventRows } = await boot();
+    it("a delivery that runs out of attempts is kept as failed and reported", async () => {
+      const { first, events, dispatch, deliveries, eventRows } = await boot();
       let tries = 0;
       const subscribers = createDurableSubscribers();
       subscribers.register("@test/email", PAID, "receipt", () => {
@@ -423,6 +590,39 @@ describe.each(getConfiguredTestDialects())(
       expect(tries).toBe(2);
       const [event] = await eventRows();
       expect(event?.finishedAt ?? null).toBeNull();
+
+      // Reported until abandoned, by its id.
+      const [failed] = await deliveries();
+      expect(await reportStuckDeliveries(first)).toMatchObject([
+        {
+          id: failed?.id,
+          subscriber: "@test/email:receipt",
+          status: "failed",
+          attemptCount: 2,
+          lastError: "the address is refused",
+        },
+      ]);
+      // A dry run names it and changes nothing.
+      expect(
+        await abandonDurableDeliveries(
+          first,
+          { deliveryId: failed?.id },
+          { dryRun: true, now }
+        )
+      ).toMatchObject([{ id: failed?.id, status: "failed" }]);
+      expect(await reportStuckDeliveries(first)).toHaveLength(1);
+      await abandonDurableDeliveries(
+        first,
+        { deliveryId: failed?.id },
+        { now }
+      );
+      expect(await reportStuckDeliveries(first)).toEqual([]);
+      expect((await deliveries())[0]).toMatchObject({
+        status: "abandoned",
+        attemptCount: 2,
+        lastError: "the address is refused",
+      });
+      expect(msOf((await eventRows())[0]?.finishedAt)).toBe(clock.getTime());
     });
   }
 );
