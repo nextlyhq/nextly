@@ -594,13 +594,128 @@ describe("FieldSettingsPanel", () => {
       await user.type(offset, "-5");
       expect(current.pluginOptions?.offset).toBe(-5);
       await user.clear(offset);
-      expect(current.pluginOptions).not.toHaveProperty("offset");
+      expect(current.pluginOptions?.offset).toBeUndefined();
       await user.type(offset, "1.5");
       expect(current.pluginOptions?.offset).toBe(1.5);
       expect(offset).toHaveValue("1.5");
     } finally {
       branding.current = {};
     }
+  });
+
+  describe("a plugin type's declared settings, edited and undone", () => {
+    const withSettings = (settings: unknown[]) => ({
+      plugins: [
+        {
+          name: "rating-plugin",
+          enabled: true,
+          fieldTypes: [
+            {
+              type: "star-rating",
+              component: "rating-plugin/StarRating",
+              storage: "number",
+              label: "Star rating",
+              settings,
+            },
+          ],
+        },
+      ],
+    });
+    const rating: BuilderField = {
+      id: "f-rating",
+      name: "rating",
+      label: "Rating",
+      type: "star-rating",
+    };
+
+    it("leaves no empty options behind when the only setting is cleared", async () => {
+      const user = userEvent.setup();
+      branding.current = withSettings([
+        { key: "caption", label: "Caption", control: "text" },
+      ]);
+      try {
+        let current = rating;
+        render(
+          <Host
+            initial={rating}
+            onChange={next => {
+              current = next;
+            }}
+          />
+        );
+        const caption = screen.getByLabelText("Caption");
+        await user.type(caption, "x");
+        await user.clear(caption);
+        expect(current).not.toHaveProperty("pluginOptions");
+        expect(countDirtyFields([rating], [current])).toBe(0);
+      } finally {
+        branding.current = {};
+      }
+    });
+
+    it("clears a chosen option back to none", async () => {
+      const user = userEvent.setup();
+      branding.current = withSettings([
+        {
+          key: "shape",
+          label: "Shape",
+          control: "select",
+          options: [
+            { label: "Star", value: "star" },
+            { label: "Heart", value: "heart" },
+          ],
+        },
+      ]);
+      try {
+        let current: BuilderField = {
+          ...rating,
+          pluginOptions: { shape: "heart" },
+        };
+        render(
+          <Host
+            initial={current}
+            onChange={next => {
+              current = next;
+            }}
+          />
+        );
+        await user.click(screen.getByRole("button", { name: "Clear Shape" }));
+        expect(current).not.toHaveProperty("pluginOptions");
+        expect(
+          screen.queryByRole("button", { name: "Clear Shape" })
+        ).toBeNull();
+      } finally {
+        branding.current = {};
+      }
+    });
+
+    it("says a number it cannot read is not saved, and shows the saved one again on leaving", async () => {
+      const user = userEvent.setup();
+      branding.current = withSettings([
+        { key: "max", label: "Most stars", control: "number" },
+      ]);
+      try {
+        let current = rating;
+        render(
+          <Host
+            initial={rating}
+            onChange={next => {
+              current = next;
+            }}
+          />
+        );
+        const max = screen.getByLabelText("Most stars");
+        await user.type(max, "12x");
+        expect(current.pluginOptions?.max).toBe(12);
+        expect(max).toHaveAttribute("aria-invalid", "true");
+        expect(max).toHaveAccessibleDescription(/not a number/i);
+        await user.tab();
+        expect(max).toHaveValue("12");
+        expect(max).not.toHaveAttribute("aria-invalid", "true");
+      } finally {
+        branding.current = {};
+      }
+    });
   });
 
   describe("a plugin type whose plugin list has not arrived", () => {

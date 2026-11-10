@@ -10,6 +10,7 @@
  * and come first there; the rest go to the tab each names.
  */
 import {
+  Button,
   Input,
   Label,
   Select,
@@ -41,10 +42,14 @@ function withSetting(
 ): BuilderField {
   const { [key]: _previous, ...rest } = field.pluginOptions ?? {};
   void _previous;
-  return {
-    ...field,
-    pluginOptions: value === undefined ? rest : { ...rest, [key]: value },
-  };
+  const options = value === undefined ? rest : { ...rest, [key]: value };
+  // A container left with nothing in it is dropped, so undoing the only edit
+  // returns the field to the shape it was loaded in and reads as no change.
+  if (Object.keys(options).length > 0)
+    return { ...field, pluginOptions: options };
+  const { pluginOptions: _empty, ...withoutOptions } = field;
+  void _empty;
+  return withoutOptions;
 }
 
 /** One declared setting's control, reading and writing `pluginOptions[key]`. */
@@ -88,26 +93,44 @@ function DeclaredSetting({
         );
       case "select":
         return (
-          <Select
-            value={typeof stored === "string" ? stored : undefined}
-            disabled={readOnly}
-            onValueChange={set}
-          >
-            <SelectTrigger
-              id={id}
-              aria-label={setting.label}
-              aria-describedby={describedBy}
+          <div className="flex items-center gap-2">
+            <Select
+              // Keyed by whether a value is chosen, so clearing it shows the
+              // placeholder again rather than the last option picked.
+              key={typeof stored === "string" ? "chosen" : "none"}
+              value={typeof stored === "string" ? stored : undefined}
+              disabled={readOnly}
+              onValueChange={set}
             >
-              <SelectValue placeholder="Choose…" />
-            </SelectTrigger>
-            <SelectContent>
-              {setting.options.map(option => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              <SelectTrigger
+                id={id}
+                aria-label={setting.label}
+                aria-describedby={describedBy}
+              >
+                <SelectValue placeholder="Choose…" />
+              </SelectTrigger>
+              <SelectContent>
+                {setting.options.map(option => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {/* A choice left unset is the plugin's default, so a chosen one can
+              be taken back to that rather than only swapped for another. */}
+            {typeof stored === "string" && !readOnly && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-label={`Clear ${setting.label}`}
+                onClick={() => set(undefined)}
+              >
+                Clear
+              </Button>
+            )}
+          </div>
         );
       case "text":
         return (
@@ -166,24 +189,46 @@ function NumberSettingInput({
   onValue: (value: number | undefined) => void;
 }): JSX.Element {
   const [text, setText] = useState(stored === undefined ? "" : String(stored));
+  const errorId = useId();
+  // Text that is not yet a number (`-`, `12x`) is never written, so the saved
+  // value stays the last one that was. The box says so while it shows the
+  // text, and shows the saved value again once the person leaves it.
+  const unreadable = text.trim() !== "" && !Number.isFinite(Number(text));
+  const shown = stored === undefined ? "" : String(stored);
   return (
-    <Input
-      id={id}
-      inputMode="decimal"
-      aria-describedby={describedBy}
-      value={text}
-      disabled={readOnly}
-      onChange={e => {
-        const next = e.target.value;
-        setText(next);
-        if (next.trim() === "") {
-          onValue(undefined);
-          return;
+    <div className="space-y-1">
+      <Input
+        id={id}
+        inputMode="decimal"
+        aria-invalid={unreadable || undefined}
+        aria-describedby={
+          [describedBy, unreadable ? errorId : undefined]
+            .filter(Boolean)
+            .join(" ") || undefined
         }
-        const parsed = Number(next);
-        if (Number.isFinite(parsed)) onValue(parsed);
-      }}
-    />
+        value={text}
+        disabled={readOnly}
+        onChange={e => {
+          const next = e.target.value;
+          setText(next);
+          if (next.trim() === "") {
+            onValue(undefined);
+            return;
+          }
+          const parsed = Number(next);
+          if (Number.isFinite(parsed)) onValue(parsed);
+        }}
+        onBlur={() => {
+          if (unreadable) setText(shown);
+        }}
+      />
+      {unreadable && (
+        <p id={errorId} className="text-xs text-destructive">
+          Not a number, so not saved; the setting stays{" "}
+          {shown === "" ? "unset" : shown}.
+        </p>
+      )}
+    </div>
   );
 }
 

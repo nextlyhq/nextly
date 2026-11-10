@@ -18,12 +18,7 @@ import { NextlyError } from "../errors/nextly-error";
 
 import type { PluginFieldTypeSetting } from "./contributions";
 import type { PluginDefinition } from "./plugin-context";
-
-/**
- * Keys a field restates as its own identity inside `pluginOptions`, so a
- * setting stored under one would be read back as the field's type or name.
- */
-const RESERVED_KEYS: ReadonlySet<string> = new Set(["type", "name"]);
+import { RESERVED_PLUGIN_OPTION_KEYS } from "./plugin-options";
 
 /** A key the panel and the stored options can both carry unchanged. */
 const KEY = /^[A-Za-z][A-Za-z0-9_]*$/;
@@ -99,9 +94,12 @@ function problemOf(
       };
     }
     const setting = parsed.data;
-    if (RESERVED_KEYS.has(setting.key)) {
+    // The keys core keeps for the field itself inside `pluginOptions`, the set
+    // the manifest and option folding enforce, so a setting stored under one
+    // would be shadowed or refused at save.
+    if (RESERVED_PLUGIN_OPTION_KEYS.has(setting.key)) {
       return {
-        reason: `uses the reserved key "${setting.key}", which a field keeps as its own ${setting.key}`,
+        reason: `uses the reserved key "${setting.key}", which the field keeps for itself`,
         context: { index, key: setting.key },
       };
     }

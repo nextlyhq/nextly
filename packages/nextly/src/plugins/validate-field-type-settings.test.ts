@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { NextlyError } from "../errors/nextly-error";
 
 import type { PluginDefinition } from "./plugin-context";
+import { RESERVED_PLUGIN_OPTION_KEYS } from "./plugin-options";
 import { assertFieldTypeSettings } from "./validate-field-type-settings";
 
 function asPlugins(defs: unknown[]): PluginDefinition[] {
@@ -107,10 +108,15 @@ describe("assertFieldTypeSettings", () => {
     expect(error.logContext).toMatchObject({ index: 1, key: "max" });
   });
 
-  it.each(["type", "name"])("refuses the reserved key %s", key => {
-    const error = refusal([{ key, label: "Clash", control: "text" }]);
-    expect(error.logMessage).toMatch(new RegExp(`reserved key "${key}"`));
-  });
+  // Every key core reserves inside `pluginOptions`, read from the set the
+  // manifest and option folding enforce, so a key core adds is covered here too.
+  it.each([...RESERVED_PLUGIN_OPTION_KEYS])(
+    "refuses the reserved key %s",
+    key => {
+      const error = refusal([{ key, label: "Clash", control: "text" }]);
+      expect(error.logMessage).toMatch(new RegExp(`reserved key "${key}"`));
+    }
+  );
 
   it("refuses an option value offered twice", () => {
     const error = refusal([
