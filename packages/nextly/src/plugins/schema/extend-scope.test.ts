@@ -174,6 +174,53 @@ describe("extend with a scope — types in the configuration", () => {
   });
 });
 
+describe("extend with a scope — who owns what it added", () => {
+  it("keeps a field a scope added as the plugin's, where another scope was left alone on the same type", () => {
+    // @t/titles' scope collides with every type's `title` and is left alone
+    // there; @t/seo's `seo` on the same types is still @t/seo's.
+    const titles = plugin("@t/titles", {
+      extend: [{ target: EVERY, fields: [field("title")] }],
+    });
+    // A transform, so the fold records who added which field.
+    const noop = plugin("@t/noop", {
+      transforms: [{ target: "posts", transform: entity => entity }],
+    });
+    const { fieldsAddedByPlugins, leftAlone } =
+      applyPluginSchemaContributionsDeferred(siteConfig(), [
+        seoPlugin(),
+        titles,
+        noop,
+      ]);
+
+    expect(leftAlone).toContainEqual(
+      expect.objectContaining({ target: "posts", field: "title" })
+    );
+    const posts = fieldsAddedByPlugins.get("posts");
+    expect(posts?.get("seo")).toBe("@t/seo");
+    // The app's own `title`, which @t/titles left alone, is not @t/titles'.
+    expect(posts?.has("title")).toBe(false);
+  });
+});
+
+describe("extend with a scope — the order clauses apply in", () => {
+  it("defers a scope and a later slug target in the plugins' own order", () => {
+    // @t/seo's scope comes first, so a Builder type receives it first, as a
+    // configured type does, and a later plugin's same-named field meets it.
+    const later = plugin("@t/later", {
+      extend: [{ target: "articles", fields: [field("seo")] }],
+    });
+    const { deferredExtends } = applyPluginSchemaContributionsDeferred(
+      siteConfig(),
+      [seoPlugin(), later]
+    );
+
+    expect(deferredExtends.map(clause => clause.owner)).toEqual([
+      "@t/seo",
+      "@t/later",
+    ]);
+  });
+});
+
 describe("extend with a scope — Schema Builder types", () => {
   const builder = () => ({
     collections: [
