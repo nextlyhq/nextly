@@ -394,7 +394,12 @@ export class SingleRegistryService extends BaseRegistryService<
    * @throws NextlyError(DATABASE_ERROR) on insert failure.
    */
   async registerSingle(
-    data: DynamicSingleInsert
+    data: DynamicSingleInsert,
+    /**
+     * `seedPermissions: false` leaves the Single's permissions to a seeding the
+     * caller knows follows, as a start's does (`syncCodeFirstSingles`).
+     */
+    options: { seedPermissions?: boolean } = {}
   ): Promise<DynamicSingleRecord> {
     this.logger.debug("Registering Single", { slug: data.slug });
 
@@ -429,7 +434,9 @@ export class SingleRegistryService extends BaseRegistryService<
         source: data.source,
       });
 
-      await this.seedPermissionsForSingle(data.slug);
+      if (options.seedPermissions !== false) {
+        await this.seedPermissionsForSingle(data.slug);
+      }
 
       return this.deserializeRecord(result);
     } catch (error) {
@@ -1014,11 +1021,20 @@ export class SingleRegistryService extends BaseRegistryService<
    * Singles as needed. Typically called during application startup.
    */
   async syncCodeFirstSingles(
-    configs: CodeFirstSingleConfig[]
+    configs: CodeFirstSingleConfig[],
+    /**
+     * `seedPermissions: false` when a seeding of every entity's permissions
+     * follows, as at a start: the sync then leaves them to it, so each is
+     * ensured once. Every other caller has its Singles' permissions seeded
+     * here, as before.
+     */
+    options: { seedPermissions?: boolean } = {}
   ): Promise<SyncSingleResult> {
     this.logger.info("Syncing code-first Singles", {
       count: configs.length,
     });
+    const seedPermissions = options.seedPermissions !== false;
+    const recordOf = await this.storedRecordsBySlug();
 
     const result: SyncSingleResult = {
       created: [],
@@ -1029,40 +1045,44 @@ export class SingleRegistryService extends BaseRegistryService<
 
     for (const config of configs) {
       try {
-        const existing = await this.findRecordForWrite(config.slug);
+        const existing = await recordOf(config.slug);
         const schemaHash = calculateSchemaHash(config.fields);
 
         if (!existing) {
-          await this.registerSingle({
-            slug: config.slug,
-            label: config.label,
-            // Route through the canonical resolver so registry and DDL paths
-            // never disagree on the single's physical table name, even when
-            // an explicit dbName/tableName is provided without the prefix.
-            tableName: resolveSingleTableName({
+          await this.registerSingle(
+            {
               slug: config.slug,
-              dbName: config.tableName,
-            }),
-            description: config.description,
-            fields: config.fields,
-            admin: config.admin,
-            source: "code",
-            locked: true,
-            // Forward Draft/Published flag so code-first Singles that opt
-            // in actually write the column on first sync.
-            status: config.status === true,
-            // Forward the resolved versioning config on first sync.
-            versions: config.versions,
-            // Forward the cache-revalidation config on first sync.
-            revalidate: config.revalidate,
-            // Forward the webhook recording policy on first sync.
-            webhooks: config.webhooks,
-            localized: config.localized === true,
-            configPath: config.configPath,
-            schemaHash,
-          });
+              label: config.label,
+              // Route through the canonical resolver so registry and DDL paths
+              // never disagree on the single's physical table name, even when
+              // an explicit dbName/tableName is provided without the prefix.
+              tableName: resolveSingleTableName({
+                slug: config.slug,
+                dbName: config.tableName,
+              }),
+              description: config.description,
+              fields: config.fields,
+              admin: config.admin,
+              source: "code",
+              locked: true,
+              // Forward Draft/Published flag so code-first Singles that opt
+              // in actually write the column on first sync.
+              status: config.status === true,
+              // Forward the resolved versioning config on first sync.
+              versions: config.versions,
+              // Forward the cache-revalidation config on first sync.
+              revalidate: config.revalidate,
+              // Forward the webhook recording policy on first sync.
+              webhooks: config.webhooks,
+              localized: config.localized === true,
+              configPath: config.configPath,
+              schemaHash,
+            },
+            // Registering seeds the Single's permissions, unless a later
+            // seeding of every entity's is left to.
+            { seedPermissions }
+          );
           result.created.push(config.slug);
-          await this.seedPermissionsForSingle(config.slug);
         } else if (
           this.schemaSyncNeeded(
             config,
@@ -1106,7 +1126,7 @@ export class SingleRegistryService extends BaseRegistryService<
             { source: "code" }
           );
           result.updated.push(config.slug);
-          await this.seedPermissionsForSingle(config.slug);
+          if (seedPermissions) await this.seedPermissionsForSingle(config.slug);
         } else if (
           this.adminConfigChanged(config.admin, existing.admin) ||
           metadataSyncNeeded(config, existing)
@@ -1145,10 +1165,11 @@ export class SingleRegistryService extends BaseRegistryService<
             { source: "code" }
           );
           result.updated.push(config.slug);
-          await this.seedPermissionsForSingle(config.slug);
+          if (seedPermissions) await this.seedPermissionsForSingle(config.slug);
         } else {
-          // No changes — still ensure permissions exist (idempotent)
-          await this.seedPermissionsForSingle(config.slug);
+          // No changes — still ensure permissions exist (idempotent), unless a
+          // seeding of every entity's follows.
+          if (seedPermissions) await this.seedPermissionsForSingle(config.slug);
           result.unchanged.push(config.slug);
         }
       } catch (error) {
@@ -1267,6 +1288,27 @@ export class SingleRegistryService extends BaseRegistryService<
    * Seed read/update permissions for a single and assign to super_admin.
    * Non-blocking — errors are logged but do not fail the parent operation.
    */
+  /**
+   * The record as stored for a slug, from one read of every record rather than
+   * a read per slug, so a sync costs the same number of reads for five Singles
+   * as for fifty. Read past the registry row cache, as `findRecordForWrite`
+   * reads, since a sync decides from it. Where that read fails (a registry a
+   * migration has not created yet), each slug is read on its own, as before, so
+   * each failure lands on the Single it belongs to.
+   */
+  private async storedRecordsBySlug(): Promise<
+    (slug: string) => Promise<DynamicSingleRecord | null>
+  > {
+    try {
+      const records = new Map(
+        (await this.getAllSingles()).map(record => [record.slug, record])
+      );
+      return slug => Promise.resolve(records.get(slug) ?? null);
+    } catch {
+      return slug => this.findRecordForWrite(slug);
+    }
+  }
+
   private async seedPermissionsForSingle(slug: string): Promise<void> {
     if (!this.permissionSeedService) return;
 

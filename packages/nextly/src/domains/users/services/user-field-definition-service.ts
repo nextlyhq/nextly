@@ -499,13 +499,10 @@ export class UserFieldDefinitionService extends BaseService {
   async syncCodeFields(
     codeFields: { name: string; [key: string]: unknown }[]
   ): Promise<void> {
-    if (!codeFields || codeFields.length === 0) {
-      // No code fields — delete any stale code-sourced rows
-      await this.db
-        .delete(this.userFieldDefinitions)
-        .where(eq(this.userFieldDefinitions.source, "code"));
-      return;
-    }
+    // A configuration declaring none goes through the same comparison: it
+    // removes the code fields stored, where there are any, rather than writing a
+    // delete on every sync whether or not anything is stored.
+    codeFields = codeFields ?? [];
 
     // Processes starting at once each find a code field missing and insert
     // it; one wins, and the rest roll back on its name, taking every other

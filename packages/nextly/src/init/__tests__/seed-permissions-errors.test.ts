@@ -38,8 +38,10 @@ vi.mock("../../di/service-access", () => ({
       case "permissionSeedService":
         return {
           seedSystemPermissions,
-          seedAllCollectionPermissions: async () => seeded(),
-          seedAllSinglePermissions: async () => seeded(),
+          seedAllEntityPermissions: async () => ({
+            collections: seeded(),
+            singles: seeded(),
+          }),
           seedCustomPermissions: async () => seeded(),
           markOrphanedPermissions: async () => undefined,
           assignNewPermissionsToSuperAdmin: async () => undefined,

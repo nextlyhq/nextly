@@ -171,9 +171,12 @@ import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import {
   bootApplyEnabled,
   checkRelationsBeforePlugins,
+  readStartFingerprints,
+  unchangedSinceLastStart,
 } from "../init/boot-apply";
 import { assertBootMigrationsNotRefused } from "../init/boot-migrations-gate";
 import type { RunProdMigrationsArgs } from "../init/prod-migrations";
+import { bootSeedingFollows } from "../init/seed-permissions";
 import { unwrittenSlugs } from "../init/sync-outcome";
 import { startCompanionReadinessWarmUp } from "../init/warm-companion-readiness";
 import { env } from "../lib/env";
@@ -1124,6 +1127,9 @@ async function registerServicesOnce(
       // with it on, the push that follows would plan to drop translatable columns a database laid
       // out before the setting still holds on its main tables; with it off, reads would ask main
       // tables for columns the setting kept per language.
+      // At a development start, what the last one recorded of each entity's declaration, read once
+      // before any per-entity work, so the reads below can skip what has not changed.
+      await readStartFingerprints(adapter, resolvedLogger, transformedConfig);
       await refuseMixedStorageInConfig(
         adapter,
         transformedConfig,
@@ -3753,8 +3759,13 @@ async function syncCodeFirstCollections(
   // database's, so they hold whatever the rows below do.
   publishCollectionDbOptions(codeFirstConfigs);
 
-  const syncResult =
-    await collectionRegistry.syncCodeFirstCollections(codeFirstConfigs);
+  // A start's own seeding ensures every entity's permissions once it has
+  // registered the services, so the sync leaves them to it and each is
+  // ensured once. A caller with no seeding to follow has the sync seed them.
+  const syncResult = await collectionRegistry.syncCodeFirstCollections(
+    codeFirstConfigs,
+    { seedPermissions: !bootSeedingFollows() }
+  );
 
   logger.info?.(
     `Collections registered: ${syncResult.created.length} created, ${syncResult.updated.length} updated, ${syncResult.unchanged.length} unchanged`
@@ -3803,6 +3814,8 @@ async function syncCodeFirstCollections(
     (transformedConfig.collections ?? []).map(c => [c.slug, c])
   );
   for (const slug of syncResult.unchanged) {
+    // A development start brought this one's table in line with the same declaration already.
+    if (unchangedSinceLastStart("collection", slug)) continue;
     const collection = collectionsBySlug.get(slug);
     const baseTableName = collection?.dbName ?? slug.replace(/-/g, "_");
     const tableName = baseTableName.startsWith("dc_")
@@ -4276,8 +4289,10 @@ async function syncCodeFirstSingles(
     ReturnType<SingleRegistryService["syncCodeFirstSingles"]>
   > | null = null;
   try {
+    // As for collections: left to the start's seeding when one follows.
     singleSyncResult = await singleRegistry.syncCodeFirstSingles(
-      codeFirstSingleConfigs
+      codeFirstSingleConfigs,
+      { seedPermissions: !bootSeedingFollows() }
     );
     logger.info?.(
       `Singles registered: ${singleSyncResult.created.length} created, ${singleSyncResult.updated.length} updated, ${singleSyncResult.unchanged.length} unchanged`
@@ -5441,15 +5456,20 @@ async function refuseMixedStorageInConfig(
       })
     ),
   ];
+  const declaredTables = new Set(entities.map(entity => entity.tableName));
+  // At a development start, an entity whose declaration a start already brought in line under the
+  // same settings is not read again: nothing about its layout can have changed since.
+  const judged = entities.filter(
+    entity =>
+      !unchangedSinceLastStart(
+        entity.kind === "component" ? "fieldGroup" : entity.kind,
+        entity.slug
+      )
+  );
   // The Schema Builder's entities, by their registered tables; one the configuration also declares
   // is judged as the configuration describes it.
-  entities.push(
-    ...(await readLayoutScanEntities(
-      adapter,
-      new Set(entities.map(entity => entity.tableName))
-    ))
-  );
-  await refuseMixedStorage(adapter, entities, perLanguage);
+  judged.push(...(await readLayoutScanEntities(adapter, declaredTables)));
+  await refuseMixedStorage(adapter, judged, perLanguage);
   // With no languages declared in the configuration or in Settings, the site would serve the
   // implicit language alone: refused where its per-language tables hold others, so translations
   // never read as gone after a `localization` block is removed.

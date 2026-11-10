@@ -44,7 +44,11 @@ import { getService, isServicesRegistered } from "./di/service-access";
 import { installLegacyFieldGroupsNamespaceGuard } from "./direct-api/legacy-field-groups-namespace";
 import { requireNextly as getDirectAPI } from "./direct-api/nextly";
 import { NextlyError } from "./errors/nextly-error";
-import { runBootTimeApplyIfDev } from "./init/boot-apply";
+import {
+  recordStartFingerprints,
+  runBootTimeApplyIfDev,
+  unchangedSinceLastStart,
+} from "./init/boot-apply";
 import { awaitBootMigrations } from "./init/boot-migrations-gate";
 import {
   buildServiceConfig,
@@ -429,6 +433,10 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // The drift check itself is failure-safe; we don't wrap a
         // try/catch around getService("config") so a real DI bug
         // crashes loudly instead of being masked.
+        // The collections the drift check reads, and whether it found any drifted: those are left
+        // unrecorded below, so the next start checks them, and warns, again.
+        let driftChecked: string[] = [];
+        let drifted = false;
         if (process.env.NODE_ENV === "development") {
           const config = getService("config");
           const driftLogger = {
@@ -438,12 +446,24 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
             error: (msg: string) => consoleLogger.error(msg),
           };
           // Reduced by the drift check's own helper, which carries every
-          // attribute that changes a table (status, declared indexes).
-          await runDriftCheck({
-            adapter,
-            collections: driftCheckCollections(config.collections ?? []),
-            logger: driftLogger,
-          });
+          // attribute that changes a table (status, declared indexes). A
+          // collection whose declaration a start already brought in line is
+          // not read again: nothing about it changed since.
+          const changed = driftCheckCollections(
+            (config.collections ?? []).filter(
+              collection =>
+                !unchangedSinceLastStart("collection", collection.slug)
+            )
+          );
+          driftChecked = changed.map(collection => collection.slug);
+          drifted =
+            (
+              await runDriftCheck({
+                adapter,
+                collections: changed,
+                logger: driftLogger,
+              })
+            ).kind === "drift";
         }
 
         // Boot-time auto-apply for code-first schema changes (dev only).
@@ -473,6 +493,14 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // from instrumentation and scripts.
         await seedPermissionsAndRolePresets();
         releaseSeeding();
+
+        // What this development start brought in line, for the next to skip. Written only when it
+        // differs from what is recorded, so a start with nothing changed writes nothing here.
+        await recordStartFingerprints(
+          adapter,
+          getService("logger"),
+          drifted ? driftChecked.map(slug => `collection:${slug}`) : []
+        );
 
         // The remaining post-initialisation tasks (templates, code-field sync,
         // and the like) run in the background so that getNextly() returns as

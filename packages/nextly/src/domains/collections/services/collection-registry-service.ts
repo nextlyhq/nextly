@@ -428,7 +428,12 @@ export class CollectionRegistryService extends BaseRegistryService<
   }
 
   async registerCollection(
-    data: DynamicCollectionInsert
+    data: DynamicCollectionInsert,
+    /**
+     * `seedPermissions: false` leaves the collection's permissions to a seeding
+     * the caller knows follows, as a start's does (`syncCodeFirstCollections`).
+     */
+    options: { seedPermissions?: boolean } = {}
   ): Promise<DynamicCollectionRecord> {
     this.logger.debug("Registering collection", { slug: data.slug });
 
@@ -502,7 +507,11 @@ export class CollectionRegistryService extends BaseRegistryService<
 
       const deserializedRecord = this.deserializeRecord(result);
 
-      if (this.permissionSeedService && data.slug) {
+      if (
+        this.permissionSeedService &&
+        data.slug &&
+        options.seedPermissions !== false
+      ) {
         try {
           const permResult =
             await this.permissionSeedService.seedCollectionPermissions(
@@ -818,6 +827,26 @@ export class CollectionRegistryService extends BaseRegistryService<
   }
 
   /**
+   * The record the registry holds for a slug, from one read of every record
+   * rather than a read per slug, so a sync costs the same number of reads for
+   * five collections as for fifty. Where that read fails (a registry a
+   * migration has not created yet), each slug is read on its own, as before, so
+   * each failure lands on the collection it belongs to.
+   */
+  private async recordsBySlug(): Promise<
+    (slug: string) => Promise<DynamicCollectionRecord | null>
+  > {
+    try {
+      const records = new Map(
+        (await this.getAllCollections()).map(record => [record.slug, record])
+      );
+      return slug => Promise.resolve(records.get(slug) ?? null);
+    } catch {
+      return slug => this.getCollectionBySlug(slug);
+    }
+  }
+
+  /**
    * What a code-first sync does with `config`, given the record the registry holds for its slug
    * (null for none): register it (`create`), write a schema change through (`update`: fields, the
    * status switch, a declared default or the physical table changed), write only its metadata
@@ -892,11 +921,20 @@ export class CollectionRegistryService extends BaseRegistryService<
   }
 
   async syncCodeFirstCollections(
-    configs: CodeFirstCollectionConfig[]
+    configs: CodeFirstCollectionConfig[],
+    /**
+     * `seedPermissions: false` when a seeding of every entity's permissions
+     * follows, as at a start: the sync then leaves them to it, so each is
+     * ensured once. Every other caller has its collections' permissions seeded
+     * here, as before.
+     */
+    options: { seedPermissions?: boolean } = {}
   ): Promise<SyncResult> {
     this.logger.info("Syncing code-first collections", {
       count: configs.length,
     });
+    const seedPermissions = options.seedPermissions !== false;
+    const recordOf = await this.recordsBySlug();
 
     const result: SyncResult = {
       created: [],
@@ -909,36 +947,40 @@ export class CollectionRegistryService extends BaseRegistryService<
       try {
         const decision = this.codeFirstSyncStep(
           config,
-          await this.getCollectionBySlug(config.slug)
+          await recordOf(config.slug)
         );
         const { schemaHash, desiredTableName } = decision;
 
         if (decision.step === "create") {
-          await this.registerCollection({
-            slug: config.slug,
-            labels: config.labels,
-            tableName: desiredTableName,
-            description: config.description,
-            fields: config.fields,
-            timestamps: config.timestamps ?? true,
-            admin: config.admin,
-            source: config.source ?? "code",
-            locked: true,
-            // Forward Draft/Published flag so code-first collections that
-            // opt in actually write the column on first sync.
-            status: config.status === true,
-            // Forward the resolved versioning config on first sync.
-            versions: config.versions,
-            // Forward the cache-revalidation config on first sync.
-            revalidate: config.revalidate,
-            // Forward the webhook recording policy on first sync.
-            webhooks: config.webhooks,
-            localized: config.localized === true,
-            configPath: config.configPath,
-            schemaHash,
-          });
+          await this.registerCollection(
+            {
+              slug: config.slug,
+              labels: config.labels,
+              tableName: desiredTableName,
+              description: config.description,
+              fields: config.fields,
+              timestamps: config.timestamps ?? true,
+              admin: config.admin,
+              source: config.source ?? "code",
+              locked: true,
+              // Forward Draft/Published flag so code-first collections that
+              // opt in actually write the column on first sync.
+              status: config.status === true,
+              // Forward the resolved versioning config on first sync.
+              versions: config.versions,
+              // Forward the cache-revalidation config on first sync.
+              revalidate: config.revalidate,
+              // Forward the webhook recording policy on first sync.
+              webhooks: config.webhooks,
+              localized: config.localized === true,
+              configPath: config.configPath,
+              schemaHash,
+            },
+            // Registering seeds the collection's permissions, unless a later
+            // seeding of every entity's is left to.
+            { seedPermissions }
+          );
           result.created.push(config.slug);
-          await this.seedPermissionsForCollection(config.slug);
         } else if (decision.step === "update") {
           const { existing } = decision;
           // Fields changed, status toggle flipped, or `dbName` resolved to a
@@ -982,7 +1024,9 @@ export class CollectionRegistryService extends BaseRegistryService<
             { source: config.source ?? "code" }
           );
           result.updated.push(config.slug);
-          await this.seedPermissionsForCollection(config.slug);
+          if (seedPermissions) {
+            await this.seedPermissionsForCollection(config.slug);
+          }
         } else if (decision.step === "metadata") {
           await this.updateCollection(
             config.slug,
@@ -1004,7 +1048,9 @@ export class CollectionRegistryService extends BaseRegistryService<
           );
           result.updated.push(config.slug);
         } else {
-          await this.seedPermissionsForCollection(config.slug);
+          if (seedPermissions) {
+            await this.seedPermissionsForCollection(config.slug);
+          }
           result.unchanged.push(config.slug);
         }
       } catch (error) {

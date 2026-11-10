@@ -66,9 +66,10 @@ import { runBoundedDiagnostic } from "./bounded-diagnostic";
 export async function seedAllPermissions(): Promise<void> {
   const permissionSeedService = getService("permissionSeedService");
   const systemResult = await permissionSeedService.seedSystemPermissions();
-  const collectionResult =
-    await permissionSeedService.seedAllCollectionPermissions();
-  const singleResult = await permissionSeedService.seedAllSinglePermissions();
+  // Every entity's permissions against one read of the table: the start's one
+  // ensuring of them, which the registry syncs leave to it.
+  const { collections: collectionResult, singles: singleResult } =
+    await permissionSeedService.seedAllEntityPermissions();
 
   const config = getService("config");
   const declared = collectCustomPermissions(config, config.plugins ?? []);
@@ -206,6 +207,16 @@ export function holdBootSeeding(): () => void {
     holds.delete(held);
     release();
   };
+}
+
+/**
+ * Whether a boot holds the seeding gate: it has yet to seed, and will, once it
+ * has registered the services (`holdBootSeeding`). Work it would repeat, such
+ * as a registry sync ensuring each entity's permissions, is left to that one
+ * seeding, so a start ensures each permission once.
+ */
+export function bootSeedingFollows(): boolean {
+  return (globalForSeeding.__nextly_seedingHolds?.size ?? 0) > 0;
 }
 
 /**

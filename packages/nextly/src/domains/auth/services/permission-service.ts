@@ -118,6 +118,38 @@ function refuseDeletingBuiltIn(permission: {
  * Deriving both behaviours from one list makes those two disagreements unrepresentable, and the
  * parameter type below is the one remaining copy, which the compiler ties to this list.
  */
+/** One permission as a seeder declares it: its identity, its spelling and its provenance. */
+export interface PermissionDeclaration {
+  action: string;
+  resource: string;
+  name: string;
+  slug: string;
+  description?: string;
+  meta?: { owner?: string; group?: string; danger?: boolean };
+}
+
+/** A stored permission, with what a declaration is compared against. */
+export type PermissionRow = Record<
+  | "id"
+  | "action"
+  | "resource"
+  | "owner"
+  | "slug"
+  | "permissionGroup"
+  | "danger"
+  | "orphanedAt",
+  unknown
+>;
+
+/**
+ * The key a permission is matched on: its action and resource without regard to
+ * case, as `findByActionResource` matches them with `LOWER()`.
+ */
+export function permissionKey(action: string, resource: string): string {
+  // A space cannot occur in either: both are slugs.
+  return `${action.toLowerCase()} ${resource.toLowerCase()}`;
+}
+
 const EDITABLE_PERMISSION_FIELDS = [
   "name",
   "slug",
@@ -525,10 +557,97 @@ export class PermissionService extends BaseService {
     created: boolean;
   }> {
     await this.validateResource(resource);
+    return this.ensureAgainst(
+      { action, resource, name, slug, description, meta },
+      await this.findByActionResource(action, resource)
+    );
+  }
 
+  /**
+   * Ensure each of `declared` exists, as `ensurePermission` does, against one
+   * read of the whole table (`rows`, read here when not handed in) rather than
+   * a read per permission, so ensuring every entity's permissions costs the
+   * same number of reads for five entities as for fifty. Each declaration's
+   * outcome is returned in order, a failure as its error rather than thrown,
+   * so one refused row does not stop the rest.
+   *
+   * The resource is not checked against the registries, as `ensurePermission`
+   * checks it: a caller ensuring many at once ensures the entities it has just
+   * read from them.
+   */
+  async ensurePermissions(
+    declared: readonly PermissionDeclaration[],
+    rows?: readonly PermissionRow[]
+  ): Promise<Array<{ id: string; created: boolean } | { error: unknown }>> {
+    const byKey = new Map<string, PermissionRow>();
+    for (const row of rows ?? (await this.permissionRows())) {
+      byKey.set(permissionKey(String(row.action), String(row.resource)), row);
+    }
+    const outcomes: Array<
+      { id: string; created: boolean } | { error: unknown }
+    > = [];
+    for (const declaration of declared) {
+      const key = permissionKey(declaration.action, declaration.resource);
+      try {
+        const ensured = await this.ensureAgainst(
+          declaration,
+          byKey.get(key) ?? null
+        );
+        // A second declaration of the same permission finds the row just written.
+        if (ensured.created) {
+          byKey.set(key, {
+            id: ensured.id,
+            action: declaration.action,
+            resource: declaration.resource,
+            owner: declaration.meta?.owner ?? null,
+            slug: declaration.slug,
+            permissionGroup: declaration.meta?.group ?? null,
+            danger: declaration.meta?.danger === true,
+            orphanedAt: null,
+          });
+        }
+        outcomes.push(ensured);
+      } catch (error) {
+        outcomes.push({ error });
+      }
+    }
+    return outcomes;
+  }
+
+  /**
+   * Every permission row, with what `ensurePermission` compares a declaration
+   * against, in one read.
+   */
+  async permissionRows(): Promise<PermissionRow[]> {
     const { permissions } = this.tables;
+    return (await this.db
+      .select({
+        id: permissions.id,
+        action: permissions.action,
+        resource: permissions.resource,
+        owner: permissions.owner,
+        slug: permissions.slug,
+        permissionGroup: permissions.permissionGroup,
+        danger: permissions.danger,
+        orphanedAt: permissions.orphanedAt,
+      })
+      .from(permissions)) as PermissionRow[];
+  }
 
-    const existing = await this.findByActionResource(action, resource);
+  /**
+   * Bring the permission `declared` names in line with the declaration, given
+   * the row stored for its action and resource (`existing`, null for none):
+   * the one rule `ensurePermission` and `ensurePermissions` both apply.
+   */
+  private async ensureAgainst(
+    declared: PermissionDeclaration,
+    existing: Record<
+      "id" | "owner" | "slug" | "permissionGroup" | "danger" | "orphanedAt",
+      unknown
+    > | null
+  ): Promise<{ id: string; created: boolean }> {
+    const { action, resource, name, slug, description, meta } = declared;
+    const { permissions } = this.tables;
     if (existing) {
       // Adopt the row's provenance and slug if either is out of step with the
       // declaration. Create-if-missing alone would leave every permission
