@@ -146,6 +146,14 @@ export type {
   PublicSourceReader,
 } from "./runtime/routing/public-reader";
 
+// Whether a failed read was refused by access, which a route built on the
+// public reader answers as not found, as nextly's own routes do; and the wait
+// for the request that an enforced, uncached read takes first, so a prerender
+// never mistakes it for build-time work. `@experimental` with the public
+// reader.
+export { isReadRefusal } from "./runtime/routing/miss-or-denied";
+export { deferToRequest } from "./runtime/routing/defer-to-request";
+
 // The frame a page builder named query's `run` executes in: inside it, the
 // Direct API refuses every call, and only the reader handed to the query
 // reads, through the frame's door. `@experimental` with named queries.

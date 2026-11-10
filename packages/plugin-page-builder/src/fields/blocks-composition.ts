@@ -68,6 +68,7 @@ import {
   type NamedQuerySource,
 } from "@nextlyhq/blocks-engine";
 import type {
+  PluginCollectionTransaction,
   PluginFieldValidateArgs,
   PluginFieldWrite,
   PluginStoredValueTarget,
@@ -252,8 +253,17 @@ export interface CompositionSetup {
    * of it. Asked at most once per write, and only when a reference needs it.
    * A write adding a reference to anything else is refused. Absent where the
    * site style cannot be read, and then nothing is refused.
+   *
+   * Read through the Direct API when asked with no transaction, as the
+   * validation asks before the write's transaction opens; on `transaction`
+   * when handed one, as the judgement under the composition graph lock asks
+   * (`composition-rejudge`), so that read takes no second connection while
+   * the write holds one. Both resolve the record by one reading
+   * (`site-definitions`).
    */
-  readonly siteDefinitions?: () => Promise<SiteDefinitions>;
+  readonly siteDefinitions?: (
+    transaction?: PluginCollectionTransaction
+  ) => Promise<SiteDefinitions>;
   /**
    * The fields a collection declares and the public may read, for judging
    * what a page's collection lists filter and sort by. Absent where the
@@ -1029,6 +1039,10 @@ async function judgeComposedLists(args: {
       maxNodes: site.maxNodes,
       onUnjudged: (bindings: number) =>
         args.setup.onBindingsUnjudged?.({ ...args.unjudged, bindings }),
+      // A placed list's item bindings, against its query's rows.
+      ...(args.setup.namedQueries === undefined
+        ? {}
+        : { namedQueries: args.setup.namedQueries }),
     }
   );
   for (const issue of bound) args.report.add(issue.code, issue.message);

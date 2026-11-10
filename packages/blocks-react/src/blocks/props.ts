@@ -229,14 +229,19 @@ export const LINK_PROPS = {
 
 /**
  * The claim a block's own reads are made with, naming it, so a page past its
- * allowance names the block among those drawn without their data. Nothing
- * for a block drawn outside a page (a host or a test calling its render
- * directly), whose reads are then claimed unnamed.
+ * allowance names the block among those drawn without their data. A block
+ * drawn from inside a placed component is named by that placement
+ * (`instanceOf`), the block an author placed and can select; its own id is
+ * minted for the draw and is in no stored page. Nothing for a block drawn
+ * outside a page (a host or a test calling its render directly), whose
+ * reads are then claimed unnamed.
  */
 export function readClaimOf(
-  node: { readonly id: string } | undefined
+  node: { readonly id: string; readonly instanceOf?: string } | undefined
 ): ReadClaim | undefined {
-  return node === undefined ? undefined : { nodeId: node.id };
+  return node === undefined
+    ? undefined
+    : { nodeId: node.instanceOf ?? node.id };
 }
 
 /** Whether a block's prop holds text, for its draw checks. */
@@ -379,6 +384,8 @@ function originOf(value: unknown): string | undefined {
  *
  * `undefined` where either filter refuses, so a caller decides what to draw in
  * its place rather than being handed a URL it must not request.
+ *
+ * @experimental Settles with the editor's binding controls.
  */
 export function fetchableUrl(
   value: unknown,

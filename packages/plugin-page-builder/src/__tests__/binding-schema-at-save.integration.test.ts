@@ -251,6 +251,30 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("keeps an entry's binding to a field its list's collection lost, and refuses a new one", async () => {
+      // A list of the articles, its entries drawn with a heading bound to a
+      // field the articles no longer have: judged against the list's items.
+      await keptButNotAdded(
+        id => ({
+          id,
+          type: "core/collection-loop",
+          version: 1,
+          props: { collection: ARTICLES, limit: 3 },
+          slots: {
+            children: [
+              heading(`${id}-entry`, {
+                $bind: "headline",
+                source: "item",
+                fallback: "Untitled",
+              }),
+            ],
+          },
+        }),
+        '"$bind":"headline"',
+        ["binding-field-missing"]
+      );
+    });
+
     it("keeps a binding to a removed prop, and refuses a new one", async () => {
       await keptButNotAdded(
         id => stat(id, "subtitle", { $bind: "title" }),

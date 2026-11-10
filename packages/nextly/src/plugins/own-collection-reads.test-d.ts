@@ -18,6 +18,7 @@ import type { SingleDocument } from "../domains/singles/types";
 import type { PluginContext } from "./plugin-context";
 import type {
   OwnCollectionReadOpts,
+  OwnSingleTransactionReadOpts,
   OwnTransactionReadOpts,
   PluginCollectionTransaction,
   ServiceOpts,
@@ -39,6 +40,19 @@ expectTypeOf<{ [K in PoolReads]: Parameters<Own[K]>[2] }>().toEqualTypeOf<{
 // A collection read on a transaction may also name the lock its rows take.
 expectTypeOf<keyof OwnTransactionReadOpts>().toEqualTypeOf<
   keyof OwnCollectionReadOpts | "lock"
+>();
+// The locks a collection read names: shared (the default), for update, or a
+// plain read with none.
+expectTypeOf<OwnTransactionReadOpts["lock"]>().toEqualTypeOf<
+  "share" | "update" | "none" | undefined
+>();
+// A Single read on a transaction names its lock too, shared or none: one row
+// read to answer a document has no `update`.
+expectTypeOf<keyof OwnSingleTransactionReadOpts>().toEqualTypeOf<
+  keyof OwnCollectionReadOpts | "lock"
+>();
+expectTypeOf<OwnSingleTransactionReadOpts["lock"]>().toEqualTypeOf<
+  "share" | "none" | undefined
 >();
 expectTypeOf<{
   [K in
@@ -64,7 +78,7 @@ expectTypeOf<{
   >[2];
 }>().toEqualTypeOf<{
   [K in "getSingleInTransaction" | "getHostSingleInTransaction"]:
-    | OwnCollectionReadOpts
+    | OwnSingleTransactionReadOpts
     | undefined;
 }>();
 // A transaction read takes the plugin's transaction token first, never the

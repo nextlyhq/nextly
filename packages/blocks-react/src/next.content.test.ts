@@ -12,6 +12,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
+import { NextlyError } from "nextly/errors";
 import type { BindingSourceRef } from "nextly/runtime";
 import { createElement, type ReactElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
@@ -19,8 +20,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The real reader, told the fake's declarations (it hides no field), since
 // no Nextly services are registered in this process for it to read a schema
-// from; and each cached read's tags, so what refreshes a page is seen.
-const runtime = vi.hoisted(() => ({ tags: [] as string[][] }));
+// from; and each cached read's tags and key, so what refreshes a page, and
+// what it is cached under, is seen; and the waits for the request among the
+// address lookups, in order.
+const runtime = vi.hoisted(() => ({
+  tags: [] as string[][],
+  keys: [] as string[][],
+  // When set, the route's design reads are answered from it by their key, as
+  // Next's cache answers them, so a key that is not the entry's own is seen
+  // serving one entry another's design.
+  designCache: null as Map<string, Promise<unknown>> | null,
+  events: [] as string[],
+}));
 vi.mock("nextly/runtime", async importOriginal => {
   const actual = await importOriginal<typeof import("nextly/runtime")>();
   return {
@@ -37,12 +48,23 @@ vi.mock("nextly/runtime", async importOriginal => {
       options: Parameters<typeof actual.cachedFind>[1]
     ) => {
       runtime.tags.push([...options.tags]);
+      runtime.keys.push([...options.keyParts]);
+      const cache = runtime.designCache;
+      if (cache !== null && options.keyParts[0] === "nextly-content-design") {
+        const key = JSON.stringify(options.keyParts);
+        const cached = cache.get(key) ?? read();
+        cache.set(key, cached);
+        return cached;
+      }
       return actual.cachedFind(read, options);
     },
     readPublicSiteSettings: async () => {
       throw new Error("no site settings");
     },
     bindingFieldShapes: async (_ref: BindingSourceRef) => undefined,
+    deferToRequest: async () => {
+      runtime.events.push("request");
+    },
   };
 });
 
@@ -148,6 +170,7 @@ function store(held: Record<string, ContentAddressHolder>) {
     lookups,
     resolveAddress: async (locale: string | undefined, path: string) => {
       lookups.push([locale, path]);
+      runtime.events.push(`lookup ${path}`);
       return held[path] ?? null;
     },
   };
@@ -209,6 +232,9 @@ async function served(
 
 beforeEach(() => {
   runtime.tags = [];
+  runtime.events = [];
+  runtime.keys = [];
+  runtime.designCache = null;
 });
 
 afterEach(() => {
@@ -272,6 +298,92 @@ describe("the content route", () => {
     await expect(route.ContentPage({ params: { slug } })).rejects.toMatchObject(
       NOT_FOUND
     );
+  });
+
+  describe("an entry the public is refused", () => {
+    /** The route's options over an instance whose read of posts fails with `error`. */
+    function failing(error: () => unknown) {
+      const options = config();
+      const nextly = options.pages.nextly as unknown as ReturnType<
+        typeof instance
+      >;
+      const read = nextly.find.getMockImplementation();
+      nextly.find.mockImplementation(async (args: Record<string, unknown>) => {
+        if (args.collection === "posts") throw error();
+        return await read!(args);
+      });
+      return options;
+    }
+
+    it.each([
+      [
+        "an access-enforced route",
+        "a visitor asked to sign in",
+        createContentPage,
+        () => NextlyError.authRequired(),
+      ],
+      [
+        "a public route",
+        "a visitor asked to sign in",
+        createPublicContentPage,
+        () => NextlyError.authRequired(),
+      ],
+      [
+        "an access-enforced route",
+        "a denial",
+        createContentPage,
+        () => NextlyError.forbidden(),
+      ],
+      [
+        "a public route",
+        "a denial",
+        createPublicContentPage,
+        () => NextlyError.forbidden(),
+      ],
+    ] as const)(
+      "answers not found, as for an unpublished entry (%s, %s)",
+      async (_route, _refusal, factory, refusal) => {
+        const route = factory(failing(refusal));
+        await expect(
+          route.ContentPage({ params: { slug: ["blog", "hello"] } })
+        ).rejects.toMatchObject(NOT_FOUND);
+        expect(
+          await route.generateMetadata({ params: { slug: ["blog", "hello"] } })
+        ).toEqual({});
+      }
+    );
+
+    it.each([
+      ["a fault", () => new Error("database unreachable")],
+      ["a credential to fix", () => NextlyError.tokenExpired()],
+      ["a 403 that is not a denial", () => NextlyError.emailNotVerified()],
+    ] as const)(
+      "throws %s rather than answering not found",
+      async (_why, error) => {
+        const thrown = error();
+        const route = createContentPage(failing(() => thrown));
+        await expect(
+          route.ContentPage({ params: { slug: ["blog", "hello"] } })
+        ).rejects.toBe(thrown);
+      }
+    );
+  });
+
+  it("waits for the request before an access-enforced route's uncached lookup, and a public route's cached one does not", async () => {
+    await createContentPage(config()).generateMetadata({
+      params: { slug: ["blog", "hello"] },
+    });
+    expect(runtime.events.slice(0, 2)).toEqual([
+      "request",
+      "lookup /blog/hello",
+    ]);
+
+    runtime.events = [];
+    await createPublicContentPage(config()).generateMetadata({
+      params: { slug: ["blog", "hello"] },
+    });
+    expect(runtime.events).not.toContain("request");
+    expect(runtime.events).toContain("lookup /blog/hello");
   });
 
   it("never asks the store about a path the runtime keeps", async () => {
@@ -448,5 +560,152 @@ describe("the content route", () => {
       "nextly:templates",
       "nextly:posts",
     ]);
+  });
+});
+
+/**
+ * An entry's own design: a template that serves one entry instead of its
+ * collection. The literal heading it draws is what tells it from the
+ * collection's template, whose heading is the entry's bound title.
+ */
+const OWN = headingDocument(
+  "template",
+  { props: { text: "Drawn with its own design", level: "h1" } },
+  { title: [{ $bind: "title" }, " | Own"] }
+);
+
+/** The paths two posts hold: one with an own design, one without. */
+const TWO_POSTS: Record<string, ContentAddressHolder> = {
+  "/blog/hello": HELD["/blog/hello"],
+  "/blog/other": { collection: "posts", id: "other", kind: "address" },
+};
+
+/**
+ * A provider that answers `post-1` its own design and every other post its
+ * collection's template, as the page builder's `readFor` does, recording
+ * what it is asked.
+ */
+function withOwnDesigns() {
+  const asked: [string, string, string | undefined][] = [];
+  const base = config();
+  const options: ContentPageConfig = {
+    ...base,
+    resolveAddress: async (_locale, path) => TWO_POSTS[path] ?? null,
+    templates: {
+      ...base.templates,
+      readFor: async (collection, id, locale) => {
+        asked.push([collection, id, locale]);
+        if (collection !== "posts") return null;
+        return id === "post-1"
+          ? { id: "own-1", document: OWN }
+          : { id: "t1", document: TEMPLATE };
+      },
+    },
+  };
+  return { asked, options };
+}
+
+describe("an entry's own design", () => {
+  it.each([
+    ["an access-enforced route", createContentPage],
+    ["a public route", createPublicContentPage],
+  ] as const)(
+    "draws an entry with its own published design, and an entry without one with its collection's template (%s)",
+    async (_name, factory) => {
+      const { asked, options } = withOwnDesigns();
+      const route = factory(options);
+      const own = await served(route, ["blog", "hello"]);
+      expect(own).toContain("Drawn with its own design");
+      expect(own).not.toContain("Hello world");
+      const other = await served(route, ["blog", "other"]);
+      expect(other).toContain("Another post");
+      expect(other).not.toContain("Drawn with its own design");
+      expect(asked).toEqual([
+        ["posts", "post-1", undefined],
+        ["posts", "other", undefined],
+      ]);
+    }
+  );
+
+  it("takes an entry's metadata from its own design's SEO", async () => {
+    const route = createContentPage(withOwnDesigns().options);
+    expect(
+      await route.generateMetadata({ params: { slug: ["blog", "hello"] } })
+    ).toEqual({ title: "Hello world | Own" });
+    expect(
+      await route.generateMetadata({ params: { slug: ["blog", "other"] } })
+    ).toEqual({ title: "Another post | Blog" });
+  });
+
+  it("asks only `readFor` once the provider offers it, so its null is not found whatever `read` answers", async () => {
+    const read = vi.fn(async () => ({ id: "t1", document: TEMPLATE }));
+    const base = withOwnDesigns().options;
+    const route = createContentPage({
+      ...base,
+      templates: { ...base.templates, read, readFor: async () => null },
+    });
+    await expect(
+      route.ContentPage({ params: { slug: ["blog", "hello"] } })
+    ).rejects.toMatchObject(NOT_FOUND);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("asks for the published design in the route's language, with no draft scope to ask for even where the route has a draft gate", async () => {
+    const base = withOwnDesigns();
+    const draft = vi.fn(async () => false);
+    const route = createContentPage({
+      ...base.options,
+      pages: { ...base.options.pages, locale: "fr", draft },
+    });
+    await route
+      .ContentPage({ params: { slug: ["blog", "hello"] } })
+      .catch(() => undefined);
+    expect(draft).toHaveBeenCalled();
+    expect(base.asked).toEqual([["posts", "post-1", "fr"]]);
+  });
+
+  it("caches each entry's design under its own key, tagged with templates, so one entry is never served another's", async () => {
+    runtime.designCache = new Map();
+    const { asked, options } = withOwnDesigns();
+    const route = createPublicContentPage(options);
+
+    expect(await served(route, ["blog", "hello"])).toContain(
+      "Drawn with its own design"
+    );
+    const other = await served(route, ["blog", "other"]);
+    expect(other).toContain("Another post");
+    expect(other).not.toContain("Drawn with its own design");
+    // Served again from the cache: the cache is really answering, so the
+    // separation above is the key's doing.
+    expect(await served(route, ["blog", "hello"])).toContain(
+      "Drawn with its own design"
+    );
+    expect(asked).toHaveLength(2);
+
+    const designReads = runtime.keys.flatMap((key, at) =>
+      key[0] === "nextly-content-design"
+        ? [{ key, tags: runtime.tags[at] }]
+        : []
+    );
+    expect(designReads.map(read => read.key.slice(-2))).toEqual([
+      ["posts", "post-1"],
+      ["posts", "other"],
+      ["posts", "post-1"],
+    ]);
+    expect(designReads.map(read => read.tags)).toEqual([
+      ["nextly:templates"],
+      ["nextly:templates"],
+      ["nextly:templates"],
+    ]);
+  });
+
+  it("keeps the collection's template cache for a provider without `readFor`", async () => {
+    await served(createPublicContentPage(config()), ["blog", "hello"]);
+    expect(runtime.keys.map(key => key[0])).toContain(
+      "nextly-content-template"
+    );
+    expect(runtime.keys.map(key => key[0])).not.toContain(
+      "nextly-content-design"
+    );
   });
 });

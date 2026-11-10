@@ -23,6 +23,8 @@ import {
   BreakpointSwitcher,
   BuilderShell,
   Canvas,
+  conditionedBlocksIn,
+  useAppliedConditions,
   useConditionsUnchecked,
   CanvasFrame,
   CanvasFrameProvider,
@@ -36,9 +38,10 @@ import {
   OnboardingChecklist,
   SelectionBreadcrumb,
   SpacingOverlay,
-  VariantPreviewTag,
   VisitorUnreadableBadges,
   VisitorUnreadableProvider,
+  type AppliedConditions,
+  type AppliedConditionsOptions,
   type ComponentFieldsHost,
   type ComponentVariantsHost,
   type OpenPassages,
@@ -54,6 +57,7 @@ import {
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -91,6 +95,12 @@ import { OwnDesignsChip } from "../TemplateOwnDesigns";
 import type { OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
+import { previewedCanvas } from "./canvas-preview-mode";
+import {
+  PageConditionsStrip,
+  PlacedConditionsStrip,
+  type TemplateConditions,
+} from "./conditions-strip";
 import {
   editorPanelRenderer,
   useEditorPanels,
@@ -102,6 +112,11 @@ import {
   useMediaSummaryReader,
   type ReadMediaSummary,
 } from "./media-summary-reader";
+import {
+  usePageConditionsRead,
+  type PageConditionsSource,
+} from "./page-conditions-read";
+import { PageReadMeter } from "./page-read-meter";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
 import { recentIconsStore } from "./recent-icons-store";
@@ -174,6 +189,14 @@ type EditorView = EditorMount &
     reveal: Reveal;
     /** The conditioned blocks the page can't check, which the canvas badges red. */
     conditionsUnchecked: ReadonlySet<string>;
+    /**
+     * The page with its conditions applied for the previewed entry, while
+     * the author's switch is on; the canvas then draws a hidden block as a
+     * marker and badges a shown one so.
+     */
+    conditionsApplied: AppliedConditions | undefined;
+    /** What a block shown for the previewed entry is badged with. */
+    conditionsShownLabel: string;
     /** A stored media id's name, picture and alt text, for the image fields. */
     readMedia: ReadMediaSummary;
     /** The variant open in a component's view, which the canvas previews. */
@@ -288,13 +311,39 @@ const COMPONENT_READ_NOTES: Readonly<
  * history and state at the start, the devices in the centre, and Preview and
  * the document's actions at the end.
  */
+/**
+ * Which field of the page the editor is open on, beside the page's title, for
+ * a field below the top level: `Sections · Hero banner · Body`. Inside a
+ * repeater the row is named by its title, as the form's row header names it,
+ * so the author can tell which row's layout this is; the way back to the
+ * entry is the exit at the start of the bar.
+ */
+function FieldLocation({ location }: { location: string }): React.JSX.Element {
+  return (
+    <span
+      // The whole of it on hover, where the bar's width cuts it short.
+      title={location}
+      className="min-w-0 max-w-[20rem] shrink truncate text-sm text-muted-foreground"
+      data-testid="builder-field-location"
+    >
+      {location}
+    </span>
+  );
+}
+
 function editorTopBar(
   view: EditorView,
   /**
-   * The page's title as the form has it now, the field being edited, and the
-   * canvas, which a binding's Select brings its block into view in.
+   * The page's title as the form has it now, the field being edited by its
+   * address, where that field sits in words when below the top level, and
+   * the canvas, which a binding's Select brings its block into view in.
    */
-  page: { title: string | undefined; field: string; canvas: HTMLElement | null }
+  page: {
+    title: string | undefined;
+    field: string;
+    location?: string | undefined;
+    canvas: HTMLElement | null;
+  }
 ): {
   topBar: React.JSX.Element;
   topBarCenter: React.JSX.Element;
@@ -329,6 +378,9 @@ function editorTopBar(
           userId={view.userId}
           onAllPages={() => view.requestPanel("pages")}
         />
+        {page.location === undefined ? null : (
+          <FieldLocation location={page.location} />
+        )}
         <DocumentStatusPill isDirty={documentDirty} />
         {/* The page's bindings that no longer fit, beside its status: shown
             only when it has one. */}
@@ -342,6 +394,16 @@ function editorTopBar(
             own design, opening the list; nothing on any other document. */}
         <OwnDesignsChip />
         <HistoryButtons editor={editor} inline={inline} />
+        {/* What the page costs to read, against its allowance: a page's
+            alone, since a component is read as part of each page placing it. */}
+        {view.initialDocument.kind === "page" ? (
+          <PageReadMeter
+            editor={editor}
+            drawnWith={view.canvasRender}
+            regions={view.canvasRegions}
+            componentTitle={view.componentLibrary.titleOf}
+          />
+        ) : null}
       </>
     ),
     topBarCenter: (
@@ -689,6 +751,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     canvasDir,
     visitorUnreadable,
   } = view;
+  // The theme the frame draws the page in and the tags saying so, from one
+  // answer, so the tag never names a mode the canvas is not drawn in.
+  const previewed = previewedCanvas(view.previewMode, view.preview.previewing);
   return (
     <>
       {/*
@@ -763,9 +828,13 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             // is drawn inside the site's own layout and stylesheets.
             source={canvasSource}
             onSourceFallback={onCanvasFallback}
+            // The site mode the author picked, on the frame's document and
+            // the frame element only; nothing picked draws the page's own.
+            theme={previewed.theme}
             overlay={
               <>
-                <VariantPreviewTag name={view.preview.previewing} />
+                {/* One row: the variant previewed and the mode picked. */}
+                {previewed.tags}
                 {/* A selected block the page hides on this device is drawn
                     anyway, and its ring says so. */}
                 <CanvasMarks
@@ -783,6 +852,7 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                       componentLibrary.titleOf
                     )
                   }
+                  shownLabel={view.conditionsShownLabel}
                 />
                 {/* A block whose bound value a visitor will not see says
                     so above its corner; pressing the badge selects it, and
@@ -881,6 +951,11 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
               // The conditioned blocks visitors never see, because the page
               // can't check their conditions: badged in red on the canvas.
               conditionsUnchecked={view.conditionsUnchecked}
+              // While the author applies the conditions for the previewed
+              // entry: a hidden block drawn as its marker, a shown one badged.
+              {...(view.conditionsApplied === undefined
+                ? {}
+                : { conditionsApplied: view.conditionsApplied })}
               // The same object those handlers came from, forwarded whole.
               // The canvas draws what the pointer currently means — which
               // block is in flight, which container is receiving it — and
@@ -1044,6 +1119,28 @@ interface BlocksEditorProps<TFieldValues extends FieldValues> {
    * the top.
    */
   openAt?: OpenAt | undefined;
+  /**
+   * The field's address from the document's root, where it differs from
+   * `name`: inside a repeater's row, which the address names by its saved id
+   * and the form by its position. What the editor records the page under, so
+   * opening it again finds the same row. `name` where absent.
+   */
+  address?: string | undefined;
+  /**
+   * Where the field sits, in words, for a field below the top level
+   * (`Sections · Hero banner · Body`): said in the top bar and at the root of
+   * the bottom bar, so the author knows which row's layout this is.
+   */
+  location?: string | undefined;
+  /**
+   * For a field in a repeater's row: where it sits in another copy of the
+   * document's values, found by the row's id. The editor reads the field's
+   * stored copy through it, since the row may stand elsewhere in the values
+   * last stored than in the form.
+   */
+  pathIn?:
+    | ((values: Record<string, unknown>) => string | undefined)
+    | undefined;
 }
 
 export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
@@ -1081,10 +1178,10 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
               */}
               {isTemplate ? (
                 <TemplatePreviewScope control={props.control}>
-                  <EditorBody {...props} />
+                  <EditorBody {...props} place={fieldPlace(props)} />
                 </TemplatePreviewScope>
               ) : (
-                <EditorBody {...props} />
+                <EditorBody {...props} place={fieldPlace(props)} />
               )}
             </CanvasFrameProvider>
           </ConnectStyleHistoryContext.Provider>
@@ -1110,6 +1207,76 @@ function searchInsertSources(
   };
 }
 
+/**
+ * The field's value as last loaded or saved: the form resets its defaults to
+ * what a save stored, so the editor holds an edit to the locks against the
+ * same stored copy the next save is judged against. Inside a repeater's row
+ * the row is found in that copy by its id (`pathIn`), since the form may hold
+ * the rows in another order; a row not stored yet has no stored copy. A hook
+ * of its own so the editor's body reads one answer rather than the steps.
+ */
+function useStoredFieldValue<TFieldValues extends FieldValues>(
+  control: Control<TFieldValues>,
+  name: Path<TFieldValues>,
+  pathIn: FieldPlace["pathIn"]
+): unknown {
+  const { defaultValues } = useFormState({ control, name });
+  const storedPath = pathIn === undefined ? name : pathIn(defaultValues ?? {});
+  return storedPath === undefined
+    ? undefined
+    : valueAtPath(defaultValues, storedPath);
+}
+
+/**
+ * The bottom bar's trail, for the shell to draw. For a field below the top
+ * level it starts at where the field sits, so the author reads which row's
+ * layout this is; for a top-level field it starts at the page, as it always
+ * has. Built here so the editor's body passes one finished element.
+ */
+function editorBreadcrumb(
+  editor: React.ComponentProps<typeof SelectionBreadcrumb>["editor"],
+  componentTitle: React.ComponentProps<
+    typeof SelectionBreadcrumb
+  >["componentTitle"],
+  location: string | undefined
+): React.JSX.Element {
+  return (
+    <SelectionBreadcrumb
+      editor={editor}
+      {...(location === undefined ? {} : { rootLabel: location })}
+      hints={{ editText: true, goUp: true, commandPalette: true }}
+      {...(componentTitle === undefined ? {} : { componentTitle })}
+    />
+  );
+}
+
+/**
+ * Where the field the editor is open on sits, in one value: its address, which
+ * the editor records the page under; where it sits in words, for the top bar
+ * and the bottom bar; and, inside a repeater's row, how to find the row in
+ * another copy of the values. Gathered so the editor's body takes one fact
+ * about the field's place rather than three.
+ */
+interface FieldPlace {
+  address: string;
+  location: string | undefined;
+  pathIn: ((values: Record<string, unknown>) => string | undefined) | undefined;
+}
+
+/**
+ * The field's place from the editor's props: a field outside repeaters is
+ * addressed by its form path, so `name` stands in for an address not given.
+ */
+function fieldPlace<TFieldValues extends FieldValues>(
+  props: BlocksEditorProps<TFieldValues>
+): FieldPlace {
+  return {
+    address: props.address ?? props.name,
+    location: props.location,
+    pathIn: props.pathIn,
+  };
+}
+
 function EditorBody<TFieldValues extends FieldValues>({
   initialValue,
   kinds,
@@ -1118,15 +1285,12 @@ function EditorBody<TFieldValues extends FieldValues>({
   name,
   control,
   openAt,
-}: BlocksEditorProps<TFieldValues>): JSX.Element {
-  // The field's value as last loaded or saved: the form resets its defaults to
-  // what a save stored, so the editor holds an edit to the locks against the
-  // same stored copy the next save is judged against.
-  const { defaultValues } = useFormState({ control, name });
+  place,
+}: BlocksEditorProps<TFieldValues> & { place: FieldPlace }): JSX.Element {
   const mount = useEditorMount(
     initialValue,
     kinds,
-    valueAtPath(defaultValues, name)
+    useStoredFieldValue(control, name, place.pathIn)
   );
   const { editor, inline } = mount;
 
@@ -1156,6 +1320,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   });
   const { done, publishOffer, removalHold } = useHostCommit({
     name,
+    address: place.address,
     control,
     editor,
     inline,
@@ -1239,6 +1404,32 @@ function EditorBody<TFieldValues extends FieldValues>({
     // in the tree the canvas composes.
     canvas.canvasRender.definitions
   );
+  // The switch that applies the conditions for the entry a template is
+  // previewed with: the author's own, for this session, never saved.
+  const conditions = useAppliedConditionsSwitch(
+    reveal.document,
+    templatePreview,
+    pageConditionsSourceOf(
+      templatePreview,
+      mount.initialDocument.kind,
+      identity,
+      mount.locale
+    ),
+    {
+      services: conditionServices,
+      componentTitle: mount.componentLibrary.titleOf,
+      // Every block the canvas draws, under the limits it draws with.
+      limits: canvas.canvasRender.limits,
+      // The placed components, whose own conditioned blocks go unchecked.
+      definitions: canvas.canvasRender.definitions,
+      // The regions of the page's Layout, whose conditioned blocks go
+      // unchecked too.
+      regions: panels.canvasRegions,
+      // The site's zone, as the canvas's bindings read it, for a date a
+      // condition compares by day.
+      timeZone: canvasRender.bindings.timeZone,
+    }
+  );
   const view: EditorView = {
     ...mount,
     ...style,
@@ -1257,6 +1448,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     // entries of the pages placing it, as its save judges them.
     entryCollection,
     conditionsUnchecked,
+    conditionsApplied: conditions.applied,
+    conditionsShownLabel: `Shown for this ${conditions.noun}`,
   };
   useOpenAtSection({
     sectionId: openAt?.sectionId,
@@ -1311,11 +1504,19 @@ function EditorBody<TFieldValues extends FieldValues>({
           // The title is the top bar's switcher, so the shell draws none.
           {...editorTopBar(view, {
             title: page.title,
-            field: name,
+            // Recorded by its address, so the recent page opens the same row
+            // after the rows are reordered.
+            field: place.address,
+            location: place.location,
             canvas: canvas.canvasElement,
           })}
           // Pinned above a template's canvas: the entry it is drawn with.
-          canvasStrip={templateStrip(templatePreview)}
+          canvasStrip={editorStrip(
+            templatePreview,
+            conditions,
+            mount.initialDocument.kind,
+            page.title
+          )}
           openSettingsRequest={view.pages.settingsRequest}
           renderSettings={editorSettings(view, page)}
           // The shell owns the region; this fills it. Rendered unconditionally
@@ -1344,13 +1545,11 @@ function EditorBody<TFieldValues extends FieldValues>({
           // The hint names Enter, Escape and the palette's key because this
           // editor binds all three: inline editing and the block keyboard
           // actions below, and the palette it mounts.
-          breadcrumb={
-            <SelectionBreadcrumb
-              editor={editor}
-              hints={{ editText: true, goUp: true, commandPalette: true }}
-              componentTitle={componentLibrary.titleOf}
-            />
-          }
+          breadcrumb={editorBreadcrumb(
+            editor,
+            componentLibrary.titleOf,
+            place.location
+          )}
           checklist={editorChecklist(view)}
           renderPanel={editorPanelRenderer(view)}
         >
@@ -1473,13 +1672,155 @@ function useConditionServices(
   );
 }
 
-/** The Previewing strip for a template's preview, or none for any other document. */
-function templateStrip(
-  preview: ReturnType<typeof useTemplatePreviewState>
+/**
+ * The strip above the canvas: a template's Previewing strip, with the switch
+ * that applies its conditions while it holds a block whose conditions read
+ * the entry; a page's own strip, with the switch and no entry to name, while
+ * it holds a block whose conditions read the page; a component's or a
+ * Layout's own strip, with the switch disabled, while it holds a conditioned
+ * block; none otherwise.
+ */
+function editorStrip(
+  preview: ReturnType<typeof useTemplatePreviewState>,
+  conditions: AppliedConditionsSwitch,
+  kind: DocumentKind,
+  title: string | undefined
 ): React.JSX.Element | undefined {
-  return preview === undefined ? undefined : (
-    <TemplatePreviewStrip preview={preview} />
+  if (conditions.page !== undefined) {
+    return <PageConditionsStrip conditions={conditions.page} />;
+  }
+  if (preview !== undefined) {
+    return conditions.template === undefined ? (
+      <TemplatePreviewStrip preview={preview} />
+    ) : (
+      <TemplatePreviewStrip
+        preview={preview}
+        conditions={conditions.template}
+      />
+    );
+  }
+  if (!conditions.held || (kind !== "component" && kind !== "region")) {
+    return undefined;
+  }
+  return (
+    <PlacedConditionsStrip
+      kind={kind === "component" ? "Component" : "Layout"}
+      name={title ?? (kind === "component" ? "Component" : "Layout")}
+    />
   );
+}
+
+/**
+ * The page whose own conditions read it, on a page that is not a template:
+ * the entry of a collection being edited, read as a visitor reads it. None on
+ * a template, whose conditions read the entry it is previewed with, on a
+ * component or a Layout, which has no entry, or on a Single, which is not an
+ * entry of a collection. The editor opens only a saved entry, so one with no
+ * id is never asked about.
+ */
+function pageConditionsSourceOf(
+  preview: ReturnType<typeof useTemplatePreviewState>,
+  kind: DocumentKind,
+  identity: ReturnType<typeof useCanvasEntryIdentity>,
+  locale: string | undefined
+): PageConditionsSource | undefined {
+  if (preview !== undefined || kind !== "page") return undefined;
+  if (identity?.kind !== "collection" || identity.documentId === undefined) {
+    return undefined;
+  }
+  return { collection: identity.slug, id: identity.documentId, locale };
+}
+
+/** The switch that applies a document's conditions, and what it did. */
+interface AppliedConditionsSwitch {
+  /** The switch's state in a template's strip; absent outside a template. */
+  readonly template: TemplateConditions | undefined;
+  /** The switch's state in a page's strip; absent outside a page. */
+  readonly page: TemplateConditions | undefined;
+  /** The page with its conditions applied, while they are. */
+  readonly applied: AppliedConditions | undefined;
+  /** Whether the document holds a conditioned block at all. */
+  readonly held: boolean;
+  /** What the previewed entry is called in words, lower case: "post". */
+  readonly noun: string;
+}
+
+/**
+ * The author's switch that applies the conditions for the entry a template
+ * is previewed with, and the page as they leave it. Applied only to the
+ * blocks that read the entry; checked against the entry as a visitor reads
+ * it, so the canvas hides what the published page would.
+ */
+function useAppliedConditionsSwitch(
+  document: BlockDocument,
+  preview: ReturnType<typeof useTemplatePreviewState>,
+  pageSource: PageConditionsSource | undefined,
+  options: Omit<AppliedConditionsOptions, "noun">
+): AppliedConditionsSwitch {
+  const [on, setOn] = useState(false);
+  // Each time the conditions are applied, counted, so a failed read of the
+  // page is asked again rather than kept.
+  const [attempt, setAttempt] = useState(0);
+  const toggle = useCallback(() => {
+    if (!on) setAttempt(count => count + 1);
+    setOn(!on);
+  }, [on]);
+  const { limits } = options;
+  const held = useMemo(
+    () => conditionedBlocksIn(document, limits),
+    [document, limits]
+  );
+  // A page is read as a visitor reads it, and only once the author applies
+  // its conditions.
+  const pageRead = usePageConditionsRead(
+    pageSource,
+    on && held.readingEntry && pageSource !== undefined,
+    attempt
+  );
+  const noun =
+    preview !== undefined
+      ? preview.labels.singular.toLowerCase()
+      : pageSource !== undefined
+        ? pageRead.noun
+        : "entry";
+  const previewed =
+    preview !== undefined ? preview.previewed : pageRead.previewed;
+  // The entry is handed over only while the switch is on: the canvas then
+  // draws the page as a visitor reading that entry would get it.
+  const applied = useAppliedConditions(
+    document,
+    on && held.readingEntry ? previewed : undefined,
+    { ...options, noun }
+  );
+  const template = useMemo<TemplateConditions | undefined>(
+    () =>
+      preview === undefined || !held.readingEntry
+        ? undefined
+        : {
+            on,
+            toggle,
+            available: previewed?.kind === "entry",
+            applied,
+            noun,
+          },
+    [preview, held.readingEntry, on, toggle, previewed, applied, noun]
+  );
+  const page = useMemo<TemplateConditions | undefined>(
+    () =>
+      pageSource === undefined || !held.readingEntry
+        ? undefined
+        : // The editor opens only a saved page, so there is always one to read.
+          {
+            on,
+            toggle,
+            available: true,
+            applied,
+            noun,
+            failed: pageRead.failed,
+          },
+    [pageSource, held.readingEntry, on, toggle, applied, noun, pageRead.failed]
+  );
+  return { template, page, applied, held: held.any, noun };
 }
 
 /**

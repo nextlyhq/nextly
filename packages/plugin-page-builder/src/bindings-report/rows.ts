@@ -16,6 +16,7 @@
 import {
   DEFAULT_BINDING_SOURCE,
   isPlainRecord,
+  SITE_SETTING_FIELD_SHAPES,
   type BindingDocument,
   type BindingFieldShape,
   type BindingSchemaRef,
@@ -23,7 +24,6 @@ import {
 
 import {
   currentBindingProblems,
-  type DeclaredShapesReader,
   type ReadRef,
 } from "../fields/binding-judgement";
 
@@ -123,6 +123,8 @@ function sourceFields(
       ? fieldsOf(entry)
       : undefined;
   }
+  // The settings a page is handed: the table the judgement read them by.
+  if (source === "site") return SITE_SETTING_FIELD_SHAPES;
   return undefined;
 }
 
@@ -238,7 +240,7 @@ function rowAt(
 export async function documentBindingReport(
   document: BindingDocument,
   entry: BindingSchemaRef | undefined,
-  site: { readonly shapesOf: DeclaredShapesReader; readonly maxNodes?: number }
+  site: Parameters<typeof currentBindingProblems>[2]
 ): Promise<DocumentBindingReport> {
   const problems = await currentBindingProblems(document, entry, site);
   if (problems.overflowed) {

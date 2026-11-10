@@ -36,8 +36,10 @@ import {
 } from "@nextlyhq/builder/ops";
 import {
   getCachedNextly,
+  mayWriteEntry,
   NextlyError,
   readableTitleText,
+  respondDoc,
   respondMutation,
   type PluginCollectionTransaction,
   type PluginRouteContext,
@@ -63,22 +65,21 @@ import {
   type ActionAnswer,
   type CompositionRouteContext,
 } from "../composition-route-kit";
-import {
-  asOverwrite,
-  documentVersionOf,
-  withVersionFrom,
-} from "../document-version";
+import { documentVersionOf, withVersionFrom } from "../document-version";
 import { titleFieldIn } from "../entries-route";
 import { emptyBlockDocument } from "../fields/blocks-document";
 import { JUDGEMENT_CONTEXT, judgeInTransaction } from "../judged-writes";
 import { readingAsUser } from "../library-route";
+import { parseRouteQuery } from "../route-query";
 
 import {
   TEMPLATE_ACTIONS_ROUTE_PATH,
+  TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH,
   TEMPLATE_ROUTING_ROUTE_PATH,
   type TemplateAction,
   type TemplateActionRequest,
   type TemplateActionResult,
+  type TemplateCollectionRetarget,
   type TemplateRoutingAccess,
   type TemplateSummary,
 } from "./template-actions-contract";
@@ -86,6 +87,7 @@ import {
   addressCollectionProblem,
   addressHolderProblem,
   ASKED_BEFORE_CONTEXT,
+  retargetVerdict,
   secondTemplateRefusal,
   templateCollectionProblem,
   type MayReadTemplate,
@@ -328,20 +330,37 @@ async function designSource(
     { [TEMPLATE_COLLECTION_FIELD]: { equals: collection } },
     "published"
   );
-  return (
-    base ??
-    refusedAction([
-      `The collection "${collection}" has no published template to copy. Publish its template first.`,
-    ])
-  );
+  return base ?? noPublishedTemplate(collection);
+}
+
+/** The refusal of an own design for a collection with no published template. */
+function noPublishedTemplate(collection: string): NextlyError {
+  return refusedAction([
+    `The collection "${collection}" has no published template to copy. Publish its template first.`,
+  ]);
 }
 
 /**
- * Create the own design, under the entry's lock, which deleting the entry
- * takes too, and check once it has committed that the entry is still there:
- * a delete that held the lock first has committed by then, and the design
- * made after it is removed. Two gives meet at the unique key; the one that
- * loses is told the entry has one now.
+ * Create the own design with the entry's row held for share in the same
+ * transaction, taken before the design is written: deleting the entry locks
+ * that row for update before it removes it, and deletes the entry's own
+ * design after, so the two take turns. A delete that held the row first has
+ * committed by the time this hold is granted, which then finds the entry
+ * gone and writes nothing; a delete that comes after waits for this one and
+ * deletes the design with the entry. Held before the write rather than only
+ * in the templates' in-transaction phase (which holds it again, for every
+ * other path), so on MySQL a delete reading the new design's key never waits
+ * on this transaction while it waits on the delete. Two gives meet at the
+ * unique key; the one that loses is told the entry has one now.
+ *
+ * The template the design is copied from is held the same way, after the
+ * entry and before the write: a delete of that template that held its row
+ * first has committed by then, and the give is refused as one finding no
+ * published template; a delete that comes after waits for this one and
+ * empties the new design's link with the others it finds. Held before the
+ * write for the same reason, so on MySQL the delete's walk of the copies
+ * never waits on this transaction's new row while this one waits on the
+ * delete.
  */
 async function createDesign(
   ctx: TemplateActionsContext,
@@ -357,7 +376,18 @@ async function createDesign(
   let created: unknown;
   try {
     created = await collections.withTransaction(async tx => {
-      await guard.lockEntry(tx, action.collection, action.entry);
+      if (!(await guard.holdEntry(tx, action.collection, action.entry))) {
+        throw NextlyError.notFound({
+          logContext: { reason: "entry-design-entry-deleted" },
+        });
+      }
+      const source = data[TEMPLATE_FORKED_FROM_FIELD];
+      if (
+        typeof source === "string" &&
+        !(await guard.holdEntry(tx, templates, source))
+      ) {
+        throw noPublishedTemplate(action.collection);
+      }
       return collections.createEntryInTransaction(tx, templates, data, {
         ...asCaller(ctx),
         context: { [ASKED_BEFORE_CONTEXT]: true },
@@ -373,46 +403,7 @@ async function createDesign(
     if (winner === null) throw error;
     throw alreadyHasDesign(winner);
   }
-  if (!(await guard.entryExists(action.collection, action.entry))) {
-    const id = idOf(created);
-    if (id !== undefined) {
-      await collections.deleteEntry(templates, id, { as: "system" });
-    }
-    throw NextlyError.notFound({
-      logContext: { reason: "entry-design-entry-deleted" },
-    });
-  }
-  await unlinkIfSourceGone(ctx, data, created, guard);
   return created;
-}
-
-/**
- * Empty the new design's link to the template it was copied from when that
- * template was deleted while the copy was being made: the delete emptied the
- * link of every copy it found, and this one was not yet there to find.
- */
-async function unlinkIfSourceGone(
-  ctx: TemplateActionsContext,
-  data: Record<string, unknown>,
-  item: unknown,
-  guard: TemplateGuardSetup
-): Promise<void> {
-  const source = data[TEMPLATE_FORKED_FROM_FIELD];
-  const id = idOf(item);
-  if (typeof source !== "string" || id === undefined) return;
-  const templates = guard.templatesCollection;
-  const stillThere = await templateWhere(
-    templates,
-    { id: { equals: source } },
-    "all"
-  );
-  if (stillThere !== null) return;
-  await ctx.services.collections.updateEntry(
-    templates,
-    id,
-    asOverwrite({ [TEMPLATE_FORKED_FROM_FIELD]: null }),
-    { as: "system" }
-  );
 }
 
 /** The refusal of a second own design for an entry, naming the first by id. */
@@ -635,7 +626,22 @@ function entryTitle(
 ): string {
   const title =
     (field === null ? undefined : readableTitleText(entry[field])) ?? id;
-  return [...title].slice(0, TITLE_MAX).join("").trimEnd();
+  return cutToTitleLength(title, TITLE_MAX).trimEnd();
+}
+
+/**
+ * `text` cut to at most `max` UTF-16 code units, the length a text field's
+ * `maxLength` counts (a string's `length`), so a derived title always passes
+ * the title field's own check. A character outside the Basic Multilingual
+ * Plane, an emoji, takes two units; a cut that would split one keeps neither
+ * half, so the title never ends in half a character.
+ */
+export function cutToTitleLength(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const last = text.charCodeAt(max - 1);
+  // A high surrogate as the last unit kept: its low half is past the cut.
+  const end = last >= 0xd800 && last <= 0xdbff ? max - 1 : max;
+  return text.slice(0, end);
 }
 
 /** `create-template`, as the module docblock describes. */
@@ -1161,10 +1167,10 @@ async function defaultTitle(
     typeof labels?.singular === "string" && labels.singular.trim() !== ""
       ? labels.singular.trim()
       : collection;
-  return `${[...singular]
-    .slice(0, TITLE_MAX - TITLE_SUFFIX.length)
-    .join("")
-    .trimEnd()}${TITLE_SUFFIX}`;
+  return `${cutToTitleLength(
+    singular,
+    TITLE_MAX - TITLE_SUFFIX.length
+  ).trimEnd()}${TITLE_SUFFIX}`;
 }
 
 /** A refusal of the action as a whole, with the reasons given. */
@@ -1255,5 +1261,142 @@ export function templateRoutingRoute(): {
     path: TEMPLATE_ROUTING_ROUTE_PATH,
     handler: async (_req, ctx) =>
       Response.json(await readTemplateRoutingAccess(ctx)),
+  };
+}
+
+/**
+ * The retarget question's query: one template id, bounded as a query's ids
+ * are elsewhere in the plugin. Stated as a type so the parser's result is one.
+ */
+const COLLECTION_RETARGET_QUERY: z.ZodType<
+  { template: string },
+  Record<string, string>
+> = z.object({ template: z.string().trim().min(1).max(512) });
+
+/** What the retarget question reads with, each read made as the caller. */
+export interface TemplateRetargetReads {
+  /** Template `id` as the caller may read it, with its working draft, or null. */
+  readonly templateAsCaller: (
+    id: string
+  ) => Promise<Record<string, unknown> | null>;
+  /** Whether the caller may change template `id`'s collection, by the update's own gates. */
+  readonly mayChangeCollection: (id: string) => Promise<boolean>;
+  /** Whether the caller may set or clear a template address. */
+  readonly mayManageRouting: () => Promise<boolean>;
+  /** The guard's own lookup of a collection, as the system. */
+  readonly readCollection: TemplateGuardSetup["readCollection"];
+}
+
+/**
+ * Whether saved template `id` may be pointed at another collection, by the
+ * guard's own rule over the collection and address it stores. The collection
+ * list leaves out what the caller may not read, so the template form cannot
+ * tell an unreadable collection from a removed one, and asks this.
+ *
+ * It names a template, not a collection, so it says nothing of a collection
+ * the caller could not already see on a template they may change: the row is
+ * read as the caller, and their right to change its collection asked, before
+ * the collection is looked up. One they may not read is not found; one they
+ * may read but not change is forbidden.
+ */
+export async function readTemplateCollectionRetarget(
+  id: string,
+  reads: TemplateRetargetReads
+): Promise<TemplateCollectionRetarget> {
+  const row = await reads.templateAsCaller(id);
+  const collection = row?.[TEMPLATE_COLLECTION_FIELD];
+  // An own design draws no collection, so it has none to change.
+  if (typeof collection !== "string" || collection === "") {
+    throw NextlyError.notFound({
+      logContext: { reason: "template-retarget-missing-template" },
+    });
+  }
+  if (!(await reads.mayChangeCollection(id))) {
+    throw NextlyError.forbidden({
+      logContext: { route: TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH },
+    });
+  }
+  const verdict = await retargetVerdict(
+    collection,
+    storedAddressOf(row?.[TEMPLATE_ADDRESS_FIELD]),
+    reads.readCollection
+  );
+  return verdict === "address-blocks"
+    ? { retarget: verdict, mayClearAddress: await reads.mayManageRouting() }
+    : { retarget: verdict };
+}
+
+/** The retarget question's reads for one request, as its caller. */
+function retargetReadsOf(
+  ctx: PluginRouteContext,
+  guard: TemplateGuardSetup
+): TemplateRetargetReads {
+  const templates = guard.templatesCollection;
+  const { caller } = ctx;
+  return {
+    templateAsCaller: async id =>
+      recordOf(
+        await readOrNull(async () =>
+          (await getCachedNextly()).findByID({
+            collection: templates,
+            id,
+            ...(await readingAsUser(ctx)),
+            status: "all",
+            // The form edits the working draft, so its stored collection
+            // and address are the draft's.
+            draft: true,
+            depth: 0,
+          })
+        )
+      ),
+    // Core's own update gate for this row and the collection field's rule,
+    // asked without writing; no person, no right.
+    mayChangeCollection: async id =>
+      ctx.user !== null &&
+      caller !== null &&
+      (await mayWriteEntry(await caller.identity(), {
+        collection: templates,
+        id,
+        fields: [TEMPLATE_COLLECTION_FIELD],
+      })),
+    mayManageRouting: async () =>
+      (await readTemplateRoutingAccess(ctx)).mayManageRouting,
+    readCollection: guard.readCollection,
+  };
+}
+
+/**
+ * The retarget question's route: what the template form asks before it
+ * offers a saved template's collection for change. Authenticated, with its
+ * rights asked in the read above; the guard still judges the write.
+ */
+export function templateCollectionRetargetRoute(setup: {
+  readonly guard: () => TemplateGuardSetup;
+}): {
+  method: "GET";
+  path: string;
+  noStore: true;
+  handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
+} {
+  return {
+    method: "GET",
+    path: TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH,
+    // A collection is added, renamed or removed, and an address cleared, at
+    // any time.
+    noStore: true,
+    handler: async (req, ctx) => {
+      const { template } = parseRouteQuery(
+        req.url,
+        ["template"],
+        COLLECTION_RETARGET_QUERY,
+        "template collection retarget route"
+      );
+      return respondDoc(
+        await readTemplateCollectionRetarget(
+          template,
+          retargetReadsOf(ctx, setup.guard())
+        )
+      );
+    },
   };
 }

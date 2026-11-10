@@ -794,20 +794,79 @@ export class DynamicCollectionRegistryService extends BaseService {
 const NAMED_LOCK_WAIT_SECONDS = 30;
 
 /**
- * The named lock of each of `slugs` on MySQL, taken on `tx`'s connection in
- * one order, so two holds of overlapping sets cannot wait on each other. A
- * name is a hash of the slug: MySQL caps a lock name at 64 characters.
+ * The name of collection `slug`'s named lock on MySQL, in the database named
+ * `database` (`DATABASE()` on the connection, null where none is selected).
+ *
+ * MySQL's named locks belong to the server, not to a database, so a name
+ * built from the slug alone would be shared by every Nextly database on one
+ * server: a delete in one would hold up a write or a delete of the same slug
+ * in another. The name is a hash of both, as the migration lock's is, since
+ * MySQL caps a lock name at 64 characters. The two are kept apart by a NUL,
+ * which neither holds, so no database and slug run together into another.
+ */
+export function namedCollectionLockName(
+  database: string | null,
+  slug: string
+): string {
+  const hash = createHash("sha256")
+    .update(`${database ?? ""}\u0000${slug}`)
+    .digest("hex");
+  return `nextly:collection:${hash.slice(0, 40)}`;
+}
+
+/**
+ * The name collection `slug`'s named lock had before it was named for the
+ * database: a hash of the slug alone. Still taken beside the new name: see
+ * {@link namedCollectionLockNames}.
+ */
+export function legacyCollectionLockName(slug: string): string {
+  const hash = createHash("sha256").update(slug).digest("hex");
+  return `nextly:collection:${hash.slice(0, 40)}`;
+}
+
+/**
+ * The named locks a hold of `slugs` takes on MySQL, in the order it takes
+ * them, in the database named `database`.
+ *
+ * Each slug's lock under its old name comes first, then under its name for
+ * the database ({@link namedCollectionLockName}). While a rolling deployment
+ * runs, instances still on the old release take only the old name, and a
+ * hold that took only the new one would not wait for theirs: a write could
+ * name a collection one of them is deleting. Taking both keeps every
+ * instance in step until none on the old release is left; the old name may
+ * then be dropped. Until then two databases on one server still share the
+ * old name, as they did before.
+ *
+ * The old names are taken in the order the old release takes them, by slug,
+ * and before any new name, which the old release never takes. So a hold on
+ * either release takes the names it shares with another in the same order,
+ * and two holds of overlapping sets cannot each hold a name the other waits
+ * for.
+ */
+export function namedCollectionLockNames(
+  database: string | null,
+  slugs: readonly string[]
+): string[] {
+  const sorted = [...new Set(slugs)].sort();
+  return [
+    ...sorted.map(legacyCollectionLockName),
+    ...sorted.map(slug => namedCollectionLockName(database, slug)),
+  ];
+}
+
+/**
+ * The named locks of `slugs` on MySQL ({@link namedCollectionLockNames}),
+ * taken on `tx`'s connection, for the database the connection is in.
  */
 async function takeNamedCollectionLocks(
   tx: TransactionContext,
   slugs: readonly string[]
 ): Promise<{ release: () => Promise<void> }> {
-  const names = [...new Set(slugs)]
-    .sort()
-    .map(
-      slug =>
-        `nextly:collection:${createHash("sha256").update(slug).digest("hex").slice(0, 40)}`
-    );
+  const [selected] = await tx.queryStatement<{ name: unknown }>(
+    sql`SELECT DATABASE() AS ${sql.identifier("name")}`
+  );
+  const database = typeof selected?.name === "string" ? selected.name : null;
+  const names = namedCollectionLockNames(database, slugs);
   const taken: string[] = [];
   // In the reverse of the order taken, each once.
   const release = async (): Promise<void> => {

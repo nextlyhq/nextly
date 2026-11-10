@@ -32,24 +32,10 @@ describe("nestedBlocksFields", () => {
     ).toEqual([]);
   });
 
-  it("names one inside a repeater, and inside a Single", () => {
-    expect(
-      nestedBlocksFields({
-        singles: [
-          {
-            slug: "home",
-            fields: [
-              { name: "sections", type: "repeater", fields: [blocks("body")] },
-            ],
-          },
-        ],
-      })
-    ).toEqual([{ kind: "single", slug: "home", path: "sections.body" }]);
-  });
-
-  it("names one inside a repeater whatever the groups around it", () => {
-    // A group inside a repeater's row, and a repeater inside a group: either
-    // way the path runs through a row.
+  it("leaves a blocks field inside a repeater's row alone, whatever the groups around it", () => {
+    // The Page Builder opens a row's field by an address naming the row's
+    // saved id (`rows.<rowId>.hero.a`), so a repeater no longer puts a blocks
+    // field out of reach: a group in a row, a repeater in a group, a Single.
     expect(
       nestedBlocksFields({
         collections: [
@@ -73,10 +59,42 @@ describe("nestedBlocksFields", () => {
             ],
           },
         ],
+        singles: [
+          {
+            slug: "home",
+            fields: [
+              { name: "sections", type: "repeater", fields: [blocks("body")] },
+            ],
+          },
+        ],
+      })
+    ).toEqual([]);
+  });
+
+  it("names one inside a repeater whose rows declare their own id", () => {
+    // Those rows get no saved id, so no address can name one of them.
+    expect(
+      nestedBlocksFields({
+        collections: [
+          {
+            slug: "pages",
+            fields: [
+              {
+                name: "rows",
+                type: "repeater",
+                fields: [{ name: "id", type: "text" }, blocks("body")],
+              },
+            ],
+          },
+        ],
       })
     ).toEqual([
-      { kind: "collection", slug: "pages", path: "rows.hero.a" },
-      { kind: "collection", slug: "pages", path: "page.rows.b" },
+      {
+        kind: "collection",
+        slug: "pages",
+        path: "rows.body",
+        because: "ownIdRows",
+      },
     ]);
   });
 
@@ -111,61 +129,33 @@ describe("nestedBlocksFields", () => {
 });
 
 describe("warnNestedBlocksFields", () => {
-  it("warns once per field, naming where each is and what to do", () => {
-    const warn = vi.fn();
-    const config = {
-      collections: [
-        {
-          slug: "pages",
-          fields: [
-            { name: "hero", type: "group", fields: [blocks("layout")] },
-            { name: "rows", type: "repeater", fields: [blocks("cell")] },
-            { name: "more", type: "repeater", fields: [blocks("cell")] },
-          ],
-        },
-      ],
-    };
-
-    warnNestedBlocksFields(config, warn);
-    // A reload in one process runs it again; the operator is told once per
-    // field, and every field is told: a single "warned already" flag would
-    // say the first and drop the second.
-    warnNestedBlocksFields(config, warn);
-
-    // The grouped field opens in the Page Builder, so it is not mentioned.
-    expect(warn).toHaveBeenCalledTimes(2);
-    const messages = warn.mock.calls.map(call => call[0] as string);
-    expect(messages[0]).toContain('collection "pages"');
-    expect(messages[0]).toContain('"rows.cell"');
-    expect(messages[0]).toContain("inside a repeater");
-    expect(messages[0]).toContain("Move it out of the repeater");
-    expect(messages[1]).toContain('"more.cell"');
-    expect(messages.join("\n")).not.toContain("hero.layout");
-  });
-
-  it("says nothing when every blocks field is at the top level or in a group", () => {
+  it("says nothing at startup about a blocks field inside a repeater", () => {
+    // The Page Builder opens it, row by row, so there is nothing to warn
+    // about; the warning used to name every such field.
     const warn = vi.fn();
     warnNestedBlocksFields(
       {
         collections: [
           {
-            slug: "posts",
+            slug: "articles",
             fields: [
-              blocks("content"),
-              { name: "hero", type: "group", fields: [blocks("body")] },
+              { name: "rows", type: "repeater", fields: [blocks("cell")] },
+              {
+                name: "page",
+                type: "group",
+                fields: [
+                  {
+                    name: "more",
+                    type: "repeater",
+                    fields: [
+                      { name: "hero", type: "group", fields: [blocks("x")] },
+                    ],
+                  },
+                ],
+              },
             ],
           },
         ],
-      },
-      warn
-    );
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("names a Single as a Single", () => {
-    const warn = vi.fn();
-    warnNestedBlocksFields(
-      {
         singles: [
           {
             slug: "landing",
@@ -177,7 +167,64 @@ describe("warnNestedBlocksFields", () => {
       },
       warn
     );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("warns once per field in a repeater whose rows declare their own id, saying why", () => {
+    const warn = vi.fn();
+    const config = {
+      collections: [
+        {
+          slug: "listings",
+          fields: [
+            { name: "hero", type: "group", fields: [blocks("layout")] },
+            {
+              name: "rows",
+              type: "repeater",
+              fields: [{ name: "id", type: "text" }, blocks("cell")],
+            },
+            { name: "more", type: "repeater", fields: [blocks("cell")] },
+          ],
+        },
+      ],
+    };
+
+    warnNestedBlocksFields(config, warn);
+    // A reload in one process runs it again; the operator is told once per
+    // field.
+    warnNestedBlocksFields(config, warn);
+
+    // Only the field in the repeater with its own `id`: the grouped field and
+    // the one in a repeater with saved row ids both open.
     expect(warn).toHaveBeenCalledOnce();
-    expect(warn.mock.calls[0]?.[0]).toContain('single "landing"');
+    const message = warn.mock.calls[0]?.[0] as string;
+    expect(message).toContain('collection "listings"');
+    expect(message).toContain('"rows.cell"');
+    expect(message).toContain("declare their own `id` field");
+    expect(warn.mock.calls.join("\n")).not.toContain("more.cell");
+    expect(warn.mock.calls.join("\n")).not.toContain("hero.layout");
+  });
+
+  it("names a Single as a Single", () => {
+    const warn = vi.fn();
+    warnNestedBlocksFields(
+      {
+        singles: [
+          {
+            slug: "promo",
+            fields: [
+              {
+                name: "rows",
+                type: "repeater",
+                fields: [{ name: "id", type: "text" }, blocks("cell")],
+              },
+            ],
+          },
+        ],
+      },
+      warn
+    );
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[0]).toContain('single "promo"');
   });
 });

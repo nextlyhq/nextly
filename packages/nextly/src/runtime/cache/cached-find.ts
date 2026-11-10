@@ -11,7 +11,10 @@
  */
 import { container } from "../../di/container";
 import type { LanguageRegistry } from "../../domains/i18n/language-registry";
+import { NextlyError } from "../../errors/nextly-error";
+import type { PublicData } from "../../errors/public-data";
 import { loadNextModule, requireNextApi } from "../next-api";
+import { isReadRefusal } from "../routing/miss-or-denied";
 
 import { readTags } from "./nextly-tags";
 import {
@@ -78,6 +81,11 @@ export interface CachedFindOptions {
  * Run `reader` behind Next's tagged cache. On a cache hit the reader is skipped;
  * on a miss (or after a bust of any of `tags`) it runs and the result is cached
  * under `keyParts` + `tags`.
+ *
+ * A read refused by access (`isReadRefusal`) is cached too, as the refusal, and
+ * every read of the entry throws it again until a bust or the entry's lifetime
+ * reads it afresh. So a read that comes to be refused, when its entry is read
+ * again, replaces the answer it gave while it was allowed.
  *
  * @example
  * // Public entry detail — cached and busted when any post changes. Tag with the
@@ -153,19 +161,21 @@ export function applyCache<T>(
   // registered one: `unstable_cache` is the model Cache Components replaces,
   // and a page read right after a write can be served its previous entry once.
   const cachedRead = registeredCachedRead();
+  const read = afterLanguagesRead(keepingRefusal(reader));
+  const keyParts = [...options.keyParts, KEPT_KEY_PART];
   if (cachedRead) {
     return readThroughRegistered(
       cachedRead,
-      JSON.stringify(options.keyParts),
-      afterLanguagesRead(reader),
+      JSON.stringify(keyParts),
+      read,
       readTags(options.tags),
       publicReadLifetime(options.revalidate ?? false, true),
       () => noteCachedRead(true)
-    );
+    ).then(answerOf);
   }
   reportUnregisteredUnderCacheComponents();
   if (!unstableCache) return reader();
-  const cached = unstableCache(afterLanguagesRead(reader), options.keyParts, {
+  const cached = unstableCache(read, keyParts, {
     // Each once, none longer than Next.js accepts, and no more than it keeps,
     // in the order given: the routes put their own collection's or Single's
     // tag first, and a caller's own `cachedFind` keeps its order.
@@ -173,6 +183,99 @@ export function applyCache<T>(
     revalidate: publicReadLifetime(options.revalidate ?? false, false),
   });
   return runCachedOrDirect(cached, reader, () => noteCachedRead(false));
+}
+
+/**
+ * The key part every entry is filed under after the caller's: what an entry
+ * holds is a {@link Kept} envelope, where an earlier release filed the bare
+ * answer under the caller's parts alone. Kept apart, so neither release reads
+ * the other's shape from a cache two releases share during a deployment.
+ */
+const KEPT_KEY_PART = "nextly:kept-v1";
+
+/**
+ * A read as either cache keeps it: its answer, or the refusal it met, in an envelope the reader's
+ * own answer can never be mistaken for, whatever keys that answer has. The refusal is kept as its
+ * public parts and the reason it was logged with, all plain values, so either cache stores it as
+ * it stores an answer.
+ */
+type Kept<T> =
+  | { readonly kept: "answer"; readonly answer: T }
+  | {
+      readonly kept: "refusal";
+      readonly refusal: {
+        readonly code: string;
+        readonly statusCode: number;
+        readonly publicMessage: string;
+        readonly publicData?: PublicData;
+        readonly messageKey?: string;
+        readonly reason?: string;
+      };
+    };
+
+/**
+ * `reader`, answering a refusal by access with the refusal as a value rather
+ * than by throwing it.
+ *
+ * Neither cache keeps a throw. When an entry is read again in the background,
+ * as its lifetime ends, a read that throws leaves the earlier answer in place
+ * and Next keeps serving it: a read the public was allowed before an owner took
+ * its permission away went on being served to the public, until some write
+ * busted one of its tags. Kept as a value, the refusal replaces that answer.
+ * Every other error still throws, so a fault is never kept as an answer.
+ */
+function keepingRefusal<T>(reader: () => Promise<T>): () => Promise<Kept<T>> {
+  return async () => {
+    try {
+      return { kept: "answer", answer: await reader() };
+    } catch (error) {
+      if (!isReadRefusal(error)) throw error;
+      const reason = error.logContext?.reason;
+      return {
+        kept: "refusal",
+        refusal: {
+          code: String(error.code),
+          statusCode: error.statusCode,
+          publicMessage: error.publicMessage,
+          ...(error.publicData === undefined
+            ? {}
+            : { publicData: error.publicData }),
+          ...(error.messageKey === undefined
+            ? {}
+            : { messageKey: error.messageKey }),
+          ...(typeof reason === "string" ? { reason } : {}),
+        },
+      };
+    }
+  };
+}
+
+/**
+ * A cached entry's answer, throwing the refusal it kept as the refusal it was.
+ *
+ * Only what a cache handed back is read here, never a reader's own answer, so
+ * the envelope is the outermost value and an answer is returned without being
+ * looked into. A value that is no envelope comes from a cache that holds
+ * something this function did not write (a test's stand-in) and is returned
+ * as it is.
+ */
+function answerOf<T>(value: Kept<T> | T): T {
+  if (!isKept(value)) return value;
+  if (value.kept === "answer") return value.answer;
+  const { reason, ...refusal } = value.refusal;
+  throw new NextlyError({
+    ...refusal,
+    logContext: { kept: true, ...(reason === undefined ? {} : { reason }) },
+  });
+}
+
+function isKept<T>(value: Kept<T> | T): value is Kept<T> {
+  if (typeof value !== "object" || value === null) return false;
+  const kept = (value as { kept?: unknown }).kept;
+  return (
+    (kept === "answer" && "answer" in value) ||
+    (kept === "refusal" && "refusal" in value)
+  );
 }
 
 /**
@@ -204,19 +307,20 @@ function afterLanguagesRead<T>(reader: () => Promise<T>): () => Promise<T> {
  * is rethrown.
  */
 async function runCachedOrDirect<T>(
-  cached: () => Promise<T>,
+  cached: () => Promise<Kept<T>>,
   reader: () => Promise<T>,
   onCached: () => void
 ): Promise<T> {
+  let kept: Kept<T>;
   try {
-    const value = await cached();
-    // Only a read that was cached tells anything about the cache handlers.
-    onCached();
-    return value;
+    kept = await cached();
   } catch (error) {
     if (isMissingCacheScopeError(error)) return reader();
     throw error;
   }
+  // Only a read that was cached tells anything about the cache handlers.
+  onCached();
+  return answerOf(kept);
 }
 
 /** True for the `unstable_cache` "no incremental cache in this scope" invariant. */

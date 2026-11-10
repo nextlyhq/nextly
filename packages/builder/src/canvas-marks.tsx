@@ -18,7 +18,7 @@
 
 import type { BreakpointSet } from "@nextlyhq/blocks-engine";
 import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
-import { AlertCircle, Split } from "lucide-react";
+import { AlertCircle, CircleCheck, Split } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -149,8 +149,11 @@ interface Mark {
    * too close to the top of what is on screen for a tag above it to show.
    */
   readonly hoverTagInside?: boolean;
-  /** A conditioned block's badge: conditional, or conditions it can't check. */
-  readonly condition?: "conditional" | "unchecked";
+  /**
+   * A conditioned block's badge: conditional, conditions it can't check, or,
+   * while conditions are applied, shown for the previewed entry.
+   */
+  readonly condition?: ConditionMarkKind;
   /** Where its badge goes: above the block, below it, or inside its top. */
   readonly conditionTag?: "above" | "below" | "inside";
   /** Whether the block is selected, so its ring stands for the outline. */
@@ -204,6 +207,11 @@ export interface CanvasMarksProps {
    * does not name is tagged as a component.
    */
   readonly nameOf?: (address: string) => string | undefined;
+  /**
+   * What a block shown for the previewed entry is badged with while
+   * conditions are applied: "Shown for this post".
+   */
+  readonly shownLabel?: string;
 }
 
 /**
@@ -547,6 +555,18 @@ function takesTheTop(side: "above" | "below" | "pinned"): boolean {
   return side !== "below";
 }
 
+/** What a conditioned block's badge says about who sees it. */
+type ConditionMarkKind = "conditional" | "unchecked" | "shown";
+
+/** The words on a conditioned block's badge. */
+function conditionWords(
+  condition: ConditionMarkKind,
+  shownLabel: string
+): string {
+  if (condition === "unchecked") return "Can’t be checked";
+  return condition === "shown" ? shownLabel : "Conditional";
+}
+
 /** What the marks are drawn for besides what the canvas marks on the page. */
 interface MarkInputs {
   /** The block a Layers row points at, or `null`. */
@@ -558,6 +578,8 @@ interface MarkInputs {
   readonly revealed: ReadonlySet<string>;
   /** About how wide a hidden block's tag is drawn, in the chrome's pixels. */
   readonly tagWidth: number;
+  /** What a shown block's badge says while conditions are applied. */
+  readonly shownLabel: string;
 }
 
 /** The marked elements of a canvas root, as the boxes to draw over them. */
@@ -727,7 +749,9 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
       });
     });
   }
-  found.push(...conditionedMarks(root, space, onScreen, toolbarAbove));
+  found.push(
+    ...conditionedMarks(root, space, onScreen, toolbarAbove, inputs.shownLabel)
+  );
   return dimmedBesideEditing(found);
 }
 
@@ -742,14 +766,21 @@ function conditionedMarks(
   root: HTMLElement,
   space: OverlaySpace,
   onScreen: Rect,
-  toolbarAbove: (rect: Rect) => boolean
+  toolbarAbove: (rect: Rect) => boolean,
+  shownLabel: string
 ): Mark[] {
   const badges = new Map<string, ConditionBadge>();
   const copies = new Map<Element | null, number>();
   root.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`).forEach(element => {
     if (element.closest(`.${CANVAS_ROOT_CLASS}`) !== root) return;
     const condition = element.getAttribute(CONDITIONED_ATTRIBUTE);
-    if (condition !== "conditional" && condition !== "unchecked") return;
+    if (
+      condition !== "conditional" &&
+      condition !== "unchecked" &&
+      condition !== "shown"
+    ) {
+      return;
+    }
     const outline = outlineOf(element, root, space);
     if (outline === null) return;
     const key = badgeKey(element, copies, badges.size);
@@ -770,13 +801,13 @@ function conditionedMarks(
     }
   });
   return [...badges.values()].map(badge =>
-    conditionedMark(badge, onScreen, toolbarAbove)
+    conditionedMark(badge, onScreen, toolbarAbove, shownLabel)
   );
 }
 
 /** A conditioned block's parts, gathered to draw one outline and one tab. */
 interface ConditionBadge {
-  readonly condition: "conditional" | "unchecked";
+  readonly condition: ConditionMarkKind;
   readonly parts: Outline[];
   selected: boolean;
   primary: boolean;
@@ -816,7 +847,8 @@ function badgeKey(
 function conditionedMark(
   badge: ConditionBadge,
   onScreen: Rect,
-  toolbarAbove: (rect: Rect) => boolean
+  toolbarAbove: (rect: Rect) => boolean,
+  shownLabel: string
 ): Mark {
   const outline = placementOutline(badge.parts);
   // The top is taken by a selected placement's name, or by the block
@@ -835,7 +867,11 @@ function conditionedMark(
     tagEdge: "right",
     tagInset: {
       bottom: 0,
-      side: tabInset(outline.rect, onScreen, badge.condition),
+      side: tabInset(
+        outline.rect,
+        onScreen,
+        conditionWords(badge.condition, shownLabel)
+      ),
     },
     condition: badge.condition,
     conditionTag: conditionTagOf(outline.rect, onScreen, topTaken),
@@ -849,19 +885,13 @@ function conditionedMark(
  * edge, a negative inset, when the screen cuts the block's left so little of
  * it shows that the tab would run off the left.
  */
-function tabInset(
-  rect: Rect,
-  onScreen: Rect,
-  condition: "conditional" | "unchecked"
-): number {
+function tabInset(rect: Rect, onScreen: Rect, words: string): number {
   const right = rect.x + rect.width;
   // A block wholly off the screen to either side keeps its tab with it,
   // rather than leaving one stranded at the screen's edge.
   if (right <= onScreen.x || rect.x >= onScreen.x + onScreen.width) return 0;
   const cutRight = Math.max(0, right - (onScreen.x + onScreen.width));
-  const width =
-    tagWidthOf(condition === "unchecked" ? "Can’t be checked" : "Conditional") +
-    CONDITION_ICON_ROOM;
+  const width = tagWidthOf(words) + CONDITION_ICON_ROOM;
   const fitsLeft = right - onScreen.x - width;
   return Math.min(cutRight, fitsLeft);
 }
@@ -898,14 +928,21 @@ function conditionTagOf(
 /** A conditioned block's badge: what the canvas says about who sees it. */
 function ConditionBadge({
   condition,
+  shownLabel,
 }: {
-  condition: "conditional" | "unchecked";
+  condition: ConditionMarkKind;
+  shownLabel: string;
 }): React.JSX.Element {
-  const Icon = condition === "unchecked" ? AlertCircle : Split;
+  const Icon =
+    condition === "unchecked"
+      ? AlertCircle
+      : condition === "shown"
+        ? CircleCheck
+        : Split;
   return (
     <span className="nx-canvas-mark__condition">
       <Icon aria-hidden="true" size={12} />
-      {condition === "unchecked" ? "Can’t be checked" : "Conditional"}
+      {conditionWords(condition, shownLabel)}
     </span>
   );
 }
@@ -960,6 +997,7 @@ export function CanvasMarks({
   revealed = NO_IDS,
   device,
   nameOf,
+  shownLabel = "Shown for this entry",
 }: CanvasMarksProps = {}): React.JSX.Element {
   const shownOn =
     device === undefined
@@ -984,9 +1022,10 @@ export function CanvasMarks({
             hovered,
             revealed: new Set(JSON.parse(revealedKey) as string[]),
             tagWidth: tagWidthOf(hiddenLabel),
+            shownLabel,
           });
     setMarks(current => (sameMarks(current, next) ? current : next));
-  }, [hovered, revealedKey, hiddenLabel]);
+  }, [hovered, revealedKey, hiddenLabel, shownLabel]);
 
   React.useLayoutEffect(() => {
     measure();
@@ -1061,7 +1100,10 @@ export function CanvasMarks({
           style={markStyle(mark)}
         >
           {mark.condition === undefined ? null : (
-            <ConditionBadge condition={mark.condition} />
+            <ConditionBadge
+              condition={mark.condition}
+              shownLabel={shownLabel}
+            />
           )}
         </div>
       ))}

@@ -19,23 +19,33 @@
  * @module blocks/list-batch
  */
 import {
+  bindingKindOf,
   COLLECTION_LIST_TYPE,
   DEFAULT_BINDING_SOURCE,
   LIST_ENTRY_SLOT,
   isBindPath,
   isPlainRecord,
+  listItemRef,
   resolveNodeBindings,
+  type BindingFieldShape,
   type BindingIssue,
   type BindingRun,
   type BlockNode,
   type BoundValues,
 } from "@nextlyhq/blocks-engine";
 
-import type { PageContext } from "../context";
+import type {
+  BlocksDataProvider,
+  BlocksFieldShapes,
+  ListBatchReads,
+  PageContext,
+  QueryBudget,
+} from "../context";
 import { conditionAllows } from "../visibility";
 
 import { ICON_TYPE, iconMayDraw } from "./icon";
-import { IMAGE_TYPE, imageMayDraw } from "./image";
+import { firstMediaRead, IMAGE_TYPE, imageMayDraw } from "./image";
+import { readClaimOf } from "./props";
 
 /** Where a prop's value comes from: as set, or a list item's field path. */
 type ValueSource =
@@ -48,6 +58,8 @@ export interface ItemReadDemand {
   readonly follows: ReadonlyMap<string, ReadonlySet<string>>;
   /** The blocks that link to an entry, by a prop set or bound, in page order. */
   readonly links: readonly BlockNode[];
+  /** Every block the entry draws, in page order. */
+  readonly drawn: readonly BlockNode[];
 }
 
 /** The props a linking block names its entry by (`LINK_PROPS`). */
@@ -100,6 +112,7 @@ export function itemReadDemand(
 ): ItemReadDemand {
   const follows = new Map<string, Set<string>>();
   const links: BlockNode[] = [];
+  const nodes: BlockNode[] = [];
   // Last first, so each pop is the next block in page order: what is read
   // ahead is asked in the order the page draws it.
   const stack: BlockNode[] = [...template].reverse();
@@ -113,11 +126,12 @@ export function itemReadDemand(
     ) {
       continue;
     }
+    nodes.push(node);
     addFollows(node, follows);
     if (linksToAnEntry(node)) links.push(node);
     stack.push(...childrenOf(node).reverse());
   }
-  return { follows, links };
+  return { follows, links, drawn: nodes };
 }
 
 /** Each relation a node's item bindings follow, with the field read there. */
@@ -211,7 +225,12 @@ export async function withReadAhead<
     read.outcome.items,
     list.slots?.[LIST_ENTRY_SLOT] ?? [],
     ctx,
-    { nodeId: list.id, collection, contextOf: read.itemContext }
+    {
+      // Named as the list's own reads are: by its placement, inside one.
+      nodeId: readClaimOf(list)?.nodeId ?? list.id,
+      collection,
+      contextOf: read.itemContext,
+    }
   );
   return {
     ...read,
@@ -268,22 +287,13 @@ export async function readListAhead(
     )
   );
   const claim = { nodeId: list.nodeId };
-  const followed =
-    list.collection === undefined
-      ? new Map<Record<string, unknown>, FollowedRows>()
-      : await relatedRows(items, demands, {
-          reads,
-          collection: list.collection,
-          claim,
-        });
-  const refs = linkRefs(items, demands, item => {
-    // Drawn with the rows read for it, as the list draws it.
-    const { itemFollowed: _outer, ...drawn } = list.contextOf(item);
-    const rows = followed.get(item);
-    return rows === undefined ? drawn : { ...drawn, itemFollowed: rows };
+  return await scheduleReads(items, demands, {
+    reads,
+    collection: list.collection,
+    claim,
+    contextOf: list.contextOf,
+    queries: ctx.queries,
   });
-  if (refs.length > 0) await reads.entryPaths(refs, claim);
-  return followed;
 }
 
 /** An item's stored relation id, when it holds one. */
@@ -293,56 +303,288 @@ function storedId(value: unknown): string | undefined {
     : undefined;
 }
 
-/**
- * Each relation the entries follow, with every field read there and the
- * entries that follow it, by their place in the list.
- */
-function followsOf(
-  demands: readonly ItemReadDemand[]
-): Map<string, { fields: Set<string>; entries: number[] }> {
-  const follows = new Map<string, { fields: Set<string>; entries: number[] }>();
-  demands.forEach((demand, index) => {
-    for (const [field, inner] of demand.follows) {
-      const wanted = follows.get(field) ?? { fields: new Set(), entries: [] };
-      for (const name of inner) wanted.fields.add(name);
-      wanted.entries.push(index);
-      follows.set(field, wanted);
-    }
-  });
-  return follows;
+/** What one block asks of the entries that draw it, in page order. */
+type Ask =
+  | { readonly kind: "related"; readonly field: string }
+  | { readonly kind: "link" | "image"; readonly node: BlockNode };
+
+/** The asks one block makes: its relations, then its link and its image. */
+function asksOf(node: BlockNode): Ask[] {
+  const follows = new Map<string, Set<string>>();
+  addFollows(node, follows);
+  return [
+    ...[...follows.keys()].map(field => ({ kind: "related" as const, field })),
+    ...(linksToAnEntry(node) ? [{ kind: "link" as const, node }] : []),
+    ...(node.type === IMAGE_TYPE ? [{ kind: "image" as const, node }] : []),
+  ];
 }
 
 /**
- * The related entries each item's followed relations lead to, one read per
- * relation for all the entries that follow it, by item. An item whose
- * related entry was not read has none, and its binding shows its fallback.
+ * Every block the entries draw, once, in the order the list first draws
+ * it: entry by entry, each entry's blocks in page order, so under a tight
+ * allowance the reads ahead are asked in the order they would be made one
+ * entry at a time. Kept as first met rather than ranked by place within an
+ * entry: entries whose conditions show different blocks draw a later block
+ * of the template before an earlier one.
  */
-async function relatedRows(
+function inPageOrder(demands: readonly ItemReadDemand[]): BlockNode[] {
+  const seen = new Map<string, BlockNode>();
+  for (const demand of demands) {
+    for (const node of demand.drawn) {
+      if (!seen.has(node.id)) seen.set(node.id, node);
+    }
+  }
+  return [...seen.values()];
+}
+
+/**
+ * The reads ahead, scheduled from one traversal of what the entries draw,
+ * in page order: each relation read when the first block following it is
+ * reached (for every entry that follows it); runs of links, and runs of
+ * images, read as one batch each. A link or an image read through a
+ * relation is read with that relation's rows where it was read before it.
+ * Returns the related entries read, by item.
+ */
+async function scheduleReads(
   items: readonly Record<string, unknown>[],
   demands: readonly ItemReadDemand[],
   how: {
     readonly reads: NonNullable<PageContext["listReads"]>;
-    readonly collection: string;
+    readonly collection: string | undefined;
     readonly claim: { readonly nodeId: string };
+    readonly contextOf: (item: Record<string, unknown>) => PageContext;
+    readonly queries: PageContext["queries"];
   }
 ): Promise<Map<Record<string, unknown>, FollowedRows>> {
   const rows = new Map<Record<string, unknown>, FollowedRows>();
-  for (const [field, { fields, entries }] of followsOf(demands)) {
-    const following = entries
-      .map(index => items[index])
-      .filter((item): item is Record<string, unknown> => item !== undefined);
-    const ids = following.flatMap(item => storedId(item[field]) ?? []);
-    if (ids.length === 0) continue;
-    const related = await how.reads.related(
-      how.collection,
-      field,
-      ids,
-      [...fields],
-      how.claim
-    );
-    if (related !== undefined) placeRows(rows, following, field, related);
+  // Stopped once a read ahead stops for want of reads: the reads left are
+  // the earlier blocks', which they make as they are drawn, in page order.
+  for (const step of readSteps(demands, how.collection)) {
+    const going =
+      step.kind === "related"
+        ? await readRelation(items, demands, rows, step.field, {
+            ...how,
+            collection: step.collection,
+          })
+        : await readRun(items, demands, rows, step, how);
+    if (!going) break;
   }
   return rows;
+}
+
+/** One read ahead: a relation, or a run of links or of images. */
+type ReadStep =
+  | {
+      readonly kind: "related";
+      readonly field: string;
+      readonly collection: string;
+    }
+  | { readonly kind: "link" | "image"; readonly nodes: BlockNode[] };
+
+/**
+ * The reads ahead in the order they are made, from one traversal of what
+ * the entries draw, in page order: each relation where the first block
+ * following it is reached, once, and only for a list of a collection; each
+ * run of links, and each run of images, as one step, broken by a relation
+ * read between them or by an ask of the other kind.
+ */
+function readSteps(
+  demands: readonly ItemReadDemand[],
+  collection: string | undefined
+): ReadStep[] {
+  const steps: ReadStep[] = [];
+  const read = new Set<string>();
+  for (const node of inPageOrder(demands)) {
+    for (const ask of asksOf(node)) addStep(steps, ask, read, collection);
+  }
+  return steps;
+}
+
+/**
+ * One block's ask, added to the steps: a link or an image joins the run
+ * before it when that run is of its kind, and a relation is a step of its
+ * own, the first time it is asked, for a list of a collection.
+ */
+function addStep(
+  steps: ReadStep[],
+  ask: Ask,
+  read: Set<string>,
+  collection: string | undefined
+): void {
+  if (ask.kind === "related") {
+    if (collection === undefined || read.has(ask.field)) return;
+    read.add(ask.field);
+    steps.push({ kind: "related", field: ask.field, collection });
+    return;
+  }
+  const last = steps.at(-1);
+  if (last !== undefined && last.kind !== "related" && last.kind === ask.kind) {
+    last.nodes.push(ask.node);
+    return;
+  }
+  steps.push({ kind: ask.kind, nodes: [ask.node] });
+}
+
+/**
+ * One relation, read for every entry whose drawn blocks follow it, with
+ * every field read there; placed beside each item it was read for.
+ */
+async function readRelation(
+  items: readonly Record<string, unknown>[],
+  demands: readonly ItemReadDemand[],
+  rows: Map<Record<string, unknown>, FollowedRows>,
+  field: string,
+  how: {
+    readonly reads: NonNullable<PageContext["listReads"]>;
+    readonly collection: string;
+    readonly claim: { readonly nodeId: string };
+    readonly queries: PageContext["queries"];
+  }
+): Promise<boolean> {
+  const fields = new Set<string>();
+  const following: Record<string, unknown>[] = [];
+  items.forEach((item, index) => {
+    const inner = demands[index]?.follows.get(field);
+    if (inner === undefined) return;
+    for (const name of inner) fields.add(name);
+    following.push(item);
+  });
+  const ids = following.flatMap(item => storedId(item[field]) ?? []);
+  if (ids.length === 0) return true;
+  const related = await how.reads.related(
+    how.collection,
+    field,
+    ids,
+    [...fields],
+    how.claim
+  );
+  if (related !== undefined) placeRows(rows, following, field, related);
+  // Spent: nothing more is read ahead.
+  return how.queries?.remaining?.() !== 0;
+}
+
+/**
+ * A run of links or images, read as one batch for every entry that draws
+ * them, from each entry's props as the render fills them, with the related
+ * entries read for it so far.
+ */
+async function readRun(
+  items: readonly Record<string, unknown>[],
+  demands: readonly ItemReadDemand[],
+  rows: ReadonlyMap<Record<string, unknown>, FollowedRows>,
+  run: {
+    readonly kind: "link" | "image";
+    readonly nodes: readonly BlockNode[];
+  },
+  how: {
+    readonly reads: NonNullable<PageContext["listReads"]>;
+    readonly claim: { readonly nodeId: string };
+    readonly contextOf: (item: Record<string, unknown>) => PageContext;
+  }
+): Promise<boolean> {
+  const drawnWith = (item: Record<string, unknown>): PageContext => {
+    // Drawn with the rows read for it, as the list draws it.
+    const { itemFollowed: _outer, ...drawn } = how.contextOf(item);
+    const read = rows.get(item);
+    return read === undefined ? drawn : { ...drawn, itemFollowed: read };
+  };
+  const wanted = new Set(run.nodes.map(node => node.id));
+  const entries = items.flatMap((item, index) => {
+    const drawn = demands[index]?.drawn ?? [];
+    const nodes = drawn.filter(node => wanted.has(node.id));
+    return nodes.length === 0 ? [] : [{ item, nodes }];
+  });
+  if (run.kind === "link") {
+    const refs = linkRefs(entries, drawnWith);
+    if (refs.length === 0) return true;
+    return await stepGoesOn(how.reads.entryPaths(refs, how.claim));
+  }
+  const ids = mediaIdsOf(entries, drawnWith);
+  if (ids.length === 0) return true;
+  return await stepGoesOn(how.reads.media?.(ids, how.claim));
+}
+
+/**
+ * Each read-ahead call's own answer to whether it primed all it was asked,
+ * by the promise the call returned. Kept apart from the published methods,
+ * which answer nothing, so a host's own `ListBatchReads` keeps its type:
+ * the route's steps and the editor's count's give theirs (`judgedStep`).
+ * By call, not by step, so two lists reading ahead at once never read each
+ * other's answer.
+ */
+const ANSWERS = new WeakMap<Promise<void>, Promise<boolean>>();
+
+/**
+ * A read-ahead step, published as `ListBatchReads` takes it, with its own
+ * answer kept for the scheduler: `false` where it primed less than it was
+ * asked (it could not afford a batch, a read was refused, or it reads none
+ * ahead), so the list reads nothing more ahead and each later block reads
+ * as it is drawn, in page order.
+ */
+export function judgedStep<A extends readonly unknown[]>(
+  step: (...args: A) => Promise<boolean>
+): (...args: A) => Promise<void> {
+  return (...args) => {
+    const answer = step(...args);
+    const published = answer.then(() => undefined);
+    // The scheduler awaits the answer; a host awaiting the published
+    // promise still sees a failure, and nothing is left unhandled.
+    published.catch(() => undefined);
+    ANSWERS.set(published, answer);
+    return published;
+  };
+}
+
+/**
+ * Whether the reads ahead go on past a step's call: the step's own answer,
+ * where it gave one (`judgedStep`); a host's step without one is taken as
+ * having primed what it was asked, as before; and no step at all goes no
+ * further, since each of those blocks then reads as it is drawn.
+ */
+async function stepGoesOn(called: Promise<void> | undefined): Promise<boolean> {
+  if (called === undefined) return false;
+  const answer = ANSWERS.get(called);
+  if (answer !== undefined) return await answer;
+  await called;
+  return true;
+}
+
+/**
+ * Every media record the entries' images read first, once: from each image
+ * as the render fills it, its bound value included, so an image drawn from
+ * an address (a bound URL field, or a fallback) reads nothing ahead.
+ */
+function mediaIdsOf(
+  entries: readonly {
+    readonly item: Record<string, unknown>;
+    readonly nodes: readonly BlockNode[];
+  }[],
+  drawnWith: (item: Record<string, unknown>) => PageContext
+): string[] {
+  const ids = new Set<string>();
+  for (const { item, nodes } of entries) {
+    const context = drawnWith(item);
+    for (const node of nodes) {
+      const filled = filledNode(node, context);
+      const id = firstMediaRead(filled.props, filled.bound);
+      if (id !== undefined) ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
+/** A node's props as the render fills them for one entry, and what each bound prop holds. */
+function filledNode(
+  node: BlockNode,
+  context: PageContext
+): {
+  readonly props: Readonly<Record<string, unknown>>;
+  readonly bound: BoundValues | undefined;
+} {
+  const run = context.itemBindingRun;
+  if (run === undefined) return { props: node.props, bound: undefined };
+  const filled = fillItemBindings(node, context, run);
+  return { props: filled.props, bound: filled.bound };
 }
 
 /** Each item's related entry, set beside it under the field it follows. */
@@ -408,14 +650,16 @@ function itemBindingPasses<N extends BlockNode>(
  * entry read for it.
  */
 function linkRefs(
-  items: readonly Record<string, unknown>[],
-  demands: readonly ItemReadDemand[],
+  entries: readonly {
+    readonly item: Record<string, unknown>;
+    readonly nodes: readonly BlockNode[];
+  }[],
   drawnWith: (item: Record<string, unknown>) => PageContext
 ): { collection: string; id: string }[] {
   const refs = new Map<string, { collection: string; id: string }>();
-  for (const [index, item] of items.entries()) {
+  for (const { item, nodes } of entries) {
     const context = drawnWith(item);
-    for (const node of demands[index]?.links ?? []) {
+    for (const node of nodes) {
       const entry = linkedEntry(node, context);
       if (entry === undefined) continue;
       refs.set(`${entry.collection}\u0000${entry.id}`, entry);
@@ -426,15 +670,18 @@ function linkRefs(
 
 /** The schema the item being drawn binds against, where one is known. */
 function itemRefOf(context: Pick<PageContext, "itemSource" | "itemQuery">): {
-  readonly itemRef?: { collection: string } | { query: string };
+  readonly itemRef?:
+    | { readonly collection: string }
+    | { readonly query: string };
 } {
-  const itemSource = context.itemSource;
-  return typeof itemSource === "string" && itemSource !== ""
-    ? { itemRef: { collection: itemSource } }
-    : // A named query's rows with their own schema bind as the query's.
-      typeof context.itemQuery === "string"
-      ? { itemRef: { query: context.itemQuery } }
-      : {};
+  // The engine's one rule, which the save and the report judge by too: a
+  // collection's entries bind as that collection's, a named query's rows
+  // with their own schema as the query's.
+  const itemRef = listItemRef({
+    collection: context.itemSource,
+    query: context.itemQuery,
+  });
+  return itemRef === undefined ? {} : { itemRef };
 }
 
 /** The part of a page context that says which list item a node is drawn for. */
@@ -480,6 +727,104 @@ export function fillItemBindings<N extends BlockNode>(
     bound = { ...bound, ...result.bound };
   }
   return { props, bound, issues };
+}
+
+/** The collection a field leads to, when a path may follow it. */
+export function relationTarget(
+  fields: readonly BindingFieldShape[] | undefined,
+  name: string
+): string | undefined {
+  const field = fields?.find(candidate => candidate.name === name);
+  if (field === undefined || field.hasMany === true) return undefined;
+  const kind = bindingKindOf(field);
+  return (kind === "reference" || kind === "media") &&
+    typeof field.relationTo === "string"
+    ? field.relationTo
+    : undefined;
+}
+
+/** How many ids one read ahead asks for: the readers' own page cap. */
+export const AHEAD_BATCH_SIZE = 100;
+
+/**
+ * A batch's rows by the ids asked for, or `undefined` when they cannot be
+ * matched to those ids with certainty: the database's own count must equal
+ * the rows returned, and every row must carry a distinct id that was asked
+ * for. A read hook that rewrote or dropped an id fails that, and the batch
+ * is not trusted; the per-id path, which never matches by a returned id,
+ * answers instead.
+ */
+export function rowsById(
+  found: { readonly items: readonly unknown[]; readonly meta?: unknown },
+  asked: readonly string[]
+): Map<string, Record<string, unknown>> | undefined {
+  const total = isPlainRecord(found.meta) ? found.meta.total : undefined;
+  if (typeof total !== "number" || total !== found.items.length) {
+    return undefined;
+  }
+  const wanted = new Set(asked);
+  const rows = new Map<string, Record<string, unknown>>();
+  for (const item of found.items) {
+    if (!isPlainRecord(item)) return undefined;
+    const id = item.id;
+    if (typeof id !== "string" && typeof id !== "number") return undefined;
+    const key = String(id);
+    if (!wanted.has(key) || rows.has(key)) return undefined;
+    rows.set(key, item);
+  }
+  return rows;
+}
+
+/**
+ * A list's relations read through `data`, the page's own data provider (the
+ * one its entries come through), so whatever it refuses a list it refuses a
+ * list's relations too, and judged by the public's field shapes: the read a
+ * route's lists make, and the one the editor's count makes, alike.
+ *
+ * @experimental
+ */
+export function relatedThrough(
+  data: BlocksDataProvider,
+  shapes: BlocksFieldShapes | undefined,
+  budget: QueryBudget
+): ListBatchReads["related"] {
+  return async (collection, field, ids, fields, claim) => {
+    // Only a relation the public's shapes say is a to-one relation to one
+    // collection, as an entry binding's path may follow.
+    const target = relationTarget(shapes?.fieldsOf({ collection }), field);
+    if (target === undefined) return undefined;
+    const wanted = [...new Set(ids.map(String))];
+    const found = new Map<string, Readonly<Record<string, unknown>>>();
+    for (let at = 0; at < wanted.length; at += AHEAD_BATCH_SIZE) {
+      const chunk = wanted.slice(at, at + AHEAD_BATCH_SIZE);
+      if (!budget.take({ ...claim, kind: "related" })) break;
+      const page = await data
+        .find({
+          collection: target,
+          filters: [{ field: "id", op: "in", value: chunk }],
+          limit: chunk.length,
+          select: [...fields],
+        })
+        .catch(() => undefined);
+      // Rows matched to ids only with certainty; otherwise these items
+      // keep their ids, and their bindings show their fallbacks. A
+      // provider need not count what it matched; then the rows it gave are
+      // taken as its count.
+      const rows =
+        page === undefined
+          ? undefined
+          : rowsById(
+              {
+                items: page.items,
+                meta: { total: page.total ?? page.items.length },
+              },
+              chunk
+            );
+      if (rows === undefined) continue;
+      for (const [id, row] of rows) found.set(id, row);
+    }
+    return found;
+  };
 }
 
 /**

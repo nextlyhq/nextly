@@ -36,8 +36,13 @@ import {
   designShapeProblem,
   designShapeRefusal,
   isEntryDesign,
+  withoutEmptyEntryFields,
 } from "./entry-designs";
-import { TEMPLATE_TARGET_FIELDS } from "./template-preview-contract";
+import type { TemplateRetargetVerdict } from "./template-actions-contract";
+import {
+  TEMPLATE_ENTRY_ADDRESS_FIELD,
+  TEMPLATE_TARGET_FIELDS,
+} from "./template-preview-contract";
 import { templateTargetOf } from "./template-target";
 import {
   addressRefusal,
@@ -251,8 +256,40 @@ export type CollectionRecordRead = (
   slug: string
 ) => Promise<Record<string, unknown> | null>;
 
+/**
+ * The one rule for pointing a saved template at another collection, asked by
+ * the guard of every write that changes it and by the template form, through
+ * the retarget route, before it offers the change.
+ *
+ * A template keeps the collection it draws while that collection exists
+ * under its name: only a renamed or removed one may be replaced, so a rename
+ * never strands its design. And a template storing an address moves live
+ * addresses wherever it draws, so it is pointed elsewhere only once that
+ * address is removed, which needs the routing permission.
+ *
+ * The collection is asked first: while it exists, removing the address would
+ * not let the change through, so naming the address would send an editor to
+ * take a collection's addresses down for nothing. `read` is `null` where
+ * nothing may be read, inside a transaction whose dry run judged the write
+ * before, and the address alone is judged.
+ */
+export async function retargetVerdict(
+  collection: unknown,
+  address: string | null,
+  read: CollectionRecordRead | null
+): Promise<TemplateRetargetVerdict> {
+  if (
+    read !== null &&
+    typeof collection === "string" &&
+    (await read(collection)) !== null
+  ) {
+    return "collection-exists";
+  }
+  return address === null ? "allowed" : "address-blocks";
+}
+
 /** The field whose value is an entry's part of its address. */
-const ENTRY_ADDRESS_FIELD = "slug";
+const ENTRY_ADDRESS_FIELD = TEMPLATE_ENTRY_ADDRESS_FIELD;
 
 /**
  * Why `collection` cannot have a template, or `null` when it can.
@@ -320,10 +357,64 @@ export function templateCollectionRefusal(message: string): NextlyError {
 /**
  * The hook context key a template action's own write carries when the action
  * asked the guard's questions before opening its transaction, and asks the
- * ones that can change meanwhile again once it has committed: giving an
- * entry its own design checks the entry before, and again after.
+ * ones that can change meanwhile again inside it: giving an entry its own
+ * design checks the entry before, and holds it in the write's transaction.
  */
 export const ASKED_BEFORE_CONTEXT = "pageBuilder.templateAskedBefore";
+
+/**
+ * The hook context key under which the guard leaves, for the write's
+ * in-transaction phase (`entry-design-write`), the collections a template
+ * write names as the guard let it through: its `collection` and its
+ * `entryCollection`, each as text or null for none.
+ *
+ * A collection the guard lets a write newly name has passed
+ * {@link templateCollectionProblem}, here or in the template action that
+ * asked before it wrote. A hook running after the guard can still rewrite
+ * either field, so the phase lets a write newly name only a collection the
+ * guard let through. It asks that rather than judging the collection
+ * again: judging reads the collection's record, which inside the write's
+ * transaction would take a second connection from the pool, and on a pool
+ * of one wait for the connection the transaction holds.
+ */
+export const GUARDED_COLLECTIONS_CONTEXT =
+  "pageBuilder.templateGuardedCollections";
+
+/** The fields a template names the collection it draws from in. */
+export const TEMPLATE_COLLECTION_FIELDS: readonly [
+  typeof TEMPLATE_COLLECTION_FIELD,
+  typeof TEMPLATE_ENTRY_COLLECTION_FIELD,
+] = [TEMPLATE_COLLECTION_FIELD, TEMPLATE_ENTRY_COLLECTION_FIELD] as const;
+
+/** A collection field's value as it is compared: text, or null for none. */
+export function namedCollection(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+/**
+ * Leave in the write's shared hook context the collections the template
+ * names as the guard let the write through ({@link GUARDED_COLLECTIONS_CONTEXT}):
+ * what `data` names, and on an update, the stored row's for a field `data`
+ * leaves out.
+ */
+function recordGuardedCollections(
+  hook: Record<string, unknown>,
+  data: Record<string, unknown> | null
+): void {
+  const shared = recordOf(hook.context);
+  if (data === null || shared === null || !Object.isExtensible(shared)) return;
+  const original =
+    hook.operation === "create" ? null : recordOf(hook.originalData);
+  const guarded: Record<string, string | null> = {};
+  for (const field of TEMPLATE_COLLECTION_FIELDS) {
+    guarded[field] = namedCollection(
+      Object.prototype.hasOwnProperty.call(data, field)
+        ? data[field]
+        : original?.[field]
+    );
+  }
+  shared[GUARDED_COLLECTIONS_CONTEXT] = guarded;
+}
 
 /** What the guard is built with. */
 export interface TemplateGuardSetup {
@@ -336,14 +427,15 @@ export interface TemplateGuardSetup {
   /** Whether `collection` holds an entry `id`, in any state, read as the system. */
   readonly entryExists: (collection: string, id: string) => Promise<boolean>;
   /**
-   * Hold the entry's own lock row until `tx` ends: taken by giving an entry
-   * its own design and by deleting the entry, so the two take turns.
+   * Hold the entry's row for share until `tx` ends, and answer whether it
+   * exists: a delete of the entry locks the row for update before removing
+   * it, so giving the entry its own design and deleting it take turns.
    */
-  readonly lockEntry: (
+  readonly holdEntry: (
     tx: PluginCollectionTransaction,
     collection: string,
     id: string
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   /** Each address declared in code, by collection slug. */
   readonly declaredAddresses: ReadonlyMap<string, string>;
   /** The template storing an address, read as the system. */
@@ -382,7 +474,11 @@ export interface TemplateGuardHooks {
  *
  * `beforeChange`, which runs after every `beforeCreate` and `beforeUpdate`
  * hook and after validation, still before the write. A hook running later
- * can still change the data; the unique index is what holds regardless.
+ * can still change the data: the unique indexes hold regardless, and the
+ * template's in-transaction phase judges the row it commits again
+ * (`entry-design-write`): what it serves, that the collections it names are
+ * those the guard let through ({@link GUARDED_COLLECTIONS_CONTEXT}), and a
+ * new own design's entry.
  */
 export function registerTemplateGuard(
   ctx: TemplateGuardHooks,
@@ -390,10 +486,15 @@ export function registerTemplateGuard(
 ): void {
   ctx.hooks.on("beforeChange", setup.templatesCollection, async context => {
     const hook = recordOf(context) ?? {};
-    const data = await guardAddress(setup, hook);
+    const addressed = await guardAddress(setup, hook);
+    // A cleared input names no entry, as a cleared address is none: stored
+    // as none rather than as an empty value the unique index would hold.
+    const data =
+      withoutEmptyEntryFields(addressed ?? recordOf(hook.data)) ?? addressed;
     await guardWrite(setup, data === undefined ? hook : { ...hook, data });
-    // The data as the address guard left it, an emptied address made none;
-    // undefined keeps the write's own.
+    recordGuardedCollections(hook, data ?? recordOf(hook.data));
+    // The data as the guards left it, an emptied address or entry field made
+    // none; undefined keeps the write's own.
     return data;
   });
 }
@@ -492,24 +593,34 @@ export async function addressCollectionProblem(
 }
 
 /**
- * Refuse pointing a template at another collection while it stores an
- * address: it moves live addresses wherever it draws, so it is pointed
- * elsewhere only once its address is removed, which needs the routing
- * permission. The address is the write's own where it names one, else the
- * stored one.
+ * The address that holds a template to its collection: the write's own where
+ * it names one, else the stored one, so a write that removes it may also
+ * point the template elsewhere.
  */
-function refuseAddressedRetarget(
+function retargetAddressOf(
   data: Record<string, unknown>,
   original: Record<string, unknown> | null
-): void {
-  const addressed = storedAddressOf(
+): string | null {
+  return storedAddressOf(
     Object.prototype.hasOwnProperty.call(data, TEMPLATE_ADDRESS_FIELD)
       ? data[TEMPLATE_ADDRESS_FIELD]
       : original?.[TEMPLATE_ADDRESS_FIELD]
   );
-  if (addressed !== null) {
+}
+
+/** Refuse a change of collection the retarget rule does not allow, in its words. */
+function refuseRetarget(
+  verdict: TemplateRetargetVerdict,
+  address: string | null
+): void {
+  if (verdict === "collection-exists") {
+    throw templateCollectionRefusal(
+      "A template's collection cannot be changed while that collection exists. Create a template for the other collection instead."
+    );
+  }
+  if (verdict === "address-blocks") {
     throw addressRefusal(
-      `This template serves its collection's entries at ${addressed}. Remove its address before pointing it at another collection.`
+      `This template serves its collection's entries at ${address ?? ""}. Remove its address before pointing it at another collection.`
     );
   }
 }
@@ -554,20 +665,12 @@ export async function guardWrite(
     ) {
       return;
     }
-    refuseAddressedRetarget(data, original);
-    if (skipsReads(context)) return;
-    // A template keeps the collection it draws. The one exception is a
-    // template whose collection no longer exists under its name, renamed or
-    // deleted: it may be pointed at another, judged as a new template's
-    // collection is, so a rename never strands its design.
-    if (
-      typeof before === "string" &&
-      (await setup.readCollection(before)) !== null
-    ) {
-      throw templateCollectionRefusal(
-        "A template's collection cannot be changed while that collection exists. Create a template for the other collection instead."
-      );
-    }
+    // Allowed only as the retarget rule says, and then judged as a new
+    // template's collection is.
+    const reads = skipsReads(context) ? null : setup.readCollection;
+    const address = retargetAddressOf(data, original);
+    refuseRetarget(await retargetVerdict(before, address, reads), address);
+    if (reads === null) return;
     const id = original?.id;
     await judgeCollection(
       setup,

@@ -16,6 +16,7 @@ import {
   type BlockDefinition,
   blockTypeClassName,
   defineBlock,
+  type BoundValues,
   type ImageValue,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
@@ -75,6 +76,25 @@ export interface ImageProps extends LinkProps {
  */
 export function imageMayDraw(has: (prop: string) => boolean): boolean {
   return has("mediaId") || has("src");
+}
+
+/**
+ * The media record an image reads first as it is drawn, by its id: its
+ * first picture candidate, where that holds a media record. None where it
+ * draws an address, a bound URL field's or a fallback's, which takes no
+ * read. What a list reads ahead for its images, from the same candidates
+ * the render draws from, so a list never reads a record its image will not.
+ */
+export function firstMediaRead(
+  props: Readonly<Record<string, unknown>>,
+  bound: BoundValues | undefined
+): string | undefined {
+  const [first] = pictureCandidates(
+    text(props.mediaId),
+    props.src,
+    boundImage(bound?.mediaId)
+  );
+  return first?.holds === "media" ? first.value : undefined;
 }
 
 export async function renderImage({
@@ -479,6 +499,9 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
       role: "content",
       type: "media",
       accept: "image/*",
+      // An image kept by its address, as an unbound one a visitor saw by
+      // address is, belongs in `src`: `mediaId` holds a library id only.
+      addressProp: "src",
     },
     src: { label: "Image address", role: "content", type: "url" },
     alt: { label: "Alt text", role: "content", type: "text" },

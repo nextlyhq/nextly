@@ -66,6 +66,7 @@ import {
   editorReaderAsCaller,
   findAsCaller,
   idsKeptByWorkflowKey,
+  publicSourceReader,
   type AsCallerFindArgs,
   type AsCallerPage,
 } from "../entry-reads";
@@ -144,9 +145,13 @@ export interface PreviewEntryReads {
   editorEntry(
     request: PreviewEntryRequest
   ): Promise<Record<string, unknown> | null>;
-  /** The published entry as an anonymous visitor reads it, or `null`. */
+  /**
+   * The published entry as an anonymous visitor reads it, or `null`; only
+   * the fields named in `select`, with its id, when it names any.
+   */
   publicEntry(
-    request: PreviewEntryRequest
+    request: PreviewEntryRequest,
+    select?: readonly string[]
   ): Promise<Record<string, unknown> | null>;
   /** The collection's field shapes as the public may read them. */
   publicFields(
@@ -161,12 +166,12 @@ export interface PreviewEntryReads {
  * unreadable: the same words for each, so the answer never says which. The
  * slug goes to the log and nowhere else.
  */
-function previewRefusal(route: string, collection: string): NextlyError {
+export function previewRefusal(route: string, collection: string): NextlyError {
   return NextlyError.forbidden({ logContext: { route, collection } });
 }
 
 /** Whether a read failed because the thing is missing or the caller may not read it. */
-function missedOrRefused(error: unknown): boolean {
+export function missedOrRefused(error: unknown): boolean {
   return (
     NextlyError.isNotFound(error) ||
     NextlyError.isForbidden(error) ||
@@ -449,15 +454,7 @@ export async function readPreviewEntry(
   if (editorValues === null || id === undefined) {
     throw previewRefusal(route, collection);
   }
-  const [publicValues, fields] = await Promise.all([
-    // A visitor who may not read the entry, or may not read it yet, reads
-    // nothing: the published page then draws each binding's fallback.
-    reads.publicEntry(request).catch((error: unknown) => {
-      if (missedOrRefused(error)) return null;
-      throw error;
-    }),
-    reads.publicFields(collection, request.locale),
-  ]);
+  const { publicValues, fields } = await visitorView(request, reads);
   const lifecycle = resolvedCollectionView(record).status === true;
   return {
     id,
@@ -472,7 +469,7 @@ export async function readPreviewEntry(
       : "published",
     editorValues,
     publicValues,
-    fields: fields ?? [],
+    fields,
   };
 }
 
@@ -491,8 +488,55 @@ function directEntriesReads(
   };
 }
 
-/** The reads the entry read binds: the editor reader as the caller, the public reader, the shapes. */
-function directEntryReads(
+/**
+ * What a visitor reads of an entry: its published values, or `null` where a
+ * visitor may not read it or may not read it yet, and the fields a visitor
+ * may read. The one read the template preview and the conditions preview
+ * both answer with.
+ */
+export async function visitorView(
+  request: PreviewEntryRequest,
+  reads: Pick<PreviewEntryReads, "publicEntry" | "publicFields">,
+  /**
+   * Read only the fields a visitor may read, named after the shapes, rather
+   * than the whole published row: for a reader that judges those fields and
+   * needs nothing else, such as a page's conditions, whose row holds a blocks
+   * document it never reads.
+   */
+  only?: "public-fields"
+): Promise<{
+  publicValues: Record<string, unknown> | null;
+  fields: readonly BindingFieldShape[];
+}> {
+  // A visitor who may not read the entry, or may not read it yet, reads
+  // nothing: the published page then draws each binding's fallback and hides
+  // each conditioned block.
+  const published = (select?: readonly string[]) =>
+    reads.publicEntry(request, select).catch((error: unknown) => {
+      if (missedOrRefused(error)) return null;
+      throw error;
+    });
+  if (only === "public-fields") {
+    const shapes =
+      (await reads.publicFields(request.collection, request.locale)) ?? [];
+    // The id is named too, so an entry with no field a visitor reads still
+    // answers whether a visitor reads it at all.
+    const select = ["id", ...shapes.map(shape => shape.name)];
+    return { publicValues: await published(select), fields: shapes };
+  }
+  const [publicValues, fields] = await Promise.all([
+    published(),
+    reads.publicFields(request.collection, request.locale),
+  ]);
+  return { publicValues, fields: fields ?? [] };
+}
+
+/**
+ * The reads the entry read binds: the editor reader as the caller, the public
+ * reader, the shapes. Shared with the conditions preview's read, which asks
+ * the same three questions of a page.
+ */
+export function directEntryReads(
   ctx: PluginRouteContext,
   guard: () => TemplateGuardSetup
 ): PreviewEntryReads {
@@ -504,19 +548,13 @@ function directEntryReads(
       await (
         await editorReaderAsCaller(ctx, request.locale)
       ).findById({ collection: request.collection, id: request.id }),
-    publicEntry: async request => {
-      const { createPublicReader, requireNextly } = await import(
-        "nextly/runtime"
-      );
-      const nextly = requireNextly();
-      const reader = createPublicReader(
-        { find: async args => await nextly.find(args) },
-        request.locale === undefined ? {} : { locale: request.locale }
-      );
+    publicEntry: async (request, select) => {
+      const reader = await publicSourceReader(request.locale);
       const { items } = await reader.find({
         collection: request.collection,
         filters: [{ field: "id", op: "equals", value: request.id }],
         limit: 1,
+        ...(select === undefined ? {} : { select }),
       });
       return items[0] ?? null;
     },

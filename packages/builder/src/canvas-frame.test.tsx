@@ -186,6 +186,56 @@ describe("the canvas frame", () => {
     expect(root?.hasAttribute("data-nx-theme")).toBe(false);
   });
 
+  it("states a light or dark theme as the iframe element's own colour scheme, and nothing once it is unset", () => {
+    // On the ELEMENT, not the page inside: a frame's prefers-color-scheme
+    // follows the scheme of the element embedding it. No page is loaded, so
+    // this is the element alone and not the marker on the frame's document.
+    const { container, rerender } = render(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        theme="dark"
+        source={TEST_SOURCE}
+      />
+    );
+    const frame = frameIn(container);
+    expect(frame.style.colorScheme).toBe("dark");
+
+    rerender(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        theme="light"
+        source={TEST_SOURCE}
+      />
+    );
+    expect(frame.style.colorScheme).toBe("light");
+
+    // A theme that is no colour scheme states none.
+    rerender(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        theme="brand"
+        source={TEST_SOURCE}
+      />
+    );
+    expect(frame.style.colorScheme).toBe("");
+
+    rerender(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        theme="dark"
+        source={TEST_SOURCE}
+      />
+    );
+    rerender(<CanvasFrame width={1280} title="Home" source={TEST_SOURCE} />);
+    expect(frame.style.colorScheme).toBe("");
+    // The rest of the element's style is kept as it was.
+    expect(frame.style.width).toBe("1280px");
+  });
+
   it("hands the region chrome the admin's tokens, scoped to it, and again when the theme changes", async () => {
     /*
      * jsdom does not inherit custom properties into a computed style, so the

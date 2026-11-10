@@ -40,6 +40,7 @@ import {
   ENTRY_DESIGN_SECTION_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
   TEMPLATE_DELETE_COMPONENT,
+  TEMPLATE_DESIGN_DETAILS_COMPONENT,
   TEMPLATE_OWN_DESIGNS_COMPONENT,
 } from "../builder-view";
 import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
@@ -72,9 +73,11 @@ import { PageBuilderView } from "./editor/PageBuilderView";
 import { registerEntryDesignColumn } from "./entry-design-column";
 import { EntryDesignSection } from "./EntryDesignSection";
 import { RemoveLayoutToolbarSlot } from "./RemoveLayoutAction";
-import { TemplateDeleteAction } from "./TemplateDeleteAction";
-import { TemplateOwnDesigns } from "./TemplateOwnDesigns";
 import { TemplateAddressField } from "./TemplateAddressField";
+import { TemplateCollectionField } from "./TemplateCollectionField";
+import { TemplateDeleteAction } from "./TemplateDeleteAction";
+import { TemplateDesignDetails } from "./TemplateDesignDetails";
+import { TemplateOwnDesigns } from "./TemplateOwnDesigns";
 import { registerExportActions } from "./transfer-export-action";
 import { TransferImport } from "./transfer-import";
 
@@ -107,6 +110,14 @@ const BLOCKS_SUMMARY_PATH = "@nextlyhq/plugin-page-builder/admin#BlocksSummary";
 const TEMPLATE_ADDRESS_FIELD_PATH =
   "@nextlyhq/plugin-page-builder/admin#TemplateAddressField";
 
+/**
+ * The template form's collection control. Must match
+ * `TEMPLATE_COLLECTION_FIELD_COMPONENT`, for the reason `BLOCKS_FIELD_PATH`
+ * gives.
+ */
+const TEMPLATE_COLLECTION_FIELD_PATH =
+  "@nextlyhq/plugin-page-builder/admin#TemplateCollectionField";
+
 const COMPONENTS = {
   [BLOCKS_FIELD_PATH]: BlocksField,
   [BLOCKS_SUMMARY_PATH]: BlocksSummary,
@@ -130,9 +141,12 @@ const COMPONENTS = {
   // a template's own designs, and the delete that says what it means.
   [ENTRY_DESIGN_SECTION_COMPONENT]: EntryDesignSection,
   [TEMPLATE_OWN_DESIGNS_COMPONENT]: TemplateOwnDesigns,
+  [TEMPLATE_DESIGN_DETAILS_COMPONENT]: TemplateDesignDetails,
   [TEMPLATE_DELETE_COMPONENT]: TemplateDeleteAction,
   // The template's address, editable under the routing permission.
   [TEMPLATE_ADDRESS_FIELD_PATH]: TemplateAddressField,
+  // The template's collection, by its name.
+  [TEMPLATE_COLLECTION_FIELD_PATH]: TemplateCollectionField,
 };
 
 // Eager registration on module load.
@@ -164,9 +178,11 @@ export {
   EntryDesignSection,
   PageBuilderView,
   RemoveLayoutToolbarSlot,
-  TemplateDeleteAction,
-  TemplateOwnDesigns,
   TemplateAddressField,
+  TemplateCollectionField,
+  TemplateDeleteAction,
+  TemplateDesignDetails,
+  TemplateOwnDesigns,
   TransferImport,
 };
 /**

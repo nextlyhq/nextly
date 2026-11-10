@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import type { PluginMetadata } from "@admin/types/branding";
 
-import { resolveVisibleMenuItems } from "./menu";
+import {
+  menuDestinations,
+  menuItemsMatching,
+  resolveVisibleMenuItems,
+} from "./menu";
 
 const allow = () => true;
 
@@ -154,5 +158,88 @@ describe("resolveVisibleMenuItems — section attribution", () => {
     // Asserts the population the partition is drawn from, so a filter that
     // dropped everything could not pass the per-section cases vacuously.
     expect(resolveVisibleMenuItems(plugins, always)).toHaveLength(3);
+  });
+});
+
+describe("menuItemsMatching", () => {
+  const items = [
+    { label: "Patterns", to: "/admin/collections/patterns" },
+    { label: "Components", to: "/admin/collections/components" },
+    {
+      label: "Reports",
+      to: "/admin/plugins/r/reports",
+      children: [
+        { label: "Weekly", to: "/admin/plugins/r/weekly" },
+        { label: "Monthly", to: "/admin/plugins/r/monthly" },
+      ],
+    },
+  ];
+
+  it("keeps every item for an empty search", () => {
+    expect(menuItemsMatching(items, "  ")).toEqual(items);
+  });
+
+  it("keeps an item whose label holds the search, ignoring case, with all its children", () => {
+    expect(menuItemsMatching(items, "PATT").map(item => item.label)).toEqual([
+      "Patterns",
+    ]);
+    expect(menuItemsMatching(items, "repo")[0]?.children).toHaveLength(2);
+  });
+
+  it("keeps a parent for a matching child, with only the children that match", () => {
+    const [reports] = menuItemsMatching(items, "week");
+    expect(reports?.label).toBe("Reports");
+    expect(reports?.children?.map(child => child.label)).toEqual(["Weekly"]);
+  });
+
+  it("keeps nothing that does not match", () => {
+    expect(menuItemsMatching(items, "layouts")).toEqual([]);
+  });
+});
+
+describe("resolveVisibleMenuItems with the panels drawn", () => {
+  const plugins = [
+    {
+      name: "@a/p",
+      collections: [],
+      menu: [
+        { label: "Report", to: "/report", section: "dashboard" },
+        { label: "Library", to: "/library" },
+      ],
+    },
+  ] satisfies PluginMetadata[];
+  const allow = () => true;
+
+  it("lists an item whose section draws no panel under Plugins", () => {
+    const none = (section: string) => section !== "dashboard";
+    expect(
+      resolveVisibleMenuItems(plugins, allow, "plugins", none).map(
+        item => item.label
+      )
+    ).toEqual(["Report", "Library"]);
+  });
+
+  it("keeps it in its own section where that section draws a panel", () => {
+    const all = () => true;
+    expect(
+      resolveVisibleMenuItems(plugins, allow, "plugins", all).map(
+        item => item.label
+      )
+    ).toEqual(["Library"]);
+  });
+});
+
+describe("menuDestinations", () => {
+  it("holds every item's address, children included", () => {
+    expect([
+      ...menuDestinations([
+        {
+          label: "Reports",
+          to: "/r",
+          children: [{ label: "Weekly", to: "/r/weekly" }],
+        },
+      ]),
+    ]).toEqual(["/r", "/r/weekly"]);
+    expect(menuDestinations([]).size).toBe(0);
   });
 });

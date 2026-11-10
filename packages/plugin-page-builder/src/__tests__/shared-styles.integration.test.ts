@@ -247,6 +247,27 @@ describe.each(getConfiguredTestDialects())(
       `plugins/${PAGE_BUILDER_PLUGIN_NAME}/shared-styles/${sub}`;
     const SINGLE = `singles/${SITE_STYLE_SLUG}`;
 
+    /** A page's stored content, set past every check on the page's row. */
+    async function plantContent(
+      t: TestNextly,
+      id: string,
+      content: unknown
+    ): Promise<void> {
+      const registry = t.getService("collectionRegistryService") as unknown as {
+        getCollectionBySlug(
+          slug: string
+        ): Promise<{ tableName: string } | null>;
+      };
+      const table = (await registry.getCollectionBySlug("pages"))?.tableName;
+      if (table === undefined) throw new Error("the pages table is missing");
+      await t.adapter.update(
+        table,
+        // SQLite stores a JSON column as text; the others take the value.
+        { content: dialect === "sqlite" ? JSON.stringify(content) : content },
+        { and: [{ column: "id", op: "=", value: id }] }
+      );
+    }
+
     /** The stored class list, read as the system. */
     async function stored(t: TestNextly): Promise<Record<string, unknown>[]> {
       const doc = (await t.nextly.findSingle({
@@ -708,22 +729,26 @@ describe.each(getConfiguredTestDialects())(
         },
       });
 
-      // A page holding `spare`, which a trusted write then removes from the
-      // library: the page's reference is now to a class the site lacks.
-      const created = await t.nextly.create({
-        collection: "pages",
-        data: {
-          title: "Old",
-          slug: "old",
-          content: pageOf([text("a", { classes: ["c-spare"] })]),
-        },
-        overrideAccess: true,
-      });
+      // A page holding `spare` after the library dropped it: the page's
+      // reference is to a class the site lacks. Dropped while nothing uses
+      // it, since a removal is refused while a page does, then planted in the
+      // page's stored row past every check, as a page stored before the
+      // removal rules existed holds it.
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
         data: { classes: [lockedCard, hero], _overwrite: true },
         overrideAccess: true,
       });
+      const created = await t.nextly.create({
+        collection: "pages",
+        data: { title: "Old", slug: "old", content: pageOf([text("a")]) },
+        overrideAccess: true,
+      });
+      await plantContent(
+        t,
+        String(created.item.id),
+        pageOf([text("a", { classes: ["c-spare"] })])
+      );
       const kept = await t.nextly.update({
         collection: "pages",
         id: String(created.item.id),

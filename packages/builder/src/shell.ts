@@ -208,6 +208,10 @@ export type {
 // The variant open in a component's view, previewed on the host's canvas.
 export { useVariantPreview, VariantPreviewTag } from "./variant-preview";
 export type { VariantPreviewState } from "./variant-preview";
+// The one row of tags over the canvas: the variant previewed, and the site
+// mode the author picked to preview the page in.
+export { CanvasPreviewTags } from "./canvas-preview-tags";
+export type { CanvasPreviewTagsProps } from "./canvas-preview-tags";
 
 /**
  * The Style half of the same inspector.
@@ -406,6 +410,22 @@ export {
   usePreviewedEntry,
 } from "./previewed-entry";
 export type { PreviewedEntry } from "./previewed-entry";
+/**
+ * @experimental Visibility conditions applied for the entry a template is
+ * previewed with: what the host hands the canvas (`conditionsApplied`) and
+ * the Previewing strip's switch and count.
+ */
+export {
+  conditionedBlocksIn,
+  type AppliedConditions,
+  type ConditionsPreview,
+  type HiddenBlock,
+} from "./applied-conditions";
+export {
+  conditionsPreviewOf,
+  useAppliedConditions,
+  type AppliedConditionsOptions,
+} from "./use-applied-conditions";
 export { PageInserters } from "./page-inserters";
 export type { PageInsertersProps } from "./page-inserters";
 
@@ -582,6 +602,7 @@ export type {
   SpacingModeControl,
   TokensPanelProps,
   VariablesHeader,
+  VariablesPreview,
 } from "./tokens-panel";
 /*
  * How widely variables are used, as a host reads it for the Variables view.
@@ -597,6 +618,19 @@ export type {
 } from "./variable-usage";
 export { SelectionBreadcrumb } from "./breadcrumb";
 export type { SelectionBreadcrumbProps } from "./breadcrumb";
+/*
+ * The page reads meter: the reads a page makes against its allowance, from
+ * 80% of it a warning, and over it the blocks that went unread.
+ */
+export { ReadBudgetMeter } from "./read-budget-meter";
+export type { ReadBudgetMeterProps } from "./read-budget-meter";
+export { readBudgetStanding, READ_WARNING_SHARE } from "./read-budget";
+export type {
+  PageReadReport,
+  ReadBudgetStanding,
+  ReadKind,
+  UnreadBlock,
+} from "./read-budget";
 /*
  * The editor's words, spelled once, for every surface a host draws beside the
  * shell's own: a panel it mounts names its places with these.

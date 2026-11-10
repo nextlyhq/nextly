@@ -281,40 +281,22 @@ bound prop removed. The document still saves, with the binding as it was, and
 renders it as the list above says. The same binding added to another block is
 refused, since that one is the save's own.
 
-Not checked at save: a binding to a list item, whose fields depend on the list
-around it; a binding to the site settings, whose fields are a fixed set; and
-any binding in a write made inside a transaction (a batch or an import), whose
-schema read could wait behind the transaction's own connection. A
-component's own document has no entry, so its bindings to the entry are checked
-when a page that places it is saved, against that page's entry, and named by
-the component.
+A binding to a list item is checked against the list's items: the entries of
+the collection the list shows, or the rows of its named query, which bind as
+the collection's entries when the query returns them and as the query's own
+declared fields otherwise. A binding in the list's empty state draws no item
+and is not checked against one.
 
-#### Bindings checked when a document is saved
+A binding to the site settings is checked against the four a page is handed:
+`applicationName` and `timezone` as text, `siteUrl` and `logoUrl` as URLs. The
+renderer reads the same list, so a setting the save refuses is one the page
+would fall back for. A binding to another setting saved before this check is
+kept, as a schema change's binding is above, and listed among the bindings to
+fix.
 
-With the Page Builder plugin, saving a document checks its bindings by the
-same rules, on its blocks and in its own metadata (`settings.seo`), through
-the API as in the editor, and refuses one that breaks them, naming the
-binding and the code. The fields are read as the source declares them, not as
-a visitor may read them: a binding to a field visitors may not read is saved,
-and the published page renders its fallback. `createdAt` and `updatedAt` are
-dates where a read of the source returns them: an entry's both, unless its
-collection turns timestamps off, and a Single's `updatedAt` alone. Only the
-sources the document binds are read: the page's own entry, each Single it
-names, and the collection a path's one relation leads into, through any group
-on the way. A document binding more than 32 of them is refused. A path into a
-built-in collection such as `media` or `users` is judged by its length, as
-the renderer judges it.
-
-A binding a schema change broke after the document was saved is kept: a field
-renamed or removed, a Single's field renamed, a bound prop's type changed, or a
-bound prop removed. The document still saves, with the binding as it was, and
-renders it as the list above says. The same binding added to another block is
-refused, since that one is the save's own.
-
-Not checked at save: a binding to a list item, whose fields depend on the list
-around it; a binding to the site settings, whose fields are a fixed set; and
-any binding in a write made inside a transaction (a batch or an import), whose
-schema read could wait behind the transaction's own connection. A
+Not checked at save: any binding in a write made inside a transaction (a batch
+or an import), whose schema read could wait behind the transaction's own
+connection. A
 component's own document has no entry, so its bindings to the entry are checked
 when a page that places it is saved, against that page's entry, and named by
 the component.
@@ -324,8 +306,9 @@ the component.
 The Page Builder keeps a report of every document holding a binding that no
 longer fits what it reads, so authors can find and fix them after a schema
 change. Each save marks its document, and a background job judges it as
-stored, soon after; every document is checked again once a collection's or a
-Single's fields, a block's props, a component or a Layout change, the job
+stored, soon after; every document is checked again once a collection's, a
+Single's or a field group's fields, a block's props, a component or a Layout
+change, the job
 walking the site a part at a time. A page is judged with the components it
 places and its Layout's regions, against its own entry, as its published page
 draws them. Each row says which block and prop the binding fills, what it reads, the
