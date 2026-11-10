@@ -11,7 +11,7 @@ import {
 import { useCallback, useId, useState, type JSX } from "react";
 
 import { EmailSubpageLayout } from "@admin/components/features/email-hub/EmailSubpageLayout";
-import { SendTestPanel } from "@admin/components/features/email-hub/sending/SendTestPanel";
+import { LazySendTestPanel } from "@admin/components/features/email-hub/sending/LazySendTestPanel";
 import {
   explainSetupFailure,
   LOG_PROVIDER_TYPE,
@@ -23,10 +23,13 @@ import {
 } from "@admin/components/features/email-hub/sending/SetupSteps";
 import {
   EMAIL_PROVIDER_FORM_ID,
-  EmailProviderForm,
   emailCatalogState,
-  type EmailProviderPayload,
-} from "@admin/components/features/settings/EmailProviderForm";
+} from "@admin/components/features/settings/EmailProviderForm/email-provider-catalog";
+import {
+  LazyEmailProviderForm,
+  preloadEmailProviderForm,
+} from "@admin/components/features/settings/EmailProviderForm/LazyEmailProviderForm";
+import type { EmailProviderPayload } from "@admin/components/features/settings/EmailProviderForm/schemas/emailProviderSchema";
 import { AlertTriangle, Loader2 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -52,6 +55,10 @@ import type {
   EmailProviderDescriptor,
   EmailProviderRecord,
 } from "@admin/services/emailProviderApi";
+
+// The form's code is fetched as this page loads, beside its own data, so the
+// form is ready by the time the page has something to put in it.
+preloadEmailProviderForm();
 
 function saveFailed(error: Error) {
   toast.error("The provider couldn't be saved", {
@@ -441,7 +448,7 @@ function ConnectStep({
           <AlertDescription>{failure.check}</AlertDescription>
         </Alert>
       )}
-      <EmailProviderForm
+      <LazyEmailProviderForm
         // A saved provider is edited rather than created again, so fixing a
         // setting never makes a second one.
         key={provider?.id ?? type}
@@ -562,7 +569,7 @@ function TestStep({
             : `A real email through ${provider.name}. It stays off until ${label} accepts it.`}
         </p>
       </div>
-      <SendTestPanel
+      <LazySendTestPanel
         provider={provider}
         providerLabel={label}
         onResult={result => setup.tested(result.success)}

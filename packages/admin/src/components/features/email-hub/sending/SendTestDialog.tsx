@@ -11,7 +11,8 @@ import {
 } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
-import { SendTestPanel, type TestableProvider } from "./SendTestPanel";
+import { LazySendTestPanel } from "./LazySendTestPanel";
+import type { TestableProvider } from "./SendTestPanel";
 
 /**
  * "Send a test" for an existing provider, from its row or its page: the same
@@ -44,7 +45,7 @@ export function SendTestDialog({
         </DialogHeader>
         {/* Keyed by provider, so a test's result never carries over to the
             next provider the dialog opens for. */}
-        <SendTestPanel
+        <LazySendTestPanel
           key={provider.id}
           provider={provider}
           providerLabel={providerLabel}

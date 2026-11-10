@@ -303,20 +303,26 @@ describe.each(getConfiguredTestDialects())(
         content: documentOf("template", [entryContent("ec", "sidebar")]),
       });
 
-      // The collection loses Sidebar, as an edit of its schema removes it.
+      // The collection loses Sidebar, as a change to its code removes it at
+      // the next sync.
       const registry = t.getService("collectionRegistryService") as unknown as {
         getCollection(slug: string): Promise<{ fields?: unknown[] }>;
         updateCollection(
           slug: string,
-          data: { fields: unknown[] }
+          data: { fields: unknown[] },
+          options: { source: string }
         ): Promise<unknown>;
       };
       const record = await registry.getCollection(ARTICLES);
-      await registry.updateCollection(ARTICLES, {
-        fields: (record.fields ?? []).filter(
-          field => (field as { name?: unknown }).name !== "sidebar"
-        ),
-      });
+      await registry.updateCollection(
+        ARTICLES,
+        {
+          fields: (record.fields ?? []).filter(
+            field => (field as { name?: unknown }).name !== "sidebar"
+          ),
+        },
+        { source: "code" }
+      );
 
       // An unrelated edit to the template saves, and its choice is kept.
       await t.nextly.update({

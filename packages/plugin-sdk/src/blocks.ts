@@ -97,6 +97,8 @@ export interface BlockSupportKeys {
   container: never;
   /** Marker style on a list. */
   list: never;
+  /** The icon a block's disclosure children show, and which side it sits on. */
+  disclosure: never;
   /** Author-written CSS on this block. Gates a capability, not a style group. */
   customCss: never;
 }

@@ -131,6 +131,9 @@ export interface ListSetting {
   readonly entryCollection?: string | null;
 }
 
+/** What is written and where: a write, short of reading what is stored. */
+export type WriteTarget = Omit<PluginFieldWrite, "readStored">;
+
 /**
  * A write's setting: its language, and the collection its page is an entry
  * of, for a list of the entry's related entries; `null` for a Single's, whose
@@ -145,10 +148,7 @@ export interface ListSetting {
  * condition by its operator, as a component placing the one being saved is.
  * A list's item inside the definition is still known, and still judged.
  */
-function listSettingOf(
-  write: PluginFieldWrite,
-  document: unknown
-): ListSetting {
+function listSettingOf(write: WriteTarget, document: unknown): ListSetting {
   const locale = write.locale === undefined ? {} : { locale: write.locale };
   if (isPlainRecord(document) && document.kind === "component") return locale;
   return {
@@ -229,7 +229,7 @@ export function isStoredTemplate(
  * {@link TEMPLATE_TARGET_UNKNOWN}, which refuses the write.
  */
 async function templateSettingOf(
-  write: PluginFieldWrite,
+  write: WriteTarget,
   document: unknown,
   data: Readonly<Record<string, unknown>>,
   templates: TemplateTargets | undefined
@@ -257,7 +257,7 @@ async function templateSettingOf(
  * document is one, else {@link listSettingOf}'s.
  */
 export async function writeSettingOf(
-  write: PluginFieldWrite,
+  write: WriteTarget,
   document: unknown,
   data: Readonly<Record<string, unknown>>,
   templates: TemplateTargets | undefined
@@ -478,7 +478,7 @@ function listErrorsIn(
 /** A write's errors as the field reports them, each naming where it is. */
 export function asFieldIssues(
   found: readonly ForestIssue[],
-  args: PluginFieldValidateArgs,
+  args: Pick<PluginFieldValidateArgs, "path">,
   label: string
 ): PluginFieldIssue[] {
   return found.map(issue => ({

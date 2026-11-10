@@ -55,6 +55,9 @@ describe.each(getConfiguredTestDialects())(
           defineCollection({
             slug: ARTICLES,
             status: true,
+            // Working drafts, so a pending edit is held apart from the live
+            // value, and the picker can mark it as a draft's.
+            versions: { drafts: true },
             access: { read: () => true },
             fields: [
               text({ name: "title" }),
