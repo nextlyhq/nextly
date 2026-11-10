@@ -68,3 +68,14 @@ export async function writeNote(nextly: Nextly, value: string): Promise<void> {
     data: { value, _overwrite: true },
   });
 }
+
+/**
+ * The answer to a write without the secret the driver starts each instance
+ * with, or `null` for one that carries it: a 404, so nothing else can write
+ * and nothing says the route exists.
+ */
+export function writeRefused(request: Request): Response | null {
+  const secret = process.env.FIXTURE_WRITE_SECRET;
+  if (secret && request.headers.get("x-fixture-secret") === secret) return null;
+  return new Response(null, { status: 404 });
+}

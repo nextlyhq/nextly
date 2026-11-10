@@ -7,7 +7,7 @@
 import { connection } from "next/server";
 import { getNextly } from "nextly";
 
-import { readNoteTagged } from "../../../lib/note";
+import { readNoteTagged, writeRefused } from "../../../lib/note";
 import {
   expirePluginNote,
   PLUGIN_NOTE_TAG,
@@ -24,10 +24,8 @@ export async function GET(): Promise<Response> {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const secret = process.env.FIXTURE_WRITE_SECRET;
-  if (!secret || request.headers.get("x-fixture-secret") !== secret) {
-    return new Response(null, { status: 404 });
-  }
+  const refused = writeRefused(request);
+  if (refused) return refused;
   // Started, so the plugin has been given its context.
   await getNextly({ config });
   await expirePluginNote();
