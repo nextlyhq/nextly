@@ -66,21 +66,54 @@ function distOf(specifier: string): string {
   return dirname(fileURLToPath(import.meta.resolve(specifier)));
 }
 
+/** A name as a pattern, with the `$` a bundler adds to a renamed clash escaped. */
+function literal(name: string): string {
+  return name.replace(/[$]/g, "\\$");
+}
+
 /**
- * The JSDoc written directly above each declaration of `name` in the given
- * declaration files: a function, a const, an interface or a type alias,
- * exported or declared. Empty when the name is declared nowhere.
+ * The local name a declaration file exports `name` under, the way the type
+ * checker resolves it: an `export { local as name }` or `export { name }`
+ * entry (with or without `type`), or an inline `export` on the declaration.
+ * A bundler renames clashing declarations (`FieldOption$1`), so a name alone
+ * can point at an unrelated type; the export list says which one is meant.
  */
-function docsOf(name: string, files: readonly string[]): string[] {
+function localNameOf(name: string, text: string): string | undefined {
+  for (const list of text.matchAll(/^export \{([^}]*)\};?$/gm)) {
+    for (const entry of list[1].split(",")) {
+      const spec = entry.trim().replace(/^type\s+/, "");
+      const parts = /^([\w$]+)(?:\s+as\s+([\w$]+))?$/.exec(spec);
+      if (parts && (parts[2] ?? parts[1]) === name) return parts[1];
+    }
+  }
+  const inline = new RegExp(
+    String.raw`^export (?:declare )?(?:function|const|interface|type) ${literal(name)}(?![\w$])`,
+    "m"
+  );
+  return inline.test(text) ? name : undefined;
+}
+
+/**
+ * The JSDoc directly above the declaration of `local` at the start of a line,
+ * `""` when it has none, or `undefined` when the file does not declare it.
+ */
+function docOf(local: string, text: string): string | undefined {
   const declaration = new RegExp(
-    String.raw`(\/\*\*(?:(?!\*\/)[\s\S])*\*\/)?\s*(?:export\s+)?(?:declare\s+)?(?:function|const|interface|type)\s+` +
-      name +
-      String.raw`\b`,
-    "g"
+    String.raw`(\/\*\*(?:(?!\*\/)[\s\S])*\*\/)?\n(?:export )?(?:declare )?(?:function|const|interface|type) ` +
+      literal(local) +
+      String.raw`(?![\w$])`
   );
-  return files.flatMap(text =>
-    [...text.matchAll(declaration)].map(match => match[1] ?? "")
-  );
+  const found = declaration.exec(text);
+  return found ? (found[1] ?? "") : undefined;
+}
+
+/** The JSDoc of the declaration each file exporting `name` resolves it to. */
+function docsOf(name: string, files: readonly string[]): string[] {
+  return files.flatMap(text => {
+    const local = localNameOf(name, text);
+    const doc = local === undefined ? undefined : docOf(local, text);
+    return doc === undefined ? [] : [doc];
+  });
 }
 
 const adminDeclarations = declarationsIn(distOf("@nextlyhq/admin"));
