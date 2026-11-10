@@ -42,6 +42,7 @@ import type { ComponentType } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import type { DocumentLockGates } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
+import type { PlaceContributionProps } from "@admin/components/shared/target-slot";
 
 import {
   componentRegistry,
@@ -257,6 +258,19 @@ export interface DocumentPanelSectionProps {
    */
   documentChanged: (result: DocumentChangeResult) => void;
 }
+
+/**
+ * @experimental Props passed to a side panel section a plugin declares at an
+ * edit page's place (`kind: "sidebarSection"`): the place's `context` and
+ * `entry`, as every contributed component receives them, and on a collection
+ * entry's page also the document's own handles that a section added through
+ * `views[slug].panelSections` is given. One component written against the
+ * place's props works on both edit pages; on a collection entry's page it may
+ * also act on the document.
+ */
+export type SidebarSectionProps =
+  | (PlaceContributionProps<"collection.edit"> & DocumentPanelSectionProps)
+  | PlaceContributionProps<"single.edit">;
 
 /**
  * Props passed to injection point components (BeforeListTable, etc.).

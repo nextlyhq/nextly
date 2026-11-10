@@ -2,7 +2,7 @@
  * What plugins change on one collection's document screen: the built-in
  * actions they hide or replace, and the sections they add to its panel, by
  * slug (`views[slug].panelSections`) or as a side panel section declared at
- * the `collection.edit` place (`panelOrderFor`).
+ * an edit page's place (`placedPanelOrder`).
  *
  * Read from `branding.plugins[]`, where admin-meta publishes both on the slug
  * the admin routes (the plugin's rename map already applied), for enabled
@@ -13,15 +13,16 @@
  *
  * @module lib/plugins/document-surfaces
  */
-import {
-  rowMatches,
-  type AdminContributionsMeta,
-  type DeliveredAdminContribution,
-  type OverridableDocumentAction,
-  type PluginDocumentActionOverride,
+import type {
+  AdminContributionsMeta,
+  DeliveredAdminContribution,
+  OverridableDocumentAction,
+  PluginDocumentActionOverride,
 } from "nextly/config";
 
 import type { PluginMetadata } from "@admin/types/branding";
+
+import { entriesDrawnHere, type PlaceView } from "./place-entries";
 
 /** One panel section as the document panel draws it. */
 export interface PluginPanelSectionEntry {
@@ -70,7 +71,7 @@ export function documentSurfacesFor(
   return { actions, sections };
 }
 
-/** A side panel section declared at the `collection.edit` place. */
+/** A side panel section declared at an edit page's place. */
 type DeclaredPanelSection = Extract<
   DeliveredAdminContribution,
   { kind: "sidebarSection" }
@@ -106,63 +107,62 @@ function isDeclaredSection(entry: unknown): entry is DeclaredPanelSection {
 }
 
 /**
- * Whether a declared section applies to `entry` of collection `slug`: it is
- * not narrowed to other collections, and its rule, if any, holds for the
- * entry as the reader's read returned it.
- */
-function appliesTo(
-  part: DeclaredPanelSection,
-  slug: string,
-  entry: unknown
-): boolean {
-  if (part.collections !== undefined && !part.collections.includes(slug)) {
-    return false;
-  }
-  return part.visibleWhen === undefined || rowMatches(part.visibleWhen, entry);
-}
-
-/**
- * The document panel's parts for one entry of collection `slug`, in the order
- * the server placed them: the built-in sections, less any a contribution
- * replaces, with the side panel sections plugins declared at the
- * `collection.edit` place among them. A section narrowed to other
- * collections, or whose rule does not hold for `entry` as the reader's read
- * returned it, is left out; where it replaces a built-in section, that
- * section is drawn in its place instead, as the server answers a replacement
- * the reader may not see.
+ * The document panel's parts on one edit page, in the order the server placed
+ * them: the built-in sections, less any a contribution replaces, with the side
+ * panel sections plugins declared at the page's place among them. Which
+ * sections are drawn is settled by the one rule every place part follows
+ * (`entriesDrawnHere`): none before the page knows who is looking, none
+ * narrowed to other collections or whose rule does not hold for the entry as
+ * the reader's read returned it; where such a section replaces a built-in
+ * section, that section is drawn in its place instead.
  *
  * `undefined` when the place has no list for this reader, so the panel draws
  * its own sections in their usual order.
+ */
+export function placedPanelOrder(
+  contributions: AdminContributionsMeta | undefined,
+  place: "collection.edit" | "single.edit",
+  view: PlaceView
+): PanelOrderEntry[] | undefined {
+  const delivered = contributions?.[place]?.sidebarSection;
+  if (delivered === undefined) return undefined;
+  return entriesDrawnHere(delivered, view).flatMap(
+    (part): PanelOrderEntry[] => {
+      if ("builtIn" in part) return [{ kind: "builtIn", name: part.builtIn }];
+      if (!isDeclaredSection(part)) return [];
+      return [
+        {
+          kind: "section",
+          id: part.id,
+          plugin: part.plugin,
+          title: part.label,
+          component: part.component,
+          ...(part.narrow === undefined ? {} : { narrow: part.narrow }),
+        },
+      ];
+    }
+  );
+}
+
+/**
+ * The document panel's parts for one entry of collection `slug`, read as a
+ * page that knows who is looking: {@link placedPanelOrder} at the
+ * `collection.edit` place.
  */
 export function panelOrderFor(
   contributions: AdminContributionsMeta | undefined,
   slug: string,
   entry: unknown
 ): PanelOrderEntry[] | undefined {
-  const delivered = contributions?.["collection.edit"]?.sidebarSection;
-  if (delivered === undefined) return undefined;
-  return delivered.flatMap((part): PanelOrderEntry[] => {
-    if ("builtIn" in part) return [{ kind: "builtIn", name: part.builtIn }];
-    if (!isDeclaredSection(part)) return [];
-    if (!appliesTo(part, slug, entry)) {
-      // The server sent the replacement in the built-in's place, so leaving
-      // both out would take the built-in away from every entry the
-      // replacement does not apply to.
-      return part.replaces === undefined
-        ? []
-        : [{ kind: "builtIn", name: part.replaces }];
-    }
-    return [
-      {
-        kind: "section",
-        id: part.id,
-        plugin: part.plugin,
-        title: part.label,
-        component: part.component,
-        ...(part.narrow === undefined ? {} : { narrow: part.narrow }),
-      },
-    ];
+  return placedPanelOrder(contributions, "collection.edit", {
+    context: { collection: slug },
+    ...(isRecord(entry) ? { entry } : {}),
   });
+}
+
+/** Whether `value` is an entry as a page reads one: an object, not a list. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** A placed section, as `panelOrderFor` answers one. */

@@ -105,6 +105,8 @@ const globalForInit = globalThis as unknown as {
   __nextly_cachedInstance?: Nextly | null;
   __nextly_drizzleVersionChecked?: boolean;
   __nextly_initPromise?: Promise<Nextly> | null;
+  /** The work the newest start left running after it resolved. */
+  __nextly_postInitTasks?: Promise<void> | null;
   /**
    * The complete options of a start that failed, until a start succeeds, so
    * `getCachedNextly` can start Nextly again with them (the database down,
@@ -129,6 +131,16 @@ const globalForInit = globalThis as unknown as {
    */
   __nextly_stopped?: boolean;
 };
+
+/**
+ * Settles once the work the newest `getNextly()` start left running after it
+ * resolved has finished: the post-initialisation tasks it does not wait for.
+ * Never rejects, since each task catches its own errors. Internal, for tests
+ * that judge everything a start does; not part of the package's exports.
+ */
+export async function startSettled(): Promise<void> {
+  await globalForInit.__nextly_postInitTasks;
+}
 
 // ============================================================
 // Instance Construction
@@ -406,28 +418,33 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         );
         consoleLogger.info(`  - Full-text search: ${capabilities.supportsFts}`);
 
-        // F8 PR 6: drift check. First-run static-table setup already
-        // ran inside registerServices (see first-run.ts). This path
-        // only logs a single warning when config has drifted from
-        // the live schema — it does NOT auto-apply (real apply goes
-        // through HMR or `nextly db:sync` which both have a TTY).
+        // F8 PR 6: drift check, in a development start only. First-run
+        // static-table setup already ran inside registerServices (see
+        // first-run.ts). This path only logs a single warning when config
+        // has drifted from the live schema — it does NOT auto-apply (real
+        // apply goes through HMR or `nextly db:sync` which both have a TTY).
+        // A production start compares nothing with the live schema: it reads
+        // every collection's table to do so, and the deploy step that runs
+        // `nextly migrate` is what brings the two together there.
         // The drift check itself is failure-safe; we don't wrap a
         // try/catch around getService("config") so a real DI bug
         // crashes loudly instead of being masked.
-        const config = getService("config");
-        const driftLogger = {
-          debug: (msg: string) => consoleLogger.debug(msg),
-          info: (msg: string) => consoleLogger.info(msg),
-          warn: (msg: string) => consoleLogger.warn(msg),
-          error: (msg: string) => consoleLogger.error(msg),
-        };
-        // Reduced by the drift check's own helper, which carries every
-        // attribute that changes a table (status, declared indexes).
-        await runDriftCheck({
-          adapter,
-          collections: driftCheckCollections(config.collections ?? []),
-          logger: driftLogger,
-        });
+        if (process.env.NODE_ENV === "development") {
+          const config = getService("config");
+          const driftLogger = {
+            debug: (msg: string) => consoleLogger.debug(msg),
+            info: (msg: string) => consoleLogger.info(msg),
+            warn: (msg: string) => consoleLogger.warn(msg),
+            error: (msg: string) => consoleLogger.error(msg),
+          };
+          // Reduced by the drift check's own helper, which carries every
+          // attribute that changes a table (status, declared indexes).
+          await runDriftCheck({
+            adapter,
+            collections: driftCheckCollections(config.collections ?? []),
+            logger: driftLogger,
+          });
+        }
 
         // Boot-time auto-apply for code-first schema changes (dev only).
         // Shared with `route-handler/auth-handler.ts:ensureServicesInitialized`
@@ -461,7 +478,8 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // and the like) run in the background so that getNextly() returns as
         // soon as the database is ready. Each is idempotent and catches its own
         // errors.
-        void runPostInitTasks();
+        // Kept, so `startSettled` can tell when this work has finished.
+        globalForInit.__nextly_postInitTasks = runPostInitTasks();
       } else {
         // Registered by the request-path boot, which may still be seeding: wait
         // for it, so this boot does not serve before the roles are written.

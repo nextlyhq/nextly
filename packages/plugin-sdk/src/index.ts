@@ -391,8 +391,10 @@ export type {
  *   `TxOption`. Held experimental until a first-party plugin signs people in
  *   with them (see STABILITY.md). `PluginReceivedWebhooks`
  *   (`ctx.security.webhooks`), verifying a received webhook against a
- *   `standardWebhooks` or a plugin's own `InboundWebhookScheme`, is
- *   experimental too, until a first-party plugin receives webhooks with it.
+ *   `standardWebhooks` or a plugin's own `InboundWebhookScheme` and claiming
+ *   it once (`claimDelivery`, with `ClaimDeliveryOptions`, `DeliveryClaim`,
+ *   `DeliveryClaimResult` and `VerifiedWebhook`), is experimental too, until
+ *   a first-party plugin receives webhooks with it.
  */
 export { PasswordTooLongError, standardWebhooks } from "nextly";
 export type {
@@ -406,6 +408,10 @@ export type {
   SecretData,
   TxOption,
   PluginReceivedWebhooks,
+  ClaimDeliveryOptions,
+  DeliveryClaim,
+  DeliveryClaimResult,
+  VerifiedWebhook,
   InboundWebhookScheme,
   InboundWebhookDelivery,
   InboundWebhookReading,
@@ -863,7 +869,8 @@ export type {
  * Contributions a plugin adds to admin places (`contributes.admin.contributions`):
  * blocks, tabs, list columns, row and bulk actions and side panel sections,
  * each ordered at its place, with a declared visibility rule and permission.
- * @experimental Nothing in the admin draws them yet (see STABILITY.md).
+ * @experimental The admin draws blocks and tabs at four places so far (see
+ * STABILITY.md).
  */
 export type {
   AdminBlockContribution,

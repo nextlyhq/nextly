@@ -42,6 +42,13 @@ const EDIT_PANEL_SECTIONS = Object.freeze([
 ] as const);
 
 /**
+ * The edit page's own blocks, as both editors draw them: the document bar with
+ * the banners under it, then the editor, which is the form's notices and the
+ * row of the field column and the side panel.
+ */
+const EDIT_PAGE_BLOCKS = Object.freeze(["document-bar", "editor"] as const);
+
+/**
  * @experimental Core's admin places, keyed by id: one for each page a plugin
  * may add to, and the entry form, which is part of a collection entry's and a
  * Single's edit pages.
@@ -51,7 +58,9 @@ const EDIT_PANEL_SECTIONS = Object.freeze([
  * place says which kinds it `accepts`, and names its `builtIns`, by kind: the
  * parts the page draws itself that a contribution may be ordered beside or
  * replace. A built-in is named here only once the page draws it under that
- * name, so a replacement always has something to replace.
+ * name, so a replacement always has something to replace. A place may also
+ * name, by kind, built-ins that are `notReplaceable`: a contribution may be
+ * ordered beside them, never take their place.
  * Frozen, so no code can add a core place at run time that the type of
  * {@link AdminPlaceId} does not know.
  */
@@ -59,7 +68,16 @@ export const CORE_ADMIN_PLACES = Object.freeze({
   dashboard: Object.freeze({
     page: "dashboard",
     accepts: Object.freeze(["block"] as const),
-    builtIns: Object.freeze({}),
+    // The welcome header, then the grid of cards. A block placed by nothing
+    // goes after the grid; one `before: "widgets"` goes between the two.
+    builtIns: Object.freeze({
+      block: Object.freeze(["welcome", "widgets"] as const),
+    }),
+    // The grid is each person's own arrangement of their cards, so a plugin
+    // draws beside it, never in its place.
+    notReplaceable: Object.freeze({
+      block: Object.freeze(["widgets"] as const),
+    }),
   }),
   "collection.list": Object.freeze({
     page: "a collection's entry list",
@@ -74,27 +92,36 @@ export const CORE_ADMIN_PLACES = Object.freeze({
   "collection.edit": Object.freeze({
     page: "a collection entry's edit page",
     accepts: Object.freeze(["block", "tab", "sidebarSection"] as const),
-    builtIns: Object.freeze({ sidebarSection: EDIT_PANEL_SECTIONS }),
+    builtIns: Object.freeze({
+      block: EDIT_PAGE_BLOCKS,
+      sidebarSection: EDIT_PANEL_SECTIONS,
+    }),
   }),
   "single.edit": Object.freeze({
     page: "a Single's edit page",
     accepts: Object.freeze(["block", "tab", "sidebarSection"] as const),
-    builtIns: Object.freeze({ sidebarSection: EDIT_PANEL_SECTIONS }),
+    builtIns: Object.freeze({
+      block: EDIT_PAGE_BLOCKS,
+      sidebarSection: EDIT_PANEL_SECTIONS,
+    }),
   }),
   "entry.form": Object.freeze({
     page: "the entry form, on a collection entry's or a Single's edit page",
     accepts: Object.freeze(["block"] as const),
-    builtIns: Object.freeze({}),
+    // The form's own fields, as both editors draw them.
+    builtIns: Object.freeze({ block: Object.freeze(["fields"] as const) }),
   }),
   settings: Object.freeze({
     page: "settings",
     accepts: Object.freeze(["block", "tab"] as const),
-    builtIns: Object.freeze({}),
+    // The general settings page's own form.
+    builtIns: Object.freeze({ block: Object.freeze(["content"] as const) }),
   }),
   "user.detail": Object.freeze({
     page: "a user's detail page",
     accepts: Object.freeze(["block", "tab"] as const),
-    builtIns: Object.freeze({}),
+    // The page's own card: the avatar and the user's details form.
+    builtIns: Object.freeze({ block: Object.freeze(["content"] as const) }),
   }),
   account: Object.freeze({
     page: "the signed-in admin's account page",
@@ -104,7 +131,8 @@ export const CORE_ADMIN_PLACES = Object.freeze({
   login: Object.freeze({
     page: "the login page",
     accepts: Object.freeze(["block"] as const),
-    builtIns: Object.freeze({}),
+    // The sign-in form itself.
+    builtIns: Object.freeze({ block: Object.freeze(["form"] as const) }),
   }),
 } as const);
 
@@ -122,6 +150,24 @@ export function coreAdminPlaceBuiltIns(
   const builtIns: Partial<Record<AdminContributionKind, readonly string[]>> =
     CORE_ADMIN_PLACES[place as CoreAdminPlaceId].builtIns;
   return builtIns[kind] ?? [];
+}
+
+/**
+ * @experimental The built-in parts of one kind at a core place that a
+ * contribution may be ordered beside but may not replace, or none.
+ */
+export function coreAdminPlaceNotReplaceable(
+  place: string,
+  kind: AdminContributionKind
+): readonly string[] {
+  if (!Object.prototype.hasOwnProperty.call(CORE_ADMIN_PLACES, place)) {
+    return [];
+  }
+  const entry = CORE_ADMIN_PLACES[place as CoreAdminPlaceId];
+  if (!("notReplaceable" in entry)) return [];
+  const kept: Partial<Record<AdminContributionKind, readonly string[]>> =
+    entry.notReplaceable;
+  return kept[kind] ?? [];
 }
 
 /** @experimental The id of one of core's admin places. */

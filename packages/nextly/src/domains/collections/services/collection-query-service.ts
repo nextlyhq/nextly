@@ -1706,13 +1706,18 @@ export class CollectionQueryService extends BaseService {
      * is filtered out so a draft translation never leaks — the field falls back to the published
      * default.
      */
-    statusFilterValues?: readonly string[] | null
-  ): Promise<void> {
-    if (!localeChain || rows.length === 0) return;
+    statusFilterValues?: readonly string[] | null,
+    /**
+     * Also take each translation's version counter in the same statement, and answer the rows
+     * read, for a read whose version comes from them (`PopulateCompanionArgs.withRevisions`).
+     */
+    withRevisions = false
+  ): Promise<Record<string, unknown>[] | undefined> {
+    if (!localeChain || rows.length === 0) return undefined;
     const companion =
       preloaded ?? (await this.fileManager.loadCompanionSchema(collectionName));
-    if (!companion) return;
-    await populateCompanionFields({
+    if (!companion) return undefined;
+    return populateCompanionFields({
       db: this.db as never,
       companionTable: companion.table,
       readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
@@ -1723,6 +1728,7 @@ export class CollectionQueryService extends BaseService {
         companion.hasStatus && statusFilterValues
           ? statusFilterValues
           : undefined,
+      withRevisions,
     });
   }
 
@@ -3816,15 +3822,22 @@ export class CollectionQueryService extends BaseService {
             : 0;
       }
 
-      // The page's translation counters, before its translated content.
-      const knownLanguages = await this.languageCountersFirst(
-        entries,
-        companion
-      );
+      // The page's version counters come with its translated content when the chain holds every
+      // language the version names, as a detail read's do: one statement where two were sent.
+      // Otherwise they are read first, apart from the content.
+      const countersWithContent =
+        localeChain !== null &&
+        chainCoversVersion(localeChain, {
+          localization: this.localization,
+          locale: params.locale,
+        });
+      const knownFirst = countersWithContent
+        ? undefined
+        : await this.languageCountersFirst(entries, companion);
       // Resolve localized fields for the whole page from the companion table
       // (batch — one query for all rows), with fallback, BEFORE relationship/component
       // expansion and hooks. Reuses the companion loaded above. No-op when non-localized.
-      await this.overlayLocalized(
+      const translationRows = await this.overlayLocalized(
         params.collectionName,
         "translation-load-failed",
         () =>
@@ -3833,9 +3846,21 @@ export class CollectionQueryService extends BaseService {
             entries,
             localeChain,
             companion,
-            statusFilter?.values ?? null // the per-locale published filter
+            statusFilter?.values ?? null, // the per-locale published filter
+            countersWithContent
           )
       );
+      const joinedRevisions =
+        countersWithContent && translationRows
+          ? languageRevisionsOf(translationRows)
+          : undefined;
+      // A page whose content read took no counters, its translations table not being there yet
+      // among others, reads them as before.
+      const knownLanguages =
+        knownFirst ??
+        (joinedRevisions && localeChain
+          ? { revisions: joinedRevisions, locales: localeChain }
+          : await this.languageCountersFirst(entries, companion));
       // `locale=all` → language-keyed values per localized field (admin/export).
       await this.overlayLocalized(
         params.collectionName,

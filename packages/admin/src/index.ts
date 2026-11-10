@@ -327,6 +327,7 @@ export {
   type DocumentActionReplacementProps,
   type DocumentChangeResult,
   type DocumentPanelSectionProps,
+  type SidebarSectionProps,
   type DocumentViewProps,
 } from "./lib/plugins/component-registry";
 export type { DocumentLockGates } from "./components/features/entries/EntryForm/document-lock-affordances";
@@ -536,6 +537,18 @@ export type {
  * `@nextlyhq/builder`) may import.
  */
 export { useSuppressAdminChrome } from "./components/layout/ChromeSuppression";
+/**
+ * An admin place's renderer and its tab strip, for `plugin-sdk/admin`: a
+ * plugin's own page draws the contributions sent to a place it declared with
+ * the parts core's pages use.
+ */
+export { PlaceTabs, TargetSlot } from "./components/shared/target-slot";
+export type {
+  PlaceContributionProps,
+  PlaceProps,
+  PlaceTabsProps,
+  TargetSlotProps,
+} from "./components/shared/target-slot";
 export type { AdminChromeLayer } from "./components/layout/lib/chrome-suppression";
 export type {
   CardActionProps,

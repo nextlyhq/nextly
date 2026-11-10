@@ -705,7 +705,9 @@ function walkPath(
       candidate => candidate.name === name
     );
     if (field === undefined) {
-      return crossed(unlistedField(name, { index, relation }, segments, schema));
+      return crossed(
+        unlistedField(name, { index, relation }, segments, schema)
+      );
     }
     if (last) return crossed({ ok: true, field });
     const step = stepInto(field, hops, schema);

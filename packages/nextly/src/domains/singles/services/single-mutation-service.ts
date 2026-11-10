@@ -37,6 +37,7 @@ import {
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
+import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import {
   inTransactionHandlersFor,
@@ -5478,6 +5479,10 @@ export class SingleMutationService extends BaseService {
           return rows;
         }, versionConflictRetries());
       } catch (error) {
+        // A field rule that could not run keeps its own answer, read through
+        // the chain before the unwrap below: that answer's cause is the rule's
+        // own error, which the unwrap would otherwise throw in its place.
+        rethrowIfRuleCouldNotRun(error);
         // A component validation failure (NextlyError) thrown inside the
         // transaction callback is re-wrapped as a database error by the adapter;
         // recover it from the cause so an invalid component update still yields
