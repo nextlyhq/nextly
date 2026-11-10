@@ -85,7 +85,10 @@ export function WelcomeHeader(): JSX.Element {
 
   return (
     <header
-      className="flex flex-wrap items-end justify-between gap-3 px-0.5 pt-1 pb-4"
+      // Below 640 px the actions always take their own row under the title and its summary
+      // line, rather than wrapping there once a summary long enough arrives: a wrap after the
+      // first paint moved the actions and every card under them.
+      className="flex flex-wrap items-end justify-between gap-3 px-0.5 pt-1 pb-4 max-sm:flex-col max-sm:items-start"
       data-testid="dashboard-header"
     >
       <div className="min-w-0">
