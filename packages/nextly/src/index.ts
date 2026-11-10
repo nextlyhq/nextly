@@ -112,9 +112,13 @@ export {
 // ============================================================
 
 // Main initialization API - recommended for most applications
+// `registerNextlyStart` is how an app's `cached-read.ts` says how to start
+// Nextly for a read that finds it not started (a root layout's read on
+// `/_not-found` during `next build`), without starting it eagerly.
 export {
   getNextly,
   getCachedNextly,
+  registerNextlyStart,
   shutdownNextly,
   createRegister,
   type Nextly,

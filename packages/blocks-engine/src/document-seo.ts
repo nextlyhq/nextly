@@ -174,7 +174,7 @@ function imageOf(
   issues: BindingIssue[]
 ): SeoImageCandidate | undefined {
   if (!isPlainRecord(binding)) return undefined;
-  if (run === undefined) return candidateOf(ownEntry(binding, "fallback"));
+  if (run === undefined) return unreadImageOf(binding);
   const checked = checkSeoBinding({
     binding,
     place: "image",
@@ -222,6 +222,21 @@ function imageOf(
     return fallback();
   }
   return candidateOf(read.value, kind) ?? fallback();
+}
+
+/**
+ * The social image of a page whose bindings were not read: the binding's
+ * fallback, judged by the same check a save is, by its shape alone, so it is
+ * an image address and never a media id a save would refuse.
+ */
+function unreadImageOf(binding: unknown): SeoImageCandidate | undefined {
+  const checked = checkSeoBinding({ binding, place: "image", id: IMAGE_ID });
+  if (checked.outcome === "ignore") return undefined;
+  const fallback =
+    checked.outcome === "fallback"
+      ? checked.fallback
+      : checked.binding.fallback;
+  return candidateOf(fallback?.value);
 }
 
 /** Names the document's social image in its issues. */

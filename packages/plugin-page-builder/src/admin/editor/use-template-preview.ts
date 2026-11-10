@@ -12,16 +12,18 @@
  * public read it, for the canvas and for anything that marks what a visitor
  * would see.
  *
- * Asked again whenever the window regains focus, so an entry made in
- * another tab (the strip's New opens one there) is listed without a reload,
- * and the previewed entry's own changes are drawn.
+ * Asked again whenever the window regains focus (`useRefreshOnFocus`, with
+ * the canvas's read of the entry), so an entry made in another tab (the
+ * strip's New opens one there) is listed without a reload, and the previewed
+ * entry's own changes are drawn, its title and its canvas alike.
  *
  * @module use-template-preview
  */
 import type { PreviewedEntry } from "@nextlyhq/builder/shell";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
+  PreviewBlocksField,
   PreviewCollectionLabels,
   PreviewEntryItem,
   PreviewEntryResponse,
@@ -76,12 +78,32 @@ export interface TemplatePreview {
   readonly fixed: boolean;
   /** How the collection is named, for "No posts to preview" and "New post". */
   readonly labels: PreviewCollectionLabels;
+  /**
+   * The collection's top-level blocks fields, which an Entry content block
+   * may draw; `undefined` until the list says, or where it was refused.
+   */
+  readonly blocksFields: readonly PreviewBlocksField[] | undefined;
   readonly language: string | undefined;
   readonly list: PreviewList;
   /** The entry being previewed, as the chip shows it; none while there is none. */
   readonly chip: PreviewChip | undefined;
-  /** The entry the editor reads, as the builder's seam carries it. */
+  /**
+   * The entry the editor reads, as the builder's seam carries it: named
+   * only once this refresh's read of it has answered.
+   */
   readonly previewed: PreviewedEntry;
+  /**
+   * The entry as its latest read has it, an earlier refresh's while this
+   * one's is on its way: what the canvas's own reads are asked of, so a
+   * refresh does not take the entry's blocks out of the page they read.
+   */
+  readonly latest: PreviewedEntry;
+  /**
+   * Whose reads the preview holds: the collection, language and person they
+   * were asked for, as one value. A refresh reads again within one scope; a
+   * change of any of the three is a switch, whatever entry id it names.
+   */
+  readonly scope: string;
   /** Preview `entry`, a row of the list or of a search. */
   readonly choose: (entry: PreviewEntryItem) => void;
   /**
@@ -119,10 +141,15 @@ function labelsFromSlug(slug: string): PreviewCollectionLabels {
   return { singular: words, plural: words };
 }
 
-/** An entry's answer, or its failure, for the id it was read for. */
-type EntryRead =
+/**
+ * An entry's answer, or its failure, for the id it was read for, and the
+ * refresh round it answers (`round`): a read from an earlier round is the
+ * entry as it was, kept while this round's read is on its way.
+ */
+type EntryRead = (
   | { readonly id: string; readonly answer: PreviewEntryResponse }
-  | { readonly id: string; readonly failed: true };
+  | { readonly id: string; readonly failed: true }
+) & { readonly round: number };
 
 /** Where the next or previous entry of `items` is, from `id`, wrapping. */
 export function steppedEntry(
@@ -144,17 +171,36 @@ export function steppedEntry(
   return item === undefined || item.id === id ? undefined : item;
 }
 
+/**
+ * Whose reads these are, as one value: the collection, the language and the
+ * person they are asked for. Every read here is kept under it, so another
+ * collection's, language's or person's answer never stands in for this one.
+ */
+function readScopeOf(args: TemplatePreviewArgs): string {
+  return JSON.stringify([
+    args.collection ?? null,
+    args.locale ?? null,
+    args.userId,
+  ]);
+}
+
+/** What the list's answer says of the collection besides its entries. */
+interface ListFacts {
+  readonly labels?: PreviewCollectionLabels;
+  readonly blocksFields?: readonly PreviewBlocksField[];
+}
+
 /** The list, read for this collection and person, again on each `round`. */
 function usePreviewList(
   args: TemplatePreviewArgs,
   round: number
-): PreviewList & { readonly labels?: PreviewCollectionLabels } {
+): PreviewList & ListFacts {
   const { collection, locale, userId } = args;
   const [answer, setAnswer] = useState<{
     readonly key: string;
-    readonly list: PreviewList & { readonly labels?: PreviewCollectionLabels };
+    readonly list: PreviewList & ListFacts;
   } | null>(null);
-  const key = JSON.stringify([collection ?? null, locale ?? null, userId]);
+  const key = readScopeOf(args);
   useEffect(() => {
     // Asked of whoever the session names; the answer is kept under that
     // person, so another's never stands in for theirs.
@@ -173,6 +219,7 @@ function usePreviewList(
             items: found.items,
             mayCreate: found.meta.mayCreate,
             labels: found.meta.labels,
+            blocksFields: found.meta.blocksFields,
           },
         });
       },
@@ -208,7 +255,7 @@ function useEntryRead(
   const [read, setRead] = useState<
     (EntryRead & { readonly key: string }) | undefined
   >(undefined);
-  const key = JSON.stringify([collection ?? null, locale ?? null, userId]);
+  const key = readScopeOf(args);
   useEffect(() => {
     if (collection === undefined || id === undefined) return;
     let current = true;
@@ -218,10 +265,10 @@ function useEntryRead(
       ...(locale === undefined ? {} : { locale }),
     }).then(
       answer => {
-        if (current) setRead({ key, id, answer });
+        if (current) setRead({ key, id, answer, round });
       },
       () => {
-        if (current) setRead({ key, id, failed: true });
+        if (current) setRead({ key, id, failed: true, round });
       }
     );
     return () => {
@@ -259,16 +306,23 @@ export function useTemplatePreview(args: TemplatePreviewArgs): TemplatePreview {
     memory,
     dropChosen,
   });
-  const previewed = useMemo(
+  // The entry as its latest read has it, and as the seam names it: only
+  // once this refresh's read has answered.
+  const latest = useMemo(
     () => previewedFrom(collection, list, selected, read),
     [collection, list, selected, read]
+  );
+  const previewed = roundPreviewed(
+    latest,
+    read !== undefined && read.round !== round
   );
   const labels = list.labels ?? labelsFromSlug(collection ?? "entries");
   const chip =
     chipFrom(
       chosenRow === undefined ? list.items : [chosenRow, ...list.items],
       selected,
-      read
+      read,
+      round
     ) ?? fixedChip(fixed, labels, read);
   const { choose, step } = useChoosing(fixed, list.items, selected, setChosen);
   return {
@@ -277,14 +331,116 @@ export function useTemplatePreview(args: TemplatePreviewArgs): TemplatePreview {
     // A template always names its collection; "entries" only stands in
     // until its form has the value.
     labels,
+    blocksFields: list.blocksFields,
     language: locale,
     list,
     chip,
     previewed,
+    latest,
+    scope: readScopeOf(args),
     choose,
     step,
     refresh,
   };
+}
+
+/** What the seam says while this refresh's read of the entry is on its way. */
+const ROUND_LOADING: PreviewedEntry = { kind: "none", reason: "loading" };
+
+/**
+ * The entry the seam names, from the entry as its latest read has it. While
+ * a refresh's read is on its way (`stale`), the latest is the entry as it
+ * was, which the canvas's reads go on being asked of, and the seam names no
+ * entry: it names one only once this refresh's read has answered, so the
+ * strip never sets the canvas's fresh answer beside the entry's older one.
+ */
+function roundPreviewed(
+  latest: PreviewedEntry,
+  stale: boolean
+): PreviewedEntry {
+  return stale && latest.kind === "entry" ? ROUND_LOADING : latest;
+}
+
+/**
+ * What the seam says while the canvas's read of the entry is on its way: one
+ * value, so a render while it waits hands the seam's readers nothing new.
+ */
+const CANVAS_LOADING: PreviewedEntry = { kind: "none", reason: "loading" };
+
+/**
+ * An entry the strip has named, and whose reads named it (`scope`): what the
+ * page settles on.
+ */
+interface ShownEntry {
+  readonly entry: Extract<PreviewedEntry, { readonly kind: "entry" }>;
+  readonly scope: string;
+}
+
+/**
+ * The entry the editor's page goes on drawing, and judging conditions with,
+ * from the preview as the strip says it (`followingCanvas`) and the entry it
+ * last named (`shown`).
+ *
+ * The entry named, once named. While a REFRESH of that same entry is read
+ * again (the strip names no entry yet, still names that one in its chip,
+ * and reads for the same collection, language and person), the entry as it
+ * was last named, so the page keeps its blocks and the conditions it was
+ * judged by until the strip names the refreshed one: they then change with
+ * the canvas's bound values, never before them, whatever the entry's own
+ * read has answered meanwhile. Anything else as the strip says it: a SWITCH
+ * to another entry, or to another collection, language or person, draws
+ * none of it until both its reads have answered, and an entry whose read
+ * failed draws none at all.
+ */
+function settledEntry(
+  preview: TemplatePreview | undefined,
+  shown: ShownEntry | undefined
+): PreviewedEntry | undefined {
+  if (preview === undefined) return undefined;
+  const { previewed } = preview;
+  const reading = previewed.kind === "none" && previewed.reason === "loading";
+  return reading && shown !== undefined && rereads(preview, shown)
+    ? shown.entry
+    : previewed;
+}
+
+/**
+ * Whether the preview reads again the entry it last named (`shown`): within
+ * the same scope, the chip still names it, readable.
+ */
+function rereads(preview: TemplatePreview, shown: ShownEntry): boolean {
+  const { chip } = preview;
+  return (
+    preview.scope === shown.scope &&
+    chip !== undefined &&
+    !chip.unavailable &&
+    chip.id === shown.entry.id
+  );
+}
+
+/**
+ * {@link settledEntry} for the preview as it changes: the entry it last
+ * named, and whose reads named it, are kept from render to render, so a
+ * refresh of that entry is told apart from a switch to another, and is
+ * drawn as named until the strip names it again.
+ */
+export function useSettledEntry(
+  preview: TemplatePreview | undefined
+): PreviewedEntry | undefined {
+  const named: ShownEntry | undefined =
+    preview?.previewed.kind === "entry"
+      ? { entry: preview.previewed, scope: preview.scope }
+      : undefined;
+  const [shown, setShown] = useState(named);
+  // Kept as soon as the strip names an entry, in this very render: a new
+  // entry, or the same one named for another scope.
+  if (
+    named !== undefined &&
+    (named.entry !== shown?.entry || named.scope !== shown.scope)
+  ) {
+    setShown(named);
+  }
+  return settledEntry(preview, named ?? shown);
 }
 
 /**
@@ -320,7 +476,7 @@ export function followingCanvas(
       ...preview,
       chip: { ...chip, loading: true },
       ...(preview.previewed.kind === "entry"
-        ? { previewed: { kind: "none", reason: "loading" } as const }
+        ? { previewed: CANVAS_LOADING }
         : {}),
       refresh,
     };
@@ -361,15 +517,32 @@ function useChoosing(
   return { choose, step };
 }
 
-/** A count bumped whenever the window regains focus, and a way to bump it. */
+/**
+ * A count bumped to read the list and the entry again, and a way to bump it.
+ * The window regaining focus does not bump it here: the editor asks the
+ * preview's whole refresh then (`useRefreshOnFocus`), so the canvas's read
+ * is asked again with them, never left on what it kept.
+ */
 function useFocusRefresh(): { round: number; refresh: () => void } {
   const [round, setRound] = useState(0);
   const refresh = useCallback(() => setRound(value => value + 1), []);
-  useEffect(() => {
-    window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
-  }, [refresh]);
   return { round, refresh };
+}
+
+/**
+ * Call `refresh` whenever the window regains focus: an entry made or changed
+ * in another tab (the strip's New opens one there) is listed and drawn
+ * without a reload. The latest `refresh` is called, so a caller may hand a
+ * new one on every render.
+ */
+export function useRefreshOnFocus(refresh: () => void): void {
+  const latest = useRef(refresh);
+  latest.current = refresh;
+  useEffect(() => {
+    const onFocus = () => latest.current();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
 }
 
 /** The entry remembered for the template this session, and how to change it. */
@@ -508,12 +681,21 @@ function fixedChip(
 function chipFrom(
   rows: readonly PreviewEntryItem[],
   selected: string | undefined,
-  read: EntryRead | undefined
+  read: EntryRead | undefined,
+  round: number
 ): PreviewChip | undefined {
   if (selected === undefined) return undefined;
   if (read !== undefined && "answer" in read && read.answer.id === selected) {
     const { id, title, status } = read.answer;
-    return { id, title, status, unavailable: false, loading: false };
+    // Named as last read, and said to be read again while a refresh's read
+    // of it is on its way.
+    return {
+      id,
+      title,
+      status,
+      unavailable: false,
+      loading: read.round !== round,
+    };
   }
   const row = rows.find(item => item.id === selected);
   // Named from its row while it is read; marked when that read failed.

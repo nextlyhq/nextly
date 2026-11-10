@@ -35,16 +35,22 @@ import {
   type ConditionScope,
   type ConditionSubject,
   type DefinitionsById,
+  type BindingFieldShape,
   type DocumentLimits,
   type NodeVisibility,
 } from "@nextlyhq/blocks-engine";
-import { sanitizeDocument } from "@nextlyhq/blocks-react";
+import {
+  sanitizeDocument,
+  type HidingItem,
+  type ItemHiddenAs,
+} from "@nextlyhq/blocks-react";
 
 import { storedGroups } from "./condition-checks";
 import { gatedAsStored } from "./condition-gate";
 import {
   conditionDraftOf,
   conditionLine,
+  conditionFieldsOfShapes,
   conditionSentence,
   type ConditionField,
 } from "./condition-model";
@@ -99,10 +105,17 @@ export interface AppliedConditions {
   readonly hidden: readonly HiddenBlock[];
   /**
    * Whether the page holds a conditioned block left unjudged, so what is said
-   * of the judged blocks is not said of all: one a list's item decides, or
-   * one inside a component the page places.
+   * of the judged blocks is not said of all: one a list's item decides, where
+   * the lists do not draw what a visitor reads, or one inside a component the
+   * page places.
    */
   readonly unjudged: boolean;
+  /**
+   * Whether the page holds conditioned blocks judged for each list entry
+   * drawn, by the renderer, which `shown` and `hidden` do not count: each
+   * one an entry hides is drawn as its marker in that entry.
+   */
+  readonly byEntry: boolean;
 }
 
 /** Where the page's own blocks read: the entry it is drawn for. */
@@ -121,11 +134,11 @@ export function appliedConditionsOf(
   nameOf: (node: BlockNode) => string,
   drawn: DrawnWith = {}
 ): AppliedConditions {
-  const { shown, hidden, markers, unjudged } = judgedBlocks(
+  const { shown, hidden, markers, itemGated, unjudged } = judgedBlocks(
     document,
     preview,
     nameOf,
-    drawn.limits
+    drawn
   );
   // A hidden block becomes its marker: matched by its id AND its stored
   // conditions, so a duplicate id elsewhere (stored data may hold one) with
@@ -143,12 +156,18 @@ export function appliedConditionsOf(
           }),
         };
   // Every other conditioned block is drawn, as the canvas draws them while
-  // conditions are not applied.
+  // conditions are not applied; but one a list's item decides, where the
+  // lists draw what a visitor reads, keeps its conditions for the renderer
+  // to judge against each item.
   return {
-    document: revealConditioned(marked),
+    document:
+      itemGated.size === 0
+        ? revealConditioned(marked)
+        : liftedExcept(marked, itemGated),
     shown,
     hidden,
     unjudged: unjudged || drawsUnjudged(document, drawn),
+    byEntry: itemGated.size > 0,
   };
 }
 
@@ -160,6 +179,13 @@ export function appliedConditionsOf(
 export interface DrawnWith {
   /** The limits the canvas draws under, so every block it draws is judged. */
   readonly limits?: DocumentLimits;
+  /**
+   * Whether the canvas's lists draw the entries a visitor reads, so a block a
+   * list's item decides is judged for each item drawn, by the renderer, and
+   * keeps its conditions in the page drawn rather than being shown for every
+   * item. Otherwise such a block is left unjudged, drawn for every item.
+   */
+  readonly itemsJudged?: boolean;
   /** The definitions of the components the page places. */
   readonly definitions?: DefinitionsById;
   /** The regions of the page's Layout, drawn around it, each with its own definitions. */
@@ -226,17 +252,96 @@ function markerFor(block: HiddenBlock, stored: BlockNode): BlockNode {
     unchecked: block.unchecked,
   };
   // Its conditions lifted as the canvas lifts them, keeping its devices.
-  const devices = revealConditioned({
-    formatVersion: DOCUMENT_FORMAT_VERSION,
-    kind: "page",
-    nodes: [{ ...stored, slots: {} }],
-  }).nodes[0]?.visibility;
+  const devices = liftedSelf(stored).visibility;
   return {
     id: block.id,
     type: CONDITION_HIDDEN_TYPE,
     version: 1,
     props,
     ...(devices === undefined ? {} : { visibility: devices }),
+  };
+}
+
+/**
+ * What the canvas reads to say why a list's item hides a block: the fields a
+ * visitor may read of a collection's entries, the same fields as the "Show
+ * when" rows name them where the host lists them, each block's name, and
+ * where the site's days start.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export interface ItemMarkerSources {
+  readonly fieldsOf: (
+    collection: string
+  ) => readonly BindingFieldShape[] | undefined;
+  readonly labelledOf?: (
+    collection: string
+  ) => readonly ConditionField[] | undefined;
+  readonly nameOf: (node: BlockNode) => string;
+  readonly dayStart?: ConditionDayStart;
+}
+
+/**
+ * What the canvas draws where a list's item hides a block, while conditions
+ * apply: the block's marker, saying why this entry hides it, as a hidden
+ * block of the page itself says it. Judged against the item as the published
+ * page judges it; an item whose fields are not known, a named query's row
+ * among them, fails closed there, so its marker says the block can't be
+ * checked.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export function itemHiddenAsOf(sources: ItemMarkerSources): ItemHiddenAs {
+  return (node, item) => {
+    const preview = itemPreviewOf(sources, item);
+    // The whole node, as the renderer judged it: its own conditions and the
+    // gates of a placement it was expanded from (`within`), which hide a
+    // component's otherwise unconditioned root.
+    const verdict = evaluateConditions(node, inputOf(preview));
+    // The renderer asks only about a block the item hides; a verdict that
+    // says otherwise draws the block's place empty rather than a false mark.
+    if (verdict.shown) return undefined;
+    return markerFor(
+      {
+        id: node.id,
+        name: sources.nameOf(node),
+        ...reasonOf(node, verdict, preview),
+      },
+      node
+    );
+  };
+}
+
+/**
+ * The list item as a visitor reads it: its values, and the fields its
+ * conditions were judged by as the renderer handed them, a named query's own
+ * row schema among them; where it handed none, the fields a visitor may read
+ * of its collection's entries, and none where those are not known either.
+ */
+function itemPreviewOf(
+  sources: ItemMarkerSources,
+  item: HidingItem
+): ConditionsPreview {
+  const { collection } = item;
+  const known =
+    collection === undefined
+      ? {}
+      : {
+          readable: sources.fieldsOf(collection),
+          labelled: sources.labelledOf?.(collection),
+        };
+  const readable = item.fields ?? known.readable ?? [];
+  return {
+    subject: {
+      fields: {
+        declared: new Set(readable.map(field => field.name)),
+        readable,
+      },
+      values: item.values,
+    },
+    noun: "entry",
+    fields: known.labelled ?? conditionFieldsOfShapes(readable),
+    ...(sources.dayStart === undefined ? {} : { dayStart: sources.dayStart }),
   };
 }
 
@@ -255,21 +360,25 @@ function judgedBlocks(
   document: BlockDocument,
   preview: ConditionsPreview,
   nameOf: (node: BlockNode) => string,
-  limits: DocumentLimits | undefined
+  drawn: Pick<DrawnWith, "limits" | "itemsJudged">
 ): {
   shown: Set<string>;
   hidden: HiddenBlock[];
   markers: Map<string, HiddenBlock>;
+  /** The blocks a list's item decides, by occurrence, when items are judged. */
+  itemGated: Set<string>;
   unjudged: boolean;
 } {
   const shown = new Set<string>();
   const hidden: HiddenBlock[] = [];
   const markers = new Map<string, HiddenBlock>();
+  const itemGated = new Set<string>();
   let unjudged = false;
-  walkScoped(document, limits, (block, scope) => {
+  walkScoped(document, drawn.limits, (block, scope) => {
     if (!gatedAsStored(block)) return true;
     if (scope.source !== "entry") {
-      unjudged = true;
+      if (drawn.itemsJudged === true) itemGated.add(occurrenceKey(block));
+      else unjudged = true;
       return true;
     }
     const verdict = evaluateConditions(storedGate(block), inputOf(preview));
@@ -286,7 +395,66 @@ function judgedBlocks(
     markers.set(occurrenceKey(block), judged);
     return false;
   });
-  return { shown, hidden, markers, unjudged };
+  return { shown, hidden, markers, itemGated, unjudged };
+}
+
+/**
+ * The page as the canvas draws it: every conditioned block drawn, its
+ * conditions lifted, but, while a list's entries are judged (`byEntry`),
+ * a block a list's entry decides, which keeps its conditions for the
+ * renderer to judge against each entry drawn.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export function revealedForCanvas(
+  document: BlockDocument,
+  applied: Pick<AppliedConditions, "byEntry"> | undefined,
+  limits?: DocumentLimits
+): BlockDocument {
+  if (applied?.byEntry !== true) return revealConditioned(document);
+  const kept = new Set<string>();
+  walkScoped(document, limits, (block, scope) => {
+    if (gatedAsStored(block) && scope.source !== "entry") {
+      kept.add(occurrenceKey(block));
+    }
+    return true;
+  });
+  return kept.size === 0
+    ? revealConditioned(document)
+    : liftedExcept(document, kept);
+}
+
+/**
+ * The page with every block's conditions lifted but those of `kept`, by
+ * occurrence, which the renderer judges for each list item it draws.
+ */
+function liftedExcept(
+  document: BlockDocument,
+  kept: ReadonlySet<string>
+): BlockDocument {
+  return {
+    ...document,
+    nodes: mapForest(document.nodes, node =>
+      gatedAsStored(node) && kept.has(occurrenceKey(node))
+        ? node
+        : liftedSelf(node)
+    ),
+  };
+}
+
+/**
+ * One block with its own conditions lifted as the canvas lifts them, keeping
+ * its devices; its slots as given, for the walk that maps them.
+ */
+function liftedSelf(node: BlockNode): BlockNode {
+  const { slots, ...self } = node;
+  const lifted =
+    revealConditioned({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [self],
+    }).nodes[0] ?? self;
+  return slots === undefined ? lifted : { ...lifted, slots };
 }
 
 /**
@@ -301,17 +469,21 @@ export function conditionedBlocksIn(
 ): {
   readonly any: boolean;
   readonly readingEntry: boolean;
+  /** Whether any is in a list's per-entry slot, read against each item. */
+  readonly readingItems: boolean;
 } {
   let any = false;
   let readingEntry = false;
+  let readingItems = false;
   walkScoped(document, limits, (block, scope) => {
     if (gatedAsStored(block)) {
       any = true;
       readingEntry ||= scope.source === "entry";
+      readingItems ||= scope.source !== "entry";
     }
-    return !readingEntry;
+    return !(readingEntry && readingItems);
   });
-  return { any, readingEntry };
+  return { any, readingEntry, readingItems };
 }
 
 /**

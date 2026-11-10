@@ -41,7 +41,8 @@ import { version as PLUGIN_VERSION } from "../package.json";
 
 import {
   backfillPageClaims,
-  publishedPages,
+  publishedPagesInTransaction,
+  type PagesInTransactionRead,
   type PagesReader,
 } from "./address-claims/backfill";
 import { committedClaims, type Tx } from "./address-claims/claim-store";
@@ -50,6 +51,7 @@ import {
   contentAddressService,
   type ContentAddressService,
 } from "./address-claims/content-addresses";
+import { entryDesignReads } from "./address-claims/design-reads";
 import { ENTRY_SLUG_FIELD } from "./address-claims/entry-claims";
 import {
   registerEntryAddressClaims,
@@ -63,6 +65,7 @@ import {
   registerPageAddressClaims,
 } from "./address-claims/page-claims-hook";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
+import { bindingFieldsRoute } from "./binding-fields-route";
 import { BINDINGS_TO_FIX_PAGE_HREF } from "./bindings-report/contract";
 import { schemaFingerprint } from "./bindings-report/fingerprint";
 import { BINDINGS_REPORT_JOB, bindingsReportJob } from "./bindings-report/job";
@@ -143,14 +146,7 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
-import {
-  entryDesignKey,
-  TEMPLATE_ENTRY_COLLECTION_FIELD,
-  TEMPLATE_ENTRY_FIELD,
-  TEMPLATE_ENTRY_ID_FIELD,
-  templatesCollection,
-  TEMPLATES_SLUG,
-} from "./collections/templates";
+import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
 import {
@@ -363,6 +359,7 @@ import {
   holdTemplateCollection,
   templateCollectionDelete,
 } from "./templates/collection-delete";
+import { readEntryBlocksFields } from "./templates/entry-content-fields";
 import {
   designUnderWhere,
   registerEntryDesignCascade,
@@ -379,6 +376,7 @@ import {
   checkedTemplateAddresses,
   type PageBuilderTemplateOptions,
 } from "./templates/template-addresses";
+import { templateCollectionChoicesRoute } from "./templates/template-collection-choices-route";
 import {
   addressHolderReader,
   registerTemplateGuard,
@@ -402,6 +400,7 @@ import { unlinkCopies } from "./templates/unlink-copies";
 import { tokenUsageIndex } from "./token-usage";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
+import { unbindPlanRoute } from "./unbind-plan-route";
 import { usageBackfillJob } from "./usage-backfill-job";
 import {
   backfillScopes,
@@ -2738,6 +2737,13 @@ export const pageBuilder = (
         // template's lists and conditions are judged against the collection
         // it draws, read from the template itself.
         templates: templateTargets(ctx.services.ownCollections, templates),
+        // A collection's top-level blocks fields, for the field a template's
+        // Entry content block draws: read per write, so a field removed a
+        // moment ago is refused at the next save that newly chooses it.
+        // A failed read is thrown, so the save refuses rather than storing
+        // a field nobody checked.
+        entryBlocksFields: collection =>
+          readEntryBlocksFields(ctx.services.collections, collection),
         listFields: listFieldsFrom({
           record: collection =>
             ctx.services.collections.getCollection(collection, {}),
@@ -2949,6 +2955,16 @@ export const pageBuilder = (
           throw error;
         }
       };
+      // The Pages collection read on a write's transaction, for the walk a
+      // save makes over every published page while the start-up pass runs,
+      // whether a page's save or an entry's.
+      const readPagesOn: PagesInTransactionRead = (on, options, opts) =>
+        ctx.services.ownCollections.listEntriesInTransaction(
+          on,
+          pagesSlug,
+          options,
+          opts
+        );
       registerPageAddressClaims(ctx.hooks, {
         pages: pagesSlug,
         claims: claimsStore,
@@ -2958,11 +2974,10 @@ export const pageBuilder = (
           ? {}
           : { pathTemplate: opts.pagePreviewPath }),
         backfillDone: () => pageClaimsBackfilled,
-        publishedPages: async function* () {
-          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-          const nextly = (await getCachedNextly()) as unknown as PagesReader;
-          yield* publishedPages(nextly, pagesSlug);
-        },
+        // Hook-free and as the system, as the pages' start-up pass reads
+        // them, on the save's own transaction: a save holding the pool's
+        // last connection never waits for a second one.
+        publishedPages: tx => publishedPagesInTransaction(readPagesOn, tx),
       });
       pageClaimsBackfill = async () => {
         const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
@@ -2974,6 +2989,23 @@ export const pageBuilder = (
             ? {}
             : { pathTemplate: opts.pagePreviewPath }),
           nextly: (await getCachedNextly()) as unknown as PagesReader,
+          // With no row lock: the pass holds the page's claims lock, which a
+          // save of the page takes before it commits, while a share lock
+          // here would wait for a save holding the row that is itself
+          // waiting for that claims lock.
+          readPage: async (tx, id) => {
+            try {
+              return await ctx.services.ownCollections.findEntryByIdInTransaction(
+                tx,
+                pagesSlug,
+                id,
+                { lock: "none" }
+              );
+            } catch (error) {
+              if (NextlyError.isNotFound(error)) return null;
+              throw error;
+            }
+          },
           withTransaction: work =>
             ctx.services.collections.withTransaction(work),
           warn: (message, meta) => ctx.logger.warn(message, meta),
@@ -3043,6 +3075,18 @@ export const pageBuilder = (
           if (rows.length === 0 || page * 500 >= total) return waiting.size;
         }
       };
+      // Each published page among `rows`, with the claims it holds.
+      const pageHoldings = (rows: readonly unknown[]) =>
+        (rows as Readonly<Record<string, unknown>>[]).flatMap(row =>
+          typeof row.id === "string" || typeof row.id === "number"
+            ? [
+                {
+                  id: String(row.id),
+                  ...pageClaims(row, siteLocales(), opts.pagePreviewPath),
+                },
+              ]
+            : []
+        );
       const claimsDeps: EntryClaimsDeps = {
         claims: claimsStore,
         addresses: templateAddresses,
@@ -3056,30 +3100,35 @@ export const pageBuilder = (
         // Asked inside a write's transaction, so read on it.
         lifecycle: async (collection, tx) =>
           (await collectionRecord(collection, tx))?.status === true,
-        pagesWithSlugs: async slugs => {
-          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-          const nextly = (await getCachedNextly()) as unknown as PagesReader;
-          const found = await nextly.find({
-            collection: pagesSlug,
-            where: {
-              status: { equals: "published" },
-              slug: { in: [...slugs] },
-            },
-            limit: slugs.length,
-            overrideAccess: true,
-            depth: 0,
-          });
-          return (found.items as Readonly<Record<string, unknown>>[]).flatMap(
-            row =>
-              typeof row.id === "string" || typeof row.id === "number"
-                ? [
-                    {
-                      id: String(row.id),
-                      ...pageClaims(row, siteLocales(), opts.pagePreviewPath),
-                    },
-                  ]
-                : []
-          );
+        // Hook-free and as the system, as the pages' start-up pass reads
+        // them, on the write's own transaction: a write holding the pool's
+        // last connection never waits for a second one. A page's slug is
+        // unique, so one read of as many rows as slugs asked finds them all.
+        pagesWithSlugs: async (slugs, tx) => {
+          const found =
+            await ctx.services.ownCollections.listEntriesInTransaction(
+              tx,
+              pagesSlug,
+              {
+                where: {
+                  status: { equals: "published" },
+                  slug: { in: [...slugs] },
+                },
+                pagination: { limit: slugs.length },
+                depth: 0,
+              }
+            );
+          return pageHoldings(found.data);
+        },
+        // The walk a page's save makes while the start-up pass runs (see
+        // `publishedPagesInTransaction`), on the write's own transaction.
+        publishedPagesOn: async function* (tx) {
+          for await (const batch of publishedPagesInTransaction(
+            readPagesOn,
+            tx
+          )) {
+            yield pageHoldings(batch);
+          }
         },
         // Hook-free and as the system, as the template guard reads it, so a
         // read hook cannot hide a template that serves entries.
@@ -3118,77 +3167,9 @@ export const pageBuilder = (
             address: address === null ? null : addressSegments(address),
           };
         },
-        // Hook-free and as the system, as the template is read, and on the
-        // write's own transaction: the routing columns of the entry's own
-        // design alone.
-        ownDesignPublished: async (collection, id, tx) => {
-          const key = entryDesignKey(collection, id);
-          const found =
-            await ctx.services.ownCollections.listEntriesInTransaction(
-              tx,
-              templatesSlug,
-              {
-                where: { [TEMPLATE_ENTRY_FIELD]: { equals: key } },
-                pagination: { limit: 1 },
-                select: {
-                  id: true,
-                  [TEMPLATE_ENTRY_FIELD]: true,
-                  status: true,
-                },
-                depth: 0,
-              }
-            );
-          const row = found.data[0] as Record<string, unknown> | undefined;
-          // Compared again exactly: a database may compare text loosely.
-          return (
-            row?.[TEMPLATE_ENTRY_FIELD] === key && row.status === "published"
-          );
-        },
-        // On the write's own transaction, a page at a time, stopping on a
-        // short page: the total beside a page is an unlocked count.
-        publishedDesigns: async (collection, tx) => {
-          const ids = new Set<string>();
-          for (let page = 1; ; page += 1) {
-            const found =
-              await ctx.services.ownCollections.listEntriesInTransaction(
-                tx,
-                templatesSlug,
-                {
-                  // Published ones only, filtered by the database: a draft
-                  // design keeps no address, so reading and locking it would
-                  // only slow the write. Each row is still compared exactly.
-                  where: {
-                    [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection },
-                    status: { equals: "published" },
-                  },
-                  pagination: { limit: 500, page },
-                  // A unique order, so no design moves between pages.
-                  sort: { field: "id", direction: "asc" },
-                  select: {
-                    id: true,
-                    [TEMPLATE_ENTRY_FIELD]: true,
-                    [TEMPLATE_ENTRY_ID_FIELD]: true,
-                    status: true,
-                  },
-                  depth: 0,
-                }
-              );
-            for (const value of found.data) {
-              const row = value as Record<string, unknown>;
-              const id = row[TEMPLATE_ENTRY_ID_FIELD];
-              // The key its entry makes, compared exactly, so a design
-              // matched loosely by collection is never counted.
-              if (
-                typeof id === "string" &&
-                row[TEMPLATE_ENTRY_FIELD] === entryDesignKey(collection, id) &&
-                row.status === "published"
-              ) {
-                ids.add(id);
-              }
-            }
-            if (found.data.length < 500) return ids;
-          }
-        },
+        // The entry's own design and the collection's template, judged for a
+        // list split into pages, on the write's own transaction.
+        ...entryDesignReads(ctx.services.ownCollections, templatesSlug),
         // The host's collection, read as the system, as a template's walk
         // reads it, but on the write's own transaction: a write holding the
         // pool's last connection never waits for a second one. One read
@@ -3235,24 +3216,30 @@ export const pageBuilder = (
           storedAddressProblem(address, collection, {
             declared: declaredPaths,
           }),
-        publishedEntries: async (collection, page, size) => {
-          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-          const nextly = (await getCachedNextly()) as unknown as PagesReader;
-          const found = await nextly.find({
+        // The host's collection, read as the system, as `entriesWithIds`
+        // reads it, on the write's own transaction: a write holding the
+        // pool's last connection never waits for a second one.
+        publishedEntries: async (collection, page, size, tx, lifecycle) => {
+          const found = await ctx.services.collections.listEntriesInTransaction(
+            tx,
             collection,
-            // Published only, and a no-op on a collection without a
-            // Draft/Published lifecycle, whose entries are all live.
-            status: "published",
-            // `id` is unique and on every collection; `createdAt` is absent
-            // where timestamps are off, and ties would let a paged walk skip
-            // an entry at a batch's edge.
-            sort: "id",
-            limit: size,
-            page,
-            overrideAccess: true,
-            depth: 0,
-          });
-          return found.items as readonly Readonly<Record<string, unknown>>[];
+            {
+              // Published only where the collection has a Draft/Published
+              // lifecycle; without one every entry is live, whatever an
+              // ordinary field named `status` holds. The hook judges each
+              // row by the same test (`isPublished`).
+              ...(lifecycle
+                ? { where: { status: { equals: "published" } } }
+                : {}),
+              // `id` is unique and on every collection; `createdAt` is absent
+              // where timestamps are off, and ties would let a paged walk skip
+              // an entry at a batch's edge.
+              sort: { field: "id", direction: "asc" },
+              pagination: { limit: size, page },
+              depth: 0,
+            }
+          );
+          return found.data;
         },
       };
       // Whatever is declared in code: a collection created at runtime is
@@ -3916,6 +3903,10 @@ export const pageBuilder = (
         // what the template form asks before it offers the change, since the
         // collection list leaves out what the author may not read.
         templateCollectionRetargetRoute({ guard: requireTemplateGuard }),
+        // The collections the template form offers: those the caller may
+        // read that the guard lets a template draw, judged by the guard's
+        // own rule, for a caller who may create or change templates.
+        templateCollectionChoicesRoute({ guard: requireTemplateGuard }),
         // A collection's own designs, its template and its names, read as
         // the caller: what the admin's Design section, Design column and the
         // template's own designs list draw from.
@@ -3953,10 +3944,19 @@ export const pageBuilder = (
         // reads them, drafts included, for a collection they may read. A
         // list whose source is a named query runs it here, on the server,
         // where its run function lives.
-        listEntriesRoute(name => namedQueries.definitionOf(name)),
+        listEntriesRoute(
+          name => namedQueries.definitionOf(name),
+          requireTemplateGuard
+        ),
         // The canvas's bound props: the entry being edited, the Singles its
         // bindings read and the site settings, read as the author asking.
         canvasBindingsRoute(),
+        // The fields the inspector's picker offers a binding, as the author
+        // asking may read them, each marked by whether visitors may.
+        bindingFieldsRoute(),
+        // An unbind's plan for the inspector, against the document it holds:
+        // the same decision as the page actions API's, applied by the editor.
+        unbindPlanRoute({ limits: () => opts.limits ?? DEFAULT_LIMITS }),
         // The documents whose bindings no longer fit, for those who edit
         // pages, each listed only when the caller may read it.
         bindingsToFixRoute({

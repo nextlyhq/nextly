@@ -26,6 +26,7 @@ import {
   CONDITIONED_ATTRIBUTE,
   CONDITIONED_OWN_ATTRIBUTE,
   Canvas,
+  ENTRY_CONTENT_ATTRIBUTE,
   SELECTED_ATTRIBUTE,
 } from "./canvas";
 import { CanvasMarks } from "./canvas-marks";
@@ -33,6 +34,7 @@ import { conditionFieldsOfShapes } from "./condition-model";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import { markLookReach } from "./look-reach";
 import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
+import { PreviewedEntryProvider } from "./previewed-entry";
 
 /**
  * The selection ring and its halo are drawn for EVERY selected rendering, by
@@ -348,7 +350,7 @@ describe("selection marks", () => {
     await act(async () => undefined);
     const badges = () =>
       Array.from(
-        container.querySelectorAll('.nx-canvas-mark[data-mark="conditioned"]')
+        container.querySelectorAll('.nx-canvas-mark[data-mark="at-rest"]')
       );
     // Two badges, none for the plain block, and nothing selected: the badge
     // is always on, unlike the selection ring.
@@ -412,7 +414,7 @@ describe("selection marks", () => {
     await act(async () => undefined);
     const badges = () =>
       Array.from(
-        container.querySelectorAll('.nx-canvas-mark[data-mark="conditioned"]')
+        container.querySelectorAll('.nx-canvas-mark[data-mark="at-rest"]')
       );
     // One badge, the shown block's: the hidden one's marker says it all.
     await waitFor(() => expect(badges()).toHaveLength(1));
@@ -447,7 +449,7 @@ describe("selection marks", () => {
     await act(async () => undefined);
     await waitFor(() =>
       expect(
-        container.querySelectorAll('.nx-canvas-mark[data-mark="conditioned"]')
+        container.querySelectorAll('.nx-canvas-mark[data-mark="at-rest"]')
       ).toHaveLength(1)
     );
   });
@@ -487,15 +489,16 @@ describe("selection marks", () => {
     const badges = () =>
       Array.from(
         container.querySelectorAll<HTMLElement>(
-          '.nx-canvas-mark[data-mark="conditioned"]'
+          '.nx-canvas-mark[data-mark="at-rest"]'
         )
       );
     await waitFor(() => expect(badges()).toHaveLength(2));
     // Selected, its name takes the top corner, so the tab goes below; the
     // unselected one, CONTROL, keeps the top.
-    expect(
-      badges().map(badge => badge.getAttribute("data-condition-tag"))
-    ).toEqual(["below", "above"]);
+    expect(badges().map(badge => badge.getAttribute("data-tab-at"))).toEqual([
+      "below",
+      "above",
+    ]);
     // The wide one's tab moves in by what the screen cuts off its right.
     expect(badges()[1]?.style.getPropertyValue("--nx-tag-inset-side")).toBe(
       "500px"
@@ -522,7 +525,7 @@ describe("selection marks", () => {
     await act(async () => undefined);
     await waitFor(() =>
       expect(
-        container.querySelectorAll('.nx-canvas-mark[data-mark="conditioned"]')
+        container.querySelectorAll('.nx-canvas-mark[data-mark="at-rest"]')
       ).toHaveLength(2)
     );
   });
@@ -560,7 +563,7 @@ describe("selection marks", () => {
     const badges = () =>
       Array.from(
         container.querySelectorAll<HTMLElement>(
-          '.nx-canvas-mark[data-mark="conditioned"]'
+          '.nx-canvas-mark[data-mark="at-rest"]'
         )
       );
     // One outline per copy, not one spanning both and what lies between.
@@ -592,7 +595,7 @@ describe("selection marks", () => {
     await act(async () => undefined);
     await waitFor(() =>
       expect(
-        container.querySelectorAll('.nx-canvas-mark[data-mark="conditioned"]')
+        container.querySelectorAll('.nx-canvas-mark[data-mark="at-rest"]')
       ).toHaveLength(1)
     );
   });
@@ -623,7 +626,7 @@ describe("selection marks", () => {
     await act(async () => undefined);
     const badge = () =>
       container.querySelector<HTMLElement>(
-        '.nx-canvas-mark[data-mark="conditioned"]'
+        '.nx-canvas-mark[data-mark="at-rest"]'
       );
     await waitFor(() => expect(badge()).not.toBeNull());
     // No inset pulling the tab back onto the screen, away from its block.
@@ -660,7 +663,7 @@ describe("selection marks", () => {
     await act(async () => undefined);
     const badge = () =>
       container.querySelector<HTMLElement>(
-        '.nx-canvas-mark[data-mark="conditioned"]'
+        '.nx-canvas-mark[data-mark="at-rest"]'
       );
     await waitFor(() => expect(badge()).not.toBeNull());
     // Moved out past the block's right edge, a negative inset, so its left
@@ -710,12 +713,13 @@ describe("selection marks", () => {
     await act(async () => undefined);
     const badges = () =>
       Array.from(
-        container.querySelectorAll('.nx-canvas-mark[data-mark="conditioned"]')
+        container.querySelectorAll('.nx-canvas-mark[data-mark="at-rest"]')
       );
     await waitFor(() => expect(badges()).toHaveLength(2));
-    expect(
-      badges().map(badge => badge.getAttribute("data-condition-tag"))
-    ).toEqual(["inside", "above"]);
+    expect(badges().map(badge => badge.getAttribute("data-tab-at"))).toEqual([
+      "inside",
+      "above",
+    ]);
   });
 
   it("draws a dashed reach mark on each block a look edit reaches, and clears it", async () => {
@@ -1517,5 +1521,165 @@ describe("a selected block shown although the page hides it", () => {
     await act(async () => undefined);
     await waitFor(() => expect(halosIn(container)).toHaveLength(2));
     expect(tagsOf(container)).toEqual(["below:left", "below:right"]);
+  });
+});
+
+describe("an Entry content block's at-rest mark", () => {
+  beforeAll(() => {
+    registerBlocks([
+      {
+        // A stand-in drawing one element, as the real block draws its root.
+        name: "core/entry-content",
+        version: 1,
+        description: "The entry's own content.",
+        example: { props: {} },
+        render: ({ className }: { className: string }) =>
+          createElement("div", { className }),
+      },
+    ] as never);
+  });
+
+  const template = {
+    formatVersion: 1,
+    kind: "template",
+    nodes: [
+      { id: "plain", type: "acme/leaf", version: 1, props: {} },
+      {
+        id: "ec",
+        type: "core/entry-content",
+        version: 1,
+        props: { field: "body" },
+      },
+    ],
+  } as never;
+
+  const tabsOf = (container: HTMLElement) =>
+    Array.from(
+      container.querySelectorAll('.nx-canvas-mark[data-mark="at-rest"]')
+    ).map(mark =>
+      Array.from(mark.querySelectorAll(".nx-canvas-mark__tab")).map(
+        tab => tab.textContent
+      )
+    );
+
+  it("marks it at rest, named by the field as the collection names it, and nothing else", async () => {
+    const { container } = render(
+      <PreviewedEntryProvider
+        value={{ kind: "none", reason: "empty" }}
+        collection={{
+          slug: "posts",
+          singular: "post",
+          plural: "Posts",
+          blocksFields: [{ name: "body", label: "Body" }],
+          // Its label where it has one, else the host's words for a key: here a
+          // stand-in that says which it took.
+          fieldLabel: name =>
+            (({ body: "Body", sidebar: "Sidebar" }) as Record<string, string>)[
+              name
+            ] ?? `Words for ${name}`,
+          entryHref: id => `/admin/collections/posts/${id}`,
+        }}
+      >
+        <Canvas
+          document={template}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          overlay={<CanvasMarks />}
+        />
+      </PreviewedEntryProvider>
+    );
+    await act(async () => undefined);
+    // One mark, for the Entry content block; the plain block beside it is
+    // the control, which carries none.
+    await waitFor(() =>
+      expect(tabsOf(container)).toEqual([["Entry content · Body"]])
+    );
+  });
+
+  it("names the field by its name where the collection's fields are not known", async () => {
+    const { container } = render(
+      <Canvas
+        document={template}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    await waitFor(() =>
+      expect(tabsOf(container)).toEqual([["Entry content · body"]])
+    );
+  });
+
+  it("draws one outline with both tabs on a block that is conditioned too", async () => {
+    const { container } = render(
+      <div className={CANVAS_ROOT_CLASS}>
+        {createElement("div", {
+          [NODE_ID_ATTRIBUTE]: "ec",
+          [CONDITIONED_ATTRIBUTE]: "conditional",
+          [ENTRY_CONTENT_ATTRIBUTE]: "Entry content · Body",
+        })}
+        <CanvasMarks />
+      </div>
+    );
+    await act(async () => undefined);
+    await waitFor(() =>
+      expect(tabsOf(container)).toEqual([
+        ["Entry content · Body", "Conditional"],
+      ])
+    );
+  });
+
+  it("says a conditioned Entry content block is shown for the entry, beside its own tab", async () => {
+    // The Entry content block carries conditions the previewed entry meets,
+    // and conditions are applied: one outline, the field's tab and the
+    // shown tab together, as the canvas marks it.
+    const conditioned = {
+      formatVersion: 1,
+      kind: "template",
+      nodes: [
+        {
+          id: "ec",
+          type: "core/entry-content",
+          version: 1,
+          props: { field: "body" },
+          visibility: {
+            conditions: [[{ field: "tier", op: "equals", value: "vip" }]],
+          },
+        },
+      ],
+    } as BlockDocument;
+    const fields = [{ name: "tier", type: "text" }] as const;
+    const applied = appliedConditionsOf(
+      conditioned,
+      {
+        subject: {
+          fields: { declared: new Set(["tier"]), readable: fields },
+          values: { tier: "vip" },
+        },
+        noun: "post",
+        fields: conditionFieldsOfShapes(fields),
+      },
+      node => node.id
+    );
+    const { container } = render(
+      <Canvas
+        document={conditioned}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        conditionsApplied={applied}
+        overlay={<CanvasMarks shownLabel="Shown for this post" />}
+      />
+    );
+    await act(async () => undefined);
+    await waitFor(() =>
+      expect(tabsOf(container)).toEqual([
+        ["Entry content · body", "Shown for this post"],
+      ])
+    );
+    const mark = container.querySelector(
+      '.nx-canvas-mark[data-mark="at-rest"]'
+    );
+    expect(mark?.getAttribute("data-condition")).toBe("shown");
+    expect(
+      mark?.querySelector('.nx-canvas-mark__tab[data-tab="shown"] > svg')
+    ).not.toBeNull();
   });
 });

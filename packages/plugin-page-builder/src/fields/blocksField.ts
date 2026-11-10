@@ -53,6 +53,7 @@ import { blocksOptionsOf, DEFAULT_ACCEPTED_KINDS } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
 import { newBreakpointIssues } from "./breakpoint-reference-judgement";
 import { newClassReferenceIssues } from "./class-reference-judgement";
+import { newEntryContentIssues } from "./entry-content-judgement";
 import {
   judgesLayersLocks,
   layersLockIssues,
@@ -312,12 +313,16 @@ export function blocksFieldType(
         if (emptied || args.write === undefined) return [];
         const maxNodes = composition?.()?.limits.maxNodes;
         const namedQueries = composition?.()?.namedQueries;
+        // Where templates are stored, so a template's lists and bindings are
+        // judged against the collection it draws.
+        const templates = composition?.()?.templates;
         const bound =
           bindingShapes === undefined
             ? []
             : await newBindingIssues(value, args, label, {
                 shapesOf: bindingShapes,
                 storedForms,
+                ...(templates === undefined ? {} : { templates }),
                 ...(maxNodes === undefined ? {} : { maxNodes }),
                 // A list's item bindings, against its query's rows.
                 ...(namedQueries === undefined ? {} : { namedQueries }),
@@ -329,9 +334,6 @@ export function blocksFieldType(
                   }),
               });
         if (listFields === undefined) return bound;
-        // Where templates are stored, so a template's lists are judged
-        // against the collection it draws.
-        const templates = composition?.()?.templates;
         const site = {
           fieldsOf: listFields,
           storedForms,
@@ -341,10 +343,22 @@ export function blocksFieldType(
         };
         // And the fields its blocks' visibility conditions check, judged the
         // same way, since a condition the page could not check hides its block.
+        const entryBlocksFields = composition?.()?.entryBlocksFields;
         return [
           ...(await newListQueryIssues(value, args, label, site)),
           ...(await newConditionIssues(value, args, label, site)),
           ...bound,
+          // And the field a template's Entry content block draws, against
+          // the collection the template draws, and where the document is
+          // stored, since only a template may hold one.
+          ...(await newEntryContentIssues(value, args, label, {
+            storedForms,
+            ...(templates === undefined ? {} : { templates }),
+            ...(entryBlocksFields === undefined
+              ? {}
+              : { blocksFieldsOf: entryBlocksFields }),
+            ...(site.maxNodes === undefined ? {} : { maxNodes: site.maxNodes }),
+          })),
         ];
       };
       const classes = async (): Promise<readonly PluginFieldIssue[]> => {

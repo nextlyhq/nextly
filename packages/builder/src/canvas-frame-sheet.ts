@@ -23,10 +23,24 @@
  * @module canvas-frame-sheet
  */
 
+import {
+  DEFAULT_TOKEN_PREFIX,
+  tokenCustomProperty,
+} from "@nextlyhq/blocks-engine";
+import {
+  ENTRY_CONTENT_DRAWN_ATTRIBUTE,
+  ENTRY_CONTENT_NOTE_ATTRIBUTE,
+} from "@nextlyhq/blocks-react";
+
 import { EMPTY_CONTAINER_SELECTOR, EMPTY_TEXT_SELECTOR } from "./empty-slot";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
+
+/** A site token as the page's sheet names it, with what stands in without it. */
+function siteToken(name: string, fallback: string): string {
+  return `var(${tokenCustomProperty(name, DEFAULT_TOKEN_PREFIX)}, ${fallback})`;
+}
 
 /** A collection list drawing its empty state while that state holds nothing. */
 const EMPTY_LIST = `${EMPTY_CONTAINER_SELECTOR}[data-nx-list-shows]`;
@@ -238,6 +252,42 @@ ${ROOT} [contenteditable="false"] { -webkit-touch-callout: none; }
   padding: 0.6em 0.9em;
 }
 
+/* A block its conditions hide while they are applied, drawn as one line in
+   its place: its words kept readable however small the canvas paints the
+   page, never under 11px on screen, and at its own 13px from full size up.
+   In pixels, not rems, so a site whose root font size is not 16px moves
+   neither. Its spacing is in its own text's units, so it keeps its shape at
+   every zoom. Written under the root, so it outweighs the marker's own
+   defaults in the page's sheet. One row, its icon centred before its words,
+   here too: a marker a list's entry draws is made as the page is drawn, so
+   the page's sheet holds no defaults for it, and a site's own sheet may set
+   an icon on a line of its own. */
+${ROOT} .nx-condition-hidden {
+  display: flex;
+  align-items: center;
+  font-size: max(13px, calc(11px / var(--nx-canvas-zoom, 1)));
+  gap: 0.6em;
+  padding: 0.45em 0.75em;
+}
+
+${ROOT} .nx-condition-hidden > svg {
+  display: inline-block;
+  flex: none;
+}
+
+/* The marker's look, in the site's own tokens, for a marker the page's sheet
+   holds no defaults for: one a list's entry draws, made as the page is
+   drawn. At no specificity, so a page marker's compiled defaults, the same
+   tokens, still win; each token stands in for itself in the page's own ink
+   where the site names its tokens otherwise. */
+:where(${ROOT} .nx-condition-hidden) {
+  border: 1px dashed ${siteToken("color.border-strong", "color-mix(in srgb, currentColor 35%, transparent)")};
+  border-radius: 2px;
+  background-color: ${siteToken("color.surface", "color-mix(in srgb, currentColor 6%, transparent)")};
+  color: ${siteToken("color.muted", "color-mix(in srgb, currentColor 70%, transparent)")};
+  line-height: 1.35;
+}
+
 [data-nx-list-diagnostic="sort-fallback"] {
   border-color: color-mix(in srgb, var(--nx-builder-warning, Mark) 55%, transparent);
   background: color-mix(
@@ -386,6 +436,66 @@ ${ROOT} [data-nx-list-empty-because="failed"]::before {
   content: "Showing When empty";
 }
 
+/* An Entry content block drawing the entry's own blocks: they are the
+   entry's, edited on the entry, so the pointer passes through them to the
+   block, which a click selects. Nothing inside is pressed, hovered or
+   followed, and no caret lands in it. */
+${ROOT} [${ENTRY_CONTENT_DRAWN_ATTRIBUTE}] * {
+  pointer-events: none;
+  cursor: inherit;
+}
+
+/* An Entry content block's note to its author, where it has none of the
+   entry's content to draw: the canvas's muted note, drawn as an empty
+   container is, in the page's own ink so it reads on any section, its words
+   faint and the entry's title in full ink; red for a field the collection
+   no longer has. At the admin's size whatever the zoom. A visitor's page
+   never carries one. */
+[${ENTRY_CONTENT_NOTE_ATTRIBUTE}] {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+  margin: 0;
+  padding: 0.6em 0.9em;
+  border: 1px dashed color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: var(--radius-sm, 0.25rem);
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  font-family: var(--font-sans, system-ui), sans-serif;
+  font-size: calc(0.75rem / var(--nx-canvas-zoom, 1));
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: start;
+}
+
+[${ENTRY_CONTENT_NOTE_ATTRIBUTE}] span > span {
+  color: color-mix(in srgb, currentColor 65%, transparent);
+}
+
+[${ENTRY_CONTENT_NOTE_ATTRIBUTE}] b {
+  font-weight: 500;
+}
+
+/* The red note, drawn on the page as the muted one is: its tint over the
+   page itself and its words mixed with the page's own ink, so it reads on a
+   light page and a dark section alike, whatever the admin's theme. The red
+   is the admin's danger hue, the one value taken from the editor. */
+[${ENTRY_CONTENT_NOTE_ATTRIBUTE}="failed"] {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--nx-builder-danger, currentColor) 55%, transparent);
+  background: color-mix(in srgb, var(--nx-builder-danger, currentColor) 8%, transparent);
+  color: color-mix(in oklab, var(--nx-builder-danger, currentColor) 70%, currentColor);
+}
+
+[${ENTRY_CONTENT_NOTE_ATTRIBUTE}="failed"] span > span {
+  color: inherit;
+}
+
+[${ENTRY_CONTENT_NOTE_ATTRIBUTE}] > svg {
+  flex: none;
+  inline-size: 1.15em;
+  block-size: 1.15em;
+}
+
 /* A list whose new source waits for an input wears what it still draws
    ("Still showing Events"), in the same tag, first in its flow. Written
    after the empty state's, so the wait is what it says while both hold. */
@@ -410,6 +520,43 @@ ${ROOT} [data-nx-list-still]::before {
   white-space: nowrap;
   pointer-events: none;
   zoom: calc(1 / var(--nx-canvas-zoom, 1));
+}
+
+/* A list drawn as a visitor reads it, while conditions are applied, wears
+   how many of the editor's entries a visitor sees ("Showing what visitors
+   see: 4 of 6 entries"): the same place as the wait's tag, quieter, since
+   it reports rather than asks. A list waiting for an input says that
+   instead, as the one thing it asks. */
+${ROOT} [data-nx-list-visitors]:not([data-nx-list-still])::before {
+  content: attr(data-nx-list-visitors);
+  display: block;
+  grid-column: 1 / -1;
+  justify-self: start;
+  align-self: start;
+  flex: none;
+  inline-size: max-content;
+  max-inline-size: 100%;
+  margin-block-end: 0.375rem;
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--nx-builder-border, GrayText);
+  border-radius: 0.1875rem;
+  background: var(--nx-builder-surface-raised, Canvas);
+  color: var(--nx-builder-text-muted, GrayText);
+  font-family: system-ui, sans-serif;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  zoom: calc(1 / var(--nx-canvas-zoom, 1));
+}
+
+/* Over a list's empty area, the same tag sits inside the area's dashed edge,
+   clear of it, rather than on the corner the empty state's own tag fills. */
+${EMPTY_LIST}[data-nx-list-visitors]:not([data-nx-list-still])::before {
+  inset-block-start: 0.25rem;
+  inset-inline-start: 0.25rem;
+  border-radius: 0.1875rem;
 }
 
 /* A region of the page's Layout, drawn locked around the page. Its content

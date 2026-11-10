@@ -31,6 +31,7 @@ import { defineCollection, defineConfig, text } from "nextly/config";
 import { Authors } from "./src/collections/authors";
 import { BlockPages } from "./src/collections/block-pages";
 import { BoundEntries } from "./src/collections/bound-entries";
+import { EntryArticles } from "./src/collections/entry-articles";
 import { ListStories } from "./src/collections/list-stories";
 import { E2E_NAMED_QUERIES } from "./src/named-queries";
 import { Categories } from "./src/collections/categories";
@@ -103,7 +104,15 @@ export const pageBuilderPlugin = pageBuilder({
   pagePreviewPath: "/{slug}",
   // Each post is served at `/blog/<its slug>` by the same route as the pages,
   // drawn with the Posts template once one is published.
-  templates: { addresses: { posts: "/blog" } },
+  // The Entry content fixture's articles at `/articles/<slug>`, with it.
+  templates: {
+    addresses: {
+      posts: "/blog",
+      ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+        ? { "entry-articles": "/articles" }
+        : {}),
+    },
+  },
   // The route that draws the editor's canvas inside this site's layout.
   canvasPath: "/page-builder-canvas",
   // The browser suite's stand-in Google Fonts catalogue, so adding a font
@@ -198,6 +207,8 @@ export default defineConfig({
     // fields include one the public may not read; registered for the e2e run
     // only, by the same switch.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [BoundEntries] : []),
+    // What a template's Entry content block draws, for its browser tests.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [EntryArticles] : []),
     // The browser test of a collection list's related source needs a public,
     // page-built entry holding a public to-many relation; registered for the
     // e2e run only, by the same switch.

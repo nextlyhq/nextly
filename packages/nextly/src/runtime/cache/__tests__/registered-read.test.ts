@@ -15,6 +15,7 @@ import * as logger from "../../../observability/logger";
 import { applyCache, type UnstableCache } from "../cached-find";
 import {
   type CachedRead,
+  cachedReadRegistered,
   DEFERRED_FILL_WINDOW_MS,
   readThroughRegistered,
   recordCacheComponents,
@@ -216,7 +217,7 @@ describe("applyCache under Cache Components", () => {
     expect(result).toEqual({ id: "x" });
     // The read's own key parts, then the part naming the shape it holds.
     expect(seen).toEqual([
-      ['["posts","x","nextly:kept-v1"]', ["nextly:posts"], 60],
+      ['["posts","x","nextly:kept-v2"]', ["nextly:posts"], 60],
     ]);
   });
 
@@ -230,7 +231,7 @@ describe("applyCache under Cache Components", () => {
       tags: ["nextly:posts"],
       keyParts: ["posts", "y"],
     });
-    expect(used).toEqual([["posts", "y", "nextly:kept-v1"]]);
+    expect(used).toEqual([["posts", "y", "nextly:kept-v2"]]);
   });
 
   // Next.js's two refusals of a `"use cache"` call with no App Router scope:
@@ -311,5 +312,33 @@ describe("Cache Components with no cached-read function registered", () => {
       throw new Error("must not be used with Cache Components off");
     }, undefined);
     await expect(read()).resolves.toEqual({ id: "x" });
+  });
+});
+
+describe("cachedReadRegistered", () => {
+  // What a component asks before it reads under Cache Components: it must say
+  // yes exactly when `cachedFind` would read through the app's function.
+  const cachedRead: CachedRead = async key => runRegisteredRead(key);
+
+  it("says no before the app registers a function", () => {
+    expect(cachedReadRegistered()).toBe(false);
+  });
+
+  it("says yes once the app registers one under Cache Components", () => {
+    registerCachedRead(cachedRead, "true");
+    expect(cachedReadRegistered()).toBe(true);
+  });
+
+  it("says no where the app's build has Cache Components off", () => {
+    // The app's file registers itself either way; with the value off, nextly
+    // keeps `unstable_cache`, and so must the answer.
+    registerCachedRead(cachedRead, undefined);
+    expect(cachedReadRegistered()).toBe(false);
+  });
+
+  it("says no once the function is forgotten", () => {
+    registerCachedRead(cachedRead, true);
+    setCachedRead(undefined);
+    expect(cachedReadRegistered()).toBe(false);
   });
 });

@@ -16,6 +16,7 @@
 import {
   bindingDemand,
   calendarDayIn,
+  composeEntryContent,
   mapForest,
   deriveSeoFromDocument,
   hashId,
@@ -64,6 +65,8 @@ import {
   nextlySiteSettingsTags,
   readPublicSiteSettings,
   LIST_PAGE_SEGMENT,
+  listPageNumber,
+  listPageOf,
   openNamedQueryFrame,
   slugToPath,
 } from "nextly/runtime";
@@ -947,6 +950,20 @@ function warnOfStandIn(standIn: ProcessSiteSettings): void {
 }
 
 /**
+ * The route's media library, for a binding that follows into it; none where
+ * the route draws its images from a collection of its own
+ * (`mediaCollection`), whose rows the public reader finds, or where its
+ * reader has no library.
+ */
+function mediaLibraryOf(
+  config: BlocksPageConfig
+): Pick<BindingSourcesArgs, "media"> {
+  if (config.mediaCollection !== undefined) return {};
+  const library = mediaNamespaceOf(readerFor(config));
+  return library === undefined ? {} : { media: library };
+}
+
+/**
  * Where a route's pages read the site settings: the instance the route reads
  * its records through, chosen by {@link readerFor} and nowhere else, so a
  * page's site name and time zone come from the same instance as its content.
@@ -994,6 +1011,81 @@ function emptyDocument(): BlockDocument {
  * the renderer already repairs a malformed document forgivingly, and a second
  * opinion about shape in front of it could only disagree with the first.
  */
+/**
+ * Each entry's drawn document, by the field it is read from, composed once
+ * per entry the route resolved: its metadata, its list's pages and its render
+ * are asked of the same entry, and so of one composition.
+ */
+const DRAWN_DOCUMENTS = new WeakMap<ContentEntry, Map<string, BlockDocument>>();
+
+/**
+ * The document a route draws `entry` with: what `field` stores, with the
+ * entry's own blocks content composed into a template's Entry content block.
+ *
+ * Read from the entry as the route read it, with the public's access, so a
+ * field the public may not read is absent and draws nothing, and nothing of
+ * it reaches the page. A page that is no template is drawn as it is stored.
+ * Composed before anything reads the page, so the entry's blocks are drawn,
+ * styled, bound, paged and described with the template's, as one document.
+ * Reads nothing itself: it is the entry the route already holds.
+ */
+function drawnDocumentOf(
+  entry: ContentEntry,
+  field: string,
+  context: RenderContext,
+  config: BlocksPageConfig
+): BlockDocument {
+  let byField = DRAWN_DOCUMENTS.get(entry);
+  const kept = byField?.get(field);
+  if (kept !== undefined) return kept;
+  const document = composedFor(entry, field, context, config);
+  if (byField === undefined) {
+    byField = new Map();
+    DRAWN_DOCUMENTS.set(entry, byField);
+  }
+  byField.set(field, document);
+  return document;
+}
+
+/**
+ * The document a route draws `entry` with, composed under the page's own
+ * limits, so the entry's blocks are cut where the page is; given the
+ * definitions of the components the page places, the template is charged
+ * what it draws once they are expanded, so every instance still resolves.
+ */
+function composedFor(
+  entry: ContentEntry,
+  field: string,
+  context: RenderContext,
+  config: BlocksPageConfig,
+  definitions?: DefinitionsById
+): BlockDocument {
+  const { maxNodes, maxDepth } = effectiveLimits(config);
+  return composeEntryContent(readDocument(entry, field, context), {
+    valueOf: name => entry[name],
+    maxNodes,
+    maxDepth,
+    ...(definitions === undefined ? {} : { definitions }),
+  });
+}
+
+/**
+ * The drawn document fitted to the definitions read for it (`composedFor`),
+ * for `readPageInputs`' `fit`: the page as first drawn where it places no
+ * component, so nothing is composed twice for a page that need not be.
+ */
+function fittedFor(
+  entry: ContentEntry,
+  field: string,
+  context: RenderContext,
+  config: BlocksPageConfig
+): (definitions: DefinitionsById) => BlockDocument {
+  return definitions =>
+    definitions.size === 0
+      ? drawnDocumentOf(entry, field, context, config)
+      : composedFor(entry, field, context, config, definitions);
+}
+
 function readDocument(
   entry: ContentEntry,
   field: string,
@@ -1889,7 +1981,8 @@ interface MediaReads {
 function mediaResolver(
   config: BlocksPageConfig,
   reader: NextlyContentReader,
-  budget: QueryBudget
+  budget: QueryBudget,
+  cache: MediaReadCache | undefined
 ): MediaReads {
   const known = new Map<string, Promise<ResolvedMedia | null>>();
   // The ids a batch on its way will answer, by that batch's read.
@@ -1897,7 +1990,7 @@ function mediaResolver(
     string,
     Promise<ReadonlyMap<string, ResolvedMedia | null> | undefined>
   >();
-  const readOne = mediaReadOne(config, reader);
+  const readOne = mediaReadOne(config, reader, cache);
   // A read is a read: a page whose images all resolve through the media
   // library spends the same budget a loop does, and an exhausted budget
   // resolves to no picture rather than to an unbounded page. A refusal is
@@ -1975,7 +2068,7 @@ function mediaResolver(
       return ownRead(id, claim);
     },
     ahead: async (ids, claim) => {
-      const readMany = mediaReadMany(config, reader);
+      const readMany = mediaReadMany(config, reader, cache);
       // A route that reads each image by its own id reads none ahead, and
       // stops the reads ahead here, so each image's own read, made as it is
       // drawn, comes before a later step's.
@@ -2013,11 +2106,44 @@ function mediaResolver(
  */
 function mediaReadMany(
   config: BlocksPageConfig,
-  reader: NextlyContentReader
+  reader: NextlyContentReader,
+  cache: MediaReadCache | undefined
 ):
   | ((
       ids: readonly string[]
     ) => Promise<ReadonlyMap<string, ResolvedMedia | null> | undefined>)
+  | undefined {
+  const readRows = mediaRowsReader(config, reader);
+  if (readRows === undefined) return undefined;
+  return async ids => {
+    // Kept as pairs rather than a Map, and an unmatched answer as `null`:
+    // the cache keeps values as JSON, where a Map and `undefined` are lost.
+    const drawn = await cachedMediaRead(
+      config,
+      cache,
+      "nextly-media-batch",
+      ids,
+      async () => {
+        const rows = await readRows(ids);
+        return rows === undefined ? null : [...drawnEach(ids, rows)];
+      },
+      null
+    );
+    return drawn === null ? undefined : new Map(drawn);
+  };
+}
+
+/**
+ * The rows a batch of images reads, by id, where the route's images can be
+ * read so; `undefined` for an answer that cannot be matched to the ids.
+ */
+function mediaRowsReader(
+  config: BlocksPageConfig,
+  reader: NextlyContentReader
+):
+  | ((
+      ids: readonly string[]
+    ) => Promise<ReadonlyMap<string, Record<string, unknown>> | undefined>)
   | undefined {
   const library = mediaNamespaceOf(reader);
   const findByIDs = library?.findByIDs?.bind(library);
@@ -2041,8 +2167,7 @@ function mediaReadMany(
         limit: ids.length,
         ...mediaPosture(config),
       });
-      const rows = rowsById(found, ids);
-      return rows === undefined ? undefined : drawnEach(ids, rows);
+      return rowsById(found, ids);
     };
   }
   // Narrowed for the type: the check above already required it.
@@ -2052,7 +2177,7 @@ function mediaReadMany(
     for (const row of await findByIDs({ ids })) {
       if (typeof row.id === "string") rows.set(row.id, row);
     }
-    return drawnEach(ids, rows);
+    return rows;
   };
 }
 
@@ -2111,10 +2236,85 @@ function mediaPosture(config: BlocksPageConfig): {
   };
 }
 
+/**
+ * How a public route keeps its image reads: in the cache its other reads use,
+ * within the route's own window, so a read never outlives the page around it.
+ * `undefined` on an access-enforced route, which reads them per request.
+ */
+interface MediaReadCache {
+  readonly window: number | false | undefined;
+}
+
+/**
+ * An image read on a public route, run inside the cache the route's other
+ * reads use, and tagged as a media write expires it: the media collection's
+ * tag, and each id's. Run as it is on a route that caches nothing.
+ *
+ * Under Cache Components a prerender refuses an uncached read that takes the
+ * current time, and a read of a missing record takes it: the media library
+ * builds its not-found error, which records when it was made, before
+ * `disableErrors` turns it into `null`. Inside the cache that error is made,
+ * if at all, where the clock may be read, and the miss is kept as an answer,
+ * so a later render of the page reads nothing for it until the id or the
+ * collection is written.
+ *
+ * A refusal is answered as `refused` inside the read, so the answer kept is
+ * the one every caller of this read wants, with no throw to catch on each hit
+ * (`cachedFind` would keep the refusal and throw it again, now without taking
+ * the clock). Any other failure still throws and is not kept, so a fault never
+ * stands as a miss.
+ */
+async function cachedMediaRead<T>(
+  config: BlocksPageConfig,
+  cache: MediaReadCache | undefined,
+  name: string,
+  ids: readonly string[],
+  read: () => Promise<T>,
+  refused: T
+): Promise<T> {
+  if (cache === undefined) return await read();
+  const collection = config.mediaCollection ?? MEDIA_TAG_COLLECTION;
+  // The named collection's posture is part of the answer: its lifecycle and
+  // language decide which row is read. The library has neither.
+  const posture =
+    config.mediaCollection === undefined ? undefined : mediaPosture(config);
+  return await cachedFind(
+    async () => {
+      try {
+        return await read();
+      } catch (error) {
+        if (isReadRefusal(error)) return refused;
+        throw error;
+      }
+    },
+    {
+      // The collection's tag first, so it is never the one a long batch
+      // drops: it is the tag every media write expires.
+      tags: [
+        ...nextlyTags(collection),
+        ...ids.map(id => entryIdTag(collection, id)),
+      ],
+      keyParts: [
+        name,
+        posture === undefined ? "library" : `collection:${collection}`,
+        posture?.status ?? "",
+        posture?.locale ?? "",
+        // The tenant discriminator, as every public read of the route keys it:
+        // two sites over different databases ask for the same ids.
+        config.cacheScope ?? "",
+        // Sorted, so one set of ids asked in another order shares the entry.
+        ...[...ids].sort(),
+      ],
+      revalidate: await releaseBoundedRevalidate(cache.window),
+    }
+  );
+}
+
 /** One image's read by id, claimed by the caller. */
 function mediaReadOne(
   config: BlocksPageConfig,
-  reader: NextlyContentReader
+  reader: NextlyContentReader,
+  cache: MediaReadCache | undefined
 ): (id: string) => Promise<ResolvedMedia | null> {
   if (config.resolveMedia) {
     const custom = config.resolveMedia;
@@ -2134,12 +2334,12 @@ function mediaReadOne(
       return usableMedia(record) ? record : null;
     };
   }
-  return async (id: string) => {
-    // `disableErrors` on both paths, because `PageContext.resolveMedia`
-    // promises `null` for an id it cannot resolve and the readers THROW
-    // not-found otherwise. The core image block happens to catch that, so the
-    // contract looked kept; a custom block reading the same context would get a
-    // rejected promise instead of the documented answer.
+  // `disableErrors` on both paths, because `PageContext.resolveMedia`
+  // promises `null` for an id it cannot resolve and the readers THROW
+  // not-found otherwise. The core image block happens to catch that, so the
+  // contract looked kept; a custom block reading the same context would get a
+  // rejected promise instead of the documented answer.
+  const readOne = async (id: string): Promise<ResolvedMedia | null> => {
     const record = config.mediaCollection
       ? // An explicitly named collection IS a dynamic collection — a site
         // storing its images somewhere of its own — so it reads as one, and
@@ -2155,6 +2355,19 @@ function mediaReadOne(
         })
       : await mediaNamespaceOf(reader)?.findByID({ id, disableErrors: true });
     return record ? drawnMedia(record) : null;
+  };
+  return async (id: string) => {
+    // A blank id names no record, and has no tag to keep a read under: the
+    // id tag refuses a blank segment by throwing.
+    if (id.trim() === "") return null;
+    return await cachedMediaRead(
+      config,
+      cache,
+      "nextly-media",
+      [id],
+      async () => await readOne(id),
+      null
+    );
   };
 }
 
@@ -2693,6 +2906,8 @@ interface SourceReads {
   readonly reader: BlocksPublicReader;
   readonly budget: QueryBudget;
   readonly shapes: BlocksFieldShapes;
+  /** The media library, which a relation into `media` is read from. */
+  readonly media?: BindingSourcesArgs["media"];
 }
 
 /** How a read is cached: the route's scope, the page's language and window. */
@@ -2739,6 +2954,32 @@ async function readById(
   }
 }
 
+/**
+ * A media library item a binding follows into, read as the page's images
+ * are, through the library rather than as a collection's row: `media` is no
+ * collection the public reader finds, and asking it for one fails the read.
+ * Only the named fields are kept, as a row's read selects them; one claim.
+ */
+async function readMediaById(
+  reads: SourceReads,
+  media: NonNullable<BindingSourcesArgs["media"]>,
+  id: string,
+  fields: readonly string[]
+): Promise<PublicRecord> {
+  if (!reads.budget.take({ kind: "related" })) return undefined;
+  try {
+    const record = await media.findByID({ id, disableErrors: true });
+    if (record === null) return null;
+    return Object.fromEntries(
+      ["id", ...fields]
+        .filter(field => Object.hasOwn(record, field))
+        .map(field => [field, record[field]])
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 /** One Single as the public reads it, with only the named fields: one claim. */
 async function readSingle(
   reads: SourceReads,
@@ -2779,7 +3020,10 @@ async function withRelations(
     const id = record[name];
     if (target === undefined) continue;
     if (typeof id !== "string" && typeof id !== "number") continue;
-    const related = await readById(reads, target, id, inner, "related");
+    const related =
+      target === MEDIA_TAG_COLLECTION && reads.media !== undefined
+        ? await readMediaById(reads, reads.media, String(id), inner)
+        : await readById(reads, target, id, inner, "related");
     if (related !== undefined) followed = { ...followed, [name]: related };
   }
   return followed;
@@ -3001,6 +3245,19 @@ export interface BindingSourcesArgs {
   /** The documents drawn, as the read pipeline prepared them. */
   readonly documents: readonly BlockDocument[];
   /**
+   * The media library, as the page's images are read from it: a relation a
+   * binding follows into the built-in `media` collection (an image's alt text
+   * from the entry's featured image) is read here by id, since `media` is no
+   * collection the public reader finds. Absent, such a relation is not
+   * followed, and its bindings show their fallbacks.
+   */
+  readonly media?: {
+    findByID(args: {
+      id: string;
+      disableErrors?: boolean;
+    }): Promise<Record<string, unknown> | null>;
+  };
+  /**
    * What the bindings read, when the caller has worked it out already: the
    * editor's canvas works it out from the document it draws and sends only
    * that. Absent, it is read from `documents`.
@@ -3101,6 +3358,7 @@ export async function readBindingSources(
     reader: args.reader,
     budget: args.budget,
     shapes,
+    ...(args.media === undefined ? {} : { media: args.media }),
   };
   const entry =
     demand.entry === undefined
@@ -3357,6 +3615,9 @@ function routeReadSources(args: {
         page: context.slug,
         ...(context.locale === undefined ? {} : { locale: context.locale }),
         reader: publicReaderFor(config, context.locale, window),
+        // The library the route's images come from, so a binding into a
+        // media item (its alt text) is read as those images are.
+        ...mediaLibraryOf(config),
         budget,
         ...(config.cacheScope === undefined
           ? {}
@@ -3539,6 +3800,12 @@ function blocksRouteConfig(
   // was made with.
   const resolver = blocks ?? registeredBlocks();
   warnOfUnknownTimeZone(config.timeZone);
+  // A public route reads its images inside the cache, as it reads the rest of
+  // the page, within the page's own window; an access-enforced one reads them
+  // per request, as it reads the rest.
+  const mediaCache: MediaReadCache | undefined = isPublic
+    ? { window: listWindow }
+    : undefined;
 
   return {
     ...routeConfig,
@@ -3567,7 +3834,9 @@ function blocksRouteConfig(
     ...(metadata
       ? {
           buildMetadata: async (entry, context) => {
-            const document = readDocument(entry, field, context);
+            // The page as it is drawn, so its title, description and image
+            // come from the entry's own content where a template draws it.
+            const document = drawnDocumentOf(entry, field, context, config);
             // Its own budget: metadata generation and the render are separate
             // invocations, so sharing one counter would let the page's reads
             // starve the preview image, or the reverse. Shared BETWEEN the two
@@ -3593,14 +3862,17 @@ function blocksRouteConfig(
                 budget,
               }),
               document,
+              // Fitted to the components it places, as the render is.
+              fit: fittedFor(entry, field, context, config),
               entrySource,
               onIssues: bindingIssueLog(context),
               regionsOnlyWhenBound: true,
             });
             const derived = await derivePageSeo(
-              document,
+              inputs.document,
               resolver,
-              mediaResolver(config, readerFor(config), budget).resolve,
+              mediaResolver(config, readerFor(config), budget, mediaCache)
+                .resolve,
               // A later page of the page's list is its own address, so its
               // canonical names it rather than the list's first page.
               listPageSlug(context.slug, context.page),
@@ -3622,10 +3894,12 @@ function blocksRouteConfig(
     // terms for comparing days, so the route never serves a page the list's
     // own links do not name, nor refuses one they do.
     listPages: async (entry, context) => {
-      const document = readDocument(entry, field, context);
-      // Nothing is read for a page whose stored document neither splits a
-      // list into pages nor binds a list's split: composing it cannot add
-      // one its own nodes do not hold.
+      // The page as it is drawn: a list split into pages inside the entry's
+      // own content, which a template draws, is the page's list.
+      const document = drawnDocumentOf(entry, field, context, config);
+      // Nothing is read for a page whose drawn document neither splits a
+      // list into pages nor binds a list's split: composing it with its
+      // components cannot add one its own nodes do not hold.
       if (
         mayPaginateList(document.nodes, effectiveLimits(config).maxNodes) ===
         undefined
@@ -3651,17 +3925,20 @@ function blocksRouteConfig(
         window: listWindow,
         budget,
       });
-      const { page, bindings, presented } = await readPageInputs({
+      const inputs = await readPageInputs({
         terms,
         sources,
         document,
+        // Fitted to the components it places, as the render is.
+        fit: fittedFor(entry, field, context, config),
         entrySource,
         onIssues: bindingIssueLog(context),
       });
+      const { page, bindings, presented } = inputs;
       // The list as the render draws it: composed with its components'
       // definitions, repaired and held to the caps.
       const list = pagedListOf(
-        document,
+        inputs.document,
         page,
         effectiveLimits(config).maxNodes,
         bindings === undefined
@@ -3711,7 +3988,10 @@ function blocksRouteConfig(
         : listPagesOf(list.props, counted.matching);
     },
     render: async (entry, context) => {
-      const document = readDocument(entry, field, context);
+      // The page as it is drawn: a template's with the entry's own blocks
+      // content composed in (`drawnDocumentOf`), fitted below to the
+      // components it places once their definitions are read.
+      const drawnFirst = drawnDocumentOf(entry, field, context, config);
       const resolved = styles ? await styles(entry, context) : undefined;
 
       // Built from the reader the ROUTE resolved this entry through, handed
@@ -3736,7 +4016,12 @@ function blocksRouteConfig(
         config.maxQueries ?? DEFAULT_MAX_QUERIES,
         { onRefused: () => overrun.refused(budget) }
       );
-      const media = mediaResolver(config, readerFor(config), budget);
+      const media = mediaResolver(
+        config,
+        readerFor(config),
+        budget,
+        mediaCache
+      );
       // The one provider this render's lists read through: their entries,
       // and what they read ahead for them.
       const listData = dataFor(data, config, context.locale, listWindow);
@@ -3833,14 +4118,23 @@ function blocksRouteConfig(
           window: listWindow,
           budget,
         }),
-        document,
+        document: drawnFirst,
+        // Fitted to the components it places: the entry's content is cut to
+        // the room their expansion leaves, so every placement resolves.
+        fit: fittedFor(entry, field, context, config),
         entrySource,
         where: context,
         budget,
         onIssues: bindingIssueLog(context),
       });
-      const { definitions, page, regions, regionDefinitions, bindings } =
-        staged;
+      const {
+        document,
+        definitions,
+        page,
+        regions,
+        regionDefinitions,
+        bindings,
+      } = staged;
       drawnPage.number = staged.listPage?.page;
       // What a list reads ahead for its entries, through the page's own
       // reads: relations as the public reads them, links as the blocks drawn
@@ -4357,12 +4651,60 @@ type ContentAnswer =
       readonly entry: ContentEntry;
       readonly context: RenderContext;
       readonly route: ContentRouteConfig<ReactElement>;
-    };
+    }
+  /** The first page of an entry's list under a second spelling. */
+  | { readonly kind: "redirect"; readonly path: string };
+
+/** Where on a document's page a path falls: its address, and a list page. */
+interface ListPlace {
+  /** The segments of the address the list is on. */
+  readonly segments: readonly string[];
+  /** The page of its list, absent for the address itself. */
+  readonly page?: number;
+}
+
+/**
+ * The page of a list `segments` names (`…/page/<n>`), as the route reads a
+ * page number, or null where it names none: no `page/<n>` ending, or a
+ * number written another way (`page/02`, `page/0`).
+ */
+function listPlaceOf(segments: readonly string[]): Required<ListPlace> | null {
+  const later = listPageOf(segments.join("/"));
+  const page = later === null ? null : listPageNumber(later.segment);
+  return page === null ? null : { segments: segments.slice(0, -2), page };
+}
+
+/**
+ * Where on an entry's page a path the store answers for it falls: its own
+ * address (`segments`), or a later page of its list (`…/page/<n>`), which
+ * the store answers as the entry's list space. Null for a path in the space
+ * that names no page (`page/02`, `page/0`), which answers not found.
+ */
+function entryPlaceOf(
+  segments: readonly string[],
+  holder: ContentAddressHolder
+): ListPlace | null {
+  return holder.kind === "space" ? listPlaceOf(segments) : { segments };
+}
+
+/** The segments of page `page` of the list on the page at `segments`. */
+function listPageSegments(
+  segments: readonly string[],
+  page: number
+): readonly string[] {
+  return page <= 1 ? segments : [...segments, LIST_PAGE_SEGMENT, String(page)];
+}
 
 /** Answer not found, through the App Router's own boundary. */
 async function contentNotFound(): Promise<never> {
   const { notFound } = await import("next/navigation");
   return notFound();
+}
+
+/** Redirect permanently to `path`, through the App Router. */
+async function contentRedirect(path: string): Promise<never> {
+  const { permanentRedirect } = await import("next/navigation");
+  return permanentRedirect(path);
 }
 
 function buildContentRoute(
@@ -4592,9 +4934,7 @@ function buildContentRoute(
     // segment URL resolution removes, is never looked up.
     const served = [...mountSegments, ...segments].join("/");
     if (slugToPath(served) === null) return null;
-    const own = segments.map(encodeURIComponent).join("/");
-    const path = own === "" ? mountPath || "/" : `${mountPath}/${own}`;
-    const holder = await holderOf(path);
+    const holder = await holderOf(pathOf(segments));
     if (holder !== null && pageCollections.has(holder.collection)) {
       return { kind: "page" };
     }
@@ -4602,9 +4942,59 @@ function buildContentRoute(
     // pages route's gate before any other holder is served: the preview
     // shows the page, and its publish is what a clash refuses.
     if (await draftGranted(slug)) return { kind: "page" };
-    if (holder === null) return null;
-    // An entry's own address only: an entry's list does not page yet.
-    if (holder.kind === "space") return null;
+    if (holder === null) return await firstListPage(segments);
+    const place = entryPlaceOf(segments, holder);
+    return place === null ? null : await entryAnswer(holder, place);
+  }
+
+  /**
+   * What `segments` is served as where the store holds it for no one, when
+   * it is the first page of a list under a second spelling (`…/page/1`):
+   * no claim holds it, since a list's first page is its document's own
+   * address and the list's space starts at page 2. So it is answered as the
+   * document at that address answers it: a page by the pages route, which
+   * redirects there, an entry by its list's own pages; anything else, or
+   * any other path, is not found.
+   */
+  async function firstListPage(
+    segments: readonly string[]
+  ): Promise<ContentAnswer | null> {
+    const place = listPlaceOf(segments);
+    if (place === null || place.page !== 1) return null;
+    const holder = await holderOf(pathOf(place.segments));
+    if (holder === null || holder.kind === "space") return null;
+    if (pageCollections.has(holder.collection)) return { kind: "page" };
+    return await entryAnswer(holder, place);
+  }
+
+  /**
+   * Whether the store gives the entry `holder` the later pages of its list
+   * on the page at `segments`: one lookup of the list's second page, which
+   * the store answers with the space's holder, as it answers every later
+   * page. Until it does (a document is published among them, and the entry
+   * waits for it), the entry's list is drawn unpaged.
+   */
+  async function holdsLaterPages(
+    holder: ContentAddressHolder,
+    segments: readonly string[]
+  ): Promise<boolean> {
+    const second = await holderOf(pathOf(listPageSegments(segments, 2)));
+    return (
+      second?.kind === "space" &&
+      second.collection === holder.collection &&
+      second.id === holder.id
+    );
+  }
+
+  /**
+   * What `place`, held by a collection's entry, is served as: the entry
+   * drawn with the design serving it, at its own address or on a page of its
+   * list; or null for not found.
+   */
+  async function entryAnswer(
+    holder: ContentAddressHolder,
+    place: ListPlace
+  ): Promise<ContentAnswer | null> {
     const template = await designOf(holder.collection, holder.id);
     if (template === null) return null;
     // An entry the public may not read answers not found, as an unpublished
@@ -4618,15 +5008,71 @@ function buildContentRoute(
       }
     );
     if (entry === null) return null;
+    const route = entryRouteOf(holder.collection);
+    const drawn = { ...entry, [TEMPLATE_DOCUMENT_KEY]: template.document };
+    // A later page's lookup was answered with the entry's space; its own
+    // address, and the first page's second spelling, ask the store.
+    const paged =
+      holder.kind === "space" ||
+      (await holdsLaterPages(holder, place.segments));
+    // The addresses of the entry's list pages, as this route serves them, so
+    // the list's links name exactly the pages the store gives the entry, and
+    // none while it gives the entry none: the list is then drawn unpaged.
+    const context: RenderContext = {
+      collection: holder.collection,
+      slug: place.segments.join("/"),
+      ...(pages.locale === undefined ? {} : { locale: pages.locale }),
+      ...(paged
+        ? {
+            listPagePath: (page: number) =>
+              pathOf(listPageSegments(place.segments, page)),
+          }
+        : {}),
+    };
+    if (place.page === undefined) {
+      return { kind: "entry", route, entry: drawn, context };
+    }
+    if (!paged) return null;
+    return await entryListPage(route, drawn, context, {
+      segments: place.segments,
+      page: place.page,
+    });
+  }
+
+  /**
+   * The path `segments` (under this route's mount) is served at, as the
+   * address store keys it: the mount, then each segment percent-encoded as
+   * a request carries it. The path a lookup asks for, and the one an
+   * entry's list links to and redirects to.
+   */
+  function pathOf(segments: readonly string[]): string {
+    const own = segments.map(encodeURIComponent).join("/");
+    return own === "" ? mountPath || "/" : `${mountPath}/${own}`;
+  }
+
+  /**
+   * Page `page` of the list on an entry's page, drawn with the design
+   * serving the entry, as a page's later pages are: counted as the list
+   * itself counts, so the route serves exactly the pages the list's links
+   * name. Page 1 under this spelling redirects to the entry's own address,
+   * and a page past the last, or of a design that splits no list, answers
+   * not found.
+   */
+  async function entryListPage(
+    route: ContentRouteConfig<ReactElement>,
+    entry: ContentEntry,
+    context: RenderContext,
+    place: { readonly segments: readonly string[]; readonly page: number }
+  ): Promise<ContentAnswer | null> {
+    const { page } = place;
+    const count = (await route.listPages?.(entry, context)) ?? null;
+    if (count === null || page > count) return null;
+    if (page === 1) return { kind: "redirect", path: pathOf(place.segments) };
     return {
       kind: "entry",
-      route: entryRouteOf(holder.collection),
-      entry: { ...entry, [TEMPLATE_DOCUMENT_KEY]: template.document },
-      context: {
-        collection: holder.collection,
-        slug,
-        ...(pages.locale === undefined ? {} : { locale: pages.locale }),
-      },
+      route,
+      entry,
+      context: { ...context, page, listPages: count },
     };
   }
 
@@ -4641,13 +5087,15 @@ function buildContentRoute(
     if (found.kind === "page") {
       return await pagesRoute.ContentPage({ params: { slug: segments } });
     }
+    if (found.kind === "redirect") return await contentRedirect(found.path);
     return await found.route.render(found.entry, found.context);
   }
 
   async function generateMetadata(args: ContentRouteArgs): Promise<Metadata> {
     const segments = await segmentsOf(args);
     const found = await answer(segments);
-    if (found === null) return {};
+    // A redirect's metadata is never read: the page answers with it.
+    if (found === null || found.kind === "redirect") return {};
     if (found.kind === "page") {
       return await pagesRoute.generateMetadata({
         params: { slug: segments },

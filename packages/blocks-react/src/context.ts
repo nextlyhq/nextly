@@ -892,6 +892,24 @@ export interface PageContext {
    */
   listsStillShowing?: ReadonlyMap<string, string>;
   /**
+   * The collection lists, by node id, an editor draws as a visitor reads
+   * them where that draws fewer entries than the person editing reads: the
+   * editor's tag for each ("Showing what visitors see: 4 of 6 entries").
+   * Honoured only where {@link diagnostics} says an author is looking.
+   *
+   * @experimental
+   */
+  listsShowingVisitors?: ReadonlyMap<string, string>;
+  /**
+   * Told how many entries each collection list drew, by its node id, as it
+   * draws them: an editor's tag compares what is drawn, never a read made
+   * again under other limits. Called only where {@link diagnostics} says an
+   * author is looking; a throw from it is contained.
+   *
+   * @experimental
+   */
+  listShown?: (nodeId: string, shown: number) => void;
+  /**
    * The editor's canvas, which can act on a list note's action: a list whose
    * sort fell back offers "Choose a field" there, which the canvas answers by
    * taking the author to the list's sort. Honoured only where
@@ -928,6 +946,49 @@ export interface PageContext {
    * @experimental
    */
   accordionTitles?: AccordionTitleLevel;
+  /**
+   * The editor's canvas, drawing a template: what an Entry content block
+   * says to its author where it has none of the entry's content to draw (no
+   * entry previewed, an empty field, a field the collection no longer has),
+   * and that the content it does draw is the entry's, which the canvas draws
+   * for looking at, never for editing. Absent on a published page, where
+   * such a block draws nothing at all.
+   *
+   * The entry's content itself is not handed over here: the host composes
+   * it into the block (`composeEntryContent`) before the page is drawn, so
+   * one render draws the template and the entry's blocks together.
+   *
+   * @experimental Settles when collection templates ship.
+   */
+  entryContentCanvas?: EntryContentCanvas;
+}
+
+/**
+ * How the editor's canvas draws an Entry content block (see
+ * {@link PageContext.entryContentCanvas}).
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export interface EntryContentCanvas {
+  /**
+   * What the block says in place of the entry's content, given the field it
+   * names (`undefined` while it names none), where it has none to draw.
+   */
+  readonly noteFor: (field: string | undefined) => EntryContentNote;
+}
+
+/**
+ * An Entry content block's note to its author on the canvas: in the canvas's
+ * muted note style, or its red one for a problem the author must fix, with
+ * the entry's title, where it names one, set apart before the words.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export interface EntryContentNote {
+  readonly tone: "muted" | "failed";
+  /** Drawn in the page's full ink before {@link words}: the entry's title. */
+  readonly lead?: string;
+  readonly words: string;
 }
 
 /**

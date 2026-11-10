@@ -10,7 +10,11 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/BlocksEditor
  */
-import type { BlockDocument, DocumentKind } from "@nextlyhq/blocks-engine";
+import {
+  isPlainRecord,
+  type BlockDocument,
+  type DocumentKind,
+} from "@nextlyhq/blocks-engine";
 import {
   prepareDocumentForRead,
   registeredBlocks,
@@ -23,7 +27,6 @@ import {
   BreakpointSwitcher,
   BuilderShell,
   Canvas,
-  conditionedBlocksIn,
   useAppliedConditions,
   useConditionsUnchecked,
   CanvasFrame,
@@ -54,6 +57,7 @@ import {
   loadInlineRichTextEditor,
   MediaPickerDialog,
   useDocumentIdentity,
+  type DocumentIdentity,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
 import {
@@ -73,7 +77,9 @@ import {
 } from "react-hook-form";
 
 import { siteSheet } from "../../site-style";
+import { bindingFieldsReader, unbindPlanner } from "../binding-fields-client";
 import { BindingsToFixChip } from "../bindings-report/BindingsToFixChip";
+import { siteTimeZoneFor } from "../canvas-bindings-client";
 import { ComponentActionPrompt } from "../ComponentActionPrompt";
 import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
 import { contributedInspector } from "../contributed-blocks";
@@ -92,10 +98,11 @@ import {
 import { valueAtPath } from "../snapshot-merge";
 import { OwnDesignsChip } from "../TemplateOwnDesigns";
 
-import type { OpenAt } from "./builder-address";
+import { bindingSourcePath, type OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
 import { previewedCanvas } from "./canvas-preview-mode";
+import { useConditionedPage, type ConditionedPage } from "./conditioned-page";
 import {
   PageConditionsStrip,
   PlacedConditionsStrip,
@@ -148,6 +155,7 @@ import { documentFrom } from "./stored-document";
 import {
   TemplatePreviewScope,
   TemplatePreviewStrip,
+  useDrawnTemplate,
   useTemplatePreviewState,
 } from "./template-preview-strip";
 import { useComponentView, type ComponentView } from "./use-component-view";
@@ -166,6 +174,11 @@ import {
   type CanvasInputs,
   type SiteStyleInputs,
 } from "./use-render-inputs";
+import {
+  useFollowApplied,
+  useItemsJudgedRender,
+  useListsAsVisitor,
+} from "./visitor-lists";
 
 /** Everything the shell's slots are filled from. */
 type EditorView = EditorMount &
@@ -195,6 +208,11 @@ type EditorView = EditorMount &
      * marker and badges a shown one so.
      */
     conditionsApplied: AppliedConditions | undefined;
+    /**
+     * The page as the canvas draws it, a template's previewed entry's own
+     * blocks composed in: the one composition the canvas draws.
+     */
+    composedDocument: BlockDocument;
     /** What a block shown for the previewed entry is badged with. */
     conditionsShownLabel: string;
     /** A stored media id's name, picture and alt text, for the image fields. */
@@ -206,6 +224,18 @@ type EditorView = EditorMount &
      * the entry's related entries; `null` on a Single, which has none.
      */
     entryCollection: string | null | undefined;
+    /**
+     * The entry the document's bindings read: its own, or the entry a
+     * template is previewed with. The binding picker lists its fields.
+     */
+    bindingEntry: DocumentIdentity | null;
+    /** The document being edited, which an unbind is planned against. */
+    editedDocument: DocumentIdentity | null;
+    /**
+     * The entry the canvas is drawn as, a component's view included, which
+     * the inspector's read of the site's time zone is asked for.
+     */
+    canvasEntry: DocumentIdentity | null;
   };
 
 /**
@@ -523,7 +553,16 @@ function servicesFor(
   locale: string | undefined,
   readMedia: ReadMediaSummary,
   entryCollection: string | null | undefined,
-  userId: string | null
+  userId: string | null,
+  /** The entry bindings read, and the document an unbind is planned in. */
+  binding: {
+    readonly entry: DocumentIdentity | null;
+    readonly page: DocumentIdentity | null;
+    /** The entry the canvas is drawn as, which the site's zone is read for. */
+    readonly canvas: DocumentIdentity | null;
+  },
+  /** The language the canvas's render formats bound values in. */
+  formatLocale: string | undefined
 ): ContentServices {
   let byLocale = servicesByPassages.get(passages);
   if (byLocale === undefined) {
@@ -532,8 +571,16 @@ function servicesFor(
   }
   // All three in the key, as JSON so no language, collection and person can
   // collide: the list count below reads as the person signed in, and the
-  // recent icons are theirs.
-  const key = JSON.stringify([locale ?? "", entryCollection ?? null, userId]);
+  // recent icons are theirs. The language previews are formatted in too.
+  const key = JSON.stringify([
+    locale ?? "",
+    entryCollection ?? null,
+    userId,
+    binding.entry,
+    binding.page,
+    binding.canvas,
+    formatLocale ?? null,
+  ]);
   const recentIcons = recentIconsStore(userId);
   let services = byLocale.get(key);
   if (services === undefined) {
@@ -559,12 +606,53 @@ function servicesFor(
           ? canvasListReadsIn(locale, userId).count(props)
           : canvasNamedQueriesIn(locale, userId).count(props),
       ...(entryCollection === undefined ? {} : { entryCollection }),
+      // The fields a binding can read, as this author reads them, kept a
+      // short while: the picker opens on every bindable prop.
+      listBindingFields: bindingFieldsReader(binding.entry, locale, userId),
+      // The picker's previews in the canvas's language and the site's zone.
+      ...previewServices(passages, binding.canvas, userId, formatLocale),
+      // An unbind's plan against the document the editor holds, by the same
+      // decision as the page actions API's.
+      ...withPlanUnbind(unbindPlanner(binding.page, locale)),
+      // Where a bound field's source is edited, for the chip's "Open
+      // source": the entry the bindings read, a Single, or the settings, in
+      // the language the picker previewed it in.
+      sourceHref: bound => bindingSourcePath(bound, binding.entry, locale),
       // The icons this author chose last, for the Icon control's Recent row.
       ...(recentIcons === undefined ? {} : { recentIcons }),
     };
     byLocale.set(key, services);
   }
   return services;
+}
+
+/**
+ * The language and zone the binding picker previews a date or a number in,
+ * so it reads as the page shows it: the canvas's language, and the site's
+ * zone, read when a picker first opens and once for this editor (its
+ * passages), never on a canvas load: the canvas reads it only for a page
+ * that already formats a date. No zone is read without an entry to ask for
+ * or a person to ask as.
+ */
+function previewServices(
+  passages: OpenPassages,
+  canvas: DocumentIdentity | null,
+  userId: string | null,
+  formatLocale: string | undefined
+): Pick<ContentServices, "bindingLocale" | "readSiteTimeZone"> {
+  return {
+    ...(formatLocale === undefined ? {} : { bindingLocale: formatLocale }),
+    ...(canvas === null || userId === null
+      ? {}
+      : { readSiteTimeZone: () => siteTimeZoneFor(passages, canvas, userId) }),
+  };
+}
+
+/** The unbind planner as a service member, absent where none can be planned. */
+function withPlanUnbind(
+  planUnbind: ContentServices["planUnbind"]
+): Pick<ContentServices, "planUnbind"> {
+  return planUnbind === undefined ? {} : { planUnbind };
 }
 
 /** The block verbs the inspector's card offers, as the verbs provider shares them. */
@@ -638,7 +726,15 @@ function editorInspector(
         view.locale,
         view.readMedia,
         view.entryCollection,
-        view.userId
+        view.userId,
+        {
+          entry: view.bindingEntry,
+          page: view.editedDocument,
+          canvas: view.canvasEntry,
+        },
+        // The language the canvas's binding pass is given, its context's, as
+        // the published page's is its route's.
+        canvasRender.context?.locale
       )}
       // A placement's exposed passage the canvas is editing in place: its
       // field in the placement panel is held meanwhile, as one editor serves
@@ -956,6 +1052,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
               {...(view.conditionsApplied === undefined
                 ? {}
                 : { conditionsApplied: view.conditionsApplied })}
+              // The page as drawn, the previewed entry's blocks composed in
+              // once, here, with the conditions judged on it.
+              composed={view.composedDocument}
               // The same object those handlers came from, forwarded whole.
               // The canvas draws what the pointer currently means — which
               // block is in flight, which container is receiving it — and
@@ -1192,6 +1291,34 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
 }
 
 /**
+ * The canvas's render inputs with the sources its bindings read, asked of
+ * `document` as the canvas draws it: a template's with the previewed entry's
+ * own blocks composed in, so a binding inside them reads its source here as
+ * the published page, which composes first, reads it. Composed from the
+ * entry's own read, not the seam's, which waits on this read's answer. Only
+ * `document`'s own blocks are marked: the entry's are edited on the entry.
+ */
+function useDrawnCanvasRender(
+  render: Parameters<typeof useBoundCanvasRender>[0],
+  document: BlockDocument,
+  regions: Parameters<typeof useBoundCanvasRender>[1]["regions"],
+  locale: string | undefined,
+  component: boolean
+): ReturnType<typeof useBoundCanvasRender> {
+  // Under the canvas's limits, the entry left the room its components need.
+  const drawn = useDrawnTemplate(document, {
+    ...render.limits,
+    definitions: render.definitions,
+  });
+  return useBoundCanvasRender(
+    render,
+    { document: drawn, stored: document, regions },
+    locale,
+    component
+  );
+}
+
+/**
  * What the editor's search adds from: the Add panel's own sources, and the
  * container whose "+" opened Add, so a search row adds where the panel would.
  */
@@ -1313,7 +1440,10 @@ function EditorBody<TFieldValues extends FieldValues>({
   );
 
   const style = useSiteStyleInputs(mount.clientConfig);
-  const canvas = useCanvasInputs(mount, style);
+  // Whether the canvas's lists read as a visitor: held above the canvas's
+  // inputs, which read them, and set by the conditions switch below.
+  const listsAsVisitor = useListsAsVisitor();
+  const canvas = useCanvasInputs(mount, style, listsAsVisitor.lists);
   const panels = useEditorPanels(mount, name, {
     control,
     canvasRoot: canvas.canvasElement,
@@ -1348,9 +1478,10 @@ function EditorBody<TFieldValues extends FieldValues>({
   // The canvas's render inputs with the sources its bindings read, asked of
   // the tree the canvas draws (in a component's view, the open variant's)
   // and of the Layout regions drawn around it, together.
-  const { canvasRender, visitorUnreadable } = useBoundCanvasRender(
+  const { canvasRender, visitorUnreadable } = useDrawnCanvasRender(
     canvas.canvasRender,
-    { document: componentView.preview.document, regions: panels.canvasRegions },
+    componentView.preview.document,
+    panels.canvasRegions,
     mount.locale,
     mount.initialDocument.kind === "component"
   );
@@ -1382,6 +1513,11 @@ function EditorBody<TFieldValues extends FieldValues>({
   // The entry the canvas is drawn as: the document's own, or the entry a
   // template is previewed with, whose collection the inspector judges by.
   const identity = useCanvasEntryIdentity();
+  // The document itself, which the inspector's unbind is planned against.
+  const editedDocument = useDocumentIdentity();
+  const isComponentDocument =
+    isPlainRecord(mount.initialDocument) &&
+    mount.initialDocument.kind === "component";
   const entryCollection = listEntryCollectionOf(
     identity,
     mount.initialDocument
@@ -1395,8 +1531,17 @@ function EditorBody<TFieldValues extends FieldValues>({
     mount.userId,
     entryCollection
   );
+  // The page as the canvas draws it, the previewed entry's blocks composed
+  // in once: what its conditions are badged on, judged on and applied to.
+  const conditioned = useConditionedPage(
+    reveal.document,
+    templatePreview,
+    canvas.canvasRender.limits,
+    // The placed components, whose expansion the entry leaves room for.
+    canvas.canvasRender.definitions
+  );
   const conditionsUnchecked = useConditionsUnchecked(
-    componentView.preview.document,
+    conditioned.composed,
     conditionServices,
     // The limits the canvas draws and the save surveys under.
     canvas.canvasRender.limits,
@@ -1407,7 +1552,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   // The switch that applies the conditions for the entry a template is
   // previewed with: the author's own, for this session, never saved.
   const conditions = useAppliedConditionsSwitch(
-    reveal.document,
+    conditioned,
     templatePreview,
     pageConditionsSourceOf(
       templatePreview,
@@ -1428,6 +1573,34 @@ function EditorBody<TFieldValues extends FieldValues>({
       // The site's zone, as the canvas's bindings read it, for a date a
       // condition compares by day.
       timeZone: canvasRender.bindings.timeZone,
+      // Once the lists read as a visitor, a list item's block is judged for
+      // each item the canvas draws.
+      itemsJudged: listsAsVisitor.visitor !== undefined,
+    }
+  );
+  // The blocks the canvas draws while the conditions are applied: the page,
+  // composed, and the regions of its Layout, whose lists read as a visitor
+  // too.
+  const applied = conditions.applied !== undefined;
+  const regions = panels.canvasRegions;
+  const visitorDrawn = useMemo(
+    () =>
+      applied
+        ? [
+            ...conditions.composed.nodes,
+            ...(regions ?? []).flatMap(region => region.document.nodes),
+          ]
+        : undefined,
+    [applied, conditions.composed, regions]
+  );
+  useFollowApplied(listsAsVisitor, visitorDrawn);
+  const shownRender = useItemsJudgedRender(
+    canvasRender,
+    listsAsVisitor.visitor !== undefined && conditions.applied !== undefined,
+    {
+      services: conditionServices,
+      componentTitle: mount.componentLibrary.titleOf,
+      timeZone: canvasRender.bindings.timeZone,
     }
   );
   const view: EditorView = {
@@ -1435,7 +1608,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     ...style,
     ...canvas,
     ...panels,
-    canvasRender,
+    canvasRender: shownRender,
     visitorUnreadable,
     documentDirty,
     pageTitle,
@@ -1447,8 +1620,15 @@ function EditorBody<TFieldValues extends FieldValues>({
     // The stored document's kind too: a component's lists relate to the
     // entries of the pages placing it, as its save judges them.
     entryCollection,
+    // A component has no entry of its own: its bindings read each placing
+    // page's, so the picker lists no entry for it and it plans no unbind of
+    // one, as its lists and its save already judge it.
+    bindingEntry: isComponentDocument ? null : identity,
+    editedDocument: isComponentDocument ? null : editedDocument,
+    canvasEntry: identity,
     conditionsUnchecked,
     conditionsApplied: conditions.applied,
+    composedDocument: conditions.composed,
     conditionsShownLabel: `Shown for this ${conditions.noun}`,
   };
   useOpenAtSection({
@@ -1743,6 +1923,12 @@ interface AppliedConditionsSwitch {
   readonly held: boolean;
   /** What the previewed entry is called in words, lower case: "post". */
   readonly noun: string;
+  /**
+   * The document as the canvas draws it: a template's with the previewed
+   * entry's own blocks composed into its Entry content, which the conditions
+   * are judged on and the canvas draws, composing nothing of its own.
+   */
+  readonly composed: BlockDocument;
 }
 
 /**
@@ -1752,12 +1938,15 @@ interface AppliedConditionsSwitch {
  * it, so the canvas hides what the published page would.
  */
 function useAppliedConditionsSwitch(
-  document: BlockDocument,
+  { entry, composed, held }: ConditionedPage,
   preview: ReturnType<typeof useTemplatePreviewState>,
   pageSource: PageConditionsSource | undefined,
   options: Omit<AppliedConditionsOptions, "noun">
 ): AppliedConditionsSwitch {
   const [on, setOn] = useState(false);
+  // Something to check: a block reading the entry, or one a list's entry
+  // decides, checked for each entry the list draws.
+  const checks = held.readingEntry || held.readingItems;
   // Each time the conditions are applied, counted, so a failed read of the
   // page is asked again rather than kept.
   const [attempt, setAttempt] = useState(0);
@@ -1765,16 +1954,11 @@ function useAppliedConditionsSwitch(
     if (!on) setAttempt(count => count + 1);
     setOn(!on);
   }, [on]);
-  const { limits } = options;
-  const held = useMemo(
-    () => conditionedBlocksIn(document, limits),
-    [document, limits]
-  );
   // A page is read as a visitor reads it, and only once the author applies
   // its conditions.
   const pageRead = usePageConditionsRead(
     pageSource,
-    on && held.readingEntry && pageSource !== undefined,
+    on && checks && pageSource !== undefined,
     attempt
   );
   const noun =
@@ -1783,18 +1967,19 @@ function useAppliedConditionsSwitch(
       : pageSource !== undefined
         ? pageRead.noun
         : "entry";
-  const previewed =
-    preview !== undefined ? preview.previewed : pageRead.previewed;
+  // A template's entry as the page settles on it, so a refresh of that same
+  // entry keeps the subject its conditions were judged by.
+  const previewed = preview !== undefined ? entry : pageRead.previewed;
   // The entry is handed over only while the switch is on: the canvas then
   // draws the page as a visitor reading that entry would get it.
   const applied = useAppliedConditions(
-    document,
-    on && held.readingEntry ? previewed : undefined,
+    composed,
+    on && checks ? previewed : undefined,
     { ...options, noun }
   );
   const template = useMemo<TemplateConditions | undefined>(
     () =>
-      preview === undefined || !held.readingEntry
+      preview === undefined || !checks
         ? undefined
         : {
             on,
@@ -1803,11 +1988,11 @@ function useAppliedConditionsSwitch(
             applied,
             noun,
           },
-    [preview, held.readingEntry, on, toggle, previewed, applied, noun]
+    [preview, checks, on, toggle, previewed, applied, noun]
   );
   const page = useMemo<TemplateConditions | undefined>(
     () =>
-      pageSource === undefined || !held.readingEntry
+      pageSource === undefined || !checks
         ? undefined
         : // The editor opens only a saved page, so there is always one to read.
           {
@@ -1818,9 +2003,9 @@ function useAppliedConditionsSwitch(
             noun,
             failed: pageRead.failed,
           },
-    [pageSource, held.readingEntry, on, toggle, applied, noun, pageRead.failed]
+    [pageSource, checks, on, toggle, applied, noun, pageRead.failed]
   );
-  return { template, page, applied, held: held.any, noun };
+  return { template, page, applied, held: held.any, noun, composed };
 }
 
 /**

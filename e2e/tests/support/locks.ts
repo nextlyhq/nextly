@@ -84,6 +84,11 @@ export const LOCK = {
    */
   postsTemplate: "posts-template",
   /**
+   * The `entry-articles` fixture collection's one template, which the Entry
+   * content specs give a design and publish.
+   */
+  entryArticlesTemplate: "entry-articles-template",
+  /**
    * A second `next dev` of the playground, with the files it snapshots and
    * restores in the playground root.
    */

@@ -27,6 +27,7 @@ import {
   ITEM_SCHEMA_MAX_DEPTH,
   optionLabel,
   richTextToPlainText,
+  type Binding,
   type BlockDocument,
   type FieldStoragePrimitive,
 } from "@nextlyhq/blocks-engine";
@@ -46,12 +47,18 @@ import {
 import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import * as React from "react";
 
+import type {
+  BindingFieldSource,
+  UnbindAsk,
+  UnbindPlanAnswer,
+} from "./binding-services";
 import { CollectionControl, SortControl } from "./collection-loop-controls";
 import {
   CONTENT_CONTROL_TYPES,
   hasContentControl,
   type ContentControlType,
 } from "./content-control-types";
+import { EntryFieldControl } from "./entry-field-control";
 import { propLabel, type EditableProp } from "./inspector";
 import type { QueryField } from "./list-query-model";
 import { loadLucideIcons } from "./lucide-icon-source";
@@ -240,6 +247,39 @@ export interface ContentServices {
    * collections and related entries only.
    */
   readonly listCustomSources?: () => Promise<readonly CustomSource[]>;
+  /**
+   * The fields a binding can read, for the inspector's picker: the entry's,
+   * each Single's and the site settings', only those the signed-in author may
+   * read, each marked by whether visitors may and previewed as the author
+   * reads it. Absent, a prop offers no binding.
+   */
+  readonly listBindingFields?: () => Promise<readonly BindingFieldSource[]>;
+  /**
+   * The page's language, as the canvas's render formats bound values in it,
+   * so the picker previews a date or a number as the page shows it. Resolved
+   * as a render resolves it (`bindingFormatEnv`): absent, English.
+   */
+  readonly bindingLocale?: string;
+  /**
+   * The site's time zone, as a published page shows its date-times in it,
+   * read when a binding picker opens: `undefined` for a site with none set.
+   * Until it is in, or where it is absent or fails, previews are in UTC, as
+   * a page rendered with no zone.
+   */
+  readonly readSiteTimeZone?: () => Promise<string | undefined>;
+  /**
+   * An unbind's plan, made against the document the editor holds by the same
+   * decision the page actions API takes: what to write in the binding's place
+   * and why, or why it can't be kept. Absent, a bound prop offers no unbind.
+   */
+  readonly planUnbind?: (ask: UnbindAsk) => Promise<UnbindPlanAnswer>;
+  /**
+   * Where a binding's source is edited in the admin: the entry's edit
+   * screen, the Single's, or the site settings. `undefined` for a source the
+   * host has no screen for, such as a list's item, which leaves a bound
+   * prop's menu without "Open source".
+   */
+  readonly sourceHref?: (binding: Binding) => string | undefined;
   /**
    * How many entries a list's stored query matches as the canvas reads them,
    * and how many of those its window shows, from one count read. Asked only
@@ -1516,6 +1556,7 @@ const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
   richText: RichTextControl,
   array: ArrayControl,
   relation: RelationControl,
+  entryField: EntryFieldControl,
 };
 
 /**

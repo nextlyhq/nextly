@@ -237,7 +237,7 @@ export interface LoopCollectionsReads {
 }
 
 /** The meta of an answer that is the whole list on one page. */
-function onePage(total: number): PaginationMeta {
+export function onePage(total: number): PaginationMeta {
   return {
     total,
     page: 1,

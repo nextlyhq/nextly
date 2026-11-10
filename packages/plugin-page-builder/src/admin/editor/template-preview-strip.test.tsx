@@ -108,6 +108,7 @@ function previewOf(
     collection: "posts",
     fixed: false,
     labels: { singular: "Post", plural: "Posts" },
+    blocksFields: undefined,
     language: undefined,
     list: { state: "ready", items: ROWS, mayCreate: true },
     chip:
@@ -121,6 +122,8 @@ function previewOf(
             loading: false,
           },
     previewed,
+    latest: previewed,
+    scope: JSON.stringify(["posts", null, "u1"]),
     choose: vi.fn(),
     step: vi.fn((by: 1 | -1) => (by === 1 ? ROWS[2] : ROWS[0])),
     refresh: vi.fn(),

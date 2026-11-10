@@ -70,6 +70,68 @@ export type UnbindPlan =
 type DeclaredProps = Readonly<Partial<Record<string, PropSchema>>> | undefined;
 
 /**
+ * The plan when visitors can't read the bound field: its fallback kept where
+ * the prop keeps such a value, or the block's own value where it has none.
+ * Apart from {@link unbindPlan} so each of the two readings stays one
+ * decision.
+ */
+function unreadablePlan(
+  prop: string,
+  path: string,
+  fallback: { readonly value: unknown } | undefined,
+  declared: DeclaredProps
+): UnbindPlan {
+  const unread = `Visitors can't read “${path}”, so its value wasn't copied in.`;
+  if (fallback === undefined) {
+    // A private image shows the block's own image, as any image bound to
+    // nothing does.
+    if (isMediaProp(declared, prop)) return ownImagePlan(prop, declared);
+    return {
+      kept: { set: {} },
+      answer: {
+        kept: "own",
+        reason: `${unread} The block keeps its own value.`,
+      },
+    };
+  }
+  // An image's fallback is a media id or an address. A media id stays in
+  // the media prop, the typed address the bound image never drew emptied;
+  // an address, which the media prop can't hold, goes where the image's
+  // own address is kept, as any address does.
+  if (isMediaProp(declared, prop)) {
+    const image = imageValueOf(fallback.value);
+    if (image?.holds === "media") {
+      return {
+        kept: {
+          set: { [prop]: image.value },
+          ...typedAddressEmptied(prop, declared),
+        },
+        answer: {
+          kept: "fallback",
+          value: image.value,
+          reason: `${unread} The fallback is kept.`,
+        },
+      };
+    }
+    return addressPlan(
+      prop,
+      fallback.value,
+      "fallback",
+      declared,
+      `${unread} The fallback is kept in the image's address.`
+    );
+  }
+  return {
+    kept: { set: { [prop]: fallback.value } },
+    answer: {
+      kept: "fallback",
+      value: fallback.value,
+      reason: `${unread} The fallback is kept.`,
+    },
+  };
+}
+
+/**
  * The plan for unbinding `prop`, from what a visitor sees of it. Pure: the
  * reading is {@link visitorViewOf}'s.
  */
@@ -80,41 +142,12 @@ export function unbindPlan(
   declared: DeclaredProps
 ): UnbindPlan {
   if (view.unreadable !== undefined) {
-    const fallback = view.unreadable.fallback;
-    const unread = `Visitors can't read “${path}”, so its value wasn't copied in.`;
-    if (fallback === undefined) {
-      // A private image shows the block's own image, as any image bound to
-      // nothing does.
-      if (isMediaProp(declared, prop)) return ownImagePlan(prop, declared);
-      return {
-        kept: { set: {} },
-        answer: {
-          kept: "own",
-          reason: `${unread} The block keeps its own value.`,
-        },
-      };
-    }
-    // An image's fallback is an address, which the media prop can't hold: it
-    // goes where the image's own address is kept, as any address does.
-    if (isMediaProp(declared, prop)) {
-      return addressPlan(
-        prop,
-        fallback.value,
-        "fallback",
-        declared,
-        `${unread} The fallback is kept in the image's address.`
-      );
-    }
-    return {
-      kept: { set: { [prop]: fallback.value } },
-      answer: {
-        kept: "fallback",
-        value: fallback.value,
-        reason: `${unread} The fallback is kept.`,
-      },
-    };
+    return asUnreadable(
+      unreadablePlan(prop, path, view.unreadable.fallback, declared)
+    );
   }
   const bound = view.bound;
+
   const value = view.filled[prop];
   if (bound === undefined) {
     return {
@@ -143,6 +176,13 @@ export function unbindPlan(
           : "The prop keeps what visitors saw.",
     },
   };
+}
+
+/** The plan's answer marked as kept in place of a field visitors can't read. */
+function asUnreadable(plan: UnbindPlan): UnbindPlan {
+  return "refusal" in plan
+    ? plan
+    : { ...plan, answer: { ...plan.answer, unreadable: true } };
 }
 
 /**
@@ -274,9 +314,14 @@ function addressPlan(
 
 /** Where an unbind reads what a visitor sees. */
 export interface UnbindSource {
-  /** The document the page stores the block in, its id and its language. */
+  /**
+   * The document the page stores the block in, its id and its language. A
+   * Single's page names the Single as `collection`, its slug as `id` too.
+   */
   readonly collection: string;
   readonly id: string;
+  /** Set where the page is a Single's document, whose entry is the Single. */
+  readonly kind?: "single";
   readonly locale?: string;
   /** The collection a template draws its entries from, for a template. */
   readonly templateTarget?: string;
@@ -313,6 +358,14 @@ export function listOf(
   return found;
 }
 
+/** The entry a page's bindings read: a collection's entry, or a Single. */
+interface EntryRead {
+  readonly collection: string;
+  readonly id?: string;
+  /** Set where it is a Single, named as `collection`. */
+  readonly single?: true;
+}
+
 /** Where the node's bindings read: its entry, and its list item when it has one. */
 function readsOf(
   source: UnbindSource,
@@ -322,7 +375,7 @@ function readsOf(
   keep: ReadKeep
 ):
   | {
-      readonly entry: { readonly collection: string; readonly id?: string };
+      readonly entry: EntryRead;
       readonly item?: { readonly collection: string; readonly id: string };
     }
   | UnbindNeeds {
@@ -410,7 +463,7 @@ async function visitorRun(
   };
   const bindings = await next.readBindingSources({
     documents: [alone],
-    entrySource: "collection",
+    entrySource: reads.entry.single === true ? "single" : "collection",
     slug: reads.entry.collection,
     ...(reads.entry.id === undefined ? {} : { entryId: reads.entry.id }),
     page: source.collection,
@@ -567,9 +620,13 @@ function entryOf(
   source: UnbindSource,
   keep: ReadKeep,
   kind: string
-): { readonly collection: string; readonly id?: string } | UnbindNeeds {
+): EntryRead | UnbindNeeds {
   const named =
     typeof keep === "object" && "entry" in keep ? keep.entry : undefined;
+  // A Single's page reads the Single itself, whichever entry is named.
+  if (source.kind === "single") {
+    return { collection: source.collection, single: true };
+  }
   if (source.templateTarget !== undefined) {
     // A template's entries differ: whose value to keep has to be named.
     if (named === undefined && kind === "entry") {

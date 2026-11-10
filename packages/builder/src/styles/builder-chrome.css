@@ -205,6 +205,8 @@
   /* The editing colours, picked for the admin's theme — see below. */
   --nx-builder-select: var(--nx-builder-select-on-light);
   --nx-builder-component: var(--nx-builder-component-on-light);
+  /* A prop bound to a field: its chip, its bind button while open. */
+  --nx-builder-bound: var(--nx-builder-bound-on-light);
   /* The "what you're editing" target: this block (pink), a shared style (green). */
   --nx-builder-local: var(--nx-builder-local-on-light);
   --nx-builder-shared: var(--nx-success);
@@ -262,6 +264,9 @@
   --nx-builder-select-on-dark: #60a5fa; /* design-lint-ok: blue 400; no runtime variable */
   --nx-builder-component-on-light: #7a00df; /* design-lint-ok: component purple; no admin token */
   --nx-builder-component-on-dark: #c99bff; /* design-lint-ok: component purple; no admin token */
+  /* A bound prop's violet, apart from a component's purple: 5.9:1 on white, 8.9:1 on #15171c (AA). */
+  --nx-builder-bound-on-light: #7a3ce0; /* design-lint-ok: bound violet; no admin token */
+  --nx-builder-bound-on-dark: #c9a6ff; /* design-lint-ok: bound violet; no admin token */
   /* This block's pink: 5.9:1 on the light ground, 9.4:1 on the dark (AA). */
   --nx-builder-local-on-light: #c2185b; /* design-lint-ok: this-block pink; no admin token */
   --nx-builder-local-on-dark: #f48fb1; /* design-lint-ok: this-block pink; no admin token */
@@ -288,6 +293,7 @@
   --nx-builder-scheme: dark;
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
+  --nx-builder-bound: var(--nx-builder-bound-on-dark);
   --nx-builder-local: var(--nx-builder-local-on-dark);
   --nx-builder-component-text: var(--nx-builder-component-text-on-dark);
   --nx-builder-select-text: var(--nx-builder-select-text-on-dark);
@@ -3458,9 +3464,11 @@
 
 /*
  * A list's chosen value stays on one line, cut with an ellipsis, rather than
- * wrapping its row to twice the height of every other ("Semibold 600").
+ * wrapping its row to twice the height of every other ("Semibold 600"). A
+ * bound prop's Format reads the same ("Set elsewhere").
  */
-.nx-style-inspector__select [data-slot="select-value"] {
+.nx-style-inspector__select [data-slot="select-value"],
+.nx-binding__format [data-slot="select-value"] {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3941,13 +3949,16 @@
 }
 
 /*
- * A block whose visibility conditions decide who sees it. The canvas draws it
- * for whoever the page would show it to, and this badge says it isn't shown
- * to everyone: a faint dashed outline round the block with a tab on its top
- * edge, so the badge reads as this block's and never covers what it draws. Red when its
- * conditions can't be checked, since visitors then never see it.
+ * The at-rest mark: a faint dashed outline round a block the canvas says
+ * something about whether or not it is selected, with its tabs on the top
+ * edge, so they read as this block's and never cover what it draws. A block
+ * whose visibility conditions decide who sees it ("Conditional", red when
+ * its conditions can't be checked, since visitors then never see it, and
+ * "Shown for this post" while conditions are applied for the entry), and
+ * an Entry content block, which draws the entry's own content
+ * ("Entry content · Body"). A block that is both carries both tabs.
  */
-.nx-canvas-mark[data-mark="conditioned"] {
+.nx-canvas-mark[data-mark="at-rest"] {
   box-sizing: border-box;
   border: 1px dashed
     color-mix(in oklch, var(--nx-muted-foreground) 55%, transparent);
@@ -3956,26 +3967,35 @@
   box-shadow: none;
 }
 
-.nx-canvas-mark[data-mark="conditioned"][data-condition="unchecked"] {
+.nx-canvas-mark[data-mark="at-rest"][data-condition="unchecked"] {
   border-color: color-mix(in oklch, var(--nx-destructive) 70%, transparent);
 }
 
 /* Selected, the selection ring outlines the block, and the dash steps back:
    after the red rule, so it wins on order at the same specificity. */
-.nx-canvas-mark[data-mark="conditioned"][data-condition-selected] {
+.nx-canvas-mark[data-mark="at-rest"][data-at-rest-selected] {
   border-color: transparent;
 }
 
-/* The badge: a tab on the outline's top edge, its foot on the dash, so it
-   reads as this block's mark and not the one above. */
-.nx-canvas-mark__condition {
+/* The tabs: on the outline's top edge, their feet on the dash, so they read
+   as this block's mark and not the one above. */
+.nx-canvas-mark__tabs {
   position: absolute;
   right: calc(var(--nx-tag-inset-side, 0px) - 1px);
   bottom: 100%;
   display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.nx-canvas-mark__tab {
+  display: inline-flex;
+  flex: none;
   align-items: center;
   gap: 4px;
-  max-width: 100%;
+  min-width: 0;
   overflow: hidden;
   padding: 1px 8px;
   border: 1px solid var(--nx-border);
@@ -3986,35 +4006,50 @@
     500 11px/16px var(--font-sans, system-ui),
     sans-serif;
   white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
-.nx-canvas-mark__condition > svg {
+/* The Entry content tab gives way first on a narrow block: its words are
+   the longer, and the field is named in Layers and the inspector too. */
+.nx-canvas-mark__tab[data-tab="entry-content"] {
+  flex: 0 1 auto;
+}
+
+.nx-canvas-mark__tab > svg {
   flex: none;
 }
 
-/* At the top of what's on screen: a tab on the outline's bottom edge. */
-.nx-canvas-mark[data-condition-tag="below"] > .nx-canvas-mark__condition {
+/* At the top of what's on screen: tabs on the outline's bottom edge. */
+.nx-canvas-mark[data-tab-at="below"] > .nx-canvas-mark__tabs {
   top: 100%;
   bottom: auto;
+  align-items: flex-start;
+}
+
+.nx-canvas-mark[data-tab-at="below"] .nx-canvas-mark__tab {
   border-radius: 0 0 4px 4px;
 }
 
 /* A block taller than what's on screen: inside its top corner, the outer
-   corner square with the dash, so it's seen. */
-.nx-canvas-mark[data-condition-tag="inside"] > .nx-canvas-mark__condition {
+   corner square with the dash, so they're seen. */
+.nx-canvas-mark[data-tab-at="inside"] > .nx-canvas-mark__tabs {
   top: -1px;
   bottom: auto;
+  align-items: flex-start;
+}
+
+.nx-canvas-mark[data-tab-at="inside"] .nx-canvas-mark__tab {
   border-radius: 0 0 0 4px;
 }
 
-.nx-canvas-mark[data-condition="unchecked"] > .nx-canvas-mark__condition {
+.nx-canvas-mark__tab[data-tab="unchecked"] {
   border-color: var(--nx-destructive);
   color: var(--nx-destructive);
 }
 
 /* Shown for the previewed entry while conditions apply: a tick in the
    success colour, the words in the foreground's. */
-.nx-canvas-mark[data-condition="shown"] > .nx-canvas-mark__condition > svg {
+.nx-canvas-mark__tab[data-tab="shown"] > svg {
   color: var(--nx-success);
 }
 
@@ -6125,8 +6160,9 @@ fieldset.nx-inspector__fields {
  * words are not selected by the drag. Touch is left to scroll and tap.
  *
  * Important because the admin gives every `[data-slot="label"]` a pointer
- * cursor with `!important`, which reads as "click me" here and outranks any
- * plain rule; this selector is the more specific of the two.
+ * cursor marked important, which reads as "click me" here and outranks any
+ * plain rule; this selector is the more specific of the two. Said in words,
+ * not as the flag, so the design lint counts the one real override here.
  */
 .nx-style-inspector .nx-inspector__field > label[data-scrub] {
   cursor: ew-resize !important;
@@ -8676,11 +8712,15 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
- * A chosen option longer than the menu button ("Load when near the screen")
- * stays on one line, cut with an ellipsis, rather than wrapping the button
- * to two lines in a row of one-line fields.
+ * A chosen option longer than the menu button ("Load when near the screen",
+ * Entry content's "Members Only (removed)") stays on one line, cut with an
+ * ellipsis, rather than wrapping the button to two lines in a row of
+ * one-line fields. Entry content's Field names the whole of it in its
+ * trigger's title.
  */
-.nx-inspector__field[data-content-control="select"] [data-slot="select-value"] {
+.nx-inspector__field[data-content-control="select"] [data-slot="select-value"],
+.nx-inspector__field[data-content-control="entryField"]
+  [data-slot="select-value"] {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -10837,6 +10877,40 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
+ * The Entry content block's Content tab: under its Field menu, the line
+ * saying whose content it draws, and Open entry beside it, a quiet action at
+ * the line's start, as the proposal draws them.
+ */
+.nx-inspector__entry-content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-block-start: 0.5rem;
+}
+
+.nx-inspector__entry-content > button {
+  gap: 0.375rem;
+}
+
+/* A field the collection no longer has, still chosen: marked as the field
+   the canvas's red note names, its value in the same red. */
+[data-content-control="entryField"]
+  [data-slot="select-trigger"][aria-invalid="true"] {
+  border-color: var(--nx-destructive);
+  color: var(--nx-destructive);
+}
+
+/*
+ * A row marking a problem with its block: an Entry content block whose field
+ * the collection no longer has. In the destructive ink, as the canvas's note
+ * and the inspector's Field say it, the words read out beside the icon.
+ */
+.nx-layer-row__badge[data-problem] {
+  color: var(--nx-destructive);
+}
+
+/*
  * The page reads meter in the top bar: a count and a short bar at the
  * editor's control height. Quiet within the limit; amber from 80% of it;
  * red over it. Each state also changes the mark and the words, so colour is
@@ -10916,6 +10990,22 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-read-meter[data-standing="counting"] .nx-read-meter__count {
   color: var(--nx-builder-text-muted);
+}
+
+/* A count that could not be made: quiet, as counting is, its alert mark in
+   the editor's warning ink, and the way to count again in the text's own
+   colour. */
+.nx-read-meter[data-standing="failed"] .nx-read-meter__count {
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-read-meter[data-standing="failed"] .nx-read-meter__mark {
+  color: var(--nx-builder-warning-text);
+}
+
+.nx-read-meter[data-standing="failed"] .nx-read-meter__retry {
+  color: var(--nx-builder-text);
+  font-weight: 500;
 }
 
 .nx-read-meter[data-standing="near"] {
@@ -11230,4 +11320,314 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   outline: 2px solid var(--nx-ring);
   outline-offset: 1px;
   border-radius: 0.25rem;
+}
+
+/*
+ * A prop's binding controls (binding-controls.tsx): a bind button beside a
+ * bindable field, the picker it opens, and a bound prop's chip, its
+ * fallback and the note an unbind leaves.
+ */
+
+/* The field and its bind button: the button in a column of its own. */
+.nx-binding-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1.5rem;
+  column-gap: 0.25rem;
+  align-items: start;
+}
+
+.nx-binding-row > .nx-binding-note {
+  grid-column: 1 / -1;
+}
+
+.nx-binding-row__bind {
+  display: inline-grid;
+  place-items: center;
+  inline-size: 1.5rem;
+  block-size: var(--nx-control-height);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--nx-muted-foreground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.nx-binding-row__bind:hover,
+.nx-binding-row__bind[data-open] {
+  color: var(--nx-builder-bound);
+  border-color: color-mix(in oklch, var(--nx-builder-bound) 35%, transparent);
+  background: color-mix(in oklch, var(--nx-builder-bound) 8%, transparent);
+}
+
+.nx-binding-row__bind:focus-visible,
+.nx-binding-chip:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-binding-row__bind:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* A bound prop: the chip on the control's line, its fallback under it. */
+.nx-binding.nx-inspector__field {
+  align-items: start;
+}
+
+.nx-binding > .nx-inspector__field-name {
+  display: flex;
+  align-items: center;
+  min-block-size: var(--nx-control-height);
+  margin: 0;
+}
+
+.nx-binding__value {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-inline-size: 0;
+}
+
+.nx-binding-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  inline-size: 100%;
+  min-block-size: var(--nx-control-height);
+  padding: 0 0.25rem 0 0.5rem;
+  border: 1px solid
+    color-mix(in oklch, var(--nx-builder-bound) 35%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--nx-foreground);
+  background: color-mix(
+    in oklch,
+    var(--nx-builder-bound) 8%,
+    var(--nx-background)
+  );
+  font-size: 0.8125rem;
+  text-align: start;
+  cursor: pointer;
+}
+
+.nx-binding-chip > svg {
+  flex: none;
+  color: var(--nx-builder-bound);
+}
+
+.nx-binding-chip > svg:last-child {
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * One line. Where the panel is narrow the source goes first, then the field
+ * is cut; the whole of both is on the chip's tooltip and in its name.
+ */
+.nx-binding-chip__text {
+  display: flex;
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* The field stays whole while it fits, and is cut only when it alone can't. */
+.nx-binding-chip__field {
+  flex: none;
+  max-inline-size: 100%;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+/* The source takes what room is left, cut with an ellipsis before the field. */
+.nx-binding-chip__source {
+  flex: 0 1 auto;
+  min-inline-size: 0;
+  overflow: hidden;
+  color: var(--nx-muted-foreground);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+}
+
+/*
+ * Fallback and Format, one under the other: their names in a column of the
+ * same width, so the two controls start at the same edge.
+ */
+.nx-binding__fallback {
+  display: grid;
+  grid-template-columns: 3.5rem minmax(0, 1fr);
+  align-items: center;
+  column-gap: 0.5rem;
+  row-gap: 0.25rem;
+}
+
+.nx-binding__fallback-label {
+  color: var(--nx-muted-foreground);
+  font-size: 0.75rem;
+}
+
+/* The Format menu shrinks with its column, its value cut rather than wrapped. */
+.nx-binding__format [data-slot="select-trigger"] {
+  min-width: 0;
+}
+
+/* Why a value was refused, or what an unset Format means: under its control. */
+.nx-binding__fallback > .nx-inspector__error,
+.nx-binding__fallback > .nx-inspector__note {
+  grid-column: 2;
+  margin: 0;
+}
+
+/* An image's fallback: the address, its picture inside the field's start. */
+.nx-image-fallback__value {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-inline-size: 0;
+}
+
+.nx-image-fallback__address {
+  position: relative;
+  flex: 1;
+  min-inline-size: 0;
+}
+
+.nx-image-fallback__thumb {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 0.375rem;
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--nx-muted);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.nx-image-fallback__address[data-pictured] > input {
+  padding-inline-start: 2rem;
+}
+
+/* A long address is cut with an ellipsis until the field is being edited. */
+.nx-image-fallback__address > input:not(:focus) {
+  text-overflow: ellipsis;
+}
+
+/* The place kept for more ways to fill it, drawn only once it holds one. */
+.nx-image-fallback__actions:empty {
+  display: none;
+}
+
+/* An unbind's note: what was kept, or why it could not be. */
+.nx-binding-note {
+  display: flex;
+  gap: 0.375rem;
+  align-items: flex-start;
+  margin: 0.25rem 0 0;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid color-mix(in oklch, var(--nx-success) 35%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--nx-foreground);
+  background: color-mix(in oklch, var(--nx-success) 8%, var(--nx-background));
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.nx-binding-note > svg {
+  flex: none;
+  margin-block-start: 0.0625rem;
+  color: var(--nx-success);
+}
+
+/* Kept in place of a field visitors can't read: amber, with its eye-off mark. */
+.nx-binding-note[data-tone="private"] > svg {
+  color: var(--nx-warning);
+}
+
+.nx-binding-note[data-tone="private"],
+.nx-binding-note[data-tone="refused"] {
+  border-color: color-mix(in oklch, var(--nx-warning) 45%, transparent);
+  background: color-mix(in oklch, var(--nx-warning) 10%, var(--nx-background));
+}
+
+/* The picker: the fields by source, each with its value as the author reads it. */
+/* Two classes, to outrank the popover's own width and padding. */
+[data-slot="popover-content"].nx-binding-popover {
+  inline-size: min(20rem, calc(100vw - 2rem));
+  padding: 0;
+}
+
+/* A long list scrolls inside the picker, its hint kept in view below it. */
+.nx-binding-picker {
+  display: flex;
+  flex-direction: column;
+  max-block-size: 24rem;
+}
+
+.nx-binding-picker__hint,
+.nx-binding-picker__note {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  color: var(--nx-muted-foreground);
+  font-size: 0.75rem;
+}
+
+.nx-binding-picker__hint {
+  border-block-start: 1px solid var(--nx-border);
+}
+
+/* A source the host could not read, said above the fields that did list. */
+.nx-binding-picker__failed {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-block-end: 1px solid var(--nx-border);
+  color: var(--nx-foreground);
+  background: color-mix(in oklch, var(--nx-warning) 10%, var(--nx-background));
+  font-size: 0.75rem;
+}
+
+.nx-binding-option {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-inline-size: 0;
+}
+
+.nx-binding-option__name {
+  flex: none;
+}
+
+.nx-binding-option__parent {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-binding-option__preview {
+  min-inline-size: 0;
+  overflow: hidden;
+  color: var(--nx-muted-foreground);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-binding-option__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.375rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  color: var(--nx-muted-foreground);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.nx-binding-option__tag[data-tone="private"] {
+  border-color: color-mix(in oklch, var(--nx-warning) 45%, transparent);
+  color: var(--nx-foreground);
+  background: color-mix(in oklch, var(--nx-warning) 10%, var(--nx-background));
 }

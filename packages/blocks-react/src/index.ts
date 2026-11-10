@@ -29,6 +29,8 @@ export type {
   BlocksQuery,
   BlocksResult,
   DefaultDataProviderOptions,
+  EntryContentCanvas,
+  EntryContentNote,
   ListBaseReader,
   NamedQueryFailure,
   NamedQueryFailureCode,
@@ -155,9 +157,13 @@ export { BlockBoundary, BlockList } from "./block-boundary";
 // container to draw an affordance on asks this attribute rather than keeping
 // its own copy of the string the renderer emits. `LIST_ACTION_ATTRIBUTE` too:
 // the editor's canvas acts on the action a list's note offers by it, and
-// `LIST_REF_ATTRIBUTE` is the reference its copy action copies.
+// `LIST_REF_ATTRIBUTE` is the reference its copy action copies. The two Entry
+// content attributes are what the canvas's sheet draws that block's content
+// and notes by.
 export {
   EDITOR_NAMESPACE,
+  ENTRY_CONTENT_DRAWN_ATTRIBUTE,
+  ENTRY_CONTENT_NOTE_ATTRIBUTE,
   INSTANCE_ATTRIBUTE,
   LIST_ACTION_ATTRIBUTE,
   LIST_REF_ATTRIBUTE,
@@ -172,6 +178,8 @@ export type {
   BlockBoundaryProps,
   BlockListProps,
   BoundaryBindings,
+  HidingItem,
+  ItemHiddenAs,
 } from "./block-boundary";
 // The binding pass's own types, which the props above and a block's `bound`
 // argument name. A consumer passing bindings or reading a bound value has no

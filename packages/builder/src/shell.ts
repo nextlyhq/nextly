@@ -194,6 +194,14 @@ export type {
   BlockInspectorResolver,
   InspectorPanelProps,
 } from "./inspector-panel";
+/**
+ * A bound image's Fallback row: an image address, shown with its picture,
+ * and a reserved place for choosing a library file. The inspector draws it
+ * under a bound image's chip; exported so the same row can be given more
+ * ways to fill it without a second implementation. @experimental
+ */
+export { ImageBindingFallback } from "./image-binding-fallback";
+export type { ImageBindingFallbackProps } from "./image-binding-fallback";
 // What a host tells the inspector about the component it edits, beside it.
 export type { ComponentFieldsHost } from "./component-fields";
 // The banner over a component's own view: its name, its reach, and Back.
@@ -400,6 +408,13 @@ export { VisitorUnreadableBadges } from "./visitor-unreadable-badges";
 export type { VisitorUnreadableBadgesProps } from "./visitor-unreadable-badges";
 export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
 /**
+ * @experimental A template's document with an entry's own blocks composed
+ * into its Entry content block, as the canvas draws it, for a host asking
+ * for the sources the drawn page's bindings read.
+ */
+export { useComposedEntryContent } from "./entry-content-canvas";
+export type { EntryContentLimits } from "./entry-content-canvas";
+/**
  * @experimental The entry a template is previewed with: the host provides it
  * around a template's editor, and anything inside reads it. `undefined`
  * outside a template.
@@ -407,9 +422,14 @@ export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
 export {
   PREVIEWED_ENTRY_KEYS,
   PreviewedEntryProvider,
+  usePreviewedCollection,
   usePreviewedEntry,
 } from "./previewed-entry";
-export type { PreviewedEntry } from "./previewed-entry";
+export type {
+  PreviewedBlocksField,
+  PreviewedCollection,
+  PreviewedEntry,
+} from "./previewed-entry";
 /**
  * @experimental Visibility conditions applied for the entry a template is
  * previewed with: what the host hands the canvas (`conditionsApplied`) and
@@ -424,7 +444,9 @@ export {
 export {
   conditionsPreviewOf,
   useAppliedConditions,
+  useItemHiddenAs,
   type AppliedConditionsOptions,
+  type ItemHiddenOptions,
 } from "./use-applied-conditions";
 export { PageInserters } from "./page-inserters";
 export type { PageInsertersProps } from "./page-inserters";

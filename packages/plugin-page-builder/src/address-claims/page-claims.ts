@@ -1,7 +1,9 @@
 /**
  * The claims a saved page holds: its address in each language while it is
  * published, and, when its document splits a list into pages, that list's
- * later pages (`<address>/page/*`) as one space.
+ * later pages (`<address>/page/*`) as one space; and whether a stored
+ * document splits a list at all, which an entry's claims ask of the design
+ * serving it.
  *
  * Pure, so a page's claims are one answer the save hook, the backfill and
  * the tests all ask.
@@ -50,25 +52,33 @@ export function pageClaims(
   if (param === null) return NONE;
   // Where the host serves its pages, by the interpolation its preview and
   // the page search use, so a claim names the address a visitor requests.
+  // The interpolation only reads the entry, so the read-only data passes as is.
   const path =
     pathTemplate === undefined
       ? `/${param.slug.map(encodeURIComponent).join("/")}`
-      : previewUrlFromTemplate(pathTemplate, { pathFields: ["slug"] })(
-          data as Record<string, unknown>
-        );
+      : previewUrlFromTemplate(pathTemplate, { pathFields: ["slug"] })(data);
   if (path === null) return NONE;
   const addresses = locales.flatMap(locale => {
     const address = servedAddress(locale, path);
     return address === null ? [] : [address];
   });
-  const document = asDocument(data.content);
-  // A list split into pages as stored, or by a value bound to the entry,
-  // holds its later pages: the save cannot run the binding pass that
-  // settles a bound split, so it holds them in case, which may refuse a
-  // page there but never leaves two documents at one address.
-  const paginates =
-    document !== null && mayPaginateList(document.nodes) !== undefined;
-  return { addresses, spaces: paginates ? addresses : [] };
+  return { addresses, spaces: splitsList(data.content) ? addresses : [] };
+}
+
+/**
+ * Whether the stored document `content` (a page's, a collection's
+ * template's or an entry's own design's) splits a list into pages, so the
+ * document it serves holds its address's later pages (`<address>/page/*`).
+ *
+ * A list split into pages as stored, or by a value bound to the entry,
+ * counts: a save cannot run the binding pass that settles a bound split, so
+ * the later pages are held in case, which may refuse a document there but
+ * never leaves two documents at one address. The one answer a page's claims
+ * and an entry's claims ask of the design serving them.
+ */
+export function splitsList(content: unknown): boolean {
+  const document = asDocument(content);
+  return document !== null && mayPaginateList(document.nodes) !== undefined;
 }
 
 /**

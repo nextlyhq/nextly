@@ -153,6 +153,32 @@ export type PageAction =
       readonly kind: "set-layout";
       readonly layout: string | null;
       readonly noHeaderFooter?: boolean;
+    }
+  /**
+   * Place an Entry content block on a template, where the entry's own blocks
+   * content is drawn: `field` names the top-level blocks field of the
+   * template's collection it draws. Absent, the collection's one blocks
+   * field where it has one; where it has several the write is refused
+   * until one is named. A second one, one on any document but a template,
+   * and a field the collection lacks are refused as an editor save is.
+   *
+   * @experimental Settles when collection templates ship.
+   */
+  | {
+      readonly kind: "place-entry-content";
+      readonly field?: string;
+      readonly at?: OpPosition;
+    }
+  /**
+   * Choose the blocks field the template's Entry content block draws,
+   * judged as an editor save is.
+   *
+   * @experimental Settles when collection templates ship.
+   */
+  | {
+      readonly kind: "set-entry-content-field";
+      readonly nodeId: string;
+      readonly field: string;
     };
 
 /**
@@ -167,6 +193,31 @@ export type UnbindKeep =
   | { readonly entry: string }
   | { readonly item: string }
   | { readonly value: unknown };
+
+/**
+ * What an unbind kept in a prop's place and why, as the one unbind decision
+ * answers the page actions API and the inspector alike.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export interface UnbindAnswer {
+  /**
+   * What was kept: what a visitor sees now, the binding's fallback, the
+   * prop's own value, or a value the caller gave.
+   */
+  readonly kept: "visitor" | "fallback" | "own" | "value";
+  /** The value kept; absent when the prop keeps its own. */
+  readonly value?: unknown;
+  /** The prop an image's address was kept in, where the bound prop could not hold it. */
+  readonly into?: string;
+  /**
+   * Set where the binding read a field visitors can't read: its value was
+   * not copied in, and the fallback or the prop's own value was kept.
+   */
+  readonly unreadable?: true;
+  /** Why, in words an author reads. */
+  readonly reason: string;
+}
 
 /**
  * The parts of a collection list's query a `set-list-query` action changes:
@@ -261,11 +312,19 @@ export type DefinitionAction =
 
 const id = z.string().min(1).max(512);
 
+/**
+ * A binding's format: a plain object, judged by a function. Named so the JSON
+ * Schema form can state it as an object rather than as any value.
+ */
+const bindingFormatSchema = z.custom<BindingFormat>(value =>
+  isPlainRecord(value)
+);
+
 /** A binding as a block stores it; whether it fits is the write's to judge. */
 const bindingShape = {
   $bind: z.string().min(1).max(512),
   fallback: z.unknown().optional(),
-  format: z.custom<BindingFormat>(value => isPlainRecord(value)).optional(),
+  format: bindingFormatSchema.optional(),
 };
 const bindingSchema: z.ZodType<Binding> = z.union([
   z.strictObject({
@@ -416,6 +475,18 @@ const pageActionOptions = [
     layout: id.nullable(),
     noHeaderFooter: z.boolean().optional(),
   }),
+  // A field is named by its name; whether the template's collection has it
+  // as a top-level blocks field is the blocks field's to judge on the write.
+  z.strictObject({
+    kind: z.literal("place-entry-content"),
+    field: id.optional(),
+    at: position.optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("set-entry-content-field"),
+    nodeId: id,
+    field: id,
+  }),
 ] as const;
 
 /**
@@ -527,10 +598,23 @@ export const DEFINITION_ACTION_KINDS: readonly DefinitionAction["kind"][] =
  * The JSON Schema form of a page action, as a client that does not run zod
  * reads it: the input the schema accepts, before the parse normalises it.
  *
+ * A binding's `format` and an unbind's kept `value` are judged by a function,
+ * which JSON Schema cannot state; the converter refuses such a schema outright
+ * otherwise, and the manifest that carries this form with it. A format is
+ * written as an object, which is what its function asks; a kept value as any
+ * value (`{}`), since it may be any JSON. Each stays required where the action
+ * requires it, and is judged by the route.
+ *
  * @experimental Settles when the composition API ships.
  */
 export function pageActionJsonSchema(): Record<string, unknown> {
-  return z.toJSONSchema(pageActionSchema, { io: "input" });
+  return z.toJSONSchema(pageActionSchema, {
+    io: "input",
+    unrepresentable: "any",
+    override: ({ zodSchema, jsonSchema }) => {
+      if (zodSchema === bindingFormatSchema) jsonSchema.type = "object";
+    },
+  });
 }
 
 /**

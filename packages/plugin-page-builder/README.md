@@ -155,12 +155,16 @@ Render a single the same way you render a collection, reading it with
 
 ## Built-in blocks
 
-Twenty, from `@nextlyhq/blocks-react/blocks`:
+Twenty-two, from `@nextlyhq/blocks-react/blocks`:
 
 `core/accordion`, `core/accordion-item`, `core/box`, `core/button`,
 `core/collection-loop`, `core/card`, `core/column`, `core/columns`, `core/divider`,
-`core/embed`, `core/form`, `core/gallery`, `core/heading`, `core/image`, `core/list`,
-`core/quote`, `core/rich-text`, `core/section`, `core/spacer`, `core/text`.
+`core/embed`, `core/entry-content`, `core/form`, `core/gallery`, `core/heading`,
+`core/icon`, `core/image`, `core/list`, `core/quote`, `core/rich-text`, `core/section`,
+`core/spacer`, `core/text`.
+
+`core/entry-content` is offered only in a collection's template, where it draws the
+entry's own blocks field (see [Editing a template](https://nextlyhq.com/docs/page-builder/editor#editing-a-template)).
 
 Each declares its props (Content tab) and which style groups it supports, and those drive
 the inspector.
