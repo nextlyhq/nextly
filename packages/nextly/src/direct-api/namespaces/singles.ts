@@ -9,6 +9,7 @@
 
 import { currentPrincipal } from "../../auth/principal-scope";
 import type { ListSinglesOptions } from "../../domains/singles/services/single-registry-service";
+import { NextlyError } from "../../errors/nextly-error";
 import { collectingWarnings } from "../../hooks/side-effect-warnings";
 import { transformRichTextFields } from "../../lib/field-transform";
 import type { Principal } from "../../plugins/principals/types";
@@ -43,6 +44,25 @@ export async function findSingle<
   ctx: NextlyContext,
   args: FindSingleArgs<TSlug> & { createIfMissing?: TCreate }
 ): Promise<FoundSingle<TSlug, TCreate>> {
+  // Only a read that declines to create can be asked what to answer in place
+  // of the document it would have created; refused rather than ignored, so a
+  // caller who expected the default read learns it asked for a creating one.
+  if (args.whenAbsent !== undefined && args.createIfMissing !== false) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "whenAbsent",
+          code: "REQUIRES_CREATE_IF_MISSING_FALSE",
+          message:
+            "Only a read with createIfMissing: false may set whenAbsent.",
+        },
+      ],
+      logContext: {
+        single: args.slug,
+        reason: "when-absent-without-no-create",
+      },
+    });
+  }
   const config = mergeConfig(ctx.defaultConfig, args);
 
   const result = await ctx.singleEntryService.get(args.slug, {
@@ -62,6 +82,7 @@ export async function findSingle<
     ...(args.createIfMissing === undefined
       ? {}
       : { createIfMissing: args.createIfMissing }),
+    ...(args.whenAbsent === undefined ? {} : { whenAbsent: args.whenAbsent }),
     ...accessOptions(config),
     context: config.context,
   });

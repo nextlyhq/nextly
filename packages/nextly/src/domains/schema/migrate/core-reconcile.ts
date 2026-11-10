@@ -23,7 +23,10 @@ import {
   bindIssuedTokens,
   type BindIssuedTokensResult,
 } from "../../auth/services/token-account-binding";
-import { RETIRED_SIZES_COLUMN } from "../../media/retired-image-sizes-constants";
+import {
+  RETAINED_SIZES_COLUMN,
+  RETIRED_SIZES_COLUMN,
+} from "../../media/retired-image-sizes-constants";
 import { markUnrecordedVerifications } from "../../users/services/email-verification-write";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import {
@@ -32,7 +35,6 @@ import {
   onlyElements,
   withoutElements,
 } from "../extension/entity-contributions";
-import type { ExtensionColumn } from "../extension/types";
 import {
   isDestructive,
   reasonFor,
@@ -497,16 +499,6 @@ export async function planCoreReconcile(
     retiredDrops,
   };
 }
-
-/** The retired `sizes` column, as a contribution to the media table. */
-const RETAINED_SIZES_COLUMN: ExtensionColumn = {
-  key: RETIRED_SIZES_COLUMN,
-  name: RETIRED_SIZES_COLUMN,
-  // The kind the column was declared with: jsonb on PostgreSQL, json on
-  // MySQL, text on SQLite.
-  kind: "json",
-  nullable: true,
-};
 
 /**
  * The contributions to set aside and compose in, with the retired `sizes`

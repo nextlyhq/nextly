@@ -53,12 +53,15 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { respondList, type PaginationMeta } from "nextly";
 import { humanizeFieldName } from "nextly/field-label";
+import { z } from "nextly/zod";
 
 import { labelOf, pluralLabelOf } from "./collection-labels";
 import { PAGES_SLUG } from "./collections/pages";
+import { ENTRIES_LOCALE_MAX } from "./entries-contract";
 import { listFieldsFrom } from "./fields/list-query-judgement";
 import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "./library-route";
 import {
+  LOOP_COLLECTIONS_PARAMS,
   LOOP_COLLECTIONS_ROUTE_PATH,
   type LoopCollectionItem,
   type LoopCollectionsResponse,
@@ -72,6 +75,7 @@ import {
   slugOf,
   type PageCollectionsContext,
 } from "./pages-search-route";
+import { optionalText, parseRouteQuery } from "./route-query";
 
 /**
  * The timestamps a collection keeps unless it turns them off, named as the
@@ -226,11 +230,14 @@ export interface LoopCollectionsReads {
    * The fields of a collection the public may read, as a published page's
    * bindings are judged; `undefined` when the public may read none of it.
    */
-  publicFields(slug: string): Promise<readonly BindingFieldShape[] | undefined>;
+  publicFields(
+    slug: string,
+    locale?: string
+  ): Promise<readonly BindingFieldShape[] | undefined>;
 }
 
 /** The meta of an answer that is the whole list on one page. */
-function onePage(total: number): PaginationMeta {
+export function onePage(total: number): PaginationMeta {
   return {
     total,
     page: 1,
@@ -246,14 +253,18 @@ async function collectionItem(
   slug: string,
   record: Record<string, unknown>,
   listedSlugs: ReadonlySet<string>,
-  reads: LoopCollectionsReads
+  reads: LoopCollectionsReads,
+  locale: string | undefined
 ): Promise<LoopCollectionItem> {
   // The fields a list may name, as a save judges them: the record's
-  // declared fields, and those the public may read.
+  // declared fields, and those the public may read, in the save's language.
   const fields = await listFieldsFrom({
     record: () => Promise.resolve(record),
-    readable: collection => reads.publicFields(collection),
-  })(slug);
+    readable: (collection, language) =>
+      language === undefined
+        ? reads.publicFields(collection)
+        : reads.publicFields(collection, language),
+  })(slug, locale);
   const declared = declaredByName(record);
   const shapes = timestampsLast(fields?.readable ?? []);
   return {
@@ -277,13 +288,20 @@ async function collectionItem(
         : [];
     }),
     declared: [...(fields?.declared ?? [])],
+    // Every key the engine reads to judge a list, so the inspector's
+    // judgement of a time of day or a plugin's type is the save's.
     readable: (fields?.readable ?? []).map(shape => ({
       name: shape.name,
+      // Named as the offered fields are, so a condition on a field no list
+      // filters by reads as the admin calls it.
+      label: fieldWordsOf(shape.name, declared.get(shape.name)),
       type: shape.type,
       ...(shape.hasMany === true ? { hasMany: true as const } : {}),
       ...(shape.relationTo === undefined
         ? {}
         : { relationTo: shape.relationTo }),
+      ...(shape.timeOnly === true ? { timeOnly: true as const } : {}),
+      ...(shape.storage === undefined ? {} : { storage: shape.storage }),
     })),
   };
 }
@@ -293,7 +311,9 @@ async function collectionItem(
  * registry order. The menu orders them by name; this decides only which.
  */
 export async function readLoopCollections(
-  reads: LoopCollectionsReads
+  reads: LoopCollectionsReads,
+  /** The language being edited, which a save judges its lists in. */
+  locale?: string
 ): Promise<LoopCollectionsResponse> {
   const internal = reads.internal();
   const seen = new Set<string>();
@@ -317,11 +337,16 @@ export async function readLoopCollections(
   const listedSlugs = new Set(listed.map(candidate => candidate.slug));
   const items = await Promise.all(
     listed.map(({ slug, record }) =>
-      collectionItem(slug, record, listedSlugs, reads)
+      collectionItem(slug, record, listedSlugs, reads, locale)
     )
   );
   return { items, meta: onePage(items.length) };
 }
+
+/** The route's query: the language the fields are judged in, if any. */
+const LOOP_COLLECTIONS_QUERY = z.object({
+  [LOOP_COLLECTIONS_PARAMS.locale]: optionalText(ENTRIES_LOCALE_MAX),
+});
 
 /** The route context this reads: the registry, the plugin's slugs, and who asks. */
 interface LoopCollectionsRouteContext extends PageCollectionsContext {
@@ -362,9 +387,12 @@ function directLoopCollectionsReads(
     // The anonymous visitor's fields, judged as the published page's
     // bindings are: imported at call time, as the save's reader is, so
     // loading this module costs none of the runtime.
-    publicFields: async slug => {
+    publicFields: async (slug, locale) => {
       const { bindingFieldShapes } = await import("nextly/runtime");
-      return bindingFieldShapes({ collection: slug });
+      return bindingFieldShapes(
+        { collection: slug },
+        locale === undefined ? {} : { locale }
+      );
     },
   };
 }
@@ -384,9 +412,16 @@ export function loopCollectionsRoute(
   return {
     method: "GET",
     path: LOOP_COLLECTIONS_ROUTE_PATH,
-    handler: async (_req, ctx) => {
+    handler: async (req, ctx) => {
+      const query = parseRouteQuery(
+        req.url,
+        Object.values(LOOP_COLLECTIONS_PARAMS),
+        LOOP_COLLECTIONS_QUERY,
+        "loop collections route"
+      );
       const answer = await readLoopCollections(
-        directLoopCollectionsReads(ctx, store)
+        directLoopCollectionsReads(ctx, store),
+        query[LOOP_COLLECTIONS_PARAMS.locale]
       );
       return respondList([...answer.items], answer.meta);
     },

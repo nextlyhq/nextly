@@ -1,17 +1,20 @@
 /**
  * An existing install upgrading to the breakpoint removal's tables, with the
  * command a deployment runs, on every configured dialect: from a release
- * before the removal's runs table (schema 4), and from one with it but before
- * the table keeping what each removal took out (schema 5).
+ * before the removal's runs table (schema 4), from one with it but before
+ * the table keeping what each removal took out (schema 5), and from one with
+ * both but before a run could mark the removal it undoes (schema 7).
  *
  * The install is made the way a site at that release made it: a scratch
  * project configured with this plugin as that release shipped it (its first
  * migration modules, without the later tables), migrated with `nextly
  * migrate`. A row is stored in one of its tables. The project is then
  * configured with the plugin as it ships now and migrated again. Exactly the
- * modules after it must run: the runs table takes one open run at a time, the
- * fragments table keeps a row with its JSON (the shared styles' with no
- * host), the earlier row and the earlier modules' records are untouched, each
+ * modules after it must run: the runs table takes one open run at a time and
+ * a run marks the removal it undoes, a run stored before the upgrade undoes
+ * nothing, the fragments table keeps a row with its JSON (the shared styles'
+ * with no host), the earlier row and the earlier modules' records are
+ * untouched, each
  * new module is recorded applied once, and migrating again does nothing.
  *
  * The database is one of the test's own on Postgres and MySQL (created beside
@@ -68,6 +71,10 @@ const RELEASES = [
   {
     release: "before the removal's fragments (schema 5)",
     shipped: shippedBefore("_create_breakpoint_removal_fragments"),
+  },
+  {
+    release: "before a run marks the removal it undoes (schema 7)",
+    shipped: shippedBefore("_add_breakpoint_removal_undoes"),
   },
 ];
 
@@ -329,12 +336,24 @@ describe.each(getConfiguredTestDialects())(
           ).toBe(true);
           opened = await openAdapter(database);
           let { adapter } = opened;
-          // CONTROL: that release has no fragments table, and the runs table
-          // only from schema 5.
-          expect(await adapter.tableExists(FRAGMENTS_TABLE)).toBe(false);
-          expect(await adapter.tableExists(REMOVALS_TABLE)).toBe(
-            shipped > shippedBefore("_create_breakpoint_removals")
+          // CONTROL: the runs table only from schema 5, the fragments
+          // table only from schema 6.
+          const hadRuns =
+            shipped > shippedBefore("_create_breakpoint_removals");
+          expect(await adapter.tableExists(FRAGMENTS_TABLE)).toBe(
+            shipped > shippedBefore("_create_breakpoint_removal_fragments")
           );
+          expect(await adapter.tableExists(REMOVALS_TABLE)).toBe(hadRuns);
+          // A removal stored before the upgrade, where the release had runs.
+          if (hadRuns) {
+            await rowsOn(dialect, adapter).insert(REMOVALS_TABLE, {
+              id: "stored-before",
+              removed_ids: '["mobile"]',
+              before: "null",
+              started_by: "user:upgrade",
+              open_key: null,
+            });
+          }
           await rowsOn(dialect, adapter).insert(OPTIONS_TABLE, {
             id: "kept-option",
             name: "upgrade-probe",
@@ -375,6 +394,25 @@ describe.each(getConfiguredTestDialects())(
           expect(await rows.column(REMOVALS_TABLE, "open-1", "phase")).toBe(
             "converting"
           );
+          // A run marks the removal it undoes; any other run undoes nothing,
+          // the one stored before the upgrade included.
+          // A run's id, as every run is named: the column holds one whole.
+          const undone = "0190a000-0000-7000-8000-0000000000d1";
+          await rows.insert(REMOVALS_TABLE, {
+            ...row("undo-1", null),
+            undoes: undone,
+          });
+          expect(await rows.column(REMOVALS_TABLE, "undo-1", "undoes")).toBe(
+            undone
+          );
+          expect(await rows.column(REMOVALS_TABLE, "done-1", "undoes")).toBe(
+            null
+          );
+          if (hadRuns) {
+            expect(
+              await rows.column(REMOVALS_TABLE, "stored-before", "undoes")
+            ).toBe(null);
+          }
           // What a removal took out, with its JSON kept whole, and the shared
           // styles' row with no host.
           const fragment = {

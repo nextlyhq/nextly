@@ -3,15 +3,17 @@
 import { Button } from "@nextlyhq/ui";
 import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { AlertTriangle } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
 import { EntityRow, ENTITY_LEADING_CLASS } from "../widgets/frame/entity-row";
-import { useRowFold } from "../widgets/frame/fold";
+import { leavesRowsEmpty, useCardFitsContent } from "../widgets/frame/fit";
+import { useRowFold, type RowFold } from "../widgets/frame/fold";
 import { CardFooterContent } from "../widgets/frame/footer-slot";
 import { LIST_ROW_HEIGHT_CLASS } from "../widgets/frame/geometry";
+import { CardHeightContext } from "../widgets/frame/tier";
 import { useCardTitleCount } from "../widgets/frame/title-count";
 import { useRevealedWhileViewed } from "../widgets/hidden-while-empty";
 
@@ -40,6 +42,12 @@ import {
  * whose room the frame keeps for every card, so the rows have the whole body.
  * The title carries how many items there are ("Needs your attention 2").
  *
+ * With fewer items than its rows hold, and none of them folded, the card asks for the height its
+ * items take rather than its stored rows (`frame/fit`): one item would otherwise sit above three
+ * rows of empty room. Its row of the dashboard is then as tall as the taller of it and the card
+ * beside it, Upcoming releases on the default dashboard. Its rows are drawn at the default
+ * density, the one they are counted at.
+ *
  * A card that joins the dashboard while the reader is on it (hidden at first,
  * then found with something waiting) says how many items arrived, politely,
  * so a reader looking elsewhere on the page learns of them.
@@ -53,33 +61,13 @@ export const NeedsAttention: React.FC<DeclaredComponentProps> = ({
   const rows = useMemo(() => attentionRows(data), [data]);
   const fold = useRowFold(rows.length);
   useCardTitleCount(rows.length);
+  useFitsItsItems(fold, rows.length);
   const arrival = useArrivalAnnouncement(
     useRevealedWhileViewed(placementId),
     rows.length
   );
   const listId = useId();
-  const listRef = useRef<HTMLUListElement | null>(null);
-  // The rows the reader's "Show N more" revealed, while they are shown: focus
-  // moves to the first of them, and the live region says how many.
-  const [revealed, setRevealed] = useState<{
-    from: number;
-    count: number;
-  } | null>(null);
-  useEffect(() => {
-    if (!fold.expanded || revealed === null) return;
-    listRef.current
-      ?.querySelectorAll<HTMLElement>("[data-fold-row]")
-      [revealed.from]?.focus();
-  }, [fold.expanded, revealed]);
-
-  const toggle = () => {
-    setRevealed(
-      fold.expanded
-        ? null
-        : { from: fold.shown, count: rows.length - fold.shown }
-    );
-    fold.toggle();
-  };
+  const { listRef, revealed, toggle } = useRevealedRows(fold, rows.length);
 
   return (
     <div
@@ -104,26 +92,7 @@ export const NeedsAttention: React.FC<DeclaredComponentProps> = ({
             className="min-w-0 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             data-testid="needs-attention-item"
           >
-            {row.failed ? (
-              <UncheckedItem row={row} refreshing={refreshing} retry={retry} />
-            ) : (
-              <EntityRow
-                density="default"
-                leading={<SeverityMark severity={row.severity} />}
-                title={row.title}
-                spoken={`${severityName(row.severity)}: ${row.spoken}`}
-                meta={row.reason === undefined ? [] : [row.reason]}
-                {...(row.href === undefined
-                  ? {}
-                  : {
-                      action: {
-                        label: "Review",
-                        href: row.href,
-                        spoken: `Review ${lowerFirst(row.label)}`,
-                      },
-                    })}
-              />
-            )}
+            <AttentionItem row={row} refreshing={refreshing} retry={retry} />
           </li>
         ))}
       </ul>
@@ -153,6 +122,83 @@ export const NeedsAttention: React.FC<DeclaredComponentProps> = ({
 };
 
 NeedsAttention.displayName = "NeedsAttention";
+
+/**
+ * Asks the card's cell for the height of its `count` items while they leave a whole row of its
+ * stored body empty (`frame/fit`). Never while the fold holds rows back: those rows are folded
+ * because the body it measured is too short for them, as when their text wraps, and a card drawn
+ * at the folded rows' height would be measured again with them all drawn and grow, then fold them
+ * again.
+ */
+function useFitsItsItems(fold: RowFold, count: number): void {
+  const storedRows = useContext(CardHeightContext);
+  useCardFitsContent(
+    fold.listRef,
+    leavesRowsEmpty(count, storedRows, "default") && fold.shown >= count,
+    count
+  );
+}
+
+/**
+ * The rows the reader's "Show N more" revealed, while they are shown: focus moves to the first of
+ * them, and the live region says how many. `toggle` is the fold's control, which records them.
+ */
+function useRevealedRows(fold: RowFold, total: number) {
+  const listRef = useRef<HTMLUListElement | null>(null);
+  const [revealed, setRevealed] = useState<{
+    from: number;
+    count: number;
+  } | null>(null);
+  useEffect(() => {
+    if (!fold.expanded || revealed === null) return;
+    listRef.current
+      ?.querySelectorAll<HTMLElement>("[data-fold-row]")
+      [revealed.from]?.focus();
+  }, [fold.expanded, revealed]);
+  const toggle = () => {
+    setRevealed(
+      fold.expanded ? null : { from: fold.shown, count: total - fold.shown }
+    );
+    fold.toggle();
+  };
+  return { listRef, revealed, toggle };
+}
+
+/**
+ * One item's row: its severity, label and count, why it is waiting and its Review, or, for an
+ * item whose count failed, "Not all checked" with a Retry.
+ */
+function AttentionItem({
+  row,
+  refreshing,
+  retry,
+}: {
+  row: AttentionRow;
+  refreshing: boolean;
+  retry: () => void;
+}) {
+  if (row.failed) {
+    return <UncheckedItem row={row} refreshing={refreshing} retry={retry} />;
+  }
+  return (
+    <EntityRow
+      density="default"
+      leading={<SeverityMark severity={row.severity} />}
+      title={row.title}
+      spoken={`${severityName(row.severity)}: ${row.spoken}`}
+      meta={row.reason === undefined ? [] : [row.reason]}
+      {...(row.href === undefined
+        ? {}
+        : {
+            action: {
+              label: "Review",
+              href: row.href,
+              spoken: `Review ${lowerFirst(row.label)}`,
+            },
+          })}
+    />
+  );
+}
 
 /**
  * What the card says once, after it is drawn, when it joined the dashboard while the reader was

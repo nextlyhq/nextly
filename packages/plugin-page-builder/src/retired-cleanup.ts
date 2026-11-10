@@ -72,6 +72,7 @@ import type {
 } from "./host-rewrite/contract";
 import {
   fenceStore,
+  walkedRuns,
   type DeletionRun,
   type RunPhase,
 } from "./host-rewrite/fence";
@@ -421,7 +422,7 @@ async function walkComponent(
   const source = siteHostSource(site);
   const report = await rewriteHosts(
     {
-      fence: parts.fence,
+      fence: walkedRuns(parts.fence, false),
       progress: parts.progress,
       // No Layout holds a placement's values, so none is a host to leave.
       source: { ...source, outside: () => Promise.resolve([]) },

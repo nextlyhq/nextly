@@ -782,6 +782,7 @@ export class UserQueryService extends BaseService {
       emailVerified: users.emailVerified,
       name: users.name,
       image: users.image,
+      interfaceLanguage: users.interfaceLanguage,
       isActive: users.isActive,
       createdAt: users.createdAt,
       updatedAt: users.updatedAt,
@@ -823,6 +824,8 @@ export class UserQueryService extends BaseService {
       emailVerified: row.emailVerified ?? null,
       name: row.name ?? null,
       image: row.image ?? null,
+      // The person's own choice for the admin; null follows the browser.
+      interfaceLanguage: row.interfaceLanguage ?? null,
       roles,
       isActive: row.isActive ?? undefined,
       createdAt: row.createdAt ?? undefined,

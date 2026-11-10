@@ -312,7 +312,7 @@ export function splitClass(
 }
 
 /** Whether a stored value is a document: a record holding a list of nodes. */
-function isDocument(value: unknown): value is BlockDocument {
+export function isDocument(value: unknown): value is BlockDocument {
   return isPlainRecord(value) && Array.isArray(value.nodes);
 }
 

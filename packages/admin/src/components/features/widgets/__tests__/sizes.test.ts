@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import {
   AS_SIZED_FROM_PX,
   COLUMN_GAP_PX,
+  CONTENT_ROWS_GRID_CLASS,
   GRID_CLASS,
   ROW_GAP_PX,
   ROW_HEIGHT_PX,
@@ -26,6 +27,7 @@ import {
   cardSpanClass,
   columnGapPx,
   columnsName,
+  dashboardGridClass,
   drawnSize,
   drawnSpan,
   heightChoices,
@@ -180,7 +182,11 @@ describe("span classes", () => {
   });
 
   it("writes every class out in full, because Tailwind scans source text", () => {
-    for (const value of [...Object.values(SPAN_CLASSES), GRID_CLASS]) {
+    for (const value of [
+      ...Object.values(SPAN_CLASSES),
+      GRID_CLASS,
+      CONTENT_ROWS_GRID_CLASS,
+    ]) {
       expect(value).not.toMatch(/[$`{}]/);
     }
   });
@@ -208,6 +214,21 @@ describe("rows, gaps and a card's height", () => {
     // 🔴 A dense grid backfills a gap with a later card, so the drawn order would leave the
     // saved order the reading and Tab order follow.
     expect(GRID_CLASS).not.toMatch(/dense/);
+  });
+
+  it("draws fixed rows while customising and rows as tall as their cards at rest, the columns and gaps the same", () => {
+    // 🔴 Fails with fixed rows at rest, where a card can never be drawn shorter than its stored
+    // size; and with content rows while customising, where a card is resized by its rows.
+    const editing = dashboardGridClass(true).split(" ");
+    const resting = dashboardGridClass(false).split(" ");
+    expect(dashboardGridClass(true)).toBe(GRID_CLASS);
+    expect(editing).toContain("auto-rows-[72px]");
+    expect(resting).toContain("auto-rows-auto");
+    expect(resting).not.toContain("auto-rows-[72px]");
+    // Everything but the rows is shared, so a card lands in the same row and columns in both.
+    const withoutRows = (classes: string[]) =>
+      classes.filter(name => !name.startsWith("auto-rows-")).sort();
+    expect(withoutRows(resting)).toEqual(withoutRows(editing));
   });
 
   it("gaps 16 px across below a 1,280 px dashboard and 24 px from it, 16 px down at every width", () => {

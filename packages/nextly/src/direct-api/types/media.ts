@@ -108,6 +108,28 @@ export interface FindMediaByIDArgs extends DirectAPIConfig {
 }
 
 /**
+ * Arguments for finding several media files by their ids, in one read.
+ *
+ * @experimental
+ *
+ * @example
+ * ```typescript
+ * const files = await nextly.media.findByIDs({ ids: ['media-1', 'media-2'] });
+ * ```
+ */
+export interface FindMediaByIDsArgs extends DirectAPIConfig {
+  /** The ids, at most {@link MEDIA_IDS_PER_READ}. */
+  ids: readonly string[];
+}
+
+/**
+ * The most ids one `media.findByIDs` read takes: one page of a list.
+ *
+ * @experimental
+ */
+export const MEDIA_IDS_PER_READ = 100;
+
+/**
  * Arguments for updating media metadata.
  *
  * @example

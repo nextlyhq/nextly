@@ -554,6 +554,20 @@ describe("a collection list's query, rendered", () => {
       expect(relatedReads(read.queries)).toEqual([]);
     });
 
+    it("tells the author a page that is no entry has no related entries to show", async () => {
+      // A Single's page: no entry for the relation to be read from.
+      const read = source({ categories: CATEGORIES });
+      const host = await drawn(
+        postCategories(),
+        context({ data: read.provider, entry: null, diagnostics: true })
+      );
+      expect(headings(host)).toEqual(["Nothing here yet"]);
+      expect(note(host)?.textContent).toBe(
+        "This list couldn't load its entries, so visitors see its empty state. This page isn't an entry in a collection, so it has no related entries to show. Only you see this message."
+      );
+      expect(read.queries).toEqual([]);
+    });
+
     it("reads nothing of a relation whose entry's collection it is not told", async () => {
       const read = source({ categories: CATEGORIES });
       const host = await drawn(

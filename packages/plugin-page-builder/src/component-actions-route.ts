@@ -86,6 +86,7 @@ import { documentVersionOf, withVersionFrom } from "./document-version";
 import { DRY_RUN_COMPONENT_ID } from "./library-contract";
 import { readingAsUser } from "./library-route";
 import type { OriginStore } from "./origin-store";
+import { carryingTemplateTarget } from "./templates/template-target";
 
 /** The blocks field a stored page holds its document in, when none is named. */
 const DEFAULT_PAGE_FIELD = "content";
@@ -237,11 +238,11 @@ export async function detachPlacement(
 
   // An ordinary update, whose own hooks keep the usage indexes.
   const stored = at.stored;
-  const rev = await requireUnchangedPage(
+  const read = await requireUnchangedPage(
     () => reads.page(stored, ctx),
     at.document
   );
-  await writeStoredPage(ctx, at, plan.pageOps, limits, rev);
+  await writeStoredPage(ctx, at, plan.pageOps, limits, read);
   return respondMutation<DetachResult>(
     "The placement was detached.",
     result(false)
@@ -437,7 +438,7 @@ async function duplicateStored(
         asCaller(ctx)
       )
     );
-    const rev = await requireUnchangedPage(
+    const read = await requireUnchangedPage(
       () => reads.page(stored, ctx),
       at.document
     );
@@ -446,7 +447,14 @@ async function duplicateStored(
       tx,
       stored.collection,
       stored.id,
-      withVersionFrom({ [stored.field]: converted }, rev),
+      // A template's collection with it, read with the page, so the write is
+      // judged against it inside this transaction.
+      carryingTemplateTarget(
+        ctx.self,
+        stored.collection,
+        read.templateTarget,
+        withVersionFrom({ [stored.field]: converted }, read.rev)
+      ),
       asCaller(ctx, stored.locale)
     );
     return id;
@@ -600,7 +608,7 @@ async function writeStoredPage(
   at: PlacementIn,
   ops: readonly BuilderOp[],
   limits: DocumentLimits | undefined,
-  rev: string | undefined
+  read: StoredPageRead
 ): Promise<void> {
   const stored = at.stored;
   if (stored === undefined) return;
@@ -608,7 +616,14 @@ async function writeStoredPage(
   await ctx.services.collections.updateEntry(
     stored.collection,
     stored.id,
-    withVersionFrom({ [stored.field]: next }, rev),
+    // A template's collection with it, as every write of a page's blocks
+    // this plugin makes carries it.
+    carryingTemplateTarget(
+      ctx.self,
+      stored.collection,
+      read.templateTarget,
+      withVersionFrom({ [stored.field]: next }, read.rev)
+    ),
     asCaller(ctx, stored.locale)
   );
 }

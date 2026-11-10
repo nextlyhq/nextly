@@ -10,6 +10,8 @@
  *
  * @module plugins/plugin-translations
  */
+import { languageTagProblem } from "../shared/lib/language-tag";
+
 import type { PluginTranslations } from "./contributions";
 import type { PluginDefinition } from "./plugin-context";
 import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
@@ -25,50 +27,32 @@ export const ADMIN_TRANSLATION_SEGMENT = "nextly";
 /** A key: two or more segments of letters, digits, `_` and `-`, joined by dots. */
 const KEY_SHAPE = /^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+$/;
 
-/** An interface language: `en`, `fr`, `pt-BR`, `zh-Hant`. */
-const LANGUAGE_SHAPE = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
-
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** A language tag's canonical spelling, or `undefined` when it is not one. */
-function canonicalLanguage(language: string): string | undefined {
-  try {
-    return Intl.getCanonicalLocales(language)[0];
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Refuse a language that is malformed, holds anything but keys, or is not
- * spelled canonically. The admin matches a catalog to the browser's language
- * by exact spelling and browsers report the canonical one, so `pt-br` would
- * never be chosen; refused rather than rewritten, so two spellings of one
- * language are never quietly merged.
+ * spelled canonically, by the rule every interface language is held to (see
+ * `shared/lib/language-tag`).
  */
 function assertLanguage(
   pluginName: string,
   language: string,
   entries: unknown
 ): asserts entries is Record<string, unknown> {
-  const canonical = canonicalLanguage(language);
-  if (
-    !LANGUAGE_SHAPE.test(language) ||
-    !isRecord(entries) ||
-    canonical === undefined
-  ) {
+  const problem = languageTagProblem(language);
+  if (problem?.kind === "malformed" || !isRecord(entries)) {
     throw resolutionError(
       "plugin-translations-malformed",
       `Plugin "${pluginName}" declares translations for "${language}", which must be a language code such as "en" or "pt-BR" holding keys and their text.`,
       { plugin: pluginName, language }
     );
   }
-  if (canonical !== language) {
+  if (problem?.kind === "not-canonical") {
     throw resolutionError(
       "plugin-translations-malformed",
-      `Plugin "${pluginName}" declares translations for "${language}", which must be spelled "${canonical}", as browsers report it.`,
-      { plugin: pluginName, language, expected: canonical }
+      `Plugin "${pluginName}" declares translations for "${language}", which must be spelled "${problem.expected}", as browsers report it.`,
+      { plugin: pluginName, language, expected: problem.expected }
     );
   }
 }

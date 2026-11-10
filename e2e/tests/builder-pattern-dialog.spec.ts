@@ -67,7 +67,7 @@ function savesThePattern(request: Request): boolean {
 
 async function openBuilder(page: Page): Promise<void> {
   const seeded = await page.request.patch(HOMEPAGE_API, {
-    data: { layout: DOCUMENT },
+    data: { layout: DOCUMENT, _overwrite: true },
   });
   expect(seeded.ok(), `seeding the homepage layout: ${seeded.status()}`).toBe(
     true

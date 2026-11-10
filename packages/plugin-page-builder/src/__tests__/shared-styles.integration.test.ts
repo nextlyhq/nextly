@@ -23,16 +23,23 @@ import {
 import { ServiceContainer } from "nextly";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CLASS_USAGE_INDEX_SLUG } from "../collections/class-usage-index";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
+import {
+  lockSharedStyle,
+  removeSharedStyles,
+  siteStyleClassStore,
+  type SharedStyleUsageSource,
+} from "../shared-styles-routes";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
 import { USAGE_BACKFILL_JOB } from "../usage-backfill-job";
 
 const ORIGIN = "http://localhost";
 const CSRF = "c".repeat(64);
+/** Where the class usage index's rows live. */
+const CLASS_ROWS = "page_builder__class_usage";
 
 const card = {
   id: "c-card",
@@ -99,6 +106,27 @@ function backfillTick(plugin: PluginDefinition): () => Promise<unknown> {
       } as never
     );
 }
+
+/** The slice of the Direct API the routes' class store reads and writes. */
+type ClassApi = Parameters<typeof siteStyleClassStore>[1];
+
+/**
+ * The usage index's answer for a site whose styles nothing uses. The index
+ * itself is driven over HTTP above; these cases are about the Single's write.
+ */
+const NOTHING_USED: SharedStyleUsageSource = {
+  health: async () => ({
+    coversExistingDocuments: true,
+    anyUndetermined: false,
+  }),
+  documentsUsingEach: async ids =>
+    new Map(ids.map(id => [id, { collections: [], complete: true }])),
+  kindOf: () => "pages",
+};
+
+/** A route's request, as its handler is handed it. */
+const routeRequest = (body: unknown) =>
+  new Request(`${ORIGIN}/x`, { method: "POST", body: JSON.stringify(body) });
 
 describe.each(getConfiguredTestDialects())(
   "shared styles (%s)",
@@ -218,6 +246,27 @@ describe.each(getConfiguredTestDialects())(
     const route = (sub: string) =>
       `plugins/${PAGE_BUILDER_PLUGIN_NAME}/shared-styles/${sub}`;
     const SINGLE = `singles/${SITE_STYLE_SLUG}`;
+
+    /** A page's stored content, set past every check on the page's row. */
+    async function plantContent(
+      t: TestNextly,
+      id: string,
+      content: unknown
+    ): Promise<void> {
+      const registry = t.getService("collectionRegistryService") as unknown as {
+        getCollectionBySlug(
+          slug: string
+        ): Promise<{ tableName: string } | null>;
+      };
+      const table = (await registry.getCollectionBySlug("pages"))?.tableName;
+      if (table === undefined) throw new Error("the pages table is missing");
+      await t.adapter.update(
+        table,
+        // SQLite stores a JSON column as text; the others take the value.
+        { content: dialect === "sqlite" ? JSON.stringify(content) : content },
+        { and: [{ column: "id", op: "=", value: id }] }
+      );
+    }
 
     /** The stored class list, read as the system. */
     async function stored(t: TestNextly): Promise<Record<string, unknown>[]> {
@@ -516,20 +565,12 @@ describe.each(getConfiguredTestDialects())(
       });
       await tick();
       // The row two interleaved saves can lose, lost here directly.
-      const rows = await t.nextly.find({
-        collection: CLASS_USAGE_INDEX_SLUG,
-        where: { classId: { equals: "c-spare" } },
-        limit: 100,
-        overrideAccess: true,
-      });
-      expect(rows.items.length).toBeGreaterThan(0);
-      for (const row of rows.items) {
-        await t.nextly.delete({
-          collection: CLASS_USAGE_INDEX_SLUG,
-          id: String((row as { id: unknown }).id),
-          overrideAccess: true,
-        });
-      }
+      const spareRows = {
+        and: [{ column: "classId", op: "=" as const, value: "c-spare" }],
+      };
+      const rows = await t.adapter.select(CLASS_ROWS, { where: spareRows });
+      expect(rows.length).toBeGreaterThan(0);
+      await t.adapter.delete(CLASS_ROWS, spareRows);
       const designer = await holding(t, ...DESIGN, "read-pages");
       // CONTROL: the index is whole and counts the style on nothing, so the
       // refusal below comes from the stored page and not from the index.
@@ -560,6 +601,117 @@ describe.each(getConfiguredTestDialects())(
       expect(JSON.stringify(unnamed.body)).not.toContain("Home");
     });
 
+    /**
+     * The routes' class store over the Direct API, with another save of the
+     * Single made just before each of the route's first `times` writes: a
+     * fixed interleave, not a race. That save renames hero, a style the
+     * route does not touch.
+     */
+    function interleaved(t: TestNextly, times: number) {
+      const real = t.nextly as unknown as ClassApi;
+      const writes = { count: 0 };
+      let renames = 0;
+      const api: ClassApi = {
+        findSingle: args => real.findSingle(args),
+        updateSingle: async args => {
+          writes.count += 1;
+          if (writes.count <= times) {
+            renames += 1;
+            const classes = await stored(t);
+            await t.nextly.updateSingle({
+              slug: SITE_STYLE_SLUG,
+              data: {
+                classes: classes.map(entry =>
+                  entry.id === "c-hero"
+                    ? { ...entry, label: `Hero ${renames}` }
+                    : entry
+                ),
+                _overwrite: true,
+              },
+              overrideAccess: true,
+            });
+          }
+          return real.updateSingle(args);
+        },
+      };
+      const store = siteStyleClassStore(
+        { self: { singles: {}, collections: {} }, user: null } as never,
+        api
+      );
+      return { store, writes };
+    }
+
+    it("locks a style when another save lands first, keeping that save's change", async () => {
+      const { t } = await boot();
+      const { store, writes } = interleaved(t, 1);
+      const answer = await lockSharedStyle(
+        routeRequest({ classId: "c-spare", locked: true }),
+        store,
+        new Set()
+      );
+      expect(answer.status).toBe(200);
+      // Refused once as made from a replaced version, then made again.
+      expect(writes.count).toBe(2);
+      expect(await stored(t)).toEqual([
+        lockedCard,
+        { ...hero, label: "Hero 1" },
+        { ...spare, locked: true },
+      ]);
+    });
+
+    it("removes a style when another save lands first, keeping that save's change", async () => {
+      const { t } = await boot();
+      const { store, writes } = interleaved(t, 1);
+      // Each walk notes hero's stored label as it runs, so the second walk
+      // is seen to come after the other save rather than merely to happen.
+      const heroLabels: unknown[] = [];
+      const stillUsed = {
+        uses: vi.fn(async (_ids: readonly string[]) => {
+          heroLabels.push(
+            (await stored(t)).find(entry => entry.id === "c-hero")?.label
+          );
+          return [];
+        }),
+        firstReadable: async () => undefined,
+      };
+      const answer = await removeSharedStyles(
+        routeRequest({ ids: ["c-spare"] }),
+        store,
+        NOTHING_USED,
+        new Set(),
+        stillUsed
+      );
+      expect(answer.status).toBe(200);
+      expect(writes.count).toBe(2);
+      expect(await stored(t)).toEqual([
+        lockedCard,
+        { ...hero, label: "Hero 1" },
+      ]);
+      // The stored documents are walked once per attempt: a page saved
+      // between the two may use the style without the index counting it.
+      expect(stillUsed.uses.mock.calls).toEqual([[["c-spare"]], [["c-spare"]]]);
+      expect(heroLabels).toEqual([undefined, "Hero 1"]);
+    });
+
+    it("refuses a lock as stale after three writes when the Single keeps changing, storing nothing of it", async () => {
+      const { t } = await boot();
+      const { store, writes } = interleaved(t, Number.POSITIVE_INFINITY);
+      await expect(
+        lockSharedStyle(
+          routeRequest({ classId: "c-spare", locked: true }),
+          store,
+          new Set()
+        )
+      ).rejects.toMatchObject({ code: "STALE_VERSION", statusCode: 409 });
+      expect(writes.count).toBe(3);
+      // Every other save is kept; the lock is not.
+      expect(await stored(t)).toEqual([
+        lockedCard,
+        { ...hero, label: "Hero 3" },
+        spare,
+      ]);
+    });
+
     it("refuses a page that adds a class the site does not define, and keeps one it already held", async () => {
       const { t } = await boot();
       const added = t.nextly.create({
@@ -577,22 +729,26 @@ describe.each(getConfiguredTestDialects())(
         },
       });
 
-      // A page holding `spare`, which a trusted write then removes from the
-      // library: the page's reference is now to a class the site lacks.
-      const created = await t.nextly.create({
-        collection: "pages",
-        data: {
-          title: "Old",
-          slug: "old",
-          content: pageOf([text("a", { classes: ["c-spare"] })]),
-        },
-        overrideAccess: true,
-      });
+      // A page holding `spare` after the library dropped it: the page's
+      // reference is to a class the site lacks. Dropped while nothing uses
+      // it, since a removal is refused while a page does, then planted in the
+      // page's stored row past every check, as a page stored before the
+      // removal rules existed holds it.
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
         data: { classes: [lockedCard, hero], _overwrite: true },
         overrideAccess: true,
       });
+      const created = await t.nextly.create({
+        collection: "pages",
+        data: { title: "Old", slug: "old", content: pageOf([text("a")]) },
+        overrideAccess: true,
+      });
+      await plantContent(
+        t,
+        String(created.item.id),
+        pageOf([text("a", { classes: ["c-spare"] })])
+      );
       const kept = await t.nextly.update({
         collection: "pages",
         id: String(created.item.id),

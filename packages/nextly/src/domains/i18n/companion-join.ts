@@ -17,6 +17,10 @@ import { and, eq, inArray, sql, type SQL, type SQLWrapper } from "drizzle-orm";
 
 import { batches } from "../../auth/access/retired-manage-permissions";
 import { isMissingNamedColumnError } from "../../database/missing-column";
+import {
+  lockedForRead,
+  type ReadingAdapter,
+} from "../../shared/lib/read-transaction-scope";
 import { DOCUMENT_REVISION_COLUMN } from "../versions/document-revision";
 
 import { COMPANION_UPDATED_AT_COLUMN } from "./companion-columns";
@@ -335,6 +339,12 @@ export async function selectRowsWithCompanion(args: {
    * statement: the translation table's runtime model does not declare it, so it is named here.
    */
   withRevisions?: boolean;
+  /**
+   * The adapter the read is made through, when it may run inside a read
+   * routed to a transaction: the rows are then read with a shared lock
+   * (`lockedForRead`). Absent, nothing is locked.
+   */
+  lockingOn?: ReadingAdapter;
 }): Promise<{
   rows: Record<string, unknown>[];
   companionRows: Record<string, unknown>[];
@@ -361,9 +371,14 @@ export async function selectRowsWithCompanion(args: {
       ) as SQL
     )
     .where(args.where);
-  const joined = await (args.orderBy && args.orderBy.length > 0
-    ? query.orderBy(...args.orderBy)
-    : query);
+  const ordered =
+    args.orderBy && args.orderBy.length > 0
+      ? query.orderBy(...args.orderBy)
+      : query;
+  // Locked last, after any order: the lock clause closes the statement.
+  const joined = await (args.lockingOn
+    ? lockedForRead(ordered, args.lockingOn, args.mainTable)
+    : ordered);
 
   const rows: Record<string, unknown>[] = [];
   const seen = new Set<unknown>();
@@ -399,6 +414,12 @@ export async function selectEntryWithCompanion(args: {
   companionTable: unknown;
   localeChain: string[];
   idKey?: string;
+  /**
+   * The adapter the read is made through, when it may run inside a read
+   * routed to a transaction: the entry's row is then read with a shared lock
+   * (`lockedForRead`). Absent, nothing is locked.
+   */
+  lockingOn?: ReadingAdapter;
 }): Promise<{
   entry: Record<string, unknown> | undefined;
   companionRows: Record<string, unknown>[];

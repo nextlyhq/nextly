@@ -16,129 +16,36 @@
  * @module class-override-rebase
  */
 
+import type { NamedClass, NodeStyles } from "@nextlyhq/blocks-engine";
+
 import {
-  isTokenRef,
-  type NamedClass,
-  type NodeStyles,
-  type StyleValue,
-} from "@nextlyhq/blocks-engine";
-
-/** A record's own entries, or none for anything that isn't a plain record. */
-function entriesOf(value: unknown): [string, unknown][] {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? Object.entries(value)
-    : [];
-}
-
-/** A record's own entry at a key, or `undefined`. */
-function at(value: unknown, key: string): unknown {
-  return typeof value === "object" &&
-    value !== null &&
-    Object.hasOwn(value, key)
-    ? (value as Record<string, unknown>)[key]
-    : undefined;
-}
+  mergedValue,
+  ownKeysOf as keysOf,
+  ownRecordOf as recordOf,
+  ownValueAt as at,
+} from "../../site-style-merge";
 
 /** Whether two stored values are the same value, as JSON compares them. */
 function same(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-/** The keys either of several records holds, in first-seen order. */
-function keysOf(...records: unknown[]): string[] {
-  return [
-    ...new Set(
-      records.flatMap(record => entriesOf(record).map(([key]) => key))
-    ),
-  ];
-}
-
-/** A record built with own keys, whatever their names. */
-function recordOf<T>(entries: readonly [string, T][]): Record<string, T> {
-  const out: Record<string, T> = {};
-  for (const [key, value] of entries) {
-    Object.defineProperty(out, key, {
-      value,
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
-  }
-  return out;
-}
-
-/** A composite value (a padding's sides), not a token reference or a scalar. */
-function isComposite(value: unknown): boolean {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    !isTokenRef(value)
-  );
-}
-
 /**
- * One value rebased: a composite side by side, so the site owning one side
- * of a padding doesn't keep the code's old value for another; anything else
- * whole. A value the stored entry holds as the old code did follows the new
- * code; the site's own value is kept, and one it cleared stays cleared.
+ * Styles rebased state by state, breakpoint by breakpoint and property by
+ * property: the three-way merge of the site's styles from the old code onto
+ * the new, where the site's own value wins wherever both changed it. A value
+ * the stored entry holds as the old code did follows the new code; the
+ * site's own value is kept, and one it cleared stays cleared. One rule with
+ * the editor's merge of a section onto a newer save, so the two cannot
+ * drift.
  */
-function rebasedValue(mine: unknown, before: unknown, code: unknown): unknown {
-  const sides = [mine, before, code].filter(value => value !== undefined);
-  if (sides.length > 0 && sides.every(isComposite)) {
-    const out: [string, unknown][] = [];
-    for (const key of keysOf(mine, before, code)) {
-      const value = rebasedValue(at(mine, key), at(before, key), at(code, key));
-      if (value !== undefined) out.push([key, value]);
-    }
-    return out.length > 0 ? recordOf(out) : undefined;
-  }
-  return same(mine, before) ? code : mine;
-}
-
-/** One breakpoint's values rebased, property by property. */
-function rebasedValues(
-  stored: unknown,
-  was: unknown,
-  now: unknown
-): Record<string, StyleValue> {
-  const out: [string, StyleValue][] = [];
-  for (const property of keysOf(stored, was, now)) {
-    const value = rebasedValue(
-      at(stored, property),
-      at(was, property),
-      at(now, property)
-    );
-    if (value !== undefined) out.push([property, value as StyleValue]);
-  }
-  return recordOf(out);
-}
-
-/** Styles rebased state by state and breakpoint by breakpoint. */
 function rebasedStyles(
   stored: unknown,
   was: unknown,
   now: unknown
 ): NodeStyles {
-  const states: [string, Record<string, Record<string, StyleValue>>][] = [];
-  for (const state of keysOf(stored, was, now)) {
-    const byBreakpoint: [string, Record<string, StyleValue>][] = [];
-    for (const breakpoint of keysOf(
-      at(stored, state),
-      at(was, state),
-      at(now, state)
-    )) {
-      const values = rebasedValues(
-        at(at(stored, state), breakpoint),
-        at(at(was, state), breakpoint),
-        at(at(now, state), breakpoint)
-      );
-      if (Object.keys(values).length > 0)
-        byBreakpoint.push([breakpoint, values]);
-    }
-    if (byBreakpoint.length > 0) states.push([state, recordOf(byBreakpoint)]);
-  }
-  return recordOf(states);
+  const merged = mergedValue(was, stored, now, { prefer: "mine" });
+  return merged ?? {};
 }
 
 /**
