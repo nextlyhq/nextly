@@ -617,6 +617,11 @@ export class CollectionsHandler {
      * caller may see.
      */
     slugAllowlist?: string[];
+    /**
+     * Leave out these slugs, carried to the same WHERE clause: the plugins'
+     * collections, on the list of the site's own.
+     */
+    slugDenylist?: string[];
   }) {
     return this.metadataService.listCollections(options);
   }

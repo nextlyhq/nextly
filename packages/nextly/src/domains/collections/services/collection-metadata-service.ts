@@ -583,6 +583,11 @@ export class CollectionMetadataService extends BaseService {
      * `total` this returns counts only rows the caller may see.
      */
     slugAllowlist?: string[];
+    /**
+     * Leave out these slugs, as a query condition the same way: the plugins'
+     * collections, on the list of the site's own.
+     */
+    slugDenylist?: string[];
   }): Promise<MetadataServiceResult> {
     try {
       // Include schema by default since the UI needs field counts

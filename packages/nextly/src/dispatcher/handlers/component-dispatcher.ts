@@ -52,6 +52,7 @@ import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
+import { getHandlerConfig } from "../../route-handler/auth-handler";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 // From the types module, not the barrel, which loads every dialect's tables.
 import {
@@ -78,6 +79,8 @@ import { readRequestLocalized } from "../helpers/request-localized";
 import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
+import { readListOffset } from "./list-offset";
+import { ownerSlugLists, pluginOwnedSlugs, readListOwner } from "./list-owner";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 
 interface ComponentsServices {
@@ -217,8 +220,21 @@ export const COMPONENTS_METHODS: Record<
     // semantics; offsetPaginationToMeta synthesises the canonical
     // PaginationMeta so the wire shape matches every other dispatcher.
     execute: async (svc, p) => {
+      // Read first, so an owner it does not know is refused before any work.
+      const owner = readListOwner(p.owner);
       const limit = toNumber(p.limit);
-      const offset = toNumber(p.offset);
+      // A 1-based `page`, as the admin's list asks, or an explicit `offset`.
+      const offset = readListOffset(p, limit);
+      // The site's own field groups or the plugins', as conditions on the
+      // same query. Field groups carry no per-reader allowlist, so the
+      // plugins' list is the plugins' slugs.
+      const slugLists = ownerSlugLists(
+        owner,
+        owner
+          ? pluginOwnedSlugs("fieldGroups", getHandlerConfig()?.plugins ?? [])
+          : [],
+        undefined
+      );
       const result = await svc.registry.listComponents({
         source: p.source as "code" | "ui" | undefined,
         // 🔴 Filtered by the DATABASE, not by the caller narrowing a page it was already sent.
@@ -229,6 +245,7 @@ export const COMPONENTS_METHODS: Record<
         search: p.search,
         limit,
         offset,
+        ...slugLists,
       });
       const placedBy = await placementCountsFor(
         result.data.map(component => component.slug)

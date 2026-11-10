@@ -34,7 +34,7 @@ import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import {
-  useFieldGroups,
+  fieldGroupKeys,
   useDeleteFieldGroup,
   useBulkDeleteFieldGroups,
 } from "@admin/hooks/queries";
@@ -43,44 +43,72 @@ import { usePagination } from "@admin/hooks/usePagination";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
 import { formatDateTime } from "@admin/lib/dates/format";
 import { navigateTo } from "@admin/lib/navigation";
+import { fieldGroupApi } from "@admin/services/fieldGroupApi";
 import type {
   ApiFieldGroup,
   FieldGroupSource,
   FieldGroupMigrationStatus,
 } from "@admin/types/entities";
 
+import {
+  SCHEMA_COLUMN_HEADER,
+  SchemaStateCell,
+  SourceCell,
+  schemaStateOf,
+  sourceLabel,
+} from "../../collection/components/entity-list/entity-list-labels";
+import { PluginEntitySections } from "../../collection/components/entity-list/PluginEntitySections";
+import {
+  usePluginEntities,
+  useSiteEntityPage,
+} from "../../collection/components/entity-list/use-entity-lists-by-owner";
+
 import { FieldGroupTableSkeleton } from "./FieldGroupTableSkeleton";
 
-/** Source badge label + icon. */
-function getSourceBadge(source?: FieldGroupSource): {
-  label: string;
-  icon: React.ReactNode;
-} {
-  switch (source) {
-    case "code":
-      return { label: "Code", icon: <Icons.Code className="mr-1 h-3 w-3" /> };
-    case "ui":
-      return { label: "UI", icon: <Icons.FileText className="mr-1 h-3 w-3" /> };
-    default:
-      return { label: "Unknown", icon: null };
-  }
+/** The source filter's options, in the order the menu offers them. */
+const SOURCE_FILTERS: FieldGroupSource[] = ["code", "ui"];
+
+/** The schema filter's options, in the order the menu offers them. */
+const SCHEMA_FILTERS: FieldGroupMigrationStatus[] = [
+  "synced",
+  "applied",
+  "pending",
+  "generated",
+  "failed",
+  "diverged",
+];
+
+/** A field group's slug, which the plugins' metadata names it by. */
+const slugOfFieldGroup = (fieldGroup: ApiFieldGroup): string => fieldGroup.slug;
+
+/** Whether a field group's label or slug holds the search text. */
+function matchesSearch(fieldGroup: ApiFieldGroup, search: string): boolean {
+  const needle = search.trim().toLowerCase();
+  if (!needle) return true;
+  return (
+    fieldGroup.label.toLowerCase().includes(needle) ||
+    fieldGroup.slug.toLowerCase().includes(needle)
+  );
 }
 
-/** Migration-status badge variant + label. */
-type MigrationBadge = {
-  variant: "success" | "warning" | "primary" | "default" | "destructive";
-  label: string;
-};
-
-/** Every migration status this table can be handed, keyed so the compiler demands each one. */
-const MIGRATION_BADGES: Record<FieldGroupMigrationStatus, MigrationBadge> = {
-  synced: { variant: "success", label: "Synced" },
-  pending: { variant: "warning", label: "Pending" },
-  generated: { variant: "primary", label: "Generated" },
-  applied: { variant: "success", label: "Applied" },
-  failed: { variant: "destructive", label: "Failed" },
-  diverged: { variant: "destructive", label: "Diverged" },
-};
+/**
+ * How many fields place a field group: the count a delete of it would be
+ * refused over. A count the list could not read says so with a dash, since
+ * it is not the same as unused.
+ */
+function UsedByCell({ placedBy }: { placedBy?: number | null }): JSX.Element {
+  if (placedBy === undefined || placedBy === null) {
+    return <span className="text-sm text-muted-foreground">—</span>;
+  }
+  if (placedBy === 0) {
+    return <span className="text-sm text-muted-foreground">Not used</span>;
+  }
+  return (
+    <span className="whitespace-nowrap text-sm tabular-nums">
+      {placedBy} {placedBy === 1 ? "field" : "fields"}
+    </span>
+  );
+}
 
 /**
  * Statuses a definition repair is the answer to.
@@ -90,37 +118,6 @@ const MIGRATION_BADGES: Record<FieldGroupMigrationStatus, MigrationBadge> = {
  * the same operation, which is why one list covers them.
  */
 const REPAIRABLE_STATUSES = new Set<string>(["diverged", "failed"]);
-
-function getMigrationBadge(status?: FieldGroupMigrationStatus): MigrationBadge {
-  // 🔴 An exhaustive Record rather than a switch with a `default`, and that is the control.
-  //
-  // A `default` arm silently absorbs any status added later: `diverged` rendered as `-` here — "no
-  // migration state", the opposite of what it means, and the state an operator most needs to find —
-  // while the sidebar indicator, which already keyed a Record off the same union, could not compile
-  // until it was handled. The compiler is a boundary; remembering to add a case is not.
-  //
-  // `undefined` keeps its own answer, because "this row has no status" is a real case and is not
-  // the same as an unhandled one.
-  if (!status) return { variant: "default", label: "-" };
-
-  // 🔴 A runtime fallback ON TOP of the exhaustive Record, not instead of it. The two catch
-  // different things and only one of them is a compile-time question.
-  //
-  // `migration_status` is an unconstrained `varchar(20)` and the registry casts whatever string it
-  // reads to this union, so the type is a claim about the column rather than a guarantee from it —
-  // a row written by an older release, a hand-edited row, or a future status arriving during a
-  // rolling deploy all land here as a value no entry covers. Indexing then yields `undefined` and
-  // the cell dereferences `.variant`, taking down the whole management view: the operator loses the
-  // page that would have shown them the offending row.
-  //
-  // This does NOT reopen the hole the Record closed. A new member of the union still fails to
-  // compile until it has an entry, because the Record is declared exhaustive OVER THE UNION; what
-  // this adds is an answer for values that were never in the union at all. The status is shown
-  // verbatim, so an operator sees what the column actually holds rather than a shrug.
-  return (
-    MIGRATION_BADGES[status] ?? { variant: "warning", label: String(status) }
-  );
-}
 
 /** Columns pinned as always-visible in the column toggle. */
 const ALWAYS_VISIBLE = new Set(["label", "createdAt"]);
@@ -175,14 +172,25 @@ export default function FieldGroupTable(): JSX.Element {
   //
   // Asking the database once and rendering the answer also keeps the pager honest: `meta` now
   // describes the filtered set, so page count, "hasNext" and the row range all agree with the rows.
-  const { data, isLoading, isFetching, isError, error } = useFieldGroups({
-    pagination: { page, pageSize },
-    sorting: [],
-    filters: {
-      search: debouncedSearch,
-      filters: { source: sourceFilter, migrationStatus: migrationFilter },
+  // The site's own field groups: the server also leaves the plugins' out of
+  // the page AND its count.
+  const { data, isLoading, isFetching, isError, error } = useSiteEntityPage(
+    fieldGroupKeys.lists(),
+    {
+      pagination: { page, pageSize },
+      sorting: [],
+      filters: {
+        search: debouncedSearch,
+        filters: { source: sourceFilter, migrationStatus: migrationFilter },
+      },
     },
-  });
+    fieldGroupApi.fetchComponents
+  );
+  // Every plugin field group, for the sections under the table.
+  const { data: pluginFieldGroups } = usePluginEntities(
+    fieldGroupKeys.lists(),
+    fieldGroupApi.fetchComponents
+  );
 
   const { mutate: deleteFieldGroup, isPending: isDeleting } =
     useDeleteFieldGroup();
@@ -300,8 +308,9 @@ export default function FieldGroupTable(): JSX.Element {
     return fieldGroup.fields?.length || 0;
   }, []);
 
-  const allColumns = useMemo<NextlyColumn<ApiFieldGroup>[]>(
-    () => [
+  // The columns, with the source cell naming the plugin on a plugin's rows.
+  const columnsFor = useCallback(
+    (pluginName?: string): NextlyColumn<ApiFieldGroup>[] => [
       {
         name: "label",
         header: "FIELD GROUP",
@@ -353,34 +362,24 @@ export default function FieldGroupTable(): JSX.Element {
           );
         },
       },
-      // fallow-ignore-next-line code-duplication
       {
         name: "source",
         header: "SOURCE",
-        cell: ({ row }) => {
-          const sourceBadge = getSourceBadge(row.source);
-          return (
-            <Badge
-              variant="default"
-              className="whitespace-nowrap font-normal text-muted-foreground"
-            >
-              {sourceBadge.icon}
-              {sourceBadge.label}
-            </Badge>
-          );
-        },
+        cell: ({ row }) => (
+          <SourceCell source={row.source} pluginName={pluginName} />
+        ),
       },
       {
+        // The stored column choice is keyed by this name, so it stays.
         name: "migrationStatus",
-        header: "STATUS",
-        cell: ({ row }) => {
-          const migrationBadge = getMigrationBadge(row.migrationStatus);
-          return (
-            <Badge variant={migrationBadge.variant}>
-              {migrationBadge.label}
-            </Badge>
-          );
-        },
+        header: SCHEMA_COLUMN_HEADER,
+        cell: ({ row }) => <SchemaStateCell state={row.migrationStatus} />,
+      },
+      {
+        // The fields that place this group, wherever they are.
+        name: "placedBy",
+        header: "USED BY",
+        cell: ({ row }) => <UsedByCell placedBy={row.placedBy} />,
       },
       {
         name: "fields",
@@ -402,6 +401,7 @@ export default function FieldGroupTable(): JSX.Element {
     ],
     [getFieldCount]
   );
+  const allColumns = useMemo(() => columnsFor(), [columnsFor]);
 
   // Resolves persisted column visibility while ensuring pinned columns remain visible.
   const { columns, columnsControl } = useTableColumns({
@@ -464,11 +464,35 @@ export default function FieldGroupTable(): JSX.Element {
         label: "Delete",
         icon: <Trash2 className="h-4 w-4" />,
         destructive: true,
-        isDisabled: () => Boolean(fieldGroup.locked),
+        // One owned by code offers no delete, rather than a disabled one.
+        isVisible: () => !fieldGroup.locked,
         onSelect: () => handleDelete(fieldGroup),
       },
     ],
     [handleEdit, handleDelete]
+  );
+
+  // A plugin's field group is read-only: it can be opened, never deleted.
+  const pluginRowActions = useCallback(
+    (fieldGroup: ApiFieldGroup): RowAction<ApiFieldGroup>[] => [
+      {
+        id: "edit",
+        label: "View",
+        icon: <Eye className="h-4 w-4" />,
+        onSelect: () => handleEdit(fieldGroup),
+      },
+    ],
+    [handleEdit]
+  );
+
+  // The plugins' field groups the search finds; the source and schema
+  // filters narrow the site's own list only.
+  const pluginRows = useMemo(
+    () =>
+      (pluginFieldGroups ?? []).filter(fieldGroup =>
+        matchesSearch(fieldGroup, debouncedSearch)
+      ),
+    [pluginFieldGroups, debouncedSearch]
   );
 
   const showLoadingSkeleton =
@@ -497,63 +521,33 @@ export default function FieldGroupTable(): JSX.Element {
                 checked={sourceFilter === "all"}
                 onCheckedChange={() => handleSourceFilterChange("all")}
               >
-                All Sources
+                Any source
               </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={sourceFilter === "code"}
-                onCheckedChange={() => handleSourceFilterChange("code")}
-              >
-                Code
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={sourceFilter === "ui"}
-                onCheckedChange={() => handleSourceFilterChange("ui")}
-              >
-                UI
-              </DropdownMenuCheckboxItem>
+              {SOURCE_FILTERS.map(source => (
+                <DropdownMenuCheckboxItem
+                  key={source}
+                  checked={sourceFilter === source}
+                  onCheckedChange={() => handleSourceFilterChange(source)}
+                >
+                  {sourceLabel(source)}
+                </DropdownMenuCheckboxItem>
+              ))}
               <DropdownMenuSeparator />
               <DropdownMenuCheckboxItem
                 checked={migrationFilter === "all"}
                 onCheckedChange={() => handleMigrationFilterChange("all")}
               >
-                All Status
+                Any schema state
               </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "synced"}
-                onCheckedChange={() => handleMigrationFilterChange("synced")}
-              >
-                Synced
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "pending"}
-                onCheckedChange={() => handleMigrationFilterChange("pending")}
-              >
-                Pending
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "generated"}
-                onCheckedChange={() => handleMigrationFilterChange("generated")}
-              >
-                Generated
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "applied"}
-                onCheckedChange={() => handleMigrationFilterChange("applied")}
-              >
-                Applied
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "failed"}
-                onCheckedChange={() => handleMigrationFilterChange("failed")}
-              >
-                Failed
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "diverged"}
-                onCheckedChange={() => handleMigrationFilterChange("diverged")}
-              >
-                Diverged
-              </DropdownMenuCheckboxItem>
+              {SCHEMA_FILTERS.map(state => (
+                <DropdownMenuCheckboxItem
+                  key={state}
+                  checked={migrationFilter === state}
+                  onCheckedChange={() => handleMigrationFilterChange(state)}
+                >
+                  {schemaStateOf(state).label}
+                </DropdownMenuCheckboxItem>
+              ))}
             </>
           )
         }
@@ -638,6 +632,16 @@ export default function FieldGroupTable(): JSX.Element {
               }
             : undefined
         }
+      />
+
+      <PluginEntitySections<ApiFieldGroup>
+        kind="fieldGroups"
+        noun={{ one: "field group", many: "field groups" }}
+        rows={pluginRows}
+        slugOf={slugOfFieldGroup}
+        columnsFor={columnsFor}
+        rowActions={pluginRowActions}
+        onRowClick={handleEdit}
       />
 
       {/* Mounted only while a target is held, so each opening fetches a fresh plan rather than

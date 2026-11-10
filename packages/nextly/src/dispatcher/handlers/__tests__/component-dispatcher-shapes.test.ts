@@ -107,6 +107,46 @@ beforeEach(() => {
   vi.mocked(getAdapterFromDI).mockReturnValue(undefined);
 });
 
+describe("listComponents, the page the admin asks for", () => {
+  /**
+   * The admin's list asks by 1-based `page`, as every list's shared query builder writes it. Read
+   * as an offset, so the second page is the second page: ignored, every page was the first.
+   */
+  it("reads a 1-based page as the offset of that page", async () => {
+    const listComponents = vi.fn().mockResolvedValue({ data: [], total: 25 });
+    wireRegistry(makeRegistry({ listComponents }));
+
+    const response = (await dispatchComponents(
+      "listComponents",
+      { limit: "10", page: "2" },
+      undefined
+    )) as Response;
+
+    expect(listComponents.mock.calls[0]?.[0]).toMatchObject({
+      limit: 10,
+      offset: 10,
+    });
+    const body = (await response.json()) as {
+      meta: { page: number; hasNext: boolean };
+    };
+    expect(body.meta.page).toBe(2);
+    expect(body.meta.hasNext).toBe(true);
+  });
+
+  it("lets an explicit offset win over a page", async () => {
+    const listComponents = vi.fn().mockResolvedValue({ data: [], total: 0 });
+    wireRegistry(makeRegistry({ listComponents }));
+
+    await dispatchComponents(
+      "listComponents",
+      { limit: "10", page: "3", offset: "5" },
+      undefined
+    );
+
+    expect(listComponents.mock.calls[0]?.[0]?.offset).toBe(5);
+  });
+});
+
 describe("listComponents, the migrationStatus filter", () => {
   /**
    * The filter has to reach the DATABASE. Applied client-side to one page it can only search that
