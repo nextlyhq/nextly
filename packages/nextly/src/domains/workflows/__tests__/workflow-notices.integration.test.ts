@@ -413,7 +413,8 @@ describe.each(getConfiguredTestDialects())(
       const handler = app().getService(
         "collectionsHandler"
       ) as CollectionsHandler;
-      await handler.updateEntry(
+      // An update names its version or says it overwrites; this one read none.
+      const edited = await handler.updateEntry(
         {
           collectionName: "posts",
           entryId: post,
@@ -421,8 +422,9 @@ describe.each(getConfiguredTestDialects())(
           locale: "en",
           user: { id: "dave" },
         },
-        { title: "Edited" }
+        { title: "Edited", _overwrite: true }
       );
+      expect(edited.success, JSON.stringify(edited)).toBe(true);
       expect(
         (await stateOf(app(), partOf("posts", post, "en")))?.enteredBy
       ).toBe("dave");
