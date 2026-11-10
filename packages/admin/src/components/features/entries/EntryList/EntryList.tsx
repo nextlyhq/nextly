@@ -18,6 +18,7 @@ import {
   Dialog,
   DialogContent,
   DialogTitle,
+  PageHeader,
 } from "@nextlyhq/ui";
 import { useState, useCallback, useMemo, useRef } from "react";
 import type { JSX } from "react";
@@ -788,40 +789,37 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
           context={placeContext}
           builtIns={{
             toolbar: (
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <h1 className="text-xl font-semibold tracking-tight">
-                    {labels.plural}
-                  </h1>
-                  {collection?.description && (
-                    <p className="text-sm font-normal text-muted-foreground mt-1">
-                      {collection.description}
-                    </p>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 w-full sm:w-auto">
-                  <Button
-                    variant="outline"
-                    onClick={handleApiPlaygroundClick}
-                    className="flex-1 sm:flex-initial hover-unified"
-                  >
-                    <Code className="h-4 w-4" />
-                    API
-                  </Button>
-                  {/* Machine-created collections (disableCreate) never offer "New" —
-                      a hand-typed entry there would be fiction, not data — and nor
-                      does a collection the caller may not create in. */}
-                  {createAllowed && (
+              // The list's header, drawn by the shared page header. The place
+              // gives its parts their spacing, so the header adds none below.
+              <PageHeader
+                className="m-0"
+                title={labels.plural}
+                description={collection?.description || undefined}
+                actions={
+                  <div className="flex items-center gap-2 w-full sm:w-auto">
                     <Button
-                      onClick={handleCreateClick}
+                      variant="outline"
+                      onClick={handleApiPlaygroundClick}
                       className="flex-1 sm:flex-initial hover-unified"
                     >
-                      <Plus className="h-4 w-4" />
-                      New {labels.singular}
+                      <Code className="h-4 w-4" />
+                      API
                     </Button>
-                  )}
-                </div>
-              </div>
+                    {/* Machine-created collections (disableCreate) never offer "New" —
+                        a hand-typed entry there would be fiction, not data — and nor
+                        does a collection the caller may not create in. */}
+                    {createAllowed && (
+                      <Button
+                        onClick={handleCreateClick}
+                        className="flex-1 sm:flex-initial hover-unified"
+                      >
+                        <Plus className="h-4 w-4" />
+                        New {labels.singular}
+                      </Button>
+                    )}
+                  </div>
+                }
+              />
             ),
             table: (
               // One part of the place: what the list draws inside it keeps its

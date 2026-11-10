@@ -1,4 +1,4 @@
-import { Button } from "@nextlyhq/ui";
+import { Button, PageHeader } from "@nextlyhq/ui";
 import type React from "react";
 
 import { UserBreadcrumbs } from "@admin/components/features/user-management/breadcrumbs";
@@ -45,23 +45,22 @@ const UsersPage: React.FC = () => {
           </div>
 
           {/* Page Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-            <div>
-              <h1 className="text-xl font-semibold tracking-tight">Users</h1>
-              {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
-              <p className="text-sm font-normal text-muted-foreground mt-1">
-                Manage user accounts and permissions
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Link href={ROUTES.USERS_CREATE}>
-                <Button size="md" className="flex items-center gap-1">
-                  <Plus className="h-4 w-4" />
-                  <span>Create User</span>
-                </Button>
-              </Link>
-            </div>
-          </div>
+          <PageHeader
+            title="Users"
+            description="Manage user accounts and permissions"
+            actions={
+              <>
+                <div className="flex items-center gap-2">
+                  <Link href={ROUTES.USERS_CREATE}>
+                    <Button size="md" className="flex items-center gap-1">
+                      <Plus className="h-4 w-4" />
+                      <span>Create User</span>
+                    </Button>
+                  </Link>
+                </div>
+              </>
+            }
+          />
 
           {/* User Table */}
           <div>

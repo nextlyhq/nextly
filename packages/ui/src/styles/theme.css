@@ -1331,6 +1331,26 @@
     align-content: start;
   }
 
+  /* A list page's inset: the shell's gutter as padding on a plain block, for a
+   * page that must stay a block (it hands its height down through
+   * `height: 100%`, which a grid area sized by `align-content: start` would
+   * collapse). */
+  .nx-page-pad {
+    padding-inline: var(--nx-gutter);
+  }
+
+  /* A start-aligned shell keeps the leading gutter fixed and gives all the
+   * surplus to the trailing track, so a bounded column starts at the same edge
+   * as the page header and every list instead of drifting right as the screen
+   * widens. A `full` column still fills the row. */
+  .nx-page-shell[data-align="start"] {
+    grid-template-columns:
+      [full-start] var(--nx-gutter)
+      [content-start] minmax(0, var(--nx-shell-measure))
+      [content-end] minmax(var(--nx-gutter), 1fr)
+      [full-end];
+  }
+
   /* `min-width: 0` because a grid item's default `min-width: auto` refuses to
    * shrink below its content, which lets one wide descendant — a long code
    * string, a table — push the column past the measure it was given. */
@@ -1358,13 +1378,15 @@
  * `:root` or `.nextly-admin` — both ancestors of the `<main>` that declares it —
  * never matches, and the gutter keeps its widest value at every panel size. */
 @container content (max-width: 1024px) {
-  .nx-page-shell {
+  .nx-page-shell,
+  .nx-page-pad {
     --nx-gutter: 1.5rem;
   }
 }
 
 @container content (max-width: 768px) {
-  .nx-page-shell {
+  .nx-page-shell,
+  .nx-page-pad {
     --nx-gutter: 1rem;
   }
 }
