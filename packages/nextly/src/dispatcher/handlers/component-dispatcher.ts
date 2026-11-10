@@ -177,6 +177,37 @@ function readMigrationStatus(
  * that guards nothing — silently, because an unrecognised name simply means "not builder surface".
  * A test reading these keys turns that into a failure by name.
  */
+/**
+ * How many fields place each field group on a list page, or `null` when that
+ * cannot be read. The list still answers without it: a count is something
+ * the page shows, not something the request depends on, so an unreadable
+ * field list leaves each row saying it has no count rather than refusing the
+ * whole list. Read once for the page, the same answer a delete would give
+ * about each field group's fields.
+ */
+async function placementCountsFor(
+  slugs: readonly string[]
+): Promise<Map<string, number> | null> {
+  const adapter = getAdapterFromDI();
+  if (!adapter || slugs.length === 0) return null;
+  try {
+    // Loaded when a list asks, as the delete path loads it: the registry's
+    // other callers never need the dependents readers.
+    const { fieldGroupPlacementCounts, readFieldOwners } = await import(
+      "../../domains/collections/services/collection-dependents"
+    );
+    return await fieldGroupPlacementCounts(slugs, {
+      fieldOwners: () => readFieldOwners(adapter),
+    });
+  } catch (error) {
+    (getLoggerFromDI() ?? DISCARDED_LOG).warn(
+      "Field-group list: the use counts could not be read; each row shows none.",
+      { error: error instanceof Error ? error.message : String(error) }
+    );
+    return null;
+  }
+}
+
 export const COMPONENTS_METHODS: Record<
   string,
   MethodHandler<ComponentsServices>
@@ -199,8 +230,14 @@ export const COMPONENTS_METHODS: Record<
         limit,
         offset,
       });
+      const placedBy = await placementCountsFor(
+        result.data.map(component => component.slug)
+      );
       return respondList(
-        result.data,
+        result.data.map(component => ({
+          ...component,
+          placedBy: placedBy?.get(component.slug) ?? null,
+        })),
         offsetPaginationToMeta({ total: result.total, limit, offset })
       );
     },

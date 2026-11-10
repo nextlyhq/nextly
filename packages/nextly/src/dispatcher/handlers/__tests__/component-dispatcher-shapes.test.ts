@@ -14,7 +14,20 @@ vi.mock("../../helpers/di", () => ({
   getComponentRegistryFromDI: vi.fn(),
   getFieldGroupMetadataServiceFromDI: vi.fn(),
   getAdapterFromDI: vi.fn(),
+  getLoggerFromDI: vi.fn(),
 }));
+
+// The field lists a list's use counts are read from, answered by each test.
+const readFieldOwners = vi.hoisted(() => vi.fn());
+vi.mock(
+  "../../../domains/collections/services/collection-dependents",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../../domains/collections/services/collection-dependents")
+    >()),
+    readFieldOwners,
+  })
+);
 
 vi.mock("../../../di/container", () => ({
   container: {
@@ -29,6 +42,7 @@ import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
   getFieldGroupMetadataServiceFromDI,
+  getLoggerFromDI,
 } from "../../helpers/di";
 import { dispatchComponents } from "../component-dispatcher";
 
@@ -191,7 +205,12 @@ describe("dispatchComponents, paginated lists (respondList)", () => {
     expect(response.headers.get("content-type")).toBe("application/json");
     const body = await response.json();
     expect(body).toEqual({
-      items: fakeComponents,
+      // No database adapter here, so no use count can be read: each row says
+      // so with `null` rather than claiming nothing uses it.
+      items: fakeComponents.map(component => ({
+        ...component,
+        placedBy: null,
+      })),
       meta: {
         total: 2,
         page: 1,
@@ -202,6 +221,73 @@ describe("dispatchComponents, paginated lists (respondList)", () => {
       },
     });
     expect(body).not.toHaveProperty("data");
+  });
+});
+
+describe("dispatchComponents, listComponents use counts", () => {
+  const page = [
+    { slug: "card", tableName: "comp_card" },
+    { slug: "seo", tableName: "comp_seo" },
+  ];
+
+  beforeEach(() => {
+    wireRegistry(
+      makeRegistry({
+        listComponents: vi.fn().mockResolvedValue({ data: page, total: 2 }),
+      })
+    );
+    vi.mocked(getAdapterFromDI).mockReturnValue(
+      {} as ReturnType<typeof getAdapterFromDI>
+    );
+  });
+
+  it("gives each row the number of fields that place it, one field group's use of another included", async () => {
+    readFieldOwners.mockResolvedValue([
+      {
+        entityType: "fieldGroup",
+        entitySlug: "card",
+        fields: [{ name: "meta", type: "component", component: "seo" }],
+      },
+      {
+        entityType: "collection",
+        entitySlug: "pages",
+        fields: [
+          { name: "teaser", type: "component", component: "card" },
+          { name: "footer", type: "component", component: "card" },
+        ],
+      },
+    ]);
+    const body = await (
+      (await dispatchComponents("listComponents", {}, undefined)) as Response
+    ).json();
+    expect(body.items).toEqual([
+      { slug: "card", tableName: "comp_card", placedBy: 2 },
+      { slug: "seo", tableName: "comp_seo", placedBy: 1 },
+    ]);
+    expect(readFieldOwners).toHaveBeenCalledTimes(1);
+  });
+
+  it("still lists the field groups when the field lists cannot be read, with no count", async () => {
+    readFieldOwners.mockRejectedValue(new Error("registry unreadable"));
+    const warn = vi.fn();
+    vi.mocked(getLoggerFromDI).mockReturnValue({
+      warn,
+    } as unknown as ReturnType<typeof getLoggerFromDI>);
+    const response = (await dispatchComponents(
+      "listComponents",
+      {},
+      undefined
+    )) as Response;
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(
+      body.items.map((item: { placedBy: unknown }) => item.placedBy)
+    ).toEqual([null, null]);
+    // Said in the log, so an unreadable registry is not mistaken for unused groups.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("use counts could not be read"),
+      { error: "registry unreadable" }
+    );
   });
 });
 

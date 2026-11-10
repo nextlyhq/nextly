@@ -455,6 +455,39 @@ export async function findEntityDependents(
 }
 
 /**
+ * How many fields place each field group, as the field-group list shows it.
+ *
+ * The same answer a delete gives about one field group's fields
+ * (`findEntityDependents`), from the same walk over every stored field list,
+ * read once for the whole set. Unlike a delete, nothing here goes together:
+ * each field group is asked about on its own, so one field group's use of
+ * another on the same page still counts. Only fields are counted, not keys or
+ * other owners' elements, which a delete also weighs.
+ *
+ * Rejects when the field lists cannot be read, so the caller decides how to
+ * show a count it does not have.
+ *
+ * @param slugs the field groups to count, as fields name them
+ * @param sources where the stored field lists are read from
+ */
+export async function fieldGroupPlacementCounts(
+  slugs: readonly string[],
+  sources: Pick<DependentsSources, "fieldOwners">
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (slugs.length === 0) return counts;
+  const owners = await sources.fieldOwners();
+  const nothingGoes: ReadonlySet<string> = new Set();
+  for (const slug of slugs) {
+    counts.set(
+      slug,
+      referencesAmong(owners, "fieldGroup", slug, nothingGoes).length
+    );
+  }
+  return counts;
+}
+
+/**
  * The keys the database holds into `own` from outside the operation that no
  * declared key accounts for. A key is told by the table it is on and the
  * table it points at, since the catalog does not name every key.
