@@ -9,7 +9,9 @@
  * readable. A collection with no many-to-many on either side still renames.
  *
  * The collections are Builder-authored, because only the Schema Builder can
- * declare a many-to-many field, and only a Builder entity can be renamed.
+ * declare a many-to-many field, and only a Builder entity can be renamed. A
+ * Builder Single or field group can declare one too, with a junction of its
+ * own, so one of theirs pointing at the collection refuses its rename as well.
  *
  * A rename also holds the schema lock, as every other schema change does: one
  * started while a migration holds it is refused at once, with nothing written,
@@ -19,7 +21,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
-import { seedBuilderCollection } from "../../../plugins/__tests__/seed-builder-entity";
+import {
+  seedBuilderCollection,
+  seedBuilderComponent,
+  seedBuilderSingle,
+} from "../../../plugins/__tests__/seed-builder-entity";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -119,6 +125,33 @@ function rename(from: string, to: string) {
   ).updateCollectionMetadata(from, { slug: to });
 }
 
+/**
+ * `tags`, and a Builder `entityKind` (a Single or a field group) whose top-level many-to-many
+ * points at it, so its junction exists.
+ */
+async function seedHolder(
+  dialect: TestDialect,
+  entityKind: "single" | "field group"
+): Promise<void> {
+  handle = await createTestNextly({ dialect });
+  await seedBuilderCollection(handle.adapter, {
+    slug: "tags",
+    fields: [{ name: "name", type: "text" }],
+  });
+  const seedHolding =
+    entityKind === "single" ? seedBuilderSingle : seedBuilderComponent;
+  await seedHolding(handle.adapter, {
+    slug: "showcase",
+    fields: [
+      {
+        name: "featured",
+        type: "relationship",
+        options: { relationType: "manyToMany", target: "tags" },
+      },
+    ],
+  });
+}
+
 /** The registry's collection slugs. */
 async function slugs(): Promise<string[]> {
   return (await t().adapter.select<{ slug: string }>("dynamic_collections"))
@@ -215,6 +248,22 @@ describe.each(getConfiguredTestDialects())(
       expect(await slugs()).toEqual(before);
       expect(await linkedTags()).toEqual(["tag-1"]);
     }, 120_000);
+
+    it.each(["single", "field group"] as const)(
+      "refuses to rename the collection a %s's many-to-many field points at, naming the field",
+      async entityKind => {
+        await seedHolder(dialect, entityKind);
+        const before = await slugs();
+
+        await expect(rename("tags", "labels")).rejects.toMatchObject({
+          code: "CONFLICT",
+          publicMessage: expect.stringContaining("showcase.featured"),
+        });
+
+        expect(await slugs()).toEqual(before);
+      },
+      120_000
+    );
 
     it("refuses before the registry row is written", async () => {
       await seed(dialect);

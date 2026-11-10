@@ -131,12 +131,13 @@ function savePosts(fields: unknown[], version: number) {
 }
 
 /**
- * The key on `dc_posts.<column>`, as the server reports it: the table it references and what it
+ * The key on `<table>.<column>` (`dc_posts` unless named), as the server reports it: the table it references and what it
  * does when that table's row is deleted.
  */
 async function keyOn(
   dialect: TestDialect,
-  column: string
+  column: string,
+  table = "dc_posts"
 ): Promise<{ table: string; onDelete: string } | undefined> {
   const sql =
     dialect === "mysql"
@@ -145,7 +146,7 @@ async function keyOn(
            JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
              ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
             AND rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
-          WHERE kcu.TABLE_SCHEMA = DATABASE() AND kcu.TABLE_NAME = 'dc_posts'
+          WHERE kcu.TABLE_SCHEMA = DATABASE() AND kcu.TABLE_NAME = '${table}'
             AND kcu.COLUMN_NAME = '${column}'`
       : `SELECT ccu.table_name AS t, rc.delete_rule AS d
            FROM information_schema.key_column_usage kcu
@@ -155,7 +156,7 @@ async function keyOn(
            JOIN information_schema.constraint_column_usage ccu
              ON ccu.constraint_name = kcu.constraint_name
             AND ccu.constraint_schema = kcu.constraint_schema
-          WHERE kcu.table_schema = current_schema() AND kcu.table_name = 'dc_posts'
+          WHERE kcu.table_schema = current_schema() AND kcu.table_name = '${table}'
             AND kcu.column_name = '${column}'`;
   const rows = await t().adapter.executeQuery<{ t: string; d: string }>(sql);
   // One key per column, so a second row would be a second key on it.
@@ -218,6 +219,27 @@ function cases(dialect: TestDialect): void {
     ]);
 
     expect((await keyOn(dialect, "editor"))?.table).toBe("dc_authors");
+  });
+
+  it("adds a many-to-many to the renamed collection with a junction keyed to the table it kept", async () => {
+    await renamedTarget(dialect);
+    const before = await postsSchema();
+
+    await updatePosts([
+      ...before.fields,
+      {
+        name: "contributors",
+        type: "relationship",
+        options: { relationType: "manyToMany", target: "writers" },
+      },
+    ]);
+
+    // The junction is named and its columns spelled from the slugs, as its reads and writes
+    // spell them; its key to the target references the table the target is stored in.
+    expect(
+      (await keyOn(dialect, "writers_id", "dc_posts_dc_writers_contributors"))
+        ?.table
+    ).toBe("dc_authors");
   });
 
   it("refuses a save made from the schema as it was before the rename rewrote it", async () => {

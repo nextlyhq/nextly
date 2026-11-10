@@ -82,7 +82,7 @@ export async function renameEntity<T>(
       const present = await slugKeyedTablesPresent(adapter);
       return writingPermissions(getDialectTables(dialect).permissions, () =>
         adapter.transaction(async tx => {
-          await refuseManyToManyLinks(tx, move);
+          await refuseManyToManyLinks(tx, move, present);
           // What the stored relationships point at, refused before anything is written.
           await refuseUnmovableTargets(tx, move, present);
           const row = await writeRegistry(tx);
