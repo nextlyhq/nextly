@@ -14,11 +14,7 @@ import {
   ChromeSuppressionProvider,
   useSuppressedChrome,
 } from "../ChromeSuppression";
-import {
-  PanelFoldProvider,
-  useFoldedPanel,
-  usePanelFold,
-} from "../PanelFold";
+import { PanelFoldProvider, useFoldedPanel, usePanelFold } from "../PanelFold";
 
 function FoldingPage({ id }: { id: string }): React.JSX.Element {
   useFoldedPanel(id);

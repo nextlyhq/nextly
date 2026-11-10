@@ -21,8 +21,8 @@ import {
   useSuppressedChrome,
 } from "../components/layout/ChromeSuppression";
 import { DashboardHeader } from "../components/layout/header";
-import { PanelFoldProvider } from "../components/layout/PanelFold";
 import { HeaderTrailProvider } from "../components/layout/header/HeaderTrail";
+import { PanelFoldProvider } from "../components/layout/PanelFold";
 import { SidebarProvider } from "../components/layout/sidebar";
 import { DualSidebar } from "../components/layout/sidebar/DualSidebar";
 import {
@@ -64,13 +64,13 @@ export function DashboardLayout({
           panel to go through it, and the bar reads the fold to draw its
           toggle. */}
       <PanelFoldProvider>
-      <SidePanelReservationProvider>
-        {/* Above the chrome for the same reason: the top bar draws the trail
+        <SidePanelReservationProvider>
+          {/* Above the chrome for the same reason: the top bar draws the trail
             a page below it registers. */}
-        <HeaderTrailProvider>
-          <DashboardChrome>{children}</DashboardChrome>
-        </HeaderTrailProvider>
-      </SidePanelReservationProvider>
+          <HeaderTrailProvider>
+            <DashboardChrome>{children}</DashboardChrome>
+          </HeaderTrailProvider>
+        </SidePanelReservationProvider>
       </PanelFoldProvider>
     </ChromeSuppressionProvider>
   );

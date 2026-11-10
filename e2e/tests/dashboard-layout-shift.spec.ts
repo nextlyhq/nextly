@@ -238,9 +238,13 @@ async function waitForSettled(page: Page): Promise<void> {
 }
 
 /** Follows the link at `href` the way the app does, without it counting as a reader's input. */
-/** Follow the first link to `href` with a real click, as a reader would. */
+/**
+ * Follow the first VISIBLE link to `href` with a real click, as a reader would.
+ * On a phone the rail's own links sit in the closed drawer, so the first match
+ * in document order can be one no reader could press.
+ */
 async function clickLink(page: Page, href: string): Promise<void> {
-  await page.locator(`a[href="${href}"]`).first().click();
+  await page.locator(`a[href="${href}"]:visible`).first().click();
 }
 
 async function followLink(page: Page, href: string): Promise<void> {
@@ -422,20 +426,12 @@ for (const size of WIDTHS) {
     }
 
     if (wide) {
-      // The population control: the probe sees a move when one happens. Collapsing the panel's
-      // track, as the shell did when a surface owned no panel, must move the column by the
-      // track's width; a probe that read a fixed box, or the wrong element, would see nothing.
-      const track = page.getByTestId("sub-sidebar");
-      const trackWidth = await track.evaluate(
-        element => element.getBoundingClientRect().width
-      );
-      expect(trackWidth).toBeGreaterThan(0);
-      await track.evaluate(element => {
-        (element as HTMLElement).style.width = "0px";
-        (element as HTMLElement).style.borderWidth = "0px";
-      });
-      const collapsed = await mainColumnBox(page);
-      expect(collapsed.x).toBe(before.x - Math.round(trackWidth));
+      // The population control: the probe sees a move when one happens. On the
+      // wide layout a collection holds its panel's track and the dashboard
+      // holds none, so their direct loads start the column a track's width
+      // apart; a probe that read a fixed box, or the wrong element, would see
+      // the two as equal and the assertions above would pass on nothing.
+      expect(collectionDirect.x - dashboardDirect.x).toBe(256);
     }
   });
 }
