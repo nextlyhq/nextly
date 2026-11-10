@@ -153,7 +153,28 @@ function onePerName(
   return [...byName.values()].map(
     fields =>
       fields.find(field => storedAsDeclared(field, tableName, existing)) ??
+      fields.find(field => mayHaveMade(field, tableName, existing)) ??
       fields[0]
+  );
+}
+
+/**
+ * Whether `field` could have made the column there: a column only in the
+ * type's translations table was made by a translated declaration, never by one
+ * declared shared. Asked where nothing states the column's type, as a
+ * migration snapshot's record of a translations table does not.
+ */
+function mayHaveMade(
+  field: NamedField,
+  tableName: string,
+  existing: ExistingColumns
+): boolean {
+  const main = existing.names.get(tableName) ?? new Set<string>();
+  const onlyTranslated = [...columnsDeclaredBy([field])].every(
+    column => !main.has(column)
+  );
+  return !(
+    onlyTranslated && (field as { localized?: unknown }).localized === false
   );
 }
 
@@ -167,15 +188,19 @@ function storedAsDeclared(
   existing: ExistingColumns
 ): boolean {
   const { dialect } = existing;
-  const there = existing.specs.get(tableName);
-  if (dialect === undefined || there === undefined) return false;
+  if (dialect === undefined) return false;
+  // On the type's own table, or on its translations table, where a held-back
+  // translated field keeps its column.
+  const there = (column: string) =>
+    existing.specs.get(tableName)?.get(column) ??
+    existing.specs.get(companionTableOf(tableName))?.get(column);
   const columns = columnsDeclaredBy([field]);
   const origins: ColumnOrigin[] = ["codeFirst", "collection"];
   return origins.some(builtBy =>
     buildDesiredTableFromFields(tableName, [field], dialect, { builtBy })
       .columns.filter(column => columns.has(column.name))
       .every(column => {
-        const current = there.get(column.name);
+        const current = there(column.name);
         return current !== undefined && !typesDiffer(current, column);
       })
   );

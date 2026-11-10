@@ -524,6 +524,84 @@ describe.each(getConfiguredTestDialects())(
       expect((await read("es_notes", noteId))?.seoTitle).toBe("Own");
     }, 240_000);
 
+    it("restores a held-back field's values from the declaration that made its translated column", async () => {
+      database = await openDatabase(dialect);
+      const adapter = database.adapter;
+      vi.stubEnv("NODE_ENV", "development");
+      const localization = { locales: ["en", "es"], defaultLocale: "en" };
+      // Two plugins declare `seo_title`: one as a shared number, off for
+      // every type here from the start, and one as translated text, whose
+      // column the type has.
+      const shared: PluginDefinition = {
+        ...seoPlugin,
+        name: "@t/seo-shared",
+        contributes: {
+          extend: [
+            {
+              target: {
+                every: ["collection"],
+                except: ["es_posts", "es_tags"],
+              },
+              fields: [{ ...number({ name: "seo_title" }), localized: false }],
+            },
+          ],
+        },
+      };
+      const translated = (except?: string[]): PluginDefinition => ({
+        ...seoPlugin,
+        contributes: {
+          extend: [
+            {
+              target: {
+                every: ["collection"],
+                ...(except === undefined ? {} : { except }),
+              },
+              fields: [{ ...text({ name: "seo_title" }), localized: true }],
+            },
+          ],
+        },
+      });
+      const tags = (localized: boolean) =>
+        defineCollection({
+          slug: "es_tags",
+          localized,
+          fields: [
+            localized
+              ? { ...text({ name: "label" }), localized: true }
+              : text({ name: "label" }),
+          ],
+        });
+      const site = (localized: boolean) => ({
+        collections: [posts, tags(localized)],
+        localization,
+      });
+      current = await createTestNextly({
+        adapter: adapter as never,
+        ...site(true),
+        plugins: [shared, translated()],
+      });
+      configWith(site(true), [shared, translated()]);
+      await reloadNextlyConfig();
+      const created = await current.nextly.create({
+        collection: "es_tags" as never,
+        data: { label: "L", seo_title: "T" } as never,
+      });
+      const id = (created.item as { id: string }).id;
+
+      // Off for the type, then its translation turned off, then on again.
+      configWith(site(true), [shared, translated(["es_tags"])]);
+      await reloadNextlyConfig();
+      configWith(site(false), [shared, translated(["es_tags"])]);
+      await reloadNextlyConfig();
+      configWith(site(false), [shared, translated()]);
+      await reloadNextlyConfig();
+      const read = (await current.nextly.findByID({
+        collection: "es_tags" as never,
+        id,
+      } as never)) as Record<string, unknown> | null;
+      expect(read?.seo_title).toBe("T");
+    }, 240_000);
+
     it("keeps a Builder type's column and values, hidden, while it is switched off in development", async () => {
       database = await openDatabase(dialect);
       const adapter = database.adapter;

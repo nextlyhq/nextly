@@ -379,13 +379,15 @@ function fieldsToRestore(
   args: Pick<RestoreCompanionArgs, "fields" | "heldBack">
 ): RestorableField[] {
   const own = restorableFields(args.fields);
+  // One to a name: of several scopes' declarations of a name, the first the
+  // companion owned while translated is the one whose values are there.
   const taken = new Set(own.map(field => field.name));
-  return [
-    ...own,
-    ...restorableFields(args.heldBack ?? []).filter(
-      field => !taken.has(field.name)
-    ),
-  ];
+  const held = restorableFields(args.heldBack ?? []).filter(field => {
+    if (taken.has(field.name)) return false;
+    taken.add(field.name);
+    return true;
+  });
+  return [...own, ...held];
 }
 /**
  * The fields whose values the companion is still entitled to supply.

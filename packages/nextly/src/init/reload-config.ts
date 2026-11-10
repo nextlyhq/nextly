@@ -1055,32 +1055,25 @@ async function unlessLeavingRefused(
 /**
  * The fields a plugin's scope holds back from `entity`, as the localization
  * restore reads them: not the entity's own by name or by column
- * (`unclaimedHeldBack`), one to a name, the fold's preferred first. Restoring
- * an entity whose translation is turned off copies them back from its
- * translations table too: their values would otherwise stay behind there, and
- * switching the field on again would find an empty column.
+ * (`unclaimedHeldBack`), every declaration of a name, the fold's preferred
+ * first. The restore copies their values back from the translations table
+ * too, where only a translated declaration's can be (`fieldsToRestore`):
+ * their values would otherwise stay behind there, and switching the field on
+ * again would find an empty column.
  */
 function heldBackForRestore(
   kind: I18nTransitionKind,
   entity: { slug?: string; fields?: { name: string; type: string }[] }
 ): { name: string; type: string; localized?: boolean }[] {
   if (kind === "fieldGroup" || entity.slug === undefined) return [];
-  const seen = new Set<string>();
   return unclaimedHeldBack(kind, {
     slug: entity.slug,
     fields: entity.fields ?? [],
-  }).flatMap(field => {
-    const name = field.name.toLowerCase();
-    if (seen.has(name)) return [];
-    seen.add(name);
-    return [
-      {
-        name: field.name,
-        type: field.type,
-        localized: (field as { localized?: boolean }).localized,
-      },
-    ];
-  });
+  }).map(field => ({
+    name: field.name,
+    type: field.type,
+    localized: (field as { localized?: boolean }).localized,
+  }));
 }
 
 /**
