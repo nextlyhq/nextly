@@ -28,7 +28,10 @@ function heading(id: string, text: string) {
 
 async function seed(page: Page, nodes: unknown[]): Promise<void> {
   const stored = await page.request.patch(HOMEPAGE_API, {
-    data: { layout: { formatVersion: 1, kind: "page", nodes } },
+    data: {
+      layout: { formatVersion: 1, kind: "page", nodes },
+      _overwrite: true,
+    },
   });
   expect(stored.ok(), `seeding the homepage layout: ${stored.status()}`).toBe(
     true

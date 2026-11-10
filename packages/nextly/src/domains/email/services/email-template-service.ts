@@ -1346,10 +1346,10 @@ export class EmailTemplateService extends BaseService {
    * write runs alone, as it always did.
    *
    * The email services are never handed a caller's transaction, so inside a
-   * flow that has one open the pair still runs on a transaction of its own:
-   * on SQLite that nests in the caller's as a savepoint, and on PostgreSQL
-   * and MySQL it holds the one other connection the write alone took before,
-   * which never leaves the template written and its record not.
+   * flow that has one open the pair opens a transaction of its own, which
+   * joins the caller's on every dialect: the pair then commits or rolls back
+   * with the caller's work, and never leaves the template written and its
+   * record not.
    */
   private async writeTemplateRow<T>(
     templateId: string,

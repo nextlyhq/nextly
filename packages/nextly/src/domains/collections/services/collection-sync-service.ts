@@ -37,6 +37,7 @@ import { dirname, join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { generatedLanguages } from "../../../cli/utils/write-generated-types";
 import type {
   CollectionAdminOptions,
   CollectionConfig,
@@ -307,6 +308,7 @@ export function toPersistedAdmin(admin: CollectionConfig["admin"]) {
     defaultColumns: admin.defaultColumns,
     isPlugin: admin.isPlugin,
     disableCreate: admin.disableCreate,
+    disableDelete: admin.disableDelete,
     // Sidebar placement. Both are read by `DynamicCollectionNav`, which takes its collections
     // from the persisted registry — so omitting them here meant a code-first collection could
     // set them, type-check, and still sort by the default.
@@ -621,6 +623,7 @@ export class CollectionSyncService extends BaseService {
         (changedSlugs.size > 0 || config.collections.length > 0)
       ) {
         const typesFile = await this.generateTypeScriptTypes(
+          config,
           config.collections,
           config.typescript.outputFile,
           opts
@@ -698,6 +701,7 @@ export class CollectionSyncService extends BaseService {
     };
 
     return this.generateTypeScriptTypes(
+      config,
       config.collections,
       config.typescript.outputFile,
       opts
@@ -1042,6 +1046,7 @@ export class CollectionSyncService extends BaseService {
 
   // eslint-disable-next-line @typescript-eslint/require-await
   private async generateTypeScriptTypes(
+    config: Pick<SanitizedNextlyConfig, "localization">,
     collections: CollectionConfig[],
     outputFile: string,
     opts: { cwd: string; dryRun: boolean }
@@ -1050,7 +1055,8 @@ export class CollectionSyncService extends BaseService {
       return undefined;
     }
 
-    const generator = new TypeGenerator();
+    // The languages the configuration locks, as every writer of the types file lists them.
+    const generator = new TypeGenerator(generatedLanguages(config));
 
     // Convert to DynamicCollectionRecord format for generator
     const records = this.convertToRecords(collections);

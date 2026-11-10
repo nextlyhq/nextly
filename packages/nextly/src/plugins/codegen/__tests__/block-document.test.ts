@@ -116,6 +116,37 @@ describe("block document schema", () => {
     }
   });
 
+  it("describes a document's own metadata as the validator bounds it", () => {
+    const withSeo = (seo: unknown) => ({
+      ...emptyPage(),
+      kind: "template",
+      settings: { seo },
+    });
+    expect(
+      parseBlockDocument(
+        withSeo({
+          title: [{ $bind: "title" }, " | ", { $bind: "name", source: "site" }],
+          image: { $bind: "cover" },
+        })
+      ).success
+    ).toBe(true);
+    for (const seo of [
+      42,
+      { title: "Not a list" },
+      { title: [{ $bind: 7 }] },
+      { title: [{ $bind: "title", source: "item" }] },
+      { image: { $bind: "cover", source: "item" } },
+      { title: Array.from({ length: 33 }, () => "a") },
+      { title: ["a".repeat(1001)] },
+      { keywords: ["a"] },
+    ]) {
+      expect(
+        parseBlockDocument(withSeo(seo)).success,
+        `seo ${JSON.stringify(seo).slice(0, 60)} should be refused`
+      ).toBe(false);
+    }
+  });
+
   it("rejects a kind outside the closed vocabulary", () => {
     expect(parseBlockDocument({ ...emptyPage(), kind: "layout" }).success).toBe(
       false

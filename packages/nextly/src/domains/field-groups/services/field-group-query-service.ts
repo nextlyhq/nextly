@@ -1,7 +1,9 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { and, asc, eq, getColumns, type SQL } from "drizzle-orm";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
+import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
@@ -17,9 +19,11 @@ import {
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import {
+  fillCompanionFields,
   type LocalizedFieldRef,
   populateCompanionFieldsAllLocales,
   populateCompanionFieldsByLanguage,
+  selectRowsWithCompanion,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
@@ -85,6 +89,25 @@ export type ComponentFallbackLocale =
  */
 export type ComponentReadAccess = RelatedRowReadContext;
 
+/** The registered tables, by physical name: the schema registry the adapter resolves through. */
+export interface InstanceTables {
+  hasTable(tableName: string): boolean;
+  getTable(tableName: string): unknown;
+}
+
+/** What reading one language of a component's translations takes (`translationPlan`). */
+interface TranslationPlan {
+  companion: NonNullable<ReturnType<typeof buildCompanionSchema>>;
+  localeChain: string[];
+  readiness: CompanionReadiness | undefined;
+}
+
+/** A component's translations, read in the same statement as its instances. */
+interface JoinedTranslations {
+  plan: TranslationPlan;
+  rows: Record<string, unknown>[];
+}
+
 /**
  * One language a component read is asked for: the locale, and the fallback
  * it is read with, as {@link PopulateComponentDataParams} names them.
@@ -92,6 +115,32 @@ export type ComponentReadAccess = RelatedRowReadContext;
 export interface ComponentReadLanguage {
   locale?: string;
   fallbackLocale?: ComponentFallbackLocale;
+}
+
+/**
+ * The languages a one-language component read falls back through. An absent `locale` is the
+ * default, as the parent read treats no explicit `?locale`, so a default-language read still
+ * overlays the component's translations instead of returning the omitted main-table columns. A
+ * language read exactly as stored is taken as named, active or not: a removed language is kept,
+ * and validating it would read the default's values in its place. Otherwise the chain comes from
+ * the shared resolver, so a component read falls back exactly as the collection and Single reads
+ * around it do; `requested` is resolved and never `all` here, so the chain is never null, and the
+ * fallback keeps the contract this path always had rather than asserting.
+ */
+function componentLocaleChain(
+  localization: SanitizedLocalizationConfig,
+  locale: string | undefined,
+  fallbackLocale: ComponentFallbackLocale | undefined
+): string[] {
+  const exact = fallbackLocale === EXACT_STORED_LANGUAGE;
+  const requested =
+    exact && locale !== undefined
+      ? locale
+      : resolveRequestedLocale(localization, locale);
+  if (exact) return [requested];
+  return (
+    resolveLocaleChain(localization, requested, fallbackLocale) ?? [requested]
+  );
 }
 
 export interface PopulateComponentDataParams {
@@ -284,7 +333,11 @@ export class FieldGroupQueryService extends BaseService {
     relationshipService?: CollectionRelationshipService,
     // i18n: when set and an embedded component is localized, its translatable fields
     // resolve/write per language via the component's companion `comp_<slug>_locales` table.
-    private readonly localizationSource?: LocalizationSource
+    private readonly localizationSource?: LocalizationSource,
+    // The tables registered for this database, so a component's instances can be read with their
+    // translations in one statement. Without it they are read first and translated after. Named
+    // apart from the base service's `tables`, the dialect's own tables, which it would shadow.
+    private readonly instanceTables?: InstanceTables
   ) {
     super(adapter, logger);
     this.registryService = registryService;
@@ -365,25 +418,43 @@ export class FieldGroupQueryService extends BaseService {
     })[],
     executor?: unknown,
     /** A failed translation read propagates rather than returning shared values. */
-    strict = false
+    strict = false,
+    // The translations the instances were read with, when they came in the same statement: only
+    // for a read of one language, whose chain the join was planned for.
+    joined?: JoinedTranslations | null
   ): Promise<void> {
     const localization = this.localization;
     const languages = byLanguage.filter(
       language => language.dataArray.length > 0
     );
+    if (joined) {
+      // Read with the instances, so there is nothing left to query.
+      const { localizedFields } = joined.plan.companion;
+      for (const { dataArray } of languages) {
+        fillCompanionFields({
+          rows: dataArray,
+          companionRows: joined.rows,
+          localizedFields,
+          localeChain: joined.plan.localeChain,
+          idKey: "id",
+        });
+        this.decodeJsonLocalizedValues(meta, localizedFields, dataArray, false);
+        await this.stripOverlaidPasswords(
+          meta,
+          localizedFields,
+          dataArray,
+          false,
+          executor
+        );
+      }
+      return;
+    }
     // Whether its values are kept per language at all: when it is translated, or under
     // per-language storage for every component.
     if (!localization || !storesPerLanguage(meta) || languages.length === 0) {
       return;
     }
-    const companion = buildCompanionSchema({
-      slug: meta.slug,
-      tableName: meta.tableName,
-      fields: meta.fields as { name: string; type: string }[],
-      dialect: this.adapter.dialect,
-      // Components are never Draft/Published — companion has no `_status`.
-      status: false,
-    });
+    const companion = this.companionOf(meta);
     if (!companion) return;
 
     const named: {
@@ -405,28 +476,9 @@ export class FieldGroupQueryService extends BaseService {
         );
         continue;
       }
-      // Resolve an absent `locale` to the default (the parent read treats no explicit `?locale` as
-      // the default locale), so a default-locale read still overlays the component's companion
-      // values instead of returning the omitted main-table columns.
-      // A language read exactly as stored is taken as named, active or not: a
-      // removed language is kept, and validating it would read the default's
-      // values in its place.
-      const exact = fallbackLocale === EXACT_STORED_LANGUAGE;
-      const requested =
-        exact && locale !== undefined
-          ? locale
-          : resolveRequestedLocale(localization, locale);
-      // Through the shared resolver, so a component read falls back exactly as
-      // the collection and single reads around it do. `requested` is already
-      // resolved and is never `all` here, so the chain is never null; the
-      // fallback keeps the contract this path always had rather than asserting.
       named.push({
         dataArray,
-        localeChain: exact
-          ? [requested]
-          : (resolveLocaleChain(localization, requested, fallbackLocale) ?? [
-              requested,
-            ]),
+        localeChain: componentLocaleChain(localization, locale, fallbackLocale),
       });
     }
     if (named.length === 0) return;
@@ -524,6 +576,68 @@ export class FieldGroupQueryService extends BaseService {
       true,
       executor
     );
+  }
+
+  /** The component's per-language table, or null when it has no translatable field. */
+  private companionOf(
+    meta: DynamicFieldGroupRecord
+  ): ReturnType<typeof buildCompanionSchema> {
+    return buildCompanionSchema({
+      slug: meta.slug,
+      tableName: meta.tableName,
+      fields: meta.fields as { name: string; type: string }[],
+      dialect: this.adapter.dialect,
+      // Components are never Draft/Published — companion has no `_status`.
+      status: false,
+    });
+  }
+
+  /**
+   * What reading one language of a component's translations takes: its companion, the language
+   * chain the read falls back through, and whether the companion is there to read. Null when there
+   * is nothing to read in one language: localization is off, the component keeps no translatable
+   * value per language, or the read asks for every translation at once.
+   */
+  private async translationPlan(
+    meta: DynamicFieldGroupRecord,
+    locale: string | undefined,
+    fallbackLocale: ComponentFallbackLocale | undefined,
+    executor: unknown
+  ): Promise<TranslationPlan | null> {
+    const localization = this.localization;
+    if (
+      !localization ||
+      !storesPerLanguage(meta) ||
+      locale === EVERY_TRANSLATION
+    ) {
+      return null;
+    }
+    const companion = this.companionOf(meta);
+    if (!companion) return null;
+    const localeChain = componentLocaleChain(
+      localization,
+      locale,
+      fallbackLocale
+    );
+    // Resolved before anything reads the companion, because inside a transaction it can only be
+    // read and the read itself must not be what fails.
+    const readiness = await this.companionReadiness(companion, executor);
+    return { companion, localeChain, readiness };
+  }
+
+  /**
+   * The plan for reading a component's translations with its instances, when the read asks for
+   * one language. Several languages are read from one instance read with a chain each, so their
+   * translations are read after it, together.
+   */
+  private oneLanguagePlan(
+    meta: DynamicFieldGroupRecord,
+    languages: readonly ComponentReadLanguage[],
+    executor: unknown
+  ): Promise<TranslationPlan | null> {
+    if (languages.length !== 1) return Promise.resolve(null);
+    const [{ locale, fallbackLocale }] = languages;
+    return this.translationPlan(meta, locale, fallbackLocale, executor);
   }
 
   /**
@@ -754,6 +868,9 @@ export class FieldGroupQueryService extends BaseService {
           results[index][fieldName] = value;
         });
       } catch (error) {
+        // A rule that could not run never answered: the request ends with
+        // that, not with the component replaced by a default.
+        rethrowIfRuleCouldNotRun(error);
         // In strict mode a read failure must roll the write back rather than
         // ship a payload with silently-missing component data.
         if (strict) throw error;
@@ -855,6 +972,8 @@ export class FieldGroupQueryService extends BaseService {
           }
         }
       } catch (error) {
+        // A rule that could not run never answered: see the catch above.
+        rethrowIfRuleCouldNotRun(error);
         // A caller judging a document by what it holds cannot take a default
         // for a field it failed to read.
         if (strict) throw error;
@@ -906,13 +1025,15 @@ export class FieldGroupQueryService extends BaseService {
       executor
     );
     const componentFields = meta.fields;
-    const rows = await this.getExistingInstances(
+    // Read with its translations when it has any in one language.
+    const { rows, joined } = await this.getExistingInstances(
       meta.tableName,
       parentId,
       parentTable,
       fieldName,
       executor,
-      strict
+      strict,
+      await this.oneLanguagePlan(meta, languages, executor)
     );
 
     if (rows.length === 0) return languages.map(() => null);
@@ -934,7 +1055,8 @@ export class FieldGroupQueryService extends BaseService {
       meta,
       byLanguage,
       executor,
-      strict
+      strict,
+      joined
     );
     const results: Record<string, unknown>[] = [];
     for (const { dataArray } of byLanguage) {
@@ -973,13 +1095,15 @@ export class FieldGroupQueryService extends BaseService {
       executor
     );
     const componentFields = meta.fields;
-    const rows = await this.getExistingInstances(
+    // Read with their translations when they have any in one language.
+    const { rows, joined } = await this.getExistingInstances(
       meta.tableName,
       parentId,
       parentTable,
       fieldName,
       executor,
-      strict
+      strict,
+      await this.oneLanguagePlan(meta, languages, executor)
     );
 
     const reach = await this.passwordReach(componentFields, executor);
@@ -1000,7 +1124,8 @@ export class FieldGroupQueryService extends BaseService {
       meta,
       byLanguage,
       executor,
-      strict
+      strict,
+      joined
     );
 
     const results: Record<string, unknown>[][] = [];
@@ -1046,7 +1171,8 @@ export class FieldGroupQueryService extends BaseService {
     for (const slug of allowedSlugs) {
       try {
         const meta = await this.registryService.getComponent(slug, executor);
-        const rows = await this.getExistingInstances(
+        // Read alone: each component type's translations are read per row below.
+        const { rows } = await this.getExistingInstances(
           meta.tableName,
           parentId,
           parentTable,
@@ -1058,6 +1184,8 @@ export class FieldGroupQueryService extends BaseService {
           allRows.push({ row, fields: meta.fields, slug });
         }
       } catch (error) {
+        // A rule that could not run never answered: see the catches above.
+        rethrowIfRuleCouldNotRun(error);
         // In strict mode surface the failure so a durable payload is not built
         // from a partial dynamic-zone read.
         if (strict) throw error;
@@ -1411,7 +1539,99 @@ export class FieldGroupQueryService extends BaseService {
     // When true, only a MISSING component table is tolerated; any other read
     // failure propagates so a durable webhook/version payload is not built from
     // a component silently read as empty.
-    strict = false
+    strict = false,
+    // Reading the instances' translations in one language, when there are any to read.
+    plan: TranslationPlan | null = null
+  ): Promise<{ rows: ComponentRow[]; joined: JoinedTranslations | null }> {
+    const joined = await this.instancesWithTranslations(
+      tableName,
+      instanceKey(parentId, parentTable, fieldName),
+      plan,
+      executor
+    );
+    if (joined) return joined;
+    return {
+      rows: await this.instancesAlone(
+        tableName,
+        parentId,
+        parentTable,
+        fieldName,
+        executor,
+        strict
+      ),
+      joined: null,
+    };
+  }
+
+  /**
+   * One parent field's instances and their translations in `plan`'s languages, in one statement,
+   * where reading the translations after the instances took two. Null when the read cannot be
+   * joined: nothing to translate, a companion not there yet, or a table the registry does not
+   * hold. A joined read that fails off a transaction is logged and answered null, so the caller
+   * reads the instances alone and translates them after, with that read's own containment; on a
+   * transaction's connection it propagates, because the failure has already aborted it.
+   */
+  private async instancesWithTranslations(
+    tableName: string,
+    key: Record<string, string>,
+    plan: TranslationPlan | null,
+    executor: unknown
+  ): Promise<{ rows: ComponentRow[]; joined: JoinedTranslations } | null> {
+    if (
+      !plan ||
+      plan.readiness !== "ready" ||
+      !this.instanceTables?.hasTable(tableName)
+    ) {
+      return null;
+    }
+    const table = this.instanceTables.getTable(tableName);
+    const columns = Object.values(getColumns(table as never)) as {
+      name: string;
+    }[];
+    const column = (name: string) => columns.find(c => c.name === name);
+    const conditions = Object.entries(key).map(([name, value]) => {
+      const found = column(name);
+      return found ? eq(found as never, value) : undefined;
+    });
+    const order = INSTANCE_ORDER.map(({ column: name }) => column(name));
+    if (conditions.some(c => c === undefined) || order.some(c => !c)) {
+      return null;
+    }
+    try {
+      const read = await selectRowsWithCompanion({
+        db: executor ?? this.adapter.getDrizzle(),
+        mainTable: table,
+        where: and(...(conditions as SQL[])),
+        orderBy: order.map(c => asc(c as never)),
+        companionTable: plan.companion.table,
+        localeChain: plan.localeChain,
+      });
+      return {
+        rows: this.withoutServerOnlyColumns(
+          read.rows as ComponentRow[],
+          tableName
+        ),
+        joined: { plan, rows: read.companionRows },
+      };
+    } catch (error) {
+      if (executor !== undefined) throw error;
+      this.logger.error(
+        `Could not read component instances with their translations from ` +
+          `${plan.companion.companionTableName}; reading them alone: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+      return null;
+    }
+  }
+
+  /** One parent field's instances, read alone. */
+  private async instancesAlone(
+    tableName: string,
+    parentId: string,
+    parentTable: string,
+    fieldName: string,
+    executor: unknown,
+    strict: boolean
   ): Promise<ComponentRow[]> {
     try {
       const rows = await this.adapter.select<ComponentRow>(
@@ -1665,6 +1885,9 @@ export class FieldGroupQueryService extends BaseService {
 
       return expanded;
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with the component's relationships left unexpanded.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.debug("Could not expand relationships in component data", {
         componentSlug,
         error: error instanceof Error ? error.message : String(error),

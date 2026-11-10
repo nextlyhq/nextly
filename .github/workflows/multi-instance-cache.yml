@@ -10,18 +10,18 @@ name: Multi-instance cache
 # are declared), the fixture's dependencies and the lockfile that pins the
 # Next.js it runs on, the e2e support module the driver starts servers with,
 # and the suite itself. A pull
-# request is filtered by `paths`. A push to main and a merge-queue entry run the
-# `changes` job first, which reads the files the commit changed and skips the
-# suite when none of them is one of those (`merge_group` takes no `paths`), so
-# a skipped run reports `skipped` rather than never reporting. The nightly run
+# request is filtered by `paths`. A push to main or dev and a merge-queue entry
+# run the `changes` job first, which reads the files the commit changed and
+# skips the suite when none of them is one of those (`merge_group` takes no
+# `paths`), so a skipped run reports `skipped` rather than never reporting. The nightly run
 # tests everything, so a change anywhere else that breaks it is caught within a
 # day.
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
     paths:
       - "packages/nextly/src/runtime/cache/**"
       - "packages/nextly/src/revalidation/**"
@@ -71,8 +71,9 @@ jobs:
         with:
           node-version-file: .nvmrc
 
-      # On a push to main, the commit this workflow last tested, so a push after
-      # one it skipped is compared with what was actually tested.
+      # On a push to main or dev, the commit this workflow last tested there,
+      # so a push after one it skipped is compared with what was actually
+      # tested.
       - name: Ask whether a newer push already covers this one
         id: newer
         uses: ./.github/actions/superseded-on-main

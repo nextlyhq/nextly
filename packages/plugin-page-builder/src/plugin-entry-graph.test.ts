@@ -64,6 +64,29 @@ describe("what the package root pulls into a browser bundle", () => {
     expect(found.length).toBeGreaterThan(10);
   });
 
+  it("loads the import's provisional variables at call time, wherever the root reaches them", () => {
+    // `provisional-variables` imports `node:async_hooks`. The root reaches
+    // `plugin.ts`, the import route and the blocks field at module scope, so
+    // each loads it with `await import(...)` and imports no `node:` module.
+    for (const file of [
+      "plugin.ts",
+      "transfer/import-route.ts",
+      "fields/blocksField.ts",
+    ]) {
+      const found = topLevelImports(file);
+      expect(found.filter(specifier => specifier.startsWith("node:"))).toEqual(
+        []
+      );
+      expect(
+        found.filter(specifier => specifier.endsWith("provisional-variables"))
+      ).toEqual([]);
+    }
+    // CONTROL: the reader sees the Node import the module does have.
+    expect(topLevelImports("transfer/provisional-variables.ts")).toContain(
+      "node:async_hooks"
+    );
+  });
+
   it("CONTROL: the reader would SEE the banned import if it came back", () => {
     // The must-be-found half, on the exact specifier this guards. A file that
     // does import it reads as importing it, so the assertion above is a fact

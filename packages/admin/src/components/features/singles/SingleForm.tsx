@@ -30,6 +30,12 @@ import { z } from "zod";
 
 import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFromLanguageScope";
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
+import { pluginDocumentLock } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
+import {
+  useDocumentPanelParts,
+  useDocumentPlace,
+} from "@admin/components/features/entries/EntryForm/document-place";
+import { DocumentFormSource } from "@admin/components/features/entries/EntryForm/document-values";
 import type { ContributedAction } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
 import {
   DocumentActionsHost,
@@ -43,6 +49,7 @@ import {
   DOCUMENT_COLUMN_INSET,
   DocumentEditorLayout,
 } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
+import { DocumentPlaceTabs } from "@admin/components/features/entries/EntryForm/DocumentPlaceTabs";
 import { DocumentSidePanel } from "@admin/components/features/entries/EntryForm/DocumentSidePanel";
 import { DocumentTitleBlock } from "@admin/components/features/entries/EntryForm/DocumentTitleBlock";
 import { DocumentTrail } from "@admin/components/features/entries/EntryForm/DocumentTrail";
@@ -59,9 +66,11 @@ import {
   EntryFormContextProvider,
   hasPendingWorkingDraft,
 } from "@admin/components/features/entries/EntryForm/EntryFormContext";
+import { EntryFormPlace } from "@admin/components/features/entries/EntryForm/EntryFormPlace";
 import { EntryFormSidebar } from "@admin/components/features/entries/EntryForm/EntryFormSidebar";
 import { EntryMetaStrip } from "@admin/components/features/entries/EntryForm/EntryMetaStrip";
 import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
+import { PanelSectionsAboveForm } from "@admin/components/features/entries/EntryForm/panels";
 import {
   readerStatusWrite,
   statusWritesHeld,
@@ -121,7 +130,7 @@ import {
   historyRetentionFrom,
 } from "@admin/components/features/versions/history-enabled";
 import { PREVIOUS_VERSION } from "@admin/components/features/versions/version-search-params";
-import { versionsHref } from "@admin/components/features/versions/VersionComparePage";
+import { versionsHref } from "@admin/components/features/versions/versions-href";
 import {
   mayRecordRecovery,
   useViewedVersion,
@@ -151,6 +160,8 @@ import {
   holdsPlaceholders,
   withoutPlaceholders,
 } from "@admin/lib/form/stored-references";
+import type { SidebarSectionProps } from "@admin/lib/plugins/component-registry";
+import type { PanelOrderEntry } from "@admin/lib/plugins/document-surfaces";
 import { cn } from "@admin/lib/utils";
 import { singleApi } from "@admin/services/singleApi";
 import type { SingleAdminOptions } from "@admin/types/entities";
@@ -485,19 +496,24 @@ function SingleFormLanguagePanel({
  * what the single renders on the live side of it.
  */
 function SingleFormFieldsPanel({
+  document,
   historicalFields,
   historicalValues,
   isSubmitting,
   mainFields,
   readOnly,
+  singleSlug,
   versionActionsHeld,
   versionBannerSlot,
 }: {
+  /** The document as loaded, which the form's place hands its blocks. */
+  document: SingleDocumentData;
   historicalFields: FieldConfig[] | null;
   historicalValues: Record<string, unknown> | null;
   isSubmitting: boolean;
   mainFields: FieldConfig[];
   readOnly: boolean;
+  singleSlug: string;
   /** Why a past version's restore is withheld (see `useVersionActions`). */
   versionActionsHeld: boolean;
   /** Where the version's comparison bar is drawn, among the banners. */
@@ -510,16 +526,23 @@ function SingleFormFieldsPanel({
       actionsDisabled={versionActionsHeld}
       bannerSlot={versionBannerSlot}
     >
-      {mainFields.length > 0 && (
-        <div className="@4xl/content:p-8 pt-6">
-          <EntryFormContent
-            fields={mainFields}
-            disabled={isSubmitting}
-            readOnly={readOnly}
-            withCard
-          />
-        </div>
-      )}
+      <EntryFormPlace
+        kind="single"
+        slug={singleSlug}
+        entryId={document.id}
+        entry={document}
+      >
+        {mainFields.length > 0 && (
+          <div className="@4xl/content:p-8 pt-6">
+            <EntryFormContent
+              fields={mainFields}
+              disabled={isSubmitting}
+              readOnly={readOnly}
+              withCard
+            />
+          </div>
+        )}
+      </EntryFormPlace>
     </ViewedVersionBody>
   );
 }
@@ -541,6 +564,8 @@ function SingleFormRail({
   locale,
   onLocaleChange,
   panel,
+  panelOrder,
+  placedSectionProps,
 }: {
   actionsDisabled: boolean;
   navigationDisabled: boolean;
@@ -555,6 +580,10 @@ function SingleFormRail({
   locale?: string;
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   panel: Pick<ReturnType<typeof useDocumentPanel>, "mode" | "shown" | "hide">;
+  /** The panel's sections in the order the server placed them. */
+  panelOrder: PanelOrderEntry[] | undefined;
+  /** What each section plugins declared at the Single's page is handed. */
+  placedSectionProps: SidebarSectionProps | undefined;
 }) {
   const documentId = entry?.id === undefined ? "" : String(entry.id);
   return (
@@ -565,6 +594,8 @@ function SingleFormRail({
     >
       <EntryFormSidebar
         mode="edit"
+        {...(panelOrder === undefined ? {} : { panelOrder })}
+        {...(placedSectionProps === undefined ? {} : { placedSectionProps })}
         entry={entry}
         hasStatus={hasStatus}
         {...(documentStatus === undefined ? {} : { documentStatus })}
@@ -1472,6 +1503,17 @@ export function SingleForm({
     previewOpen: previewOnScreen,
     closePreview: previewPane.onClose,
   });
+  // The edit page's place: plugins' blocks around the bar and the editor,
+  // their tabs over the field column and their sections in the panel.
+  const documentPlace = useDocumentPlace(
+    { kind: "single", single: schema.slug },
+    document
+  );
+  // The side panel's sections in the order the server placed them, with the
+  // sections plugins declared at the Single's page among them, as on a
+  // collection entry's page.
+  const { panelOrder, sectionsAboveForm, placedSectionProps } =
+    useDocumentPanelParts(documentPlace, panel.mode === "sheet");
 
   const localeCtx = useEntryLocaleContext({
     locale,
@@ -1662,6 +1704,8 @@ export function SingleForm({
           // The same status, and pending-draft fact, the document bar's pill
           // shows: a field covering the bar reports what the bar would have.
           documentStatus={editedStatus}
+          // The fields, so a field inside a repeater's row has an address.
+          fields={schema.fields}
         >
           <EntryLocaleProvider value={localeCtx}>
             {/* Above the header — which mounts the history panel — and above
@@ -1697,225 +1741,265 @@ export function SingleForm({
                 >
                   {/* A document view replaces the form body and nothing around
                       it, as in the entry editor. */}
-                  <DocumentActionsHost
-                    input={documentActionsInput}
-                    recovery={recoveryPoint}
-                  >
-                    <SaveWithoutPublishingBridge into={saveWithoutPublishing} />
-                    {/* Mod+S runs the Save action, so a Single saves by the
+                  {/* The Single's live values for every component a plugin
+                      draws here, the form body and a document view alike. */}
+                  <DocumentFormSource form={form} contentHeld={contentHeld}>
+                    <DocumentActionsHost
+                      input={documentActionsInput}
+                      recovery={recoveryPoint}
+                    >
+                      <SaveWithoutPublishingBridge
+                        into={saveWithoutPublishing}
+                      />
+                      {/* Mod+S runs the Save action, so a Single saves by the
                       same rule the entry editor does. The view owns Escape;
                       the save chords stay. */}
-                    <DocumentSaveShortcuts
-                      onCancel={documentView ? undefined : handleCancel}
-                      hasUnsavedWork={hasUnsavedWork}
-                      isSubmitting={busy}
-                    />
-                    {documentView ? (
-                      <DocumentViewBody
-                        view={documentView}
-                        target={{ singleSlug: schema.slug }}
-                        form={form}
-                        lock={lock}
-                        recovery={recovery}
-                        viewingVersion={viewingVersion}
-                        recovering={recovering}
-                        fields={schema.fields}
-                        // A document view has no header, so the banner goes
-                        // in among its own: an author working in the view
-                        // still sees the document is in a scheduled release.
-                        banner={documentBanner}
+                      <DocumentSaveShortcuts
+                        onCancel={documentView ? undefined : handleCancel}
+                        hasUnsavedWork={hasUnsavedWork}
+                        isSubmitting={busy}
                       />
-                    ) : (
-                      <div className={cn("space-y-0", className)}>
-                        {/* Its native submit — Enter in a field, or a
+                      {documentView ? (
+                        <DocumentViewBody
+                          view={documentView}
+                          target={{ singleSlug: schema.slug }}
+                          form={form}
+                          lock={lock}
+                          recovery={recovery}
+                          viewingVersion={viewingVersion}
+                          recovering={recovering}
+                          fields={schema.fields}
+                          // A document view has no header, so the banner goes
+                          // in among its own: an author working in the view
+                          // still sees the document is in a scheduled release.
+                          banner={documentBanner}
+                        />
+                      ) : (
+                        <div className={cn("space-y-0", className)}>
+                          {/* Its native submit — Enter in a field, or a
                             submit-typed Save — runs the Save action, so it
                             stores what Mod+S does and waits for what Save
                             waits for. */}
-                        <SaveActionFormProvider
-                          form={form}
-                          recovering={recovering}
-                        >
-                          <CopyFromLanguageScope>
-                            {/* The bar, the banners under it and the row of
+                          <SaveActionFormProvider
+                            form={form}
+                            recovering={recovering}
+                          >
+                            <CopyFromLanguageScope>
+                              {/* The bar, the banners under it and the row of
                               field column and panel, in the frame the entry
                               editor draws: one bar and one banner order on
                               both. */}
-                            <DocumentEditorLayout
-                              frameRef={panel.measure}
-                              panelMode={panel.mode}
-                              bar={
-                                <DocumentBar
-                                  panelMode={panel.mode}
-                                  autosaveEnabled={recoveryPoint.enabled}
-                                  pendingRecoveryAt={
-                                    recoveryPoint.pendingOfferAt
-                                  }
-                                  autosaveLastSavedAt={recoveryPoint.storedAt}
-                                  mode="edit"
-                                  hasStatus={hasStatus}
-                                  // The status the pill reports, and whether a
-                                  // published Single has a working draft pending,
-                                  // as the context below carries them.
-                                  documentStatus={editedStatus}
-                                  historyFields={schema.fields}
-                                  historyEnabled={historyEnabledFrom(schema)}
-                                  historyRetention={historyRetentionFrom(
-                                    schema
-                                  )}
-                                  historyLifecycle={hasStatus}
-                                  // The whole busy state: the bar's spinner,
-                                  // disabled reasons and discard dialog all
-                                  // reflect a discard in flight as well as a save.
-                                  isSubmitting={busy}
-                                  hasUnsavedWork={hasUnsavedWork}
-                                  entry={entryLike}
-                                  collectionSlug={schema.slug}
-                                  localized={schema.localized === true}
-                                  /* A Single has a draft lifecycle, so it has drafts worth
+                              <DocumentEditorLayout
+                                place={documentPlace}
+                                frameRef={panel.measure}
+                                panelMode={panel.mode}
+                                bar={
+                                  <DocumentBar
+                                    panelMode={panel.mode}
+                                    autosaveEnabled={recoveryPoint.enabled}
+                                    pendingRecoveryAt={
+                                      recoveryPoint.pendingOfferAt
+                                    }
+                                    autosaveLastSavedAt={recoveryPoint.storedAt}
+                                    mode="edit"
+                                    hasStatus={hasStatus}
+                                    // The status the pill reports, and whether a
+                                    // published Single has a working draft pending,
+                                    // as the context below carries them.
+                                    documentStatus={editedStatus}
+                                    historyFields={schema.fields}
+                                    historyEnabled={historyEnabledFrom(schema)}
+                                    historyRetention={historyRetentionFrom(
+                                      schema
+                                    )}
+                                    historyLifecycle={hasStatus}
+                                    // The whole busy state: the bar's spinner,
+                                    // disabled reasons and discard dialog all
+                                    // reflect a discard in flight as well as a save.
+                                    isSubmitting={busy}
+                                    hasUnsavedWork={hasUnsavedWork}
+                                    entry={entryLike}
+                                    collectionSlug={schema.slug}
+                                    localized={schema.localized === true}
+                                    /* A Single has a draft lifecycle, so it has drafts worth
                    sharing. The control is offered whenever the Single carries
                    that lifecycle; whether a link can actually be minted is the
                    server's call, and it refuses with a message naming what is
                    missing rather than handing out one that 404s. */
-                                  // Sharing a preview needs the permission to change
-                                  // the Single on the server, so a reader is not offered it.
-                                  isLinkAvailable={
-                                    previewLink.isAvailable && !previewHeld
-                                  }
-                                  // Withheld from a reader, so the share
-                                  // popover cannot stay mounted for them.
-                                  {...(previewLink.shareDocument ===
-                                    undefined || previewHeld
-                                    ? {}
-                                    : {
-                                        shareDocument:
-                                          previewLink.shareDocument,
-                                      })}
-                                  /* The pane is offered on exactly the terms the
+                                    // Sharing a preview needs the permission to change
+                                    // the Single on the server, so a reader is not offered it.
+                                    isLinkAvailable={
+                                      previewLink.isAvailable && !previewHeld
+                                    }
+                                    // Withheld from a reader, so the share
+                                    // popover cannot stay mounted for them.
+                                    {...(previewLink.shareDocument ===
+                                      undefined || previewHeld
+                                      ? {}
+                                      : {
+                                          shareDocument:
+                                            previewLink.shareDocument,
+                                        })}
+                                    /* The pane is offered on exactly the terms the
                            shareable link is: a Single with a draft lifecycle
                            and a resolvable language. Withheld in translation
                            mode, where the pane itself is withheld — a button
                            that toggles a flag nothing reads is worse than no
                            button. */
-                                  // A reader is offered no preview, as the
-                                  // share link beside it: opening one mints a
-                                  // credential the server grants only to a
-                                  // user who may change the Single.
-                                  {...(previewHeld ? {} : previewPane.toggle)}
-                                  toolbarSlot={versionAwareToolbarSlots(
-                                    viewedVersionHost,
-                                    // A reader's page holds the slot's writes too.
-                                    versionWritesHeld,
-                                    "single",
-                                    controllerNames[0]
-                                  )}
-                                  // Singles address their history at
-                                  // /api/singles/{slug} rather than by an
-                                  // entry id.
-                                  scope="single"
-                                  documentLocked={lock.readOnly}
-                                  writesRefused={removedFromCode}
-                                  isRailCollapsed={panel.collapsed}
-                                  onToggleRail={panel.toggle}
-                                />
-                              }
-                              banners={
-                                <DocumentBanners
-                                  documentBanner={documentBanner}
-                                  lock={lock}
-                                  recovery={recovery}
-                                  viewingVersion={viewingVersion}
-                                  versionBannerRef={setVersionBannerSlot}
-                                />
-                              }
-                              notices={
-                                <FormErrorSummary
-                                  errors={errors}
-                                  submitCount={submitCount}
-                                  className="mx-6 mt-3"
-                                />
-                              }
-                            >
-                              {/* Main column */}
-                              <div className="flex-1 min-w-0 flex flex-col">
-                                {/* The title, fixed by the Single's config and
+                                    // A reader is offered no preview, as the
+                                    // share link beside it: opening one mints a
+                                    // credential the server grants only to a
+                                    // user who may change the Single.
+                                    {...(previewHeld ? {} : previewPane.toggle)}
+                                    toolbarSlot={versionAwareToolbarSlots(
+                                      viewedVersionHost,
+                                      // A reader's page holds the slot's writes too.
+                                      versionWritesHeld,
+                                      "single",
+                                      controllerNames[0]
+                                    )}
+                                    // Singles address their history at
+                                    // /api/singles/{slug} rather than by an
+                                    // entry id.
+                                    scope="single"
+                                    documentLocked={lock.readOnly}
+                                    writesRefused={removedFromCode}
+                                    isRailCollapsed={panel.collapsed}
+                                    onToggleRail={panel.toggle}
+                                  />
+                                }
+                                banners={
+                                  <DocumentBanners
+                                    documentBanner={documentBanner}
+                                    lock={lock}
+                                    recovery={recovery}
+                                    viewingVersion={viewingVersion}
+                                    versionBannerRef={setVersionBannerSlot}
+                                  />
+                                }
+                                notices={
+                                  <FormErrorSummary
+                                    errors={errors}
+                                    submitCount={submitCount}
+                                    className="mx-6 mt-3"
+                                  />
+                                }
+                              >
+                                {/* Main column */}
+                                <div className="flex-1 min-w-0 flex flex-col">
+                                  <DocumentPlaceTabs
+                                    place={documentPlace}
+                                    // A plugin's tab writes through the same
+                                    // form, so the bar's Save stores it, and
+                                    // is told what holds the Single as the
+                                    // entry editor tells its tabs.
+                                    form={form}
+                                    documentLock={pluginDocumentLock({
+                                      contentHeld,
+                                      writesHeld,
+                                      recovering,
+                                      removedFromCode,
+                                    })}
+                                  >
+                                    {/* The title, fixed by the Single's config and
                                   so read-only. No slug line: a Single's slug
                                   is fixed by its config too, and is not part
                                   of its address on most sites. */}
-                                <DocumentTitleBlock
-                                  mode="edit"
-                                  titleField={titleField}
-                                  lockIdentity
-                                  documentLocked={lock.readOnly}
-                                  // A save or a discard alone: the title's own
-                                  // `disabled` follows it, and a recovery
-                                  // holds the title read-only through the lock
-                                  // instead.
-                                  isSubmitting={writePending}
-                                />
-                                <EntryMetaStrip
-                                  panelCarriesId={panel.docked}
-                                  documentId={document.id}
-                                />
+                                    <DocumentTitleBlock
+                                      mode="edit"
+                                      titleField={titleField}
+                                      lockIdentity
+                                      documentLocked={lock.readOnly}
+                                      // A save or a discard alone: the title's own
+                                      // `disabled` follows it, and a recovery
+                                      // holds the title read-only through the lock
+                                      // instead.
+                                      isSubmitting={writePending}
+                                    />
+                                    <EntryMetaStrip
+                                      panelCarriesId={panel.docked}
+                                      documentId={document.id}
+                                    />
+                                    {/* A plugin's section that asks to be met
+                                    first, above the fields on a phone rather
+                                    than in the sheet. */}
+                                    <PanelSectionsAboveForm
+                                      sections={sectionsAboveForm}
+                                      className={DOCUMENT_COLUMN_INSET}
+                                      {...(placedSectionProps === undefined
+                                        ? {}
+                                        : { placedSectionProps })}
+                                    />
 
-                                {/* The language panel, inline: the exact complement
+                                    {/* The language panel, inline: the exact complement
                               of the rail, shown where the rail is not. */}
-                                <SingleFormLanguagePanel
+                                    <SingleFormLanguagePanel
+                                      actionsDisabled={contentHeld}
+                                      publishAllDisabled={publishAllDisabled}
+                                      // A reader may still open the other languages.
+                                      navigationDisabled={navigationHeld}
+                                      enabled={localizationEnabled}
+                                      hasStatus={hasStatus}
+                                      panelDocked={panel.docked}
+                                      {...(singleTranslations === undefined
+                                        ? {}
+                                        : { translations: singleTranslations })}
+                                      {...(locale === undefined
+                                        ? {}
+                                        : { locale })}
+                                      {...(switchLocale === undefined
+                                        ? {}
+                                        : { onLocaleChange: switchLocale })}
+                                    />
+
+                                    {/* Reading a past version replaces the document rather
+                              than opening beside it — see the fields panel. */}
+                                    <SingleFormFieldsPanel
+                                      document={document}
+                                      singleSlug={schema.slug}
+                                      historicalFields={historicalFields}
+                                      historicalValues={historicalValues}
+                                      isSubmitting={isSubmitting}
+                                      mainFields={mainFields}
+                                      readOnly={lock.readOnly}
+                                      // A submit in flight withholds restore too: a
+                                      // restore racing the ordinary save would let
+                                      // completion order decide which contents
+                                      // survive.
+                                      // A reader's page holds restoring as well.
+                                      versionActionsHeld={
+                                        versionWritesHeld || busy
+                                      }
+                                      versionBannerSlot={versionBannerSlot}
+                                    />
+                                  </DocumentPlaceTabs>
+                                </div>
+
+                                {/* The document panel, framed for the editor's
+                                width, as the entry editor's is. */}
+                                <SingleFormRail
                                   actionsDisabled={contentHeld}
                                   publishAllDisabled={publishAllDisabled}
-                                  // A reader may still open the other languages.
                                   navigationDisabled={navigationHeld}
-                                  enabled={localizationEnabled}
+                                  entry={entryLike}
                                   hasStatus={hasStatus}
-                                  panelDocked={panel.docked}
-                                  {...(singleTranslations === undefined
-                                    ? {}
-                                    : { translations: singleTranslations })}
+                                  documentStatus={editedStatus}
+                                  singleSlug={schema.slug}
+                                  panel={panel}
+                                  panelOrder={panelOrder}
+                                  placedSectionProps={placedSectionProps}
                                   {...(locale === undefined ? {} : { locale })}
                                   {...(switchLocale === undefined
                                     ? {}
                                     : { onLocaleChange: switchLocale })}
                                 />
-
-                                {/* Reading a past version replaces the document rather
-                              than opening beside it — see the fields panel. */}
-                                <SingleFormFieldsPanel
-                                  historicalFields={historicalFields}
-                                  historicalValues={historicalValues}
-                                  isSubmitting={isSubmitting}
-                                  mainFields={mainFields}
-                                  readOnly={lock.readOnly}
-                                  // A submit in flight withholds restore too: a
-                                  // restore racing the ordinary save would let
-                                  // completion order decide which contents
-                                  // survive.
-                                  // A reader's page holds restoring as well.
-                                  versionActionsHeld={versionWritesHeld || busy}
-                                  versionBannerSlot={versionBannerSlot}
-                                />
-                              </div>
-
-                              {/* The document panel, framed for the editor's
-                                width, as the entry editor's is. */}
-                              <SingleFormRail
-                                actionsDisabled={contentHeld}
-                                publishAllDisabled={publishAllDisabled}
-                                navigationDisabled={navigationHeld}
-                                entry={entryLike}
-                                hasStatus={hasStatus}
-                                documentStatus={editedStatus}
-                                singleSlug={schema.slug}
-                                panel={panel}
-                                {...(locale === undefined ? {} : { locale })}
-                                {...(switchLocale === undefined
-                                  ? {}
-                                  : { onLocaleChange: switchLocale })}
-                              />
-                            </DocumentEditorLayout>
-                          </CopyFromLanguageScope>
-                        </SaveActionFormProvider>
-                      </div>
-                    )}
-                  </DocumentActionsHost>
+                              </DocumentEditorLayout>
+                            </CopyFromLanguageScope>
+                          </SaveActionFormProvider>
+                        </div>
+                      )}
+                    </DocumentActionsHost>
+                  </DocumentFormSource>
                 </TranslationPanes>
               </PreviewPanes>
             </DocumentHistoryContext.Provider>

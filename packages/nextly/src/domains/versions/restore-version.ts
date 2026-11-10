@@ -23,6 +23,7 @@ import { NEXTLY_ERROR_STATUS } from "../../errors/error-codes";
 import type { ServiceErrorEnvelope } from "../../errors/from-service-envelope";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { originalErrorOf } from "../../errors/original-error";
+import { rethrowIfRuleCouldNotRun } from "../../errors/rule-could-not-run";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import {
   applyFieldReadAccess,
@@ -170,7 +171,9 @@ async function readComponentSchema(
     // fields is legitimate and must stay restorable.
     return {
       fields: record?.fields ?? [],
-      localized: (record as { localized?: unknown } | null)?.localized === true,
+      // Kept per language when the component is translated, or for every component under
+      // `experimental.perLanguageStorage`.
+      localized: storesPerLanguage(record ?? { localized: false }),
       resolved: record !== null && record !== undefined,
     };
   } catch (cause) {
@@ -384,6 +387,9 @@ async function dropFieldsTheReaderMayNotRead(
       readCaller
     );
   } catch (error) {
+    // A rule that could not run never answered: the request ends with that,
+    // not with a refusal.
+    rethrowIfRuleCouldNotRun(error);
     throw NextlyError.forbidden({
       ...(error instanceof Error ? { cause: error } : {}),
       logContext: {
@@ -599,7 +605,10 @@ export async function restoreVersion(
       id: args.entryId,
     });
     dropFieldsTheProbeRejected(payload, accessProbe, droppedFields);
-  } catch {
+  } catch (error) {
+    // A rule that could not run never answered: the request ends with that,
+    // not with the restore going ahead as though it had allowed every field.
+    rethrowIfRuleCouldNotRun(error);
     // A failure here must not block a restore the update path would allow; the
     // update evaluates the same rules again and remains the authority.
   }

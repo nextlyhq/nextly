@@ -61,9 +61,11 @@ function useBrowserLanguage(): string {
 /**
  * Holds the interface language and catalogs for everything inside it.
  *
- * `interfaceLanguage` names the language outright. Without it, the browser's
- * preferred language is used where the admin has a catalog for it, and
- * English where it does not. `catalogs` defaults to the admin's own.
+ * `interfaceLanguage` is the person's own choice, read first. Where it is
+ * absent or the admin has no catalog for it, the browser's preferred language
+ * is used where there is one for that, and English where there is not; a key
+ * missing from the language in effect still reads its English. `catalogs`
+ * defaults to the admin's own.
  */
 export function I18nProvider({
   children,
@@ -80,7 +82,7 @@ export function I18nProvider({
       interfaceLanguage: resolveInterfaceLanguage(
         interfaceLanguage === undefined
           ? [browserLanguage]
-          : [interfaceLanguage],
+          : [interfaceLanguage, browserLanguage],
         catalogs
       ),
       catalogs,
@@ -125,5 +127,26 @@ export function usePluginTranslate(): (
     (key: string, params?: Readonly<Record<string, string | number>>) =>
       translate(catalogs, interfaceLanguage, key, params),
     [catalogs, interfaceLanguage]
+  );
+}
+
+/**
+ * Every interface language the admin has a catalog for, English first: what
+ * a person may choose from. Read from the catalogs in effect, the admin's own
+ * and every installed plugin's, so a language arrives with the catalog that
+ * makes it readable.
+ */
+export function useInterfaceLanguages(): readonly string[] {
+  const { catalogs } = useContext(I18nContext);
+  return useMemo(
+    () =>
+      Object.keys(catalogs).sort((a, b) =>
+        a === FALLBACK_INTERFACE_LANGUAGE
+          ? -1
+          : b === FALLBACK_INTERFACE_LANGUAGE
+            ? 1
+            : a.localeCompare(b)
+      ),
+    [catalogs]
   );
 }

@@ -103,6 +103,7 @@ export {
 // no other way to tell the caller without dressing it as a failure.
 export {
   recordAdvisoryNotice,
+  type AdvisoryNotice,
   type HookWarning,
 } from "./hooks/side-effect-warnings";
 
@@ -111,9 +112,13 @@ export {
 // ============================================================
 
 // Main initialization API - recommended for most applications
+// `registerNextlyStart` is how an app's `cached-read.ts` says how to start
+// Nextly for a read that finds it not started (a root layout's read on
+// `/_not-found` during `next build`), without starting it eagerly.
 export {
   getNextly,
   getCachedNextly,
+  registerNextlyStart,
   shutdownNextly,
   createRegister,
   type Nextly,
@@ -183,6 +188,14 @@ export type {
   RowFromSingleSlug,
   DataFromFieldGroupSlug,
 } from "./direct-api/types";
+
+// The site's languages as generated types know them: what a read's `locale` and
+// `fallbackLocale` take, for a caller annotating its own values with them.
+export type {
+  FallbackLocaleOption,
+  Locale,
+  LocaleOption,
+} from "./direct-api/types/locales";
 
 // Direct API types - the `nextly.fieldGroups.*` namespace. Exported from the
 // root because they are the argument and result types of a public namespace:
@@ -255,6 +268,7 @@ export type {
   UploadMediaArgs,
   FindMediaArgs,
   FindMediaByIDArgs,
+  FindMediaByIDsArgs,
   UpdateMediaArgs,
   DeleteMediaArgs,
   BulkDeleteMediaArgs,
@@ -514,8 +528,20 @@ export {
   type PluginAuditApi,
   type PluginAuditDeclaration,
   // The helpers a plugin receives on `ctx.security`: passwords, opaque
-  // secrets and one-purpose secrets.
+  // secrets, one-purpose secrets and verifying the webhooks it receives.
   type PluginSecurityApi,
+  standardWebhooks,
+  type InboundWebhookDelivery,
+  type InboundWebhookReading,
+  type InboundWebhookScheme,
+  type ClaimDeliveryOptions,
+  type DeliveryClaim,
+  type DeliveryClaimResult,
+  type PluginReceivedWebhooks,
+  type VerifiedWebhook,
+  type VerifyWebhookOptions,
+  type WebhookRefusal,
+  type WebhookVerification,
   PasswordTooLongError,
   type PasswordCheck,
   type PasswordHelper,
@@ -555,6 +581,8 @@ export {
   type PluginTransaction,
   type PluginHookPointDeclaration,
   type PluginSettingsApi,
+  type PluginCacheApi,
+  pluginCacheTag,
   type PluginDeclaration,
   type PluginDefinition,
   type PluginPermission,
@@ -578,6 +606,9 @@ export {
   type PluginTranslations,
   type PermissionSlug,
   type PluginHookRegistry,
+  // `ctx.hooks.onInTransaction`'s handler and what it is handed.
+  type InTransactionContext,
+  type InTransactionHandler,
   type PluginFilterRegistry,
   type PluginActionRegistry,
   type HookPointContext,
@@ -618,9 +649,24 @@ export {
   type PluginAdminContributions,
   type PluginAdminPage,
   type PluginCollectionView,
+  type OverridableDocumentAction,
+  type PluginDocumentActionOverride,
+  type PluginDocumentActionOverrides,
   type PluginDocumentView,
   type PluginFieldTypeDocumentView,
+  type PluginPanelSection,
   type PluginAdminPlaceDeclaration,
+  type AdminBlockContribution,
+  type AdminBulkActionContribution,
+  type AdminColumnContribution,
+  type AdminContribution,
+  type AdminContributionAction,
+  type AdminRowActionContribution,
+  type AdminSidebarSectionContribution,
+  type AdminTabContribution,
+  type AdminContributionKind,
+  type RowPredicate,
+  type RowPredicateValue,
   type PluginListFilterDeclaration,
   type PluginListFilterOption,
   type PluginMenuItem,
@@ -863,12 +909,26 @@ export type {
 export { readStoredFields, updateIfUnchanged } from "./plugins/stored-fields";
 export type {
   PluginConditionalUpdate,
+  PluginConditionalWriteIdentity,
   PluginStoredDocument,
   PluginStoredFields,
   PluginStoredFieldsRequest,
+  PluginStoredIdentity,
+  PluginStoredLifecycle,
+  PluginSystemCheckedWrite,
+  PluginSystemIdentity,
   PluginWriteExpectation,
 } from "./plugins/stored-fields";
 export { storedValueHash } from "./domains/collections/services/stored-field-read";
+// A plugin's question "may this person delete this entry", asked of the
+// delete's own gate (its grant and a rule's row filter for the entry) with no
+// hook run and nothing written. Here for `@nextlyhq/plugin-sdk` to publish.
+export { mayDeleteEntry } from "./plugins/entry-delete-access";
+export type { PluginDeleteCheck } from "./plugins/entry-delete-access";
+// The same question for a write: the update gate, the publish gate where it
+// puts the document live, and each named field's update rule.
+export { mayWriteEntry } from "./plugins/entry-write-access";
+export type { PluginWriteCheck } from "./plugins/entry-write-access";
 
 // Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +
 // challenge protocol. @experimental until a first-party plugin exercises it (D55).

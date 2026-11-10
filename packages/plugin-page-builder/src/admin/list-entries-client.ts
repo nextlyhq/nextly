@@ -2,8 +2,11 @@
 
 /**
  * The canvas's data for its collection lists: each read the renderer's
- * `readList` makes, answered through the list entries route as a visitor
- * reads it.
+ * `readList` makes, answered through the list entries route as the person
+ * editing reads it, drafts included; or, while a document's visibility
+ * conditions are applied, as a visitor reads it, published entries and public
+ * fields only, so each item's conditions are judged as the published page
+ * judges them.
  *
  * A data provider rather than a hook, because it is what a page context
  * carries: the canvas draws a list with the same renderer a published page
@@ -32,6 +35,7 @@ import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import {
   LIST_ENTRIES_ROUTE_PATH,
   type ListEntriesResponse,
+  type ListEntriesVisitor,
 } from "../list-entries-contract";
 
 /** How long an answer is kept, so drawing the page again reads nothing new. */
@@ -60,14 +64,17 @@ function refusalOf(error: unknown): ReadRefusal {
   });
 }
 
-/** One read, through the route. */
-async function readThrough(query: BlocksQuery): Promise<ListEntriesResponse> {
+/** One read, through the route, as a visitor reads it when one is named. */
+async function readThrough(
+  query: BlocksQuery,
+  visitor?: ListEntriesVisitor
+): Promise<ListEntriesResponse> {
   try {
     const body = await writePluginRoute<ListEntriesResponse>({
       plugin: PAGE_BUILDER_PLUGIN_NAME,
       path: LIST_ENTRIES_ROUTE_PATH,
       method: "POST",
-      body: { query },
+      body: visitor === undefined ? { query } : { query, visitor },
     });
     if (body === undefined || !Array.isArray(body.items)) {
       throw new Error("The list's entries could not be read.");
@@ -144,23 +151,79 @@ export interface CanvasListReads {
   readonly count: ReturnType<typeof canvasListCount>;
 }
 
-/** One set of reads per language, shared by the canvas and the inspector. */
-const READS_BY_LANGUAGE = new Map<string, CanvasListReads>();
+/**
+ * One set of reads per signed-in person and language, shared by the canvas
+ * and the inspector, and only the current person's: the rows read are theirs,
+ * drafts and protected fields included.
+ */
+const READS = new Map<string, CanvasListReads>();
+/**
+ * The person whose reads `READS` holds, so another's are dropped first.
+ * Always a person known by id: reads made before the signed-in person is
+ * known are never kept, so none is held under an identity two people share.
+ */
+let readsFor: string | undefined;
 
 /**
- * The canvas's list reads in `locale`, the language being edited: one object
- * per language, so the canvas's page context and the inspector's count read
- * through ONE provider and its kept answers. A date filter still compares
- * in UTC: the canvas reads no site time zone.
+ * A fresh set of list reads in `locale`, keeping only its own answers, made
+ * as a visitor of `visitor`'s document reads when one is named.
  */
-export function canvasListReadsIn(locale: string | undefined): CanvasListReads {
-  const key = locale ?? "";
-  let reads = READS_BY_LANGUAGE.get(key);
+function listReadsIn(
+  locale: string | undefined,
+  visitor: ListEntriesVisitor | undefined
+): CanvasListReads {
+  const terms: CanvasListTerms = locale === undefined ? {} : { locale };
+  const data =
+    visitor === undefined
+      ? canvasListData()
+      : canvasListData(query => readThrough(query, visitor));
+  return { terms, data, count: canvasListCount(data, terms) };
+}
+
+/** Where a set of reads is kept: its language, and the visitor it reads as. */
+function readsKey(
+  locale: string | undefined,
+  visitor: ListEntriesVisitor | undefined
+): string {
+  return JSON.stringify([
+    locale ?? "",
+    visitor?.collection ?? null,
+    visitor?.id ?? null,
+  ]);
+}
+
+/**
+ * The canvas's list reads for `userId`, the signed-in person, in `locale`, the
+ * language being edited: one object per person and language, so the canvas's
+ * page context and the inspector's count read through ONE provider and its
+ * kept answers. Its kept answers are that person's, so the moment another
+ * person asks (a sign-out and a sign-in in the same tab), every earlier
+ * person's reads are dropped before anything is answered: no row read for one
+ * account is ever handed to another. A date filter still compares in UTC: the
+ * canvas reads no site time zone.
+ *
+ * With `visitor`, the document being edited, the reads are a visitor's of
+ * that document's lists, kept apart from the person's own: the route answers
+ * them only for a document the person may open.
+ */
+export function canvasListReadsIn(
+  locale: string | undefined,
+  userId: string | null,
+  visitor?: ListEntriesVisitor
+): CanvasListReads {
+  // The route answers whoever the session cookie names, so while the person
+  // is not known by id, each ask gets reads of its own that nothing keeps:
+  // a sign-in under way cannot be handed the previous account's rows.
+  if (userId === null) return listReadsIn(locale, visitor);
+  if (readsFor !== userId) {
+    READS.clear();
+    readsFor = userId;
+  }
+  const key = readsKey(locale, visitor);
+  let reads = READS.get(key);
   if (reads === undefined) {
-    const terms: CanvasListTerms = locale === undefined ? {} : { locale };
-    const data = canvasListData();
-    reads = { terms, data, count: canvasListCount(data, terms) };
-    READS_BY_LANGUAGE.set(key, reads);
+    reads = listReadsIn(locale, visitor);
+    READS.set(key, reads);
   }
   return reads;
 }

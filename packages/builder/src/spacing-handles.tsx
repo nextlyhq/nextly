@@ -68,6 +68,8 @@ import { createPortal } from "react-dom";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
+// The one test of two rectangles sharing pixels the canvas's chrome uses.
+import { overlaps } from "./canvas-tab-places";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
 import { canvasPointerPoints, overlaySpaceOf } from "./geometry-dom";
@@ -277,16 +279,6 @@ function applied(editor: EditorState, result: StyleWrite): string | undefined {
   return editor.apply(result.op) === null
     ? "That spacing change was not applied."
     : undefined;
-}
-
-/** Whether two rectangles share any pixels. */
-function overlaps(a: Rect, b: Rect): boolean {
-  return (
-    a.x < b.x + b.width &&
-    b.x < a.x + a.width &&
-    a.y < b.y + b.height &&
-    b.y < a.y + a.height
-  );
 }
 
 /**

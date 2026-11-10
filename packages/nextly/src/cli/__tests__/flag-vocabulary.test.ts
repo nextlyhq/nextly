@@ -134,6 +134,7 @@ describe("the flag vocabulary", () => {
 const WRITES = [
   "add",
   "build",
+  "events abandon",
   "generate:manifest",
   "generate:types",
   "generate:widget",
@@ -170,6 +171,8 @@ const PREVIEWS = [
   "users:clear-plaintext-passwords",
 ];
 const READS = [
+  "events",
+  "events report",
   "generate:schema",
   "media",
   "migrate:check",

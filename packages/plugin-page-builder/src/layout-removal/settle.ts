@@ -45,7 +45,7 @@
  * renewed its lease during a long scan, is left to the request that holds it.
  *
  * It also drops an unpublish tombstone whose Layout is published again by a
- * write that ran no collection hooks (core's all-languages publish).
+ * write that ran no collection hooks (a batch with `skipHooks`).
  *
  * @module layout-removal/settle
  */
@@ -392,8 +392,8 @@ export async function settleLayoutRemovals(deps: SweepDeps): Promise<void> {
 
 /**
  * Drop each unpublish tombstone whose Layout is published again. A publish
- * normally drops it from the Layout's own after-write hook, but core's
- * all-languages publish runs no collection hooks, and would otherwise leave a
+ * normally drops it from the Layout's own after-write hook, but a write that
+ * skips hooks (a batch with `skipHooks`) runs none, and would otherwise leave a
  * published Layout that make-default refuses as being removed.
  *
  * Asked in chunks ({@link idChunks}), each released on its own, so however many

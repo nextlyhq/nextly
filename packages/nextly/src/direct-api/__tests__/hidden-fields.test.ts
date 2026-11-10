@@ -107,6 +107,29 @@ describe("a populated document's own hidden fields", () => {
     expect(stripped.sections[1]).toEqual(page.sections[1]);
   });
 
+  it("are left out of an instance that names its member type under the spelling the storage migration writes", async () => {
+    // A row the migration has reached no longer has `_componentType`, so a
+    // walk reading only that key finds no member type and skips the instance.
+    const page = {
+      title: "Home",
+      sections: [
+        {
+          _fieldGroupType: "hero",
+          heading: "Hi",
+          author: { id: "a1", name: "Ada", staffNote: "on leave" },
+        },
+      ],
+    };
+
+    const stripped = await withoutHiddenFields(
+      page,
+      { showHiddenFields: false },
+      PAGES
+    );
+
+    expect(stripped.sections[0]?.author).toEqual({ id: "a1", name: "Ada" });
+  });
+
   it("are left out of each polymorphic value by the collection it names, and an id is kept", async () => {
     const page = {
       title: "Home",

@@ -13,7 +13,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { clearSelectionValue } from "./ProviderConfigFields";
+import { clearSelectionValue } from "./email-provider-catalog";
 
 describe("the sentinel a select clears with", () => {
   it("avoids a legacy choice that happens to be the default sentinel", () => {

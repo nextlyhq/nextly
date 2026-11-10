@@ -112,6 +112,12 @@ export function buildDesiredSnapshot(args: {
       dialect
     );
 
+  // The table each collection is stored in, by slug: a relationship's key references the table a
+  // renamed target kept, not one spelled from the slug its relationships now name.
+  const targetTables = new Map(
+    Object.values(desired.collections).map(c => [c.slug, c.tableName])
+  );
+
   const snapshot: NextlySchemaSnapshot = {
     tables: [
       // A Schema Builder collection's table also carries its foreign keys:
@@ -123,7 +129,8 @@ export function buildDesiredSnapshot(args: {
             desiredCollectionTable(c, dialect),
             c,
             liveTablesByName.get(c.tableName),
-            dialect
+            dialect,
+            targetTables
           )
         )
       ),

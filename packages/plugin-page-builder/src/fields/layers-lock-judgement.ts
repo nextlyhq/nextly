@@ -27,10 +27,11 @@ import type {
 } from "@nextlyhq/plugin-sdk";
 
 import {
+  acceptedForms,
+  lockTargetOf,
   openRemovalFor,
   type OpenRemovalReader,
 } from "../breakpoint-removal/lock-acceptance";
-import { stripDocument } from "../breakpoint-removal/strip";
 
 import { documentOf, type LayersLockUnjudged } from "./blocks-composition";
 import { LAYERS_LOCK_CHANGED, pageLockMessage } from "./layers-lock-wording";
@@ -75,7 +76,9 @@ function layersLockIssuesFor(
  *
  * While a breakpoint removal is open, a write whose locked blocks equal the
  * newest stored form with the removed breakpoints' values stripped is kept:
- * that strip is the removal's own write (`breakpoint-removal/lock-acceptance`).
+ * that strip is the removal's own write. While its undo is open, one equal to
+ * that form with what the removal kept put back is kept the same way
+ * (`breakpoint-removal/lock-acceptance`).
  *
  * Two values cannot be read, so their locks cannot be judged: a blocks field
  * inside a group or a repeater, and a translated field whose language store is
@@ -120,15 +123,17 @@ export async function layersLockIssues(
   const changes = layersLockChanges(value, newest);
   if (changes.length === 0) return [];
   // Asked only once a lock is broken, so a write breaking none reads nothing.
-  const removal = await openRemovalFor(openRemoval, args.write);
-  if (removal !== null) {
-    const stripped = stripDocument(newest, removal);
-    if (
-      stripped !== newest &&
-      layersLockChanges(value, stripped).length === 0
-    ) {
-      return [];
-    }
+  const work = await openRemovalFor(openRemoval, args.write);
+  const accepted =
+    work === null
+      ? []
+      : await acceptedForms(
+          [newest],
+          work,
+          lockTargetOf(args.write, args.path)
+        );
+  if (accepted.some(form => layersLockChanges(value, form).length === 0)) {
+    return [];
   }
   return layersLockIssuesFor(changes, args.path, label);
 }

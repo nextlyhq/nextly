@@ -27,8 +27,8 @@ test.describe.configure({ lock: [LOCK.siteSettings] });
 const POSTS = "/admin/api/collections/posts/entries";
 const COMPONENTS = "/admin/api/collections/components/entries";
 const AUTOSAVE = /\/collections\/posts\/entries\/[^/]+\/versions\/autosave$/;
-const WARNING =
-  "These changes were made to an older version. Restoring them replaces changes made since.";
+const OFFER =
+  /These edits began from an older version\. Other author .+ changed the document at .+\. Restoring them replaces those changes\./;
 
 /**
  * Another account, signed in on its own. A write by the recovery point's own
@@ -75,7 +75,7 @@ test("a post another author wrote through REST after its recovery point is offer
   // Someone else then writes the document through the API.
   const other = await anotherAuthor(page.request, baseURL ?? "");
   const patched = await other.patch(`${POSTS}/${id}`, {
-    data: { excerpt: "written through the API afterwards" },
+    data: { excerpt: "written through the API afterwards", _overwrite: true },
   });
   expect(patched.ok(), await patched.text()).toBe(true);
   await other.dispose();
@@ -89,8 +89,8 @@ test("a post another author wrote through REST after its recovery point is offer
   // The server says the point is from an older version someone else wrote.
   expect(answer?.superseded).toBe("by-another");
   await expect(page.locator("main")).toBeVisible({ timeout: 30_000 });
-  // Offered still, since it is this author's work, but said to be older.
-  await expect(page.getByText(WARNING)).toBeVisible({ timeout: 15_000 });
+  // Offered still, since it is this author's work, but said to be older, naming who wrote since.
+  await expect(page.getByText(OFFER)).toBeVisible({ timeout: 15_000 });
 });
 
 test("a component another author wrote after its recovery point says it is from an older version", async ({
@@ -113,7 +113,7 @@ test("a component another author wrote after its recovery point says it is from 
 
   const other = await anotherAuthor(page.request, baseURL ?? "");
   const patched = await other.patch(`${COMPONENTS}/${id}`, {
-    data: { description: "written afterwards" },
+    data: { description: "written afterwards", _overwrite: true },
   });
   expect(patched.ok(), await patched.text()).toBe(true);
   await other.dispose();

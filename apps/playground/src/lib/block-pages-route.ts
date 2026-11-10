@@ -11,8 +11,13 @@
 import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import type { BlocksPageConfig } from "@nextlyhq/blocks-react/next";
-import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
+import {
+  loadSiteStyle,
+  namedQueriesOf,
+  SITE_STYLE_SLUG,
+} from "@nextlyhq/plugin-page-builder";
 
+import { pageBuilderPlugin } from "../../nextly.config";
 import { siteReader, SITE_STYLE_CONTEXT } from "./site-content";
 import { SITE_STYLE_DEFAULTS } from "./site-style-defaults";
 
@@ -43,6 +48,9 @@ export const blockPagesRoute: BlocksPageConfig = {
   collections: ["block-pages"],
   field: "content",
   nextly: siteReader,
+  // Where the route's catch-all is mounted, so a paginated list's links and
+  // its `/page/1` redirect name `/blocks/...` rather than the site root.
+  mountPath: MOUNT,
   // Stated even though it is this site's default language, because the read is
   // not the only thing it feeds: it is also what a `draft` decision compares a
   // preview token against, and a token always names a resolved locale rather
@@ -53,6 +61,9 @@ export const blockPagesRoute: BlocksPageConfig = {
   // editor — so a route depending on it renders the unknown-block placeholder
   // whenever this request arrived before the admin did.
   blocks: createBlockResolver(coreBlocks),
+  // This site's named queries, a list's custom sources: the page builder's
+  // own, so a list here never resolves another site's served alongside.
+  namedQueries: namedQueriesOf(pageBuilderPlugin),
   // No `data`: a `core/collection-loop` reads through the route's public
   // reader, published entries and public fields only, as any visitor would.
   styleContext: SITE_STYLE_CONTEXT,

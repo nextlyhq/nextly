@@ -10,7 +10,8 @@ name: Package smoke
 # lines the packages claim to support.
 #
 # Mostly scheduled: full installs take minutes, and packaging drift moves
-# slowly. A red night shows up as an issue, not a slower PR.
+# slowly. A red night shows up as an issue, not a slower PR. The nightly run
+# packs `main`, which releases are cut from, not the default branch `dev`.
 #
 # The RSC build is the exception and runs per PR as well, because it is the ONLY
 # control on the server-safe claim — the checks beside it read code and model
@@ -67,6 +68,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The nightly smokes `main`, what releases are cut from; a schedule
+          # would otherwise check out the default branch, `dev`. A pull request
+          # or a dispatch checks out its own ref (an empty `ref` is the default).
+          ref: ${{ github.event_name == 'schedule' && 'main' || '' }}
           persist-credentials: false
 
       - name: Setup pnpm
@@ -144,6 +149,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The nightly smokes `main`, what releases are cut from; a schedule
+          # would otherwise check out the default branch, `dev`. A pull request
+          # or a dispatch checks out its own ref (an empty `ref` is the default).
+          ref: ${{ github.event_name == 'schedule' && 'main' || '' }}
           persist-credentials: false
 
       - name: Setup pnpm
@@ -171,6 +180,12 @@ jobs:
         run: |
           mkdir -p /tmp/nextly-pack
           (cd packages/create-nextly-app && pnpm pack --pack-destination /tmp/nextly-pack)
+
+      # Before Node is switched, and the reason the scaffold below can install at
+      # all: the CLI under test is this commit's, so it has to install this
+      # commit's packages rather than the last release's.
+      - name: Pack the workspace packages and serve them from a registry
+        uses: ./.github/actions/serve-workspace-packages
 
       - name: Setup Node.js ${{ matrix.node }} for the scaffold
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -210,6 +225,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The nightly smokes `main`, what releases are cut from; a schedule
+          # would otherwise check out the default branch, `dev`. A pull request
+          # or a dispatch checks out its own ref (an empty `ref` is the default).
+          ref: ${{ github.event_name == 'schedule' && 'main' || '' }}
           persist-credentials: false
 
       - name: Setup pnpm
@@ -270,6 +289,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The nightly smokes `main`, what releases are cut from; a schedule
+          # would otherwise check out the default branch, `dev`. A pull request
+          # or a dispatch checks out its own ref (an empty `ref` is the default).
+          ref: ${{ github.event_name == 'schedule' && 'main' || '' }}
           persist-credentials: false
 
       - name: Setup pnpm

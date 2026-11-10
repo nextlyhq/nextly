@@ -28,7 +28,10 @@ export interface EntryBulkActions {
  */
 export function useEntryBulkActions(
   collection:
-    | Pick<CollectionForColumns, "slug" | "status" | "removedFromCode">
+    | Pick<
+        CollectionForColumns,
+        "slug" | "status" | "removedFromCode" | "disableDelete"
+      >
     | undefined
 ): EntryBulkActions {
   const slug = collection?.slug ?? "";
@@ -40,8 +43,13 @@ export function useEntryBulkActions(
   const canPublish = useCan(`publish-${slug}`);
   const canUnpublish = useCan(`unpublish-${slug}`);
 
+  // A collection deleted through an action of its own (a plugin's) is offered
+  // no Delete here: the server would refuse it, and that action is offered
+  // beside the row instead.
+  const deletable = collection?.disableDelete !== true;
+
   const offered = {
-    delete: writable && slug !== "" && canDelete,
+    delete: writable && deletable && slug !== "" && canDelete,
     publish: writable && hasStatus && canPublish,
     unpublish: writable && hasStatus && canUnpublish,
   };

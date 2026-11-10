@@ -4,6 +4,7 @@
 // published into admin's own bundled copy would never reach that Toaster.
 import { PortalProvider, ShortcutProvider, toast } from "@nextlyhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
+import { ADMIN_ROBOTS } from "nextly/config";
 import type React from "react";
 import { Suspense, lazy, useEffect, useState } from "react";
 
@@ -179,9 +180,10 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
       <PortalProvider container={portalRoot}>
         <BrandingProvider>
           {/* The interface language every screen's strings are read in: the
-              browser's, where the admin has a catalog for it, else English.
-              Inside branding, which carries the plugins' catalogs. */}
-          <AdminI18nProvider>
+              signed-in person's own choice, else the browser's, where the
+              admin has a catalog for it, else English. Inside branding, which
+              carries the plugins' catalogs. */}
+          <AdminI18nProvider signedIn={routeType !== "public"}>
             {/* Keeps the plugin page route registry in sync with admin-meta (D21). */}
             <PluginPageRegistrar />
             {/* Registers the widget preview page on the server's development answer alone. */}
@@ -214,6 +216,27 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
   );
 }
 
+/**
+ * Adds the admin's robots tag to the head in the browser where the page has
+ * none, for an app whose admin layout predates exporting `adminMetadata` as
+ * its metadata. That export puts the tag in the first HTML the server sends;
+ * this cannot, since the admin streams in after the head has gone, but a
+ * crawler that runs the page still reads it. One tag, never a second: a
+ * robots tag already in the head, the layout's or any other, is left as it is.
+ * Only the tag added here is taken away again.
+ */
+function AdminRobotsFallback(): null {
+  useEffect(() => {
+    if (document.head.querySelector('meta[name="robots"]')) return;
+    const tag = document.createElement("meta");
+    tag.name = "robots";
+    tag.content = ADMIN_ROBOTS;
+    document.head.append(tag);
+    return () => tag.remove();
+  }, []);
+  return null;
+}
+
 /** The admin's root layout's settings. */
 export interface RootLayoutProps {
   /**
@@ -226,19 +249,24 @@ export interface RootLayoutProps {
 
 const RootLayout = ({ nonce }: RootLayoutProps = {}): React.ReactElement => {
   return (
-    <ThemeProvider nonce={nonce}>
-      <RestartProvider>
-        {/*
+    <>
+      {/* The admin's robots tag, where the app's layout has not put one in
+          the head (\`AdminRobotsFallback\`). */}
+      <AdminRobotsFallback />
+      <ThemeProvider nonce={nonce}>
+        <RestartProvider>
+          {/*
           The admin's one keydown listener, and the root of the shortcut layer stack. It sits
           above everything so precedence follows the component tree: a dialog or an editor canvas
           registers deeper and therefore outranks the shell without either naming a number the
           other has to stay clear of.
         */}
-        <ShortcutProvider>
-          <AdminAppContent nonce={nonce} />
-        </ShortcutProvider>
-      </RestartProvider>
-    </ThemeProvider>
+          <ShortcutProvider>
+            <AdminAppContent nonce={nonce} />
+          </ShortcutProvider>
+        </RestartProvider>
+      </ThemeProvider>
+    </>
   );
 };
 

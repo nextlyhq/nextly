@@ -38,8 +38,6 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { CLASS_USAGE_INDEX_SLUG } from "../collections/class-usage-index";
-import { COMPONENT_USAGE_INDEX_SLUG } from "../collections/component-usage-index";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { USAGE_BACKFILL_STATE_SLUG } from "../collections/usage-backfill-state";
 import { componentUsageIndex } from "../component-usage";
@@ -74,13 +72,20 @@ const document = (kind: "page" | "component", nodes: Node[]) => ({
   nodes,
 });
 
+/** Where the component index's rows live. */
+const COMPONENT_ROWS = "page_builder__component_usage";
+
 /**
- * What the tests switch at run time inside the site's own hooks: a write to
- * the component index that fails, a page read that waits, a page read that
- * spends the job's budget.
+ * What the tests switch at run time inside the site's own hooks: a page read
+ * that fails, a page read that waits, a page read that spends the job's
+ * budget.
  */
 interface Switches {
-  /** Reject every write to the component index while true. */
+  /**
+   * Fail every read of one page by id while true. Index maintenance reads the
+   * page it reconciles that way after the save commits, so its write fails
+   * while the save itself goes through.
+   */
   failIndexWrites: boolean;
   /** Resolve this once, the next time a page is read by id, then wait for `release`. */
   pauseNextPageRead?: { reached: () => void; release: Promise<void> };
@@ -95,12 +100,10 @@ function sitePlugin(switches: Switches): PluginDefinition {
     version: "1.0.0",
     nextly: ">=0.0.0",
     init(ctx) {
-      ctx.hooks.on("beforeCreate", COMPONENT_USAGE_INDEX_SLUG, () => {
-        if (switches.failIndexWrites) {
-          throw new Error("the component index rejected this write");
-        }
-      });
       ctx.hooks.on("afterRead", "pages", async context => {
+        if (switches.failIndexWrites && !Array.isArray(context.data)) {
+          throw new Error("the page could not be read for its index rows");
+        }
         switches.spendOnPageRead?.setTime(0);
         const pause = switches.pauseNextPageRead;
         // A read by id, which carries one document rather than a list: the
@@ -138,8 +141,7 @@ function installed(plugin: PluginDefinition) {
           content: {},
         } as never
       ),
-    health: (): Promise<UsageIndexHealth> =>
-      health.read(componentUsageIndex, COMPONENT_USAGE_INDEX_SLUG),
+    health: (): Promise<UsageIndexHealth> => health.read(componentUsageIndex),
   };
 }
 
@@ -197,18 +199,20 @@ describe.each(getConfiguredTestDialects())(
       t: TestNextly,
       pageIds: readonly string[]
     ): Promise<Record<string, string[]>> {
-      const rows = await t.nextly.find({
-        collection: COMPONENT_USAGE_INDEX_SLUG,
-        where: { entity: { equals: "pages" }, kind: { equals: "reference" } },
-        limit: 500,
-        overrideAccess: true,
+      const rows = await t.adapter.select<{
+        entityKey: string;
+        componentId: string;
+      }>(COMPONENT_ROWS, {
+        where: {
+          and: [
+            { column: "entity", op: "=", value: "pages" },
+            { column: "kind", op: "=", value: "reference" },
+          ],
+        },
       });
       const found: Record<string, string[]> = {};
       for (const id of pageIds) found[id] = [];
-      for (const item of rows.items as {
-        entityKey: string;
-        componentId: string;
-      }[]) {
+      for (const item of rows) {
         if (!(item.entityKey in found)) continue;
         const named = found[item.entityKey]!;
         if (!named.includes(item.componentId)) named.push(item.componentId);
@@ -222,19 +226,9 @@ describe.each(getConfiguredTestDialects())(
      * the plugin over existing content has none for them.
      */
     async function forgetPages(t: TestNextly): Promise<void> {
-      const rows = await t.nextly.find({
-        collection: COMPONENT_USAGE_INDEX_SLUG,
-        where: { entity: { equals: "pages" } },
-        limit: 500,
-        overrideAccess: true,
+      await t.adapter.delete(COMPONENT_ROWS, {
+        and: [{ column: "entity", op: "=", value: "pages" }],
       });
-      for (const item of rows.items as { id: string }[]) {
-        await t.nextly.delete({
-          collection: COMPONENT_USAGE_INDEX_SLUG,
-          id: item.id,
-          overrideAccess: true,
-        });
-      }
     }
 
     describe("a maintenance write that failed", () => {
@@ -385,8 +379,8 @@ describe.each(getConfiguredTestDialects())(
         // which is what a super-admin's edit amounts to.
         const generation = backfillGeneration({
           limits,
-          classIndex: CLASS_USAGE_INDEX_SLUG,
-          componentIndex: COMPONENT_USAGE_INDEX_SLUG,
+          classIndex: "page_builder__class_usage",
+          componentIndex: COMPONENT_ROWS,
         });
         for (const variant of ["published", "draft"] as const) {
           await t.nextly.create({

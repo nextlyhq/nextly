@@ -17,6 +17,7 @@ import {
   createRuntimeCollection,
   pageWithHeading,
   removeMigrationsOf,
+  removeRuntimeCollection,
 } from "./support/runtime-collection";
 import { LOCK } from "./support/locks";
 import { CANVAS_FRAME, canvasFrame } from "./support/canvas-frame";
@@ -39,6 +40,7 @@ test("opens a blocks field inside a named group by its path, and saves it there"
   try {
     await makeAndEdit();
   } finally {
+    await removeRuntimeCollection(api, slug);
     await removeMigrationsOf(slug);
   }
 

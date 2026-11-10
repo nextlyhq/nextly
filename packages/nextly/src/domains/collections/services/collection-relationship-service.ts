@@ -1,5 +1,12 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { getColumns, inArray, sql, type SQL } from "drizzle-orm";
+import {
+  getColumns,
+  inArray,
+  sql,
+  type Column,
+  type SQL,
+  type Table,
+} from "drizzle-orm";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
@@ -17,6 +24,7 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
 import { NextlyError } from "../../../errors/nextly-error";
+import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import {
   convertTimestampsToCamelCase,
   keysToCamelCase,
@@ -73,7 +81,11 @@ import {
   type LiveFieldGroupReadPass,
 } from "../../field-groups/live-read-access";
 import { passwordReachOf } from "../../field-groups/password-reach";
-import { populateCompanionFields } from "../../i18n/companion-join";
+import {
+  fillCompanionFields,
+  populateCompanionFields,
+  selectRowsWithCompanion,
+} from "../../i18n/companion-join";
 import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
 import {
   NO_DECISIONS,
@@ -385,6 +397,20 @@ function resolveNestedTarget(
 type RelatedRowAccess = RelatedRowReadContext;
 
 /**
+ * The languages a related row is read in: every language the surrounding read falls back
+ * through, else the one it resolved to, else none.
+ */
+function targetLocaleChain(access: RelatedRowAccess): readonly string[] | null {
+  return access.localeChain ?? (access.locale ? [access.locale] : null);
+}
+
+/** A target's translations, read in the same statement as its rows, in the chain they were read in. */
+interface TargetTranslations {
+  rows: Record<string, unknown>[];
+  localeChain: readonly string[];
+}
+
+/**
  * Whether this expansion may see a target's UNPUBLISHED rows.
  *
  * Deliberately not {@link trustsTarget}. Trust answers *who may read a row*;
@@ -565,6 +591,24 @@ export interface RelationshipExpansionOptions
    * {@link RelatedRowAccess.locale}.
    */
   locale?: string;
+
+  /**
+   * What the batch path gives a hasMany relationship that stores nothing.
+   *
+   * - `"empty"` (the default): an empty list, which is what a list read has
+   *   always given for a document's own unset to-many field. List callers map
+   *   over it, so the default keeps that public shape as it was.
+   * - `"null"`: the value as stored, as {@link
+   *   CollectionRelationshipService.expandRelationships} keeps it. Asked for by
+   *   the batch path's own nested calls (repeater and group rows, and related
+   *   rows expanded for the depth remaining), whose unset values a list has
+   *   always returned as stored: a repeater row went through the single-entry
+   *   expansion, and a related row was not expanded at all.
+   *
+   * Read only by {@link CollectionRelationshipService.batchExpandRelationships};
+   * the single-entry expansion always keeps the stored value.
+   */
+  unsetHasMany?: "empty" | "null";
 }
 
 /**
@@ -852,41 +896,18 @@ function stripRelationshipsToIds(
     )
       continue;
 
+    // The same reductions the batch path's depth-0 read makes, so the two
+    // agree on what "as ids" means.
     if (isRelationshipField(field)) {
-      const hasMany =
-        field.hasMany || field.options?.relationType === "manyToMany";
-      const value = stripped[fieldName];
-
-      if (hasMany && Array.isArray(value)) {
-        stripped[fieldName] = value.map(v => extractRelationshipId(v));
-      } else {
-        stripped[fieldName] = extractRelationshipId(value);
-      }
+      stripped[fieldName] = relationshipValueToIds(stripped[fieldName], field);
     } else if (field.type === "repeater" || field.type === "group") {
       const nestedFields = getNestedFields(field);
       if (nestedFields.length === 0) continue;
-
-      const rawData = stripped[fieldName];
-      const parsed = parseJsonIfString(rawData);
-
-      if (field.type === "repeater" && Array.isArray(parsed)) {
-        stripped[fieldName] = parsed.map((item: Record<string, unknown>) => {
-          if (item && typeof item === "object") {
-            return stripRelationshipsToIds(item, nestedFields);
-          }
-          return item;
-        });
-      } else if (
-        field.type === "group" &&
-        parsed &&
-        typeof parsed === "object" &&
-        !Array.isArray(parsed)
-      ) {
-        stripped[fieldName] = stripRelationshipsToIds(
-          parsed as Record<string, unknown>,
-          nestedFields
-        );
-      }
+      stripped[fieldName] = stripContainerRows(
+        stripped[fieldName],
+        field,
+        nestedFields
+      );
     }
   }
 
@@ -1292,6 +1313,320 @@ export function relationKey(collection: string, id: string): string {
 }
 
 /**
+ * The rows one relationship field's batched fetch returned: by reference key
+ * (a many-to-many field: by source entry id, each holding a list of rows).
+ */
+type RelationDataMap = Map<
+  string,
+  Record<string, unknown> | Record<string, unknown>[]
+>;
+
+/** The lookup map of each fetched relationship field, by field name. */
+type RelationDataMaps = Record<string, RelationDataMap>;
+
+/** A related row a batched fetch returned, with the collection it came from. */
+interface FetchedRow {
+  collection: string;
+  row: Record<string, unknown>;
+}
+
+/**
+ * Record the rows a batched fetch returned for `refs`, each with the collection
+ * it was read from, so the batch path can expand them further while depth
+ * remains. A reference the fetch returned nothing for (missing, or withheld
+ * from this caller) records nothing, so nothing is expanded on its behalf.
+ */
+function collectFetchedRows(
+  refs: RelationshipRef[],
+  fetched: Map<string, Record<string, unknown>>,
+  into: FetchedRow[]
+): void {
+  for (const ref of refs) {
+    const row = fetched.get(relationKey(ref.collection, ref.id));
+    if (row) into.push({ collection: ref.collection, row });
+  }
+}
+
+/**
+ * Put the expanded version of each fetched row in place of the row itself, in
+ * every lookup map, so every entry referencing a row is assigned the expanded
+ * one. A row with no expanded version stays as fetched.
+ */
+function replaceFetchedRows(
+  dataMaps: RelationDataMaps,
+  expandedRows: Map<Record<string, unknown>, Record<string, unknown>>
+): void {
+  for (const dataMap of Object.values(dataMaps)) {
+    for (const [key, value] of dataMap) {
+      dataMap.set(
+        key,
+        Array.isArray(value)
+          ? value.map(row => expandedRows.get(row) ?? row)
+          : (expandedRows.get(value) ?? value)
+      );
+    }
+  }
+}
+
+/**
+ * The references a relationship field holds across a page of entries, each
+ * against the collection it names: every entry of a to-many value, or the one
+ * value of a to-one field. Read the same way the assembly reads each entry's
+ * value back, so a row is fetched for exactly the references assigned.
+ */
+function referencesAcross(
+  entries: Record<string, unknown>[],
+  field: FieldDefinition,
+  targetCollection: string
+): RelationshipRef[] {
+  const targets = declaredTargets(field);
+  if (isHasManyRelationship(field)) {
+    return entries.flatMap(entry =>
+      normalizeToRelationshipRefs(entry[field.name], targetCollection, targets)
+    );
+  }
+  return entries
+    .map(entry =>
+      readRelationshipRef(entry[field.name], targetCollection, targets)
+    )
+    .filter((ref): ref is RelationshipRef => ref !== null);
+}
+
+/**
+ * How deep a relationship field may be populated: its own `maxDepth`, under
+ * `options` (the Schema Builder's shape) or at its root, else the maximum. Both
+ * expansions ask this one place, so they bound a field alike.
+ */
+function fieldMaxDepthOf(field: FieldDefinition): number {
+  return field.options?.maxDepth ?? field.maxDepth ?? MAX_RELATIONSHIP_DEPTH;
+}
+
+/**
+ * Whether a field could hold anything expansion reaches: a relationship, an
+ * upload, or a container whose rows might. An entry with none of these is
+ * returned by the batch path as it is.
+ */
+function mayHoldExpandable(field: FieldDefinition): boolean {
+  return (
+    isUploadField(field) ||
+    isRepeaterOrGroupField(field) ||
+    isRelationshipField(field)
+  );
+}
+
+/**
+ * The nested fields of a container whose rows hold something expansion
+ * reaches (a relationship, an upload, or a further container), or null when
+ * there is nothing in them to expand. Both expansions ask this one place
+ * before descending into a container's rows.
+ */
+function expandableNestedFields(
+  field: FieldDefinition
+): FieldDefinition[] | null {
+  if (isRelationshipField(field)) return null;
+  const nestedFields = getNestedFields(field);
+  const reachable = nestedFields.some(
+    f =>
+      isRelationshipField(f) ||
+      isUploadField(f) ||
+      f.type === "repeater" ||
+      f.type === "group"
+  );
+  return reachable ? nestedFields : null;
+}
+
+/**
+ * Every row one repeater or group field holds across a page of entries, and
+ * where each row's expanded version goes back to. A JSON string the storage
+ * handed back is parsed, and a repeater's parsed list replaces the stored
+ * value on the entry, so the expanded rows land in the value returned.
+ */
+function containerRowsAcross(
+  entries: Record<string, unknown>[],
+  field: FieldDefinition
+): {
+  rows: Record<string, unknown>[];
+  placeBack: Array<(row: Record<string, unknown>) => void>;
+} {
+  const rows: Record<string, unknown>[] = [];
+  const placeBack: Array<(row: Record<string, unknown>) => void> = [];
+  for (const entry of entries) {
+    const rawData = entry[field.name];
+    if (rawData === undefined || rawData === null) continue;
+    const parsed = parseJsonIfString(rawData);
+
+    if (field.type === "repeater") {
+      if (!Array.isArray(parsed)) continue;
+      const list: unknown[] = [...parsed];
+      entry[field.name] = list;
+      list.forEach((row, index) => {
+        if (!row || typeof row !== "object") return;
+        rows.push(row as Record<string, unknown>);
+        placeBack.push(expanded => {
+          list[index] = expanded;
+        });
+      });
+    } else if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      rows.push(parsed as Record<string, unknown>);
+      placeBack.push(expanded => {
+        entry[field.name] = expanded;
+      });
+    }
+  }
+  return { rows, placeBack };
+}
+
+/**
+ * An entry with its relationship fields assigned the rows the batch fetched
+ * for them. A field whose value the lookup cannot resolve keeps what is stored.
+ */
+function withRelationData(
+  entry: Record<string, unknown>,
+  relationFields: FieldDefinition[],
+  dataMaps: RelationDataMaps,
+  unsetHasMany: "empty" | "null"
+): Record<string, unknown> {
+  const expandedEntry = { ...entry };
+  for (const field of relationFields) {
+    const dataMap = dataMaps[field.name];
+    if (!dataMap) continue;
+    const populated = populatedRelationValue(
+      entry,
+      field,
+      dataMap,
+      unsetHasMany
+    );
+    if (populated) expandedEntry[field.name] = populated.value;
+  }
+  return expandedEntry;
+}
+
+/**
+ * One relationship field's populated value for one entry, from the rows its
+ * batched fetch returned, or undefined to leave the stored value in place.
+ *
+ * Each value is resolved the same way the fetch resolved it, so a value that
+ * names its own collection is looked up under that collection, and a
+ * polymorphic one keeps saying which collection it came from.
+ */
+function populatedRelationValue(
+  entry: Record<string, unknown>,
+  field: FieldDefinition,
+  dataMap: RelationDataMap,
+  unsetHasMany: "empty" | "null"
+): { value: unknown } | undefined {
+  if (field.options?.relationType === "manyToMany") {
+    return { value: dataMap.get(entry.id as string) || [] };
+  }
+  const hasMany = isHasManyRelationship(field);
+  // An unset to-many value is given as the caller asked (`unsetHasMany`): left
+  // as stored for the nested calls, or, by default, read below as an empty
+  // list, exactly as a list read always gave it at the top level.
+  if (hasMany && unsetHasMany === "null" && !entry[field.name]) {
+    return undefined;
+  }
+  const fieldTarget = getTargetCollection(field);
+  if (!fieldTarget) return undefined;
+
+  if (hasMany) {
+    const refs = normalizeToRelationshipRefs(
+      entry[field.name],
+      fieldTarget,
+      declaredTargets(field)
+    );
+    const rows = refs.map(ref => {
+      const row = dataMap.get(relationKey(ref.collection, ref.id));
+      return row && !Array.isArray(row) ? withReferenceIdentity(row, ref) : row;
+    });
+    return { value: rows.filter(Boolean) };
+  }
+  const ref = readRelationshipRef(
+    entry[field.name],
+    fieldTarget,
+    declaredTargets(field)
+  );
+  if (!ref) return undefined;
+  const row = dataMap.get(relationKey(ref.collection, ref.id));
+  if (!row) return undefined;
+  return { value: Array.isArray(row) ? row : withReferenceIdentity(row, ref) };
+}
+
+/**
+ * An entry as a depth-0 read gives it: each relationship as its id(s), and the
+ * relationships inside its repeater and group rows too, since the save flow
+ * may store whole related objects inside that JSON. A container holding no
+ * relationship is left exactly as stored.
+ */
+function unexpandedEntry(
+  entry: Record<string, unknown>,
+  fields: FieldDefinition[]
+): Record<string, unknown> {
+  const normalized = { ...entry };
+  for (const field of fields) {
+    const value = normalized[field.name];
+    if (value === null || value === undefined) continue;
+    if (field.type === "repeater" || field.type === "group") {
+      const nestedFields = getNestedFields(field);
+      const holdsRelations = nestedFields.some(
+        f =>
+          isRelationshipField(f) || f.type === "repeater" || f.type === "group"
+      );
+      if (!holdsRelations) continue;
+      normalized[field.name] = stripContainerRows(value, field, nestedFields);
+    } else if (isRelationshipField(field)) {
+      normalized[field.name] = relationshipValueToIds(value, field);
+    }
+  }
+  return normalized;
+}
+
+/**
+ * A relationship value reduced to its id(s): each entry of a to-many list, or
+ * the one value of a to-one field.
+ */
+function relationshipValueToIds(
+  value: unknown,
+  field: FieldDefinition
+): unknown {
+  const hasMany = field.hasMany || field.options?.relationType === "manyToMany";
+  return hasMany && Array.isArray(value)
+    ? value.map(v => extractRelationshipId(v))
+    : extractRelationshipId(value);
+}
+
+/**
+ * A repeater's or group's stored value with the relationships in its rows
+ * reduced to ids, parsing a JSON string first. A value that is neither a list
+ * of rows nor a row is returned as stored.
+ */
+function stripContainerRows(
+  value: unknown,
+  field: FieldDefinition,
+  nestedFields: FieldDefinition[]
+): unknown {
+  const parsed = parseJsonIfString(value);
+  if (field.type === "repeater" && Array.isArray(parsed)) {
+    return parsed.map((row: Record<string, unknown>) =>
+      row && typeof row === "object"
+        ? stripRelationshipsToIds(row, nestedFields)
+        : row
+    );
+  }
+  if (
+    field.type === "group" &&
+    parsed &&
+    typeof parsed === "object" &&
+    !Array.isArray(parsed)
+  ) {
+    return stripRelationshipsToIds(
+      parsed as Record<string, unknown>,
+      nestedFields
+    );
+  }
+  return value;
+}
+
+/**
  * Pairs every id in a list-valued relationship with the collection it belongs
  * to. A multi-target field stores one `{ relationTo, value }` pair per entry,
  * and each may name a different collection, so a single target resolved from
@@ -1687,13 +2022,13 @@ export class CollectionRelationshipService extends BaseService {
                 access
               )
           );
-    const entries = (await (
-      match === undefined
-        ? this.db.select().from(schema)
-        : this.db
-            .select({ ...getColumns(schema), [RULE_MATCH]: match })
-            .from(schema)
-    ).where(inArray(schema.id, ids))) as Record<string, unknown>[];
+    const { entries, translations } = await this.selectTargetRows(
+      targetCollection,
+      schema,
+      ids,
+      match,
+      access
+    );
 
     const matching = new Set<Record<string, unknown>>();
     const fetched = entries.map(entry => {
@@ -1750,13 +2085,69 @@ export class CollectionRelationshipService extends BaseService {
       targetCollection,
       rows,
       statusFilter,
-      access
+      access,
+      translations
     );
     // Redaction runs before any caller derives a label from a row: a label
     // copies a field's value under another key, so one taken from an unredacted
     // row survives the redaction of its own source field.
     await this.redactRelatedRows(targetCollection, rows, access);
     return rows;
+  }
+
+  /**
+   * The target's rows for `ids`, with each row's rule match when the read rule answered a filter,
+   * and their translations in the same statement when the target keeps its translatable values in
+   * a companion that is there to join to: one round trip where reading them after the rows took
+   * two. A target with no companion, a system entity, or a read with no language reads its rows
+   * alone, and its translations, if any, are filled after. `schema` is the target's table itself,
+   * a collection's runtime table or a system entity's, since its columns are selected from it.
+   */
+  private async selectTargetRows(
+    targetCollection: string,
+    schema: Table & { id: Column },
+    ids: unknown[],
+    match: SQL<number> | undefined,
+    access: RelatedRowAccess
+  ): Promise<{
+    entries: Record<string, unknown>[];
+    translations: TargetTranslations | null;
+  }> {
+    const projection =
+      match === undefined
+        ? undefined
+        : { ...getColumns(schema), [RULE_MATCH]: match };
+    const where = inArray(schema.id, ids);
+    const localeChain = targetLocaleChain(access);
+    const companion =
+      localeChain && !isSystemEntity(targetCollection)
+        ? await this.resolveTargetCompanion(targetCollection, access)
+        : null;
+    if (
+      localeChain &&
+      companion &&
+      (await resolveCompanionSchemaReadiness(this.adapter, companion)) ===
+        "ready"
+    ) {
+      const joined = await selectRowsWithCompanion({
+        db: this.db,
+        mainTable: schema,
+        projection,
+        where,
+        companionTable: companion.table,
+        localeChain: [...localeChain],
+      });
+      return {
+        entries: joined.rows,
+        translations: { rows: joined.companionRows, localeChain },
+      };
+    }
+    const entries = (await (
+      projection === undefined
+        ? this.db.select().from(schema)
+        : this.db.select(projection).from(schema)
+    ).where(where)) as Record<string, unknown>[];
+    return { entries, translations: null };
   }
 
   /**
@@ -1768,10 +2159,11 @@ export class CollectionRelationshipService extends BaseService {
     targetCollection: string,
     rows: Record<string, unknown>[],
     statusFilter: StatusFilter | null,
-    access: RelatedRowAccess
+    access: RelatedRowAccess,
+    // The translations the rows were read with, when they came in the same statement.
+    translations: TargetTranslations | null = null
   ): Promise<void> {
-    const localeChain =
-      access.localeChain ?? (access.locale ? [access.locale] : null);
+    const localeChain = targetLocaleChain(access);
     if (!localeChain || rows.length === 0 || isSystemEntity(targetCollection)) {
       return;
     }
@@ -1780,6 +2172,17 @@ export class CollectionRelationshipService extends BaseService {
       access
     );
     if (!companion) return;
+    if (translations) {
+      fillCompanionFields({
+        rows,
+        companionRows: translations.rows,
+        localizedFields: companion.localizedFields,
+        localeChain: [...translations.localeChain],
+        statusValues:
+          companion.hasStatus && statusFilter ? statusFilter.values : undefined,
+      });
+      return;
+    }
     await populateCompanionFields({
       db: this.db as never,
       companionTable: companion.table,
@@ -1810,8 +2213,7 @@ export class CollectionRelationshipService extends BaseService {
   ): Promise<SQL<number> | undefined> {
     // Every language the surrounding read falls back through, as a direct
     // read of the target is judged in; else the one it resolved to.
-    const localeChain =
-      access.localeChain ?? (access.locale ? [access.locale] : null);
+    const localeChain = targetLocaleChain(access);
     const companion = localeChain
       ? await this.resolveTargetCompanion(targetCollection, access)
       : null;
@@ -2027,16 +2429,26 @@ export class CollectionRelationshipService extends BaseService {
    * The verdict this expansion already holds for the target, or `decide`'s,
    * kept for the rest of the expansion. Pending verdicts are kept too, so
    * fields fetched concurrently share one question rather than each asking.
+   * A verdict that fails is not kept, so the next ask decides again rather
+   * than repeating the failure for the rest of the expansion.
    */
   private memoizedVerdict(
     access: RelatedRowAccess,
     targetCollection: string,
     decide: () => Promise<FilteredRead>
   ): Promise<FilteredRead> {
-    const cached = access.targetVerdicts?.get(targetCollection);
+    const verdicts = access.targetVerdicts;
+    const cached = verdicts?.get(targetCollection);
     if (cached) return cached;
     const pending = decide();
-    access.targetVerdicts?.set(targetCollection, pending);
+    if (verdicts) {
+      verdicts.set(targetCollection, pending);
+      pending.catch(() => {
+        if (verdicts.get(targetCollection) === pending) {
+          verdicts.delete(targetCollection);
+        }
+      });
+    }
     return pending;
   }
 
@@ -2237,9 +2649,17 @@ export class CollectionRelationshipService extends BaseService {
    *
    * Supports depth parameter:
    * - depth=0: No expansion, return entries as-is
-   * - depth=1+: Expand relationships (note: batch expansion only does 1 level for performance)
+   * - depth=1: Expand immediate relationships
+   * - depth=2+: Expand nested relationships recursively, exactly as
+   *   {@link expandRelationships} expands one entry: a related row reached
+   *   with depth remaining has its own relationships and uploads expanded to
+   *   that depth.
    *
-   * For deeper nested expansion, use expandRelationships() on individual entries.
+   * Stays batched at every depth. The related rows one hop fetched are grouped
+   * by the collection they belong to and each group is expanded by ONE
+   * recursive call, and the rows of every repeater or group across the page are
+   * expanded together, so a page costs a fixed number of reads per depth level
+   * per target collection, never one per row.
    *
    * @param entries - Array of entries to expand
    * @param collectionName - Name of the collection
@@ -2253,7 +2673,11 @@ export class CollectionRelationshipService extends BaseService {
     fields: FieldDefinition[],
     options: RelationshipExpansionOptions = {}
   ): Promise<Record<string, unknown>[]> {
-    const { depth = DEFAULT_RELATIONSHIP_DEPTH } = options;
+    const {
+      depth = DEFAULT_RELATIONSHIP_DEPTH,
+      currentDepth = 0,
+      unsetHasMany = "empty",
+    } = options;
     // The caller travels with every fetch below so each related row is judged
     // by its own collection's field rules.
     const access = relatedRowAccessOf(options);
@@ -2266,298 +2690,259 @@ export class CollectionRelationshipService extends BaseService {
     // This is needed because the save flow may store full relationship objects
     // inside repeater/group JSON data.
     if (effectiveDepth === 0) {
-      return entries.map(entry => {
-        const normalized = { ...entry };
-        for (const field of fields) {
-          if (
-            (field.type === "repeater" || field.type === "group") &&
-            normalized[field.name] != null
-          ) {
-            const nestedFields = getNestedFields(field);
-            if (nestedFields.length === 0) continue;
-            const hasNestedRelations = nestedFields.some(
-              f =>
-                isRelationshipField(f) ||
-                f.type === "repeater" ||
-                f.type === "group"
-            );
-            if (!hasNestedRelations) continue;
-
-            const rawData = normalized[field.name];
-            const parsed = parseJsonIfString(rawData);
-
-            if (field.type === "repeater" && Array.isArray(parsed)) {
-              normalized[field.name] = parsed.map(
-                (row: Record<string, unknown>) =>
-                  row && typeof row === "object"
-                    ? stripRelationshipsToIds(row, nestedFields)
-                    : row
-              );
-            } else if (
-              field.type === "group" &&
-              parsed &&
-              typeof parsed === "object" &&
-              !Array.isArray(parsed)
-            ) {
-              normalized[field.name] = stripRelationshipsToIds(
-                parsed as Record<string, unknown>,
-                nestedFields
-              );
-            }
-          } else if (isRelationshipField(field)) {
-            // Strip top-level relationship fields to IDs too
-            const hasMany =
-              field.hasMany || field.options?.relationType === "manyToMany";
-            const value = normalized[field.name];
-            if (value != null) {
-              if (hasMany && Array.isArray(value)) {
-                normalized[field.name] = value.map((v: unknown) =>
-                  extractRelationshipId(v)
-                );
-              } else {
-                normalized[field.name] = extractRelationshipId(value);
-              }
-            }
-          }
-        }
-        return normalized;
-      });
+      return entries.map(entry => unexpandedEntry(entry, fields));
     }
 
     if (entries.length === 0) return [];
 
-    // Filter for relationship fields.
-    const relationFields = fields.filter(f => isRelationshipField(f));
+    // A level the requested depth does not reach gives its relationships as
+    // ids, as the single-entry path does at the same level.
+    if (currentDepth >= effectiveDepth) {
+      return entries.map(entry => stripRelationshipsToIds(entry, fields));
+    }
 
-    // Check if there are any fields that could contain media (upload, array, or group)
-    // Array and group fields might contain nested upload fields
-    const hasMediaFields = fields.some(
-      f =>
-        isUploadField(f) ||
-        isRepeaterOrGroupField(f) ||
-        isGroupField(f) ||
-        isRelationshipField(f)
+    // Nothing here can hold a relationship or an upload: the entries are
+    // returned as they are.
+    if (!fields.some(mayHoldExpandable)) return entries;
+
+    const relationFields = fields.filter(f => isRelationshipField(f));
+    const { dataMaps, fetchedRows } = await this.batchFetchRelationData(
+      entries,
+      collectionName,
+      relationFields,
+      currentDepth,
+      access
     );
 
-    // If no relationship fields AND no fields that could contain media, return entries as-is
-    if (!hasMediaFields) {
-      return entries;
+    // A related row reached with depth to spare is expanded to the depth
+    // remaining, its own relationships and uploads included, as the
+    // single-entry path expands it. The rows are replaced in the lookup maps
+    // before they are assigned below, so every entry referencing a row gets the
+    // expanded one.
+    if (currentDepth + 1 < effectiveDepth && fetchedRows.length > 0) {
+      const expandedRows = await this.expandFetchedRows(fetchedRows, {
+        depth: effectiveDepth,
+        currentDepth: currentDepth + 1,
+        // A related row's unset to-many value stays as stored, as it always
+        // reached a list and as the read by id gives it.
+        unsetHasMany: "null",
+        ...access,
+      });
+      replaceFetchedRows(dataMaps, expandedRows);
     }
 
-    // Build lookup maps for each relation field
-    const relationDataMaps: Record<
-      string,
-      Map<string, Record<string, unknown> | Record<string, unknown>[]>
-    > = {};
+    // Every upload the page holds, nested ones included, read in one batch.
+    const uploadDataMap =
+      (await this.mediaLookupFor(entries, fields, access)) ?? new Map();
 
+    const expandedEntries = entries.map(entry =>
+      withRelationData(entry, relationFields, dataMaps, unsetHasMany)
+    );
+
+    // Relationships and uploads nested inside repeater/group fields, expanded
+    // at THIS level, as the single-entry path expands a container's rows at
+    // the level of the entry holding them.
+    await this.batchExpandContainerRows(
+      expandedEntries,
+      collectionName,
+      fields,
+      // A container row's unset to-many value stays as stored, as it did when
+      // each row went through the single-entry expansion.
+      { depth: effectiveDepth, currentDepth, unsetHasMany: "null", ...access }
+    );
+
+    // Expand upload fields (media references) - including nested fields in
+    // arrays/groups. Use recursive function to expand media at any nesting
+    // depth.
+    return expandedEntries.map(entry =>
+      expandMediaInData(entry, fields, uploadDataMap)
+    );
+  }
+
+  /**
+   * Fetch, for a page of entries, the rows every relationship field names: one
+   * batched read per field and target collection, never one per entry.
+   *
+   * A field whose `maxDepth` the level being expanded has reached is skipped,
+   * judged as the single-entry path judges it, so it keeps its stored id(s).
+   *
+   * @returns The lookup map of each fetched field, by field name, and every row
+   *   fetched with the collection it was read from, so the rows can be expanded
+   *   further while depth remains.
+   */
+  private async batchFetchRelationData(
+    entries: Record<string, unknown>[],
+    collectionName: string,
+    relationFields: FieldDefinition[],
+    currentDepth: number,
+    access: RelatedRowAccess
+  ): Promise<{ dataMaps: RelationDataMaps; fetchedRows: FetchedRow[] }> {
+    const dataMaps: RelationDataMaps = {};
+    const fetchedRows: FetchedRow[] = [];
     for (const field of relationFields) {
-      const relationType = field.options?.relationType || "manyToOne";
       const targetCollection = getTargetCollection(field);
-      const hasMany = isHasManyRelationship(field);
-      const fieldTargets = declaredTargets(field);
-
       if (!targetCollection) continue;
-
-      // Check field-level maxDepth - if 0, skip this field entirely
-      const fieldMaxDepth =
-        field.options?.maxDepth ?? field.maxDepth ?? MAX_RELATIONSHIP_DEPTH;
-      if (fieldMaxDepth === 0) continue;
-
-      if (relationType === "manyToMany") {
-        // Batch fetch all manyToMany relations for all entries
-        const entryIds = entries.map(e => e.id) as string[];
-        const dataMap = await this.batchFetchManyToManyRelations(
-          collectionName,
-          entryIds,
-          field,
-          access
-        );
-        relationDataMaps[field.name] = dataMap;
-      } else if (hasMany) {
-        // Handle hasMany relationships (arrays of IDs stored directly)
-        // Collect all references from all entries, handling PostgreSQL array
-        // format. Each carries its own collection when the field declares
-        // several targets.
-        const allRefs = entries.flatMap(entry =>
-          normalizeToRelationshipRefs(
-            entry[field.name],
-            targetCollection,
-            fieldTargets
-          )
-        );
-        relationDataMaps[field.name] = await this.batchFetchRefs(
-          allRefs,
-          field,
-          access
-        );
-      } else {
-        // Batch fetch all referenced IDs for oneToOne/manyToOne/oneToMany
-        const relatedRefs = entries
-          .map(e =>
-            readRelationshipRef(e[field.name], targetCollection, fieldTargets)
-          )
-          .filter((ref): ref is RelationshipRef => ref !== null);
-
-        relationDataMaps[field.name] = await this.batchFetchRefs(
-          relatedRefs,
-          field,
-          access
-        );
-      }
+      if (currentDepth >= fieldMaxDepthOf(field)) continue;
+      dataMaps[field.name] = await this.batchFetchFieldRows(
+        entries,
+        collectionName,
+        field,
+        targetCollection,
+        access,
+        fetchedRows
+      );
     }
+    return { dataMaps, fetchedRows };
+  }
 
-    // ============================================================
-    // UPLOAD FIELDS: Batch expand media references (including nested)
-    // ============================================================
-
-    // Collect all media IDs from all entries, including nested fields in arrays/groups
-    const uploadDataMap: Map<string, Record<string, unknown>> = new Map();
-    const allMediaIds: string[] = [];
-
-    for (const entry of entries) {
-      // Use recursive function to collect all media IDs at any nesting depth
-      const entryMediaIds = collectAllMediaIds(entry, fields);
-      allMediaIds.push(...entryMediaIds);
-    }
-
-    // Batch fetch all media records at once
-    if (allMediaIds.length > 0) {
-      const uniqueMediaIds = [...new Set(allMediaIds)];
-      const mediaRecords = await applyMediaTrustBound(
-        await this.fetchMediaByIds(uniqueMediaIds),
+  /**
+   * One relationship field's rows across a page of entries, recording each row
+   * fetched in `fetchedRows`.
+   *
+   * A many-to-many field is read through its junction, keyed by the source
+   * entry's id; every other field is read from the references its values hold,
+   * each against the collection it names.
+   */
+  private async batchFetchFieldRows(
+    entries: Record<string, unknown>[],
+    collectionName: string,
+    field: FieldDefinition,
+    targetCollection: string,
+    access: RelatedRowAccess,
+    fetchedRows: FetchedRow[]
+  ): Promise<RelationDataMap> {
+    if (field.options?.relationType === "manyToMany") {
+      const dataMap = await this.batchFetchManyToManyRelations(
+        collectionName,
+        entries.map(e => e.id) as string[],
+        field,
         access
       );
+      for (const rows of dataMap.values()) {
+        for (const row of rows) {
+          fetchedRows.push({ collection: targetCollection, row });
+        }
+      }
+      return dataMap;
+    }
+    const refs = referencesAcross(entries, field, targetCollection);
+    const dataMap = await this.batchFetchRefs(refs, field, access);
+    collectFetchedRows(refs, dataMap, fetchedRows);
+    return dataMap;
+  }
 
-      // Build lookup map for O(1) access
-      for (const media of mediaRecords) {
-        uploadDataMap.set(String(media.id), media);
+  /**
+   * The media items the upload fields of `entries` point at, nested ones
+   * included, read in one batch and narrowed to what the caller may see, by
+   * id. Null when the entries point at no media, so no read is made.
+   *
+   * Not wrapped in a catch that answers with nothing: doing so put the raw ids
+   * on the wire, which reads to a caller exactly like media that is absent, and
+   * is what kept a broken media fetch invisible until images appeared to
+   * vanish. Both expansions in this service read media here, so they fail the
+   * same way.
+   */
+  private async mediaLookupFor(
+    entries: Record<string, unknown>[],
+    fields: FieldDefinition[],
+    access: RelatedRowAccess
+  ): Promise<Map<string, Record<string, unknown>> | null> {
+    const mediaIds = entries.flatMap(entry =>
+      collectAllMediaIds(entry, fields)
+    );
+    if (mediaIds.length === 0) return null;
+    const mediaRecords = await applyMediaTrustBound(
+      await this.fetchMediaByIds([...new Set(mediaIds)]),
+      access
+    );
+    return new Map(mediaRecords.map(media => [String(media.id), media]));
+  }
+
+  /**
+   * Expand the related rows one batched hop fetched, one level further, the
+   * way {@link expandRelationships} expands each related row it fetches.
+   *
+   * The rows are grouped by the collection they were read from and each group
+   * is expanded by ONE {@link batchExpandRelationships} call with that
+   * collection's own fields, so a page of entries costs a fixed number of reads
+   * per target collection at each depth rather than one per row. Each row is
+   * judged by its own collection's rules inside that call, by the caller
+   * `options` carries, and the per-read caches travel with it.
+   *
+   * A row reached through several references is one object here (the batch
+   * fetch hands every referencing entry the same row), so it is expanded once.
+   * A collection whose fields cannot be resolved (a system entity such as
+   * `users`) keeps its rows as fetched, as the single-entry path does.
+   *
+   * @returns The expanded version of each fetched row, keyed by the row object
+   *   the fetch returned.
+   */
+  private async expandFetchedRows(
+    fetchedRows: FetchedRow[],
+    options: RelationshipExpansionOptions
+  ): Promise<Map<Record<string, unknown>, Record<string, unknown>>> {
+    const byCollection = new Map<string, Set<Record<string, unknown>>>();
+    for (const { collection, row } of fetchedRows) {
+      const rows = byCollection.get(collection);
+      if (rows) {
+        rows.add(row);
+      } else {
+        byCollection.set(collection, new Set([row]));
       }
     }
 
-    // Apply the fetched data to each entry
-    return Promise.all(
-      entries.map(async entry => {
-        const expandedEntry = { ...entry };
+    const expanded = new Map<
+      Record<string, unknown>,
+      Record<string, unknown>
+    >();
+    for (const [collection, rowSet] of byCollection) {
+      const targetFields = await this.getCollectionFields(collection);
+      if (targetFields.length === 0) continue;
+      const rows = [...rowSet];
+      const result = await this.batchExpandRelationships(
+        rows,
+        collection,
+        targetFields,
+        options
+      );
+      rows.forEach((row, index) => expanded.set(row, result[index]));
+    }
+    return expanded;
+  }
 
-        for (const field of relationFields) {
-          const relationType = field.options?.relationType || "manyToOne";
-          const hasMany = isHasManyRelationship(field);
-          const dataMap = relationDataMaps[field.name];
+  /**
+   * Expand the relationships and uploads held inside the repeater and group
+   * fields of a page of entries, in place.
+   *
+   * Every row of one container field, across every entry, is expanded by ONE
+   * {@link batchExpandRelationships} call with the container's nested fields,
+   * at the level `options` names, so a page of entries holding many rows costs
+   * the same reads as one entry holding one. A JSON string the storage handed
+   * back is parsed first, and the parsed value replaces it, as before.
+   */
+  private async batchExpandContainerRows(
+    entries: Record<string, unknown>[],
+    collectionName: string,
+    fields: FieldDefinition[],
+    options: RelationshipExpansionOptions
+  ): Promise<void> {
+    for (const field of fields) {
+      if (!field.name) continue;
+      if (field.type !== "repeater" && field.type !== "group") continue;
+      const nestedFields = expandableNestedFields(field);
+      if (!nestedFields) continue;
 
-          if (!dataMap) continue;
+      const { rows, placeBack } = containerRowsAcross(entries, field);
+      if (rows.length === 0) continue;
 
-          if (relationType === "manyToMany") {
-            expandedEntry[field.name] = dataMap.get(entry.id as string) || [];
-            continue;
-          }
-
-          // Resolved the same way the fetch above resolved it, so a value that
-          // names its own collection is looked up under that collection.
-          const fieldTarget = getTargetCollection(field);
-          if (!fieldTarget) continue;
-
-          if (hasMany) {
-            // Handle hasMany relationships - expand array of IDs
-            const refs = normalizeToRelationshipRefs(
-              entry[field.name],
-              fieldTarget,
-              declaredTargets(field)
-            );
-            expandedEntry[field.name] = refs
-              .map(ref => {
-                const row = dataMap.get(relationKey(ref.collection, ref.id));
-                return row && !Array.isArray(row)
-                  ? withReferenceIdentity(row, ref)
-                  : row;
-              })
-              .filter(Boolean);
-          } else {
-            const ref = readRelationshipRef(
-              entry[field.name],
-              fieldTarget,
-              declaredTargets(field)
-            );
-            const row = ref && dataMap.get(relationKey(ref.collection, ref.id));
-            if (row) {
-              expandedEntry[field.name] =
-                ref && !Array.isArray(row)
-                  ? withReferenceIdentity(row, ref)
-                  : row;
-            }
-          }
-        }
-
-        // Expand relationship fields nested inside repeater/group fields
-        for (const field of fields) {
-          const fieldName = field.name;
-          if (
-            !fieldName ||
-            expandedEntry[fieldName] === undefined ||
-            expandedEntry[fieldName] === null
-          )
-            continue;
-
-          if (isRelationshipField(field)) continue;
-
-          const nestedFields = getNestedFields(field);
-          if (nestedFields.length === 0) continue;
-
-          const hasNestedRelations = nestedFields.some(
-            f =>
-              isRelationshipField(f) ||
-              isUploadField(f) ||
-              f.type === "repeater" ||
-              f.type === "group"
-          );
-          if (!hasNestedRelations) continue;
-
-          if (field.type === "repeater") {
-            const rawData = expandedEntry[fieldName];
-            const arrayData = parseJsonIfString(rawData);
-            if (Array.isArray(arrayData)) {
-              expandedEntry[fieldName] = await Promise.all(
-                arrayData.map(async (row: Record<string, unknown>) => {
-                  if (row && typeof row === "object") {
-                    return this.expandRelationships(
-                      row,
-                      collectionName,
-                      nestedFields,
-                      { depth: effectiveDepth, currentDepth: 0, ...access }
-                    );
-                  }
-                  return row;
-                })
-              );
-            }
-          } else if (field.type === "group") {
-            const rawData = expandedEntry[fieldName];
-            const groupData = parseJsonIfString(rawData);
-            if (
-              groupData &&
-              typeof groupData === "object" &&
-              !Array.isArray(groupData)
-            ) {
-              expandedEntry[fieldName] = await this.expandRelationships(
-                groupData as Record<string, unknown>,
-                collectionName,
-                nestedFields,
-                { depth: effectiveDepth, currentDepth: 0, ...access }
-              );
-            }
-          }
-        }
-
-        // Expand upload fields (media references) - including nested fields in arrays/groups
-        // Use recursive function to expand media at any nesting depth
-        const fullyExpandedEntry = expandMediaInData(
-          expandedEntry,
-          fields,
-          uploadDataMap
-        );
-
-        return fullyExpandedEntry;
-      })
-    );
+      const expanded = await this.batchExpandRelationships(
+        rows,
+        collectionName,
+        nestedFields,
+        options
+      );
+      expanded.forEach((row, index) => placeBack[index](row));
+    }
   }
 
   /**
@@ -2674,6 +3059,9 @@ export class CollectionRelationshipService extends BaseService {
         }
       }
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with related entries missing from the map.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.error(
         `Failed to batch fetch entries for ${targetCollection}`,
         { error: error }
@@ -2766,6 +3154,9 @@ export class CollectionRelationshipService extends BaseService {
         );
       }
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with every source relating to nothing.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.error("Failed to batch fetch manyToMany relations", {
         error: error,
       });
@@ -2838,9 +3229,7 @@ export class CollectionRelationshipService extends BaseService {
 
       // Check field-level maxDepth (from relationship field config)
       // Field maxDepth limits how deep this specific field can be populated
-      const fieldMaxDepth =
-        field.options?.maxDepth ?? field.maxDepth ?? MAX_RELATIONSHIP_DEPTH;
-      if (currentDepth >= fieldMaxDepth) {
+      if (currentDepth >= fieldMaxDepthOf(field)) {
         // Don't expand this field, keep the ID(s)
         continue;
       }
@@ -3039,6 +3428,9 @@ export class CollectionRelationshipService extends BaseService {
           }
         }
       } catch (error) {
+        // A rule that could not run never answered: the request ends with
+        // that, not with the relation left unexpanded.
+        rethrowIfRuleCouldNotRun(error);
         // If expansion fails, keep the original value
         this.logger.error(`Failed to expand relation ${field.name}`, {
           error: error,
@@ -3056,21 +3448,10 @@ export class CollectionRelationshipService extends BaseService {
       )
         continue;
 
-      // Skip fields already processed as top-level relationships
-      if (isRelationshipField(field)) continue;
-
-      const nestedFields = getNestedFields(field);
-      if (nestedFields.length === 0) continue;
-
-      // Only recurse if nested fields contain relationships or further nesting
-      const hasNestedRelations = nestedFields.some(
-        f =>
-          isRelationshipField(f) ||
-          isUploadField(f) ||
-          f.type === "repeater" ||
-          f.type === "group"
-      );
-      if (!hasNestedRelations) continue;
+      // Only recurse into a container whose rows hold relationships, uploads
+      // or further nesting; a relationship field was expanded above.
+      const nestedFields = expandableNestedFields(field);
+      if (!nestedFields) continue;
 
       if (field.type === "repeater") {
         const rawData = expandedEntry[fieldName];
@@ -3108,28 +3489,10 @@ export class CollectionRelationshipService extends BaseService {
       }
     }
 
-    // Expand upload fields (media references) - including nested fields in arrays/groups
-    // Collect all media IDs recursively from the entry
-    const allMediaIds = collectAllMediaIds(expandedEntry, fields);
-
-    if (allMediaIds.length > 0) {
-      // Not wrapped in a catch that returns the entry unexpanded: doing so put
-      // the raw ids on the wire, which reads to a caller exactly like media
-      // that is absent, and is what kept a broken media fetch invisible until
-      // images appeared to vanish. The batch path above does not swallow here
-      // either, so both expansions in this service fail the same way.
-      const uniqueMediaIds = [...new Set(allMediaIds)];
-      const mediaRecords = await applyMediaTrustBound(
-        await this.fetchMediaByIds(uniqueMediaIds),
-        access
-      );
-
-      // Build lookup map for O(1) access
-      const mediaMap = new Map<string, Record<string, unknown>>();
-      for (const media of mediaRecords) {
-        mediaMap.set(String(media.id), media);
-      }
-
+    // Expand upload fields (media references) - including nested fields in
+    // arrays/groups - through the same media read the batch path makes.
+    const mediaMap = await this.mediaLookupFor([expandedEntry], fields, access);
+    if (mediaMap) {
       // Use recursive function to expand media at any nesting depth
       return expandMediaInData(expandedEntry, fields, mediaMap);
     }
@@ -4311,7 +4674,10 @@ export class CollectionRelationshipService extends BaseService {
       // not refuse the whole parent read, and the caller learns no more than a
       // reference pointing at nothing would tell them.
       return readable ?? null;
-    } catch {
+    } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with a reference that reads as pointing at nothing.
+      rethrowIfRuleCouldNotRun(error);
       return null;
     }
   }
@@ -4511,6 +4877,9 @@ export class CollectionRelationshipService extends BaseService {
         access
       );
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with a relationship that reads as empty.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.error("Failed to fetch many-to-many relations", {
         error: error,
       });

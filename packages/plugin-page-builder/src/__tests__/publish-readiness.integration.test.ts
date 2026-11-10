@@ -145,7 +145,8 @@ function setStatus(
       "content-type": "application/json",
       authorization: `Bearer ${key}`,
     },
-    body: JSON.stringify({ status }),
+    // A status change, made whatever is stored: it says to overwrite.
+    body: JSON.stringify({ status, _overwrite: true }),
   });
   return createDynamicHandlers().PATCH(request, {
     params: Promise.resolve({ params: path.split("/") }),

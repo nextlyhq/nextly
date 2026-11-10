@@ -223,6 +223,19 @@ export {
 // And the entry-list filters a plugin declares, as the workspace meta sends
 // them: the admin offers each one in the list's toolbar.
 export type { PluginListFilterDeclaration } from "./plugins/admin-contributions";
+// And each place's contributions, as the workspace meta sends them to one
+// reader, with the rule language and the one function that answers it, so the
+// admin judges a contribution's rule as the server does.
+export type {
+  AdminContributionsMeta,
+  DeliveredAdminContribution,
+  DeliveredAdminEntry,
+} from "./plugins/admin-contributions-offer";
+export {
+  rowMatches,
+  type RowPredicate,
+  type RowPredicateValue,
+} from "./plugins/row-predicate";
 // And the same for a plugin's HTTP routes, for the same reason and with a
 // sharper consequence. `pluginAdminSlug` derived twice produces a dead link;
 // this derived twice produces a request to a path nothing serves, which the
@@ -273,7 +286,14 @@ export type { HookWarning } from "./hooks/side-effect-warnings";
 export type {
   ComponentPath,
   HeaderButtonId,
+  // The document-action overrides a plugin publishes, which the admin draws.
+  OverridableDocumentAction,
+  PluginDocumentActionOverride,
 } from "./plugins/admin-contributions";
+// And the list those actions are, a value: the admin holds every one of them
+// while it cannot yet tell whether a plugin overrides it. The module imports
+// types only, so this adds the list and nothing behind it.
+export { OVERRIDABLE_DOCUMENT_ACTIONS } from "./plugins/admin-contributions";
 //
 // Taken from the leaf modules rather than from `domains/widgets/index.ts`: that
 // barrel also carries `executeWidgetQuery`, and through it the Direct API, which
@@ -356,6 +376,9 @@ export {
 // Whether a link a plugin wrote stays inside the admin: asked at startup and
 // again by the admin before it draws the link, so both read this one rule.
 export { isAdminRelativePath } from "./domains/widgets/admin-path";
+// The admin's robots directives, for its layout's metadata and the admin's own
+// fallback tag.
+export { ADMIN_ROBOTS, adminMetadata } from "./domains/admin-metadata";
 // The settings the sheet draws beyond field configs (a collection, and a
 // filter, sort or grouping over it), and the union every rule reads, so the
 // admin's controls and reset are typed by core's vocabulary, not a copy of it.

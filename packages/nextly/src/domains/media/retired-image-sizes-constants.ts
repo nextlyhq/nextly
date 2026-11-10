@@ -8,8 +8,25 @@
  * @module domains/media/retired-image-sizes-constants
  */
 
+import type { ExtensionColumn } from "../schema/extension/types";
+
 /** The media column the sizes were stored in. */
 export const RETIRED_SIZES_COLUMN = "sizes";
+
+/**
+ * The retired column as a contribution to the media table: what every push
+ * composes into the media table it hands drizzle-kit while the database still
+ * has the column, so the kit plans no drop of it and a SQLite rebuild of the
+ * table copies it. One definition, for the core reconcile and the dev push.
+ */
+export const RETAINED_SIZES_COLUMN: ExtensionColumn = {
+  key: RETIRED_SIZES_COLUMN,
+  name: RETIRED_SIZES_COLUMN,
+  // The kind the column was declared with: jsonb on PostgreSQL, json on
+  // MySQL, text on SQLite.
+  kind: "json",
+  nullable: true,
+};
 
 /** The table the size definitions were kept in. */
 export const RETIRED_IMAGE_SIZES_TABLE = "image_sizes";
