@@ -10,6 +10,7 @@ import {
 import type React from "react";
 import { useState, useEffect } from "react";
 
+import { NewMenu } from "@admin/components/features/new-menu/NewMenu";
 import { Menu } from "@admin/components/icons";
 import { ErrorBoundary } from "@admin/components/shared/error-boundary";
 import { ThemeAwareLogo } from "@admin/components/shared/ThemeAwareLogo";
@@ -148,14 +149,22 @@ function DashboardChrome({ children }: DashboardLayoutProps) {
             <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
               <SheetContent
                 side="left"
-                className="p-0 border-none w-auto max-w-[calc(100vw-2rem)] flex bg-transparent"
+                className="p-0 border-none w-auto max-w-[calc(100vw-2rem)] flex flex-col bg-sidebar"
               >
                 {/* Screen-reader label for the drawer dialog. */}
                 <SheetTitle className="sr-only">Navigation menu</SheetTitle>
                 <SheetDescription className="sr-only">
                   Primary admin navigation
                 </SheetDescription>
-                <DualSidebar isMobile />
+                {/* "+ New" as the drawer's own top row, across the rail and
+                    the panel; the rail draws it at its top on wide layouts. */}
+                <NewMenu
+                  variant="drawer"
+                  className="shrink-0 border-b border-border"
+                />
+                <div className="flex min-h-0 flex-1">
+                  <DualSidebar isMobile />
+                </div>
               </SheetContent>
             </Sheet>
 

@@ -93,8 +93,12 @@ function matchesSearch(
     : 0;
 }
 
-/** Every type the reader may create, in sidebar order, and whether that is known yet. */
-function useNewMenuTypes(): {
+/**
+ * Every type the reader may create, in sidebar order, and whether that is
+ * known yet. Exported for the rail, which draws "+ New" at its top and holds
+ * the entries below it until this is known, so none of them moves.
+ */
+export function useNewMenuTypes(): {
   types: readonly ApiCollection[];
   isReady: boolean;
 } {
