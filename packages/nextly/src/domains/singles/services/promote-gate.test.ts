@@ -62,6 +62,30 @@ describe("promoting a pending change", () => {
     expect(seen[0]).toBe("published");
   });
 
+  it("allows a stored fraction through promotion via assembledFromStorage", async () => {
+    // The promoted document was assembled from storage, so a whole-number
+    // field's stored fraction rides through it: the rule binds values a caller
+    // writes, and the write's own gate refused the caller's fraction before it
+    // could reach storage.
+    const fields = [{ name: "quantity", type: "number" }];
+    await expect(
+      assertDraftsMayBePromoted(
+        [{ locale: null, snapshot: { quantity: 2.5, status: "draft" } }],
+        {
+          slug: "landing",
+          entryId: "s1",
+          fields: fields as FieldConfig[],
+          grants: async () => ({ permissions: [], roles: [] }),
+          toLogical: doc => doc,
+          liveStoredFor: async () => ({ quantity: 2, status: "draft" }),
+          status: "published",
+          localizedFieldNames: new Set(),
+          enforceLocalizedRequired: true,
+        }
+      )
+    ).resolves.toBeUndefined();
+  });
+
   /**
    * Every language's pending change writes its shared values to the one main
    * row, applied in the order given, so the last one's value is what lands.
