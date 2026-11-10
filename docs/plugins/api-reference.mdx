@@ -586,6 +586,58 @@ field, or pass none at all. Note that these options reach type generation but
 are not persisted, so a field read back from the database after boot carries
 none of them.
 
+## Providing page metadata
+
+One plugin can work out the head of every page the site serves: its title, description,
+canonical address, whether search engines may list it, its social card and its language links.
+It declares the `page-metadata` capability and contributes its resolver as the `pageMetadata`
+service:
+
+```ts
+import { definePlugin, type PageMetadataResolver } from "@nextlyhq/plugin-sdk";
+
+const resolver: PageMetadataResolver = {
+  resolve: input => ({
+    title: input.code.title ?? input.derived.title,
+    description: input.code.description ?? input.derived.description,
+    robots: { index: true, follow: true },
+  }),
+  // What the answer depends on beyond the page's own document.
+  tags: () => ["acme-seo:settings"],
+};
+
+export default definePlugin({
+  name: "@acme/nextly-plugin-seo",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.74",
+  provides: ["page-metadata"],
+  contributes: { services: { pageMetadata: () => resolver } },
+});
+```
+
+The route helpers in `nextly/runtime` and `@nextlyhq/blocks-react/next` then ask it for every
+page they serve, with no change to the site's routes. `resolve` is told:
+
+| Field     | What it holds                                                                                                                                   |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`    | The address the page was served at, from `/`. Absent for a Single route, which is never told where the app mounts it.                           |
+| `locale`  | The language the route read the page in, when the route states one.                                                                             |
+| `source`  | The document: `{ kind: "entry", collection, entry }` or `{ kind: "single", slug, document }`, as read for this request.                         |
+| `code`    | The title, description and social values the route's own `buildMetadata` or `metadata` set. A route never supplies visibility or the canonical. |
+| `derived` | What the page's content offers, such as the title, description and picture a Page Builder page's blocks show.                                   |
+
+It answers a `PageMetadataAnswer`: `title`, `description`, `canonical`, `robots`, `social` and
+`languages`, each optional. The route turns the answer into Next.js `Metadata`. Whatever else the
+route's own metadata set, such as an Open Graph `type`, is kept.
+
+The answer is cached with the page: it expires when the page's document changes, and when any tag
+`tags` names is expired, so a change to the plugin's settings reaches every page without a
+redeploy. If `resolve` throws, the error is logged and the page is served with the route's own
+metadata.
+
+Only one plugin may provide `page-metadata`, and boot refuses a plugin that declares it without a
+`pageMetadata` service. The types are `@experimental`.
+
 ## Secrets
 
 ```ts
@@ -967,7 +1019,69 @@ heading behind. A section's component receives `SidebarSectionProps`
 and `entry`, as every contributed component does, and on a collection entry's
 page also the document's handles a `panelSections` section is given
 (`collectionSlug`, `entryId`, `documentLock`, `mayWrite`,
-`documentChanged`). The entry list draws blocks around its own header (`toolbar`) and its list
+`documentChanged`).
+
+A contributed tab's component receives `PlaceTabProps` (`@experimental`): the
+place's `context` and `entry`, and `setBadge`, which shows a count beside the
+tab's label, or none with `null`. It stays mounted while another tab is open,
+so what it holds is kept and its count stays current. On an edit page it
+receives `DocumentTabProps` (`@experimental`): those, the document form's
+`control`, and the `documentLock` a side panel section is told, on a saved
+entry, a new one and a Single alike. A tab reads what the author has typed and
+not saved, and what it writes through `control` is stored by the bar's Save
+and Publish with everything else. The open tab is kept in the address as
+`?tab=<id>`, so a reload or a shared link opens it again.
+
+```tsx
+import { useEffect } from "react";
+import { useWatch } from "react-hook-form";
+import type { DocumentTabProps } from "@nextlyhq/plugin-sdk/admin";
+
+export function TitleCheckTab({ control, setBadge }: DocumentTabProps) {
+  // What the author has typed, saved or not.
+  const title = useWatch({ control, name: "title" });
+  const tooLong = typeof title === "string" && title.length > 60;
+  useEffect(() => {
+    setBadge(
+      tooLong ? { count: 1, label: "1 thing to fix", tone: "attention" } : null
+    );
+  }, [tooLong, setBadge]);
+  return (
+    <p>
+      {tooLong
+        ? "The title is longer than a results page shows."
+        : "The title fits."}
+    </p>
+  );
+}
+```
+
+Any component a plugin draws inside an edit page, a block, a side panel
+section or a tab, can read the document as it is being typed with
+`useDocumentValues` and `useDocumentField` (`@experimental`, from
+`@nextlyhq/plugin-sdk/admin`). A place's `entry` prop is the document as it
+was read; these are the values before any save. `useDocumentValues(paths)`
+answers the named fields by their dot paths and draws again only when one of
+them changes. `useDocumentField(path)` answers one field's `value`, whether it
+is `writable` now, and `set(next)`, which writes as the author typing would
+and marks the document changed. While the document's content is held (a past
+version on screen, a colleague editing it, a page the reader may only read),
+`set` writes nothing and answers `false`. `set(null)` returns a field to its
+automatic value. Both read the editor's own form, so a component with a form
+of its own still reads the document, and both answer `null` outside an editor.
+
+```tsx
+import { useDocumentField } from "@nextlyhq/plugin-sdk/admin";
+
+export function TitleLength() {
+  const title = useDocumentField("title");
+  if (title === null) return null;
+  const length = typeof title.value === "string" ? title.value.length : 0;
+  return <p>{length} characters</p>;
+}
+```
+
+The entry list draws blocks around its own header (`toolbar`) and its list
 (`table`); declared columns after the collection's own, a `field` column through
 that field's own cell and a component column one cell at a time, each cell
 behind its own boundary and receiving the place's `context` and its `row`; row

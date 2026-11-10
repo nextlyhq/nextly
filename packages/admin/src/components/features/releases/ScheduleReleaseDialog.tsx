@@ -36,6 +36,7 @@ import {
 import { isValidTimezone } from "@admin/lib/dates/format";
 import type { Release, ReleaseBlocker } from "@admin/types/releases";
 
+import { useReturnFocusOnClose } from "./dialog-opener";
 import { blockerSummary } from "./release-blockers";
 import { describeHiddenNeedFix, hiddenTotal } from "./release-hidden";
 import { instantFor, readerZone } from "./release-timezone";
@@ -118,6 +119,8 @@ export function ScheduleReleaseDialog({
   open,
   onOpenChange,
 }: ScheduleReleaseDialogProps): JSX.Element {
+  // Focus goes back to what opened the dialog when it closes.
+  const returnFocus = useReturnFocusOnClose(open);
   const [wall, setWall] = useState("");
   const [zone, setZone] = useState(() => release.timezone ?? readerZone());
   const schedule = useScheduleRelease(release.id);
@@ -161,7 +164,7 @@ export function ScheduleReleaseDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent onCloseAutoFocus={returnFocus}>
         <form
           onSubmit={event => {
             event.preventDefault();

@@ -73,3 +73,39 @@ describe("CollectionSyncService.generateTypesOnly with no types path set", () =>
     expect(said).toMatch(/delete/i);
   });
 });
+
+describe("CollectionSyncService.generateTypesOnly and the site's languages", () => {
+  // `db:sync --types` writes the same file `generate:types` does, so it lists the languages the
+  // configuration locks too: a sync after a generate must not take them out again.
+  it("lists the languages the configuration declares, as configured", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "nextly-sync-types-"));
+    made.push(cwd);
+    mkdirSync(join(cwd, "src/app"), { recursive: true });
+    const locale = (code: string) => ({
+      code,
+      label: code,
+      rtl: false,
+      fallbackLocale: [],
+    });
+    const config = {
+      collections: [
+        defineCollection({ slug: "posts", fields: [text({ name: "title" })] }),
+      ],
+      typescript: { ...DEFAULT_TYPESCRIPT_CONFIG },
+      localization: {
+        locales: [locale("en"), locale("fr")],
+        defaultLocale: "en",
+        fallback: true,
+      },
+    } as unknown as SanitizedNextlyConfig;
+
+    const written = await new CollectionSyncService(
+      adapter,
+      logger()
+    ).generateTypesOnly(config, { cwd });
+
+    expect(readFileSync(String(written), "utf-8")).toContain(
+      '  locales: {\n    "en": true;\n    "fr": true;\n  };'
+    );
+  });
+});

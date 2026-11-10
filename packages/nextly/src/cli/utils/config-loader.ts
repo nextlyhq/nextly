@@ -694,6 +694,10 @@ async function loadConfigInternal(
       // entities are DEFERRED (candidate Builder/UI-schema targets) rather than
       // thrown, so a plugin may extend/relate to a Builder-made collection
       // (P8/D3/R2).
+      // The configuration's per-language storage choice, adopted before the fold judges a
+      // transform of another plugin's entity by where its fields keep their values. The same
+      // adoption runs again once the config is installed, and agrees.
+      adoptPerLanguageStorage(config.perLanguageStorage);
       const folded = applyPluginSchemaContributionsDeferred(
         transformedConfig,
         transformedPlugins

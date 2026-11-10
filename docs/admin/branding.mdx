@@ -22,7 +22,6 @@ export default defineConfig({
         primary: "#6366f1",
         accent: "#f59e0b",
       },
-      showBuilder: true,
     },
   },
 });
@@ -104,25 +103,18 @@ If your `nextly.config.ts` is imported by your app's `layout.tsx`, you can rende
 
 ## Schema Builder visibility
 
-`showBuilder` turns the Visual Schema Builder (Collections Builder, Singles Builder, Field Groups Builder) on or off. Off, the builder is unavailable to everyone, super-admins included: its sidebar entry is hidden, a direct visit to a builder page returns to the dashboard, and the server refuses every schema change made through the admin API with a `BUILDER_DISABLED` error.
+The Visual Schema Builder (Collections Builder, Singles Builder, Field Groups Builder) is off in production, whatever the configuration says: schema reaches production through migrations (see [Production migrations](/docs/guides/production-migrations)). Outside production it is on, and `showBuilder: false` turns it off.
 
-| Value | Behavior |
-|---|---|
-| `true` | The builder is on, in every environment. |
-| `false` | The builder is off, in every environment. |
-| Not set (default) | On when `process.env.NODE_ENV !== "production"`, off in production. |
+Off, the builder is unavailable to everyone, super-admins included: its sidebar entry is hidden, a direct visit to a builder page returns to the dashboard, and the server refuses every schema change made through the admin API with a `BUILDER_DISABLED` error. Entry editing is unaffected.
 
-```typescript title="nextly.config.ts"
-// Force visible, even in production
-admin: {
-  branding: {
-    showBuilder: true,
-  },
-},
-```
+| Value | Development and test | Production |
+|---|---|---|
+| Not set (default) | On | Off |
+| `false` | Off | Off |
+| `true` | On | Off. The server logs once at start that the setting has no effect there. |
 
 ```typescript title="nextly.config.ts"
-// Force hidden, even in development
+// Turn the builder off in development too
 admin: {
   branding: {
     showBuilder: false,
@@ -130,7 +122,7 @@ admin: {
 },
 ```
 
-The toggle is evaluated on the server and sent to the admin in the `/admin/api/admin-meta` response, so a change takes effect on the next admin reload. With the builder off, define your schema in code (`nextly.config.ts`). Who may use the builder when it is on is still decided by roles and permissions.
+The setting is evaluated on the server and sent to the admin in the `/admin/api/admin-meta` response, so a change takes effect on the next admin reload. With the builder off, define your schema in code (`nextly.config.ts`). Who may use the builder when it is on is still decided by roles and permissions.
 
 ## Branding options reference
 
@@ -143,7 +135,7 @@ The toggle is evaluated on the server and sent to the admin in the `/admin/api/a
 | `favicon` | `string` | — | Custom favicon URL |
 | `colors.primary` | `string` (hex) | — | Primary brand color |
 | `colors.accent` | `string` (hex) | — | Accent brand color |
-| `showBuilder` | `boolean` | per `NODE_ENV` | Turn the Visual Schema Builder on or off |
+| `showBuilder` | `boolean` | on outside production | `false` turns the Visual Schema Builder off outside production; it is always off in production |
 
 ## Next steps
 

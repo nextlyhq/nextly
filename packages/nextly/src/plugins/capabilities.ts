@@ -19,6 +19,10 @@ import { z } from "zod";
 
 import { SCHEMA_VERSION_SHAPE } from "../domains/schema/migrate/plugin/schema-version-shape";
 import {
+  PAGE_METADATA_CAPABILITY,
+  PAGE_METADATA_SERVICE,
+} from "../runtime/seo/page-metadata-contract";
+import {
   PLUGIN_SETTING_KEY_LENGTH,
   PLUGIN_SETTING_OWNER_LENGTH,
 } from "../schemas/plugin-settings/widths";
@@ -658,6 +662,104 @@ export function resolveProvides(
     }
   }
   return provided;
+}
+
+/** A recorded provider: the started plugin's name and its version. */
+interface RecordedProvider {
+  plugin: string;
+  version: string;
+}
+
+const globalForCapabilityProviders = globalThis as unknown as {
+  __nextly_capabilityProviders?: ReadonlyMap<string, RecordedProvider>;
+};
+
+/**
+ * Record which started plugin provides each capability, for code that acts on
+ * a capability at request time rather than at boot, such as the route helpers
+ * asking the page-metadata provider for a page's head.
+ *
+ * Given the plugins whose `init` ran, and written by the same boot step that
+ * records them, so the answer is this boot's and never the configuration's: a
+ * plugin enabled by a config reload never started, so it contributes no
+ * service and cannot be the provider asked. On globalThis, like the other boot
+ * registries, so it survives the module re-evaluation Next.js does. An empty
+ * list clears it, as a boot that started no plugins must.
+ *
+ * Built by {@link resolveProvides}, so a capability two plugins provide is
+ * refused here as it is at boot validation.
+ *
+ * @throws NextlyError for a page-metadata provider that contributes no
+ * resolver service: the route helpers would ask it for every page.
+ */
+export function recordCapabilityProviders(started: PluginDefinition[]): void {
+  const provided = resolveProvides(started);
+  const pageMetadata = provided.get(PAGE_METADATA_CAPABILITY);
+  if (pageMetadata !== undefined) {
+    const definition = started.find(
+      candidate => candidate.name === pageMetadata.plugin
+    );
+    // The declaration is read rather than the service resolved: resolving it
+    // runs the plugin's factory, which belongs to the first page that needs it.
+    if (
+      typeof definition?.contributes?.services?.[PAGE_METADATA_SERVICE] !==
+      "function"
+    ) {
+      throw resolutionError(
+        "page-metadata-service-missing",
+        `Plugin "${pageMetadata.plugin}" provides "${PAGE_METADATA_CAPABILITY}" but contributes no "${PAGE_METADATA_SERVICE}" service to answer it.`,
+        { plugin: pageMetadata.plugin, capability: PAGE_METADATA_CAPABILITY }
+      );
+    }
+  }
+  globalForCapabilityProviders.__nextly_capabilityProviders = provided;
+}
+
+/**
+ * Forget the recorded providers, for a process whose services have been
+ * cleared. Back to unknown rather than none: until the next boot records its
+ * own, a route asking must not take "no provider" for an answer and skip a
+ * provider that boot is about to start.
+ */
+export function forgetCapabilityProviders(): void {
+  globalForCapabilityProviders.__nextly_capabilityProviders = undefined;
+}
+
+/**
+ * The started plugin that provides `capability`, by name, or undefined when
+ * none does or no boot has recorded its providers yet.
+ */
+export function capabilityProvider(capability: string): string | undefined {
+  return globalForCapabilityProviders.__nextly_capabilityProviders?.get(
+    capability
+  )?.plugin;
+}
+
+/**
+ * The started provider of `capability` as one string, its name and version
+ * (`name@version`), or undefined when none is recorded. What an answer cached
+ * from a provider is keyed by, so a replaced or upgraded provider never reads
+ * the answer another one cached.
+ */
+export function capabilityProviderIdentity(
+  capability: string
+): string | undefined {
+  const recorded =
+    globalForCapabilityProviders.__nextly_capabilityProviders?.get(capability);
+  return recorded === undefined
+    ? undefined
+    : `${recorded.plugin}@${recorded.version}`;
+}
+
+/**
+ * Whether a boot has recorded its providers. Until one has, "no provider" is
+ * unknown rather than none: a route whose reader boots on its first query asks
+ * before that boot, and must not take the answer for "none".
+ */
+export function capabilityProvidersRecorded(): boolean {
+  return (
+    globalForCapabilityProviders.__nextly_capabilityProviders !== undefined
+  );
 }
 
 /**

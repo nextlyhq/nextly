@@ -310,11 +310,15 @@ export default function AdminPage() {
 ```
 
 ```tsx title="src/app/admin/[[...params]]/layout.tsx"
-import { getBrandingCss } from "nextly/config";
+import { adminMetadata, getBrandingCss } from "nextly/config";
 
 import config from "../../../../nextly.config";
 
 const brandingCss = getBrandingCss(config.admin?.branding);
+
+// Keeps the admin out of search results: `noindex, nofollow` in the head of
+// the first HTML the server sends.
+export const metadata = adminMetadata;
 
 export default function AdminLayout({
   children,
