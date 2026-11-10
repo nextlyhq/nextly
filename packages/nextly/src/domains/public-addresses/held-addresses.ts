@@ -50,7 +50,7 @@ export function addressLanguages(): string[] {
 }
 
 /** The type a write names: `single:<slug>` is a Single, anything else a collection. */
-function typeOfWrite(collection: string): PublicAddressType {
+export function typeOfWrite(collection: string): PublicAddressType {
   return collection.startsWith("single:")
     ? { kind: "single", slug: collection.slice("single:".length) }
     : { kind: "collection", slug: collection };
@@ -136,7 +136,9 @@ export async function readEveryLanguage(
       : undefined;
 
   for (const language of languages) {
-    const status = ownStatus?.get(language) ?? shared.status;
+    // Where each language is published on its own, one with no row of its
+    // own was never published there.
+    const status = ownStatus ? ownStatus.get(language) : shared.status;
     versions.set(language, {
       published: !lifecycle || status === "published",
       document: { ...shared, ...translated?.get(language) },

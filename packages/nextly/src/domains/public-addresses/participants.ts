@@ -91,6 +91,16 @@ export function removeParticipant(runner: ParticipantRunner): void {
   changed();
 }
 
+/**
+ * Forget every participant, as the plugins that added them are torn down with
+ * the services: a stale one would be asked on the next boot's saves.
+ */
+export function clearParticipants(): void {
+  if (participants.length === 0) return;
+  participants.length = 0;
+  changed();
+}
+
 /** Whether any plugin takes part, so a site with none does no address work. */
 export function hasParticipants(): boolean {
   return participants.length > 0;

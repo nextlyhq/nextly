@@ -291,6 +291,8 @@ import type {
   UserService,
 } from "../services/users/user-service";
 import { assertConfiguredPublicAddresses } from "../domains/public-addresses/distinct-public-addresses";
+import { startAddressPhase } from "../domains/public-addresses/address-phase";
+import { clearParticipants } from "../domains/public-addresses/participants";
 import { assertConfiguredAddresses } from "../shared/address-rule";
 import {
   isProductionRuntime,
@@ -917,6 +919,9 @@ async function registerServicesOnce(
   // shutdown, and the config reload -- reaches the instance they went into
   // rather than whichever one happens to be global at the time.
   setActiveHookRegistry(hookRegistry);
+  // Core's public-address question joins this registry while any plugin
+  // keeps an address record (`ctx.publicAddresses.participate`).
+  startAddressPhase(hookRegistry);
 
   // Masked once here, whatever logger the app supplied: every service is
   // handed this one, so no line it writes carries a full email address
@@ -5132,6 +5137,8 @@ async function initializePlugins(
  */
 function clearActiveHookRegistry(): void {
   getActiveHookRegistry().clear();
+  // Participants were added by the plugins torn down with these hooks.
+  clearParticipants();
   setActiveHookRegistry(undefined);
   // Nothing is initialized in a process whose services have been cleared, and a
   // stale list would let the next reload treat a plugin as started.
