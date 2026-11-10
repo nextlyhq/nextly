@@ -219,12 +219,21 @@ describe("a SQLite push through drizzle-kit on a database with unrelated drift",
       .get() as { sizes: string | null };
     expect(media.sizes).toBe(SIZES);
 
-    // Neither field-group table was rebuilt: each is as it was created,
-    // indexes and rows and all.
+    // Neither field-group table was rebuilt: each is as it was created, with
+    // every index it had and its rows. The desired schema also declares a
+    // created_at index these tables were created without, and that one index
+    // is the only thing the push adds to them.
     expect(storedSql(LEGACY_GROUP)).toBe(legacyBefore);
     expect(storedSql(CURRENT_GROUP)).toBe(currentBefore);
-    expect(indexesOf(LEGACY_GROUP)).toEqual(legacyIndexes);
-    expect(indexesOf(CURRENT_GROUP)).toEqual(currentIndexes);
+    for (const [table, before] of [
+      [LEGACY_GROUP, legacyIndexes],
+      [CURRENT_GROUP, currentIndexes],
+    ] as const) {
+      const declared = `idx_${table}_created_at`;
+      const after = indexesOf(table);
+      expect(after.filter(index => index.name !== declared)).toEqual(before);
+      expect(after.map(index => index.name)).toContain(declared);
+    }
     for (const table of [LEGACY_GROUP, CURRENT_GROUP]) {
       const row = sqlite
         .prepare(`SELECT note FROM ${table} WHERE id = 'row-1'`)
