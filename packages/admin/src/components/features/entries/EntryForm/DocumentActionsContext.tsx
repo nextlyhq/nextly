@@ -203,14 +203,12 @@ export function SaveActionFormProvider({
   formId,
   className,
   recovering,
-  contentHeld,
   children,
 }: Omit<EntryFormProviderProps, "onSubmit">): JSX.Element {
   const { run } = useHostedDocumentActions();
   return (
     <EntryFormProvider
       form={form}
-      contentHeld={contentHeld}
       {...(formId === undefined ? {} : { formId })}
       {...(className === undefined ? {} : { className })}
       {...(recovering === undefined ? {} : { recovering })}

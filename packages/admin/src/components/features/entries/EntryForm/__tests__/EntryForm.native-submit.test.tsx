@@ -151,7 +151,7 @@ describe("a native submit on a collection without a status", () => {
             onSubmit,
           }}
         >
-          <SaveActionFormProvider form={form} contentHeld={false}>
+          <SaveActionFormProvider form={form}>
             <Tracker />
           </SaveActionFormProvider>
         </DocumentActionsHost>

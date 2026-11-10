@@ -121,6 +121,10 @@ export function useDocumentValues(
   const subscribe = useCallback(
     (changed: () => void) => {
       if (form === undefined) return () => {};
+      // Counted once as listening starts, so the next reading looks again: a
+      // write made after the first drawing and before this, by another
+      // component's layout effect, sent no change to hear.
+      changes.current += 1;
       const named = key === "" ? [] : key.split("\u0000");
       const subscription = form.watch((_values, { name }) => {
         if (!named.some(path => touches(name, path))) return;

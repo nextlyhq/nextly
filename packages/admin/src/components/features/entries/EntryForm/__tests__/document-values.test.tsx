@@ -6,11 +6,12 @@
  */
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DocumentFormSource,
   useDocumentField,
   useDocumentValues,
   type DocumentField,
@@ -29,17 +30,15 @@ function Document({
     defaultValues: { title: "Saved title", body: "", seo: { title: "" } },
   });
   return (
-    <EntryFormProvider
-      form={form}
-      onSubmit={async () => {}}
-      contentHeld={contentHeld}
-    >
-      <input aria-label="Title" {...form.register("title")} />
-      <input aria-label="Body" {...form.register("body")} />
-      <input aria-label="SEO title" {...form.register("seo.title")} />
-      <output aria-label="Dirty">{String(form.formState.isDirty)}</output>
-      {children}
-    </EntryFormProvider>
+    <DocumentFormSource form={form} contentHeld={contentHeld}>
+      <EntryFormProvider form={form} onSubmit={async () => {}}>
+        <input aria-label="Title" {...form.register("title")} />
+        <input aria-label="Body" {...form.register("body")} />
+        <input aria-label="SEO title" {...form.register("seo.title")} />
+        <output aria-label="Dirty">{String(form.formState.isDirty)}</output>
+        {children}
+      </EntryFormProvider>
+    </DocumentFormSource>
   );
 }
 
@@ -117,6 +116,36 @@ describe("useDocumentValues", () => {
     // one rather than changing the one a component kept.
     expect(groups.at(-1)).not.toBe(kept);
     expect(kept).toEqual({ title: "Search" });
+  });
+
+  it("reads a value another component wrote as both were first drawn", () => {
+    // Written in a layout effect: after the reader's first drawing, before it
+    // listens for changes. Both arrive once the document is already up, as a
+    // plugin's tab or section does when it is opened.
+    function Initialiser() {
+      const field = useDocumentField("seo.title");
+      const written = useRef(false);
+      useLayoutEffect(() => {
+        // Once, as it is first drawn.
+        if (written.current || field === null) return;
+        written.current = true;
+        field.set("Set on mount");
+      }, [field]);
+      return null;
+    }
+    const page = (open: boolean) => (
+      <Document>
+        {open ? (
+          <>
+            <Preview paths={["seo.title"]} />
+            <Initialiser />
+          </>
+        ) : null}
+      </Document>
+    );
+    const { rerender } = render(page(false));
+    rerender(page(true));
+    expect(preview()).toEqual({ "seo.title": "Set on mount" });
   });
 
   it("draws again only when a field it reads changes", async () => {
@@ -218,21 +247,19 @@ describe("useDocumentField", () => {
         reValidateMode: "onChange",
       });
       return (
-        <EntryFormProvider
-          form={form}
-          onSubmit={form.handleSubmit(() => {})}
-          contentHeld={false}
-        >
-          <input
-            aria-label="Title"
-            {...form.register("title", { required: "Give it a title" })}
-          />
-          <p role="alert">
-            {String(form.formState.errors.title?.message ?? "")}
-          </p>
-          <button type="submit">Save</button>
-          <FieldControl path="title" onField={f => (field = f)} />
-        </EntryFormProvider>
+        <DocumentFormSource form={form} contentHeld={false}>
+          <EntryFormProvider form={form} onSubmit={form.handleSubmit(() => {})}>
+            <input
+              aria-label="Title"
+              {...form.register("title", { required: "Give it a title" })}
+            />
+            <p role="alert">
+              {String(form.formState.errors.title?.message ?? "")}
+            </p>
+            <button type="submit">Save</button>
+            <FieldControl path="title" onField={f => (field = f)} />
+          </EntryFormProvider>
+        </DocumentFormSource>
       );
     }
     render(<Checked />);
