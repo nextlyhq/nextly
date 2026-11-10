@@ -202,6 +202,27 @@ describe("extend with a scope — who owns what it added", () => {
   });
 });
 
+describe("extend with a scope — a clause left alone whole", () => {
+  it("never takes a field from its real owner when a clause of several fields was left alone", () => {
+    // @t/both scopes `title` and `seo` together; `title` collides, so the
+    // whole clause is left alone, and `seo` stays @t/seo's.
+    const both = plugin("@t/both", {
+      extend: [{ target: EVERY, fields: [field("title"), field("seo")] }],
+    });
+    const noop = plugin("@t/noop", {
+      transforms: [{ target: "posts", transform: entity => entity }],
+    });
+    const { fieldsAddedByPlugins } = applyPluginSchemaContributionsDeferred(
+      siteConfig(),
+      [seoPlugin(), both, noop]
+    );
+
+    const posts = fieldsAddedByPlugins.get("posts");
+    expect(posts?.get("seo")).toBe("@t/seo");
+    expect(posts?.has("title")).toBe(false);
+  });
+});
+
 describe("extend with a scope — the order clauses apply in", () => {
   it("defers a scope and a later slug target in the plugins' own order", () => {
     // @t/seo's scope comes first, so a Builder type receives it first, as a

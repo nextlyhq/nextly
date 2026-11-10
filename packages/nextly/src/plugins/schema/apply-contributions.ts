@@ -316,8 +316,9 @@ function applyTransforms(
   if (contributions.length === 0) return { entities, fieldsAdded: new Map() };
 
   // The configured types each scope added its fields to: the ones it reaches.
-  // Only the exact field a scope left alone on a type is not the plugin's:
-  // the type keeps every other field that scope, or any other, added there.
+  // A clause left alone on a type added none of its fields there (the first
+  // that collided is the one recorded), so the whole clause is skipped on that
+  // type; every other clause that added fields there keeps them.
   const leftAloneKey = (target: string, name: string, owner: string) =>
     `${target}\u0000${name}\u0000${owner}`;
   const untouched = new Set(
@@ -336,7 +337,8 @@ function applyTransforms(
           new Set()
         )
       ).map(type => type.slug),
-    (slug, name, owner) => untouched.has(leftAloneKey(slug, name, owner))
+    (slug, names, owner) =>
+      names.some(name => untouched.has(leftAloneKey(slug, name, owner)))
   );
   const transformable =
     (kind: TransformableEntity["kind"]) =>
@@ -415,10 +417,10 @@ function fieldsAddedFrom(
 export function extendersBySlug(
   plugins: PluginDefinition[],
   reach?: (scope: ContentTypeScope) => readonly string[],
-  // A field a clause did not add after all, such as one a scope left alone
-  // because the type already had a field of that name: never recorded as the
-  // clause's, and never over the field's real owner.
-  skipped?: (slug: string, name: string, owner: string) => boolean
+  // A clause that added nothing to a type after all, such as one a scope left
+  // alone because the type already had a field of one of its names: none of
+  // its fields is recorded as the clause's there, nor over a real owner.
+  skipped?: (slug: string, names: string[], owner: string) => boolean
 ): Map<string, Map<string, string>> {
   const bySlug = new Map<string, Map<string, string>>();
   for (const { target, fields, owner } of flattenExtends(plugins)) {
@@ -427,13 +429,14 @@ export function extendersBySlug(
     // so a full uninstall keeps those fields' columns rather than guessing.
     const slugs =
       typeof target === "string" ? [target] : (reach?.(target) ?? []);
+    const declared = fields.flatMap(field => {
+      const name = (field as { name?: unknown }).name;
+      return typeof name === "string" ? [name] : [];
+    });
     for (const slug of slugs) {
+      if (skipped?.(slug, declared, owner)) continue;
       const names = bySlug.get(slug) ?? new Map<string, string>();
-      for (const field of fields) {
-        const name = (field as { name?: unknown }).name;
-        if (typeof name !== "string" || skipped?.(slug, name, owner)) continue;
-        names.set(name, owner);
-      }
+      for (const name of declared) names.set(name, owner);
       bySlug.set(slug, names);
     }
   }
