@@ -131,7 +131,8 @@ const app = (): TestNextly => {
 };
 
 /**
- * Boots Posts (translated, with a shared `code`, and a shared `legalNote` only rita may not read)
+ * Boots Posts (translated, with a shared `code`, a shared `legalNote` only rita may not read, and a
+ * translated `regional` a read in Spanish withholds)
  * on `postsWorkflow`, Briefs on `checked` with a secret only bob may not read, and Memos on
  * `handover`; Briefs and Memos keep few versions.
  */
@@ -172,6 +173,12 @@ async function boot(
             name: "legalNote",
             localized: false,
             access: { read: ({ user }) => user?.id !== "rita" },
+          }),
+          // Withheld by the language a read is in, not by who reads it.
+          text({
+            name: "regional",
+            localized: true,
+            access: { read: ({ locale }) => locale !== "es" },
           }),
         ],
       }),
@@ -578,6 +585,44 @@ describe.each(getConfiguredTestDialects())(
         expect(await stateOf(app(), partOf("posts", post, "es"))).toEqual(
           approved
         );
+      });
+    });
+
+    describe("a translated field a read rule withholds in one language", () => {
+      it("judges a language's changes as a read in that language does, refusing what a Spanish read withholds", async () => {
+        await boot(dialect);
+        const n = app();
+        const uma = await person(n, "uma", [["sign-off", "posts"]]);
+        const post = await entry(n, "posts");
+        await save("posts", post, { regional: "solo en" }, { locale: "en" });
+        await save("posts", post, { regional: "solo es" }, { locale: "es" });
+        for (const part of ["en", "es"]) {
+          await seedState(n, partOf("posts", post, part), "legal", {
+            enteredBy: "alice",
+            definitionHash: HASH,
+          });
+        }
+
+        // A Spanish read withholds `regional` from everyone, so no one may approve Spanish's change.
+        await expect(
+          take("posts", post, "es", "clear", uma)
+        ).rejects.toMatchObject({
+          code: "FORBIDDEN",
+          publicData: {
+            reason: "field-hidden",
+            fields: ["regional"],
+            approvers: [],
+          },
+        });
+        expect(await stateOf(app(), partOf("posts", post, "es"))).toMatchObject(
+          { stage: "legal", approval: null }
+        );
+
+        // An English read shows it, so English's change is hers to approve.
+        await take("posts", post, "en", "clear", uma);
+        expect(
+          (await stateOf(app(), partOf("posts", post, "en")))?.approval
+        ).toMatchObject({ by: "uma" });
       });
     });
 
