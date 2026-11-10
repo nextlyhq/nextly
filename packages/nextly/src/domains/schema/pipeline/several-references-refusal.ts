@@ -16,6 +16,7 @@ import { toSnakeCase } from "../services/field-column-descriptor";
 
 import { querySqlRows } from "./classifier/count-helpers";
 import type { NextlySchemaSnapshot, Operation } from "./diff/types";
+import { conversionBetweenShapes } from "./diff/types";
 import { liveTableName, renamesOf, type ApplyRenames } from "./live-uniques";
 import type { DesiredSchema } from "./types";
 
@@ -269,5 +270,60 @@ export async function refuseTargetSwitchesOverValues(args: {
   throw NextlyError.validation({
     errors,
     logContext: { reason: "relationship-target-switch-over-values" },
+  });
+}
+
+/** The column `column` of `table` in `snapshot`, case-insensitively. */
+function columnOf(
+  snapshot: NextlySchemaSnapshot,
+  table: string,
+  column: string
+): NextlySchemaSnapshot["tables"][number]["columns"][number] | undefined {
+  return snapshot.tables
+    .find(t => t.name.toLowerCase() === table.toLowerCase())
+    ?.columns.find(c => c.name.toLowerCase() === column.toLowerCase());
+}
+
+/**
+ * Refuses a relation renamed and switched between storage shapes in one change, before anything
+ * runs. A rename moves the column's values to the new name as they are, so the switch's conversion,
+ * planned for one name, reaches none of them; and the two are judged from the rename's two ends,
+ * the shape the column had under its old name and the shape it has under its new one.
+ *
+ * @throws NextlyError (validation, `RELATIONSHIP_SWITCH_WITH_RENAME`) naming each such field
+ */
+export function refuseSwitchesWithRename(args: {
+  /** The change's entities, to name each field as its entity; absent, the table is named. */
+  desired?: DesiredSchema;
+  operations: readonly Operation[];
+  /** The tables before the change, each relation column stating the shape it had. */
+  previous: NextlySchemaSnapshot;
+  /** The tables after it, each relation column stating its shape. */
+  next: NextlySchemaSnapshot;
+}): void {
+  const errors: RefusalError[] = [];
+  for (const op of args.operations) {
+    if (op.type !== "rename_column") continue;
+    const was = columnOf(args.previous, op.tableName, op.fromColumn);
+    const now = columnOf(args.next, op.tableName, op.toColumn);
+    const switched = conversionBetweenShapes(
+      was?.referenceShape,
+      now?.referenceShape
+    );
+    if (switched === undefined) continue;
+    const { label, field } =
+      args.desired === undefined
+        ? { label: `Table '${op.tableName}'`, field: op.toColumn }
+        : subjectOf(args.desired, op.tableName, op.toColumn);
+    errors.push({
+      path: `fields.${field}`,
+      code: "RELATIONSHIP_SWITCH_WITH_RENAME",
+      message: `${label}: field '${field}' cannot be renamed and change how its related entries are stored in the same change. Make the two changes one at a time.`,
+    });
+  }
+  if (errors.length === 0) return;
+  throw NextlyError.validation({
+    errors,
+    logContext: { reason: "relationship-switch-with-rename" },
   });
 }

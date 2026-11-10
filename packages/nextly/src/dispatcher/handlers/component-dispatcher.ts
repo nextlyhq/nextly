@@ -38,6 +38,7 @@ import {
   fieldsWithLeavingSettingsDeferred,
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
+import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
@@ -545,6 +546,15 @@ export const COMPONENTS_METHODS: Record<
               builtBy: "fieldGroup",
             }
           );
+          // A translated relation renamed and switched at once is refused: the companion's
+          // rename carries its values as they are.
+          refuseCompanionRenameSwitch({
+            rename: companionRename,
+            oldFields: component.fields ?? [],
+            newFields: fields,
+            subject: `Field group '${slug}'`,
+            component: true,
+          });
           // A field leaving translation has preconditions of its own, asked before the apply
           // alters anything.
           await archiveFieldsLeavingTranslation({

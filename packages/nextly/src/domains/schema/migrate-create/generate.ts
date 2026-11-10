@@ -97,6 +97,7 @@ import { operationsToJudge } from "../pipeline/moved-to-companion";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
+import { refuseSwitchesWithRename } from "../pipeline/several-references-refusal";
 import { generateStatements } from "../pipeline/sql-templates/index";
 import { sqliteTableRebuildStatements } from "../pipeline/sql-templates/sqlite-rebuild";
 
@@ -518,6 +519,13 @@ export async function generateMigration(
       args.dialect,
       previousSnapshot
     );
+    // A relation renamed and switched between storage shapes at once is refused, as the apply
+    // refuses it: the rename carries its values to the new name in the shape they had.
+    refuseSwitchesWithRename({
+      operations,
+      previous: previousSnapshot,
+      next: desiredSnapshot,
+    });
   }
   if (operations.length === 0 && !hasCompanions && !hasSettingsChanges) {
     return null;

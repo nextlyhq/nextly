@@ -137,6 +137,7 @@ import type { ClassifierEvent, Resolution } from "./resolution/types";
 import { withRetainedSizesColumn } from "./retained-core-columns";
 import {
   refuseSeveralReferencesForOne,
+  refuseSwitchesWithRename,
   refuseTargetSwitchesOverValues,
 } from "./several-references-refusal";
 import {
@@ -814,20 +815,17 @@ export class PushSchemaPipeline {
       // A translated relation's switch, planned on its companion from the same rule, joins the
       // operations here, so the confirmation, the refusals and the apply read one set, as the
       // preview does (`relationSwitches`).
+      const liveWithShapes = withRecordedShapes(liveSnapshot, desired);
+      const diffed = diffSnapshots(liveWithShapes, snapshotBeforeRenames);
       const switches = await relationSwitches({
         db,
         dialect,
         desired,
         live: liveSnapshot,
         desiredSnapshot: snapshotBeforeRenames,
+        planned: diffed,
       });
-      const allOperations = [
-        ...diffSnapshots(
-          withRecordedShapes(liveSnapshot, desired),
-          snapshotBeforeRenames
-        ),
-        ...switches.ops,
-      ];
+      const allOperations = [...diffed, ...switches.ops];
 
       // A UI save owns only the entity being edited. An operation targeting a code-first or
       // plugin-owned table is dropped here, BEFORE anything reads the operation set, because those
@@ -982,6 +980,14 @@ export class PushSchemaPipeline {
       // while a row holds several.
       // A translated relation's companion is among these (`relationSwitches`), its rows counted
       // with the main tables'.
+      // A relation renamed and switched at once: the rename carries its values to the new name as
+      // they are, which the switch's conversion, planned for one name, never reaches.
+      refuseSwitchesWithRename({
+        desired: args.desired,
+        operations: resolvedOps,
+        previous: liveWithShapes,
+        next: snapshotBeforeRenames,
+      });
       await refuseTargetSwitchesOverValues({
         db: args.db,
         dialect: args.dialect,

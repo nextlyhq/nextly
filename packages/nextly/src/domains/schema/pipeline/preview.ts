@@ -147,20 +147,19 @@ export async function previewDesiredSchema(
   // does not show is previewed as the apply plans it (`withRecordedShapes`).
   // A translated relation's switch on its companion joins them, as the apply plans it
   // (`relationSwitches`), so what is confirmed here is what runs.
+  const diffed = diffSnapshots(
+    withRecordedShapes(liveSnapshot, desired),
+    desiredSnapshot
+  );
   const switches = await relationSwitches({
     db,
     dialect,
     desired,
     live: liveSnapshot,
     desiredSnapshot,
+    planned: diffed,
   });
-  const allOperations = [
-    ...diffSnapshots(
-      withRecordedShapes(liveSnapshot, desired),
-      desiredSnapshot
-    ),
-    ...switches.ops,
-  ];
+  const allOperations = [...diffed, ...switches.ops];
 
   // Preview is what the browser asks the operator to confirm, so it must show the operation set the
   // apply can actually run. The apply drops operations on code-first and plugin-owned tables before

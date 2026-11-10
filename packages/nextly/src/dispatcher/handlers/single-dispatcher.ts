@@ -47,6 +47,7 @@ import {
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { publishesPerLanguage } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
+import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
@@ -1321,6 +1322,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               builtBy: "collection",
             }
           );
+          // A translated relation renamed and switched at once is refused: the companion's
+          // rename carries its values as they are.
+          refuseCompanionRenameSwitch({
+            rename: companionRename,
+            oldFields: single.fields,
+            newFields: fields,
+            subject: `Single '${slug}'`,
+          });
           // A field leaving translation has preconditions of its own, asked before the push alters
           // anything.
           await archiveFieldsLeavingTranslation({

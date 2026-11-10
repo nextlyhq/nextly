@@ -14,6 +14,7 @@
  * @module domains/schema/pipeline/companion-shape-switches
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
@@ -27,10 +28,12 @@ import {
   toSnakeCase,
 } from "../services/field-column-descriptor";
 
+import { querySqlRows } from "./classifier/count-helpers";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type {
   ChangeColumnTypeOp,
   NextlySchemaSnapshot,
+  Operation,
   TableSpec,
 } from "./diff/types";
 import { conversionBetweenShapes } from "./diff/types";
@@ -340,6 +343,8 @@ export interface RelationSwitchArgs {
   live: NextlySchemaSnapshot;
   /** The tables the change leaves, as the diff compares them. */
   desiredSnapshot: NextlySchemaSnapshot;
+  /** What the main tables' diff already plans, so a column it converts is not planned again. */
+  planned: readonly Operation[];
 }
 
 /**
@@ -357,14 +362,87 @@ export async function relationSwitches(
   args: RelationSwitchArgs
 ): Promise<{ ops: ChangeColumnTypeOp[]; tables: TableSpec[] }> {
   refuseSwitchesMovingTable(args);
+  const legacy = await legacyListRepairs(args);
   const ops = desiredCompanionSwitchOps(args.desired, args.dialect);
-  if (ops.length === 0) return { ops: [], tables: [] };
+  if (ops.length === 0) return { ops: legacy, tables: [] };
   const names = [...new Set(ops.map(op => op.tableName))];
   const { tables } = await introspectLiveSnapshot(args.db, args.dialect, names);
   const present = new Set(tables.map(table => table.name.toLowerCase()));
   return {
-    ops: ops.filter(op => present.has(op.tableName.toLowerCase())),
+    ops: [
+      ...legacy,
+      ...ops.filter(op => present.has(op.tableName.toLowerCase())),
+    ],
     tables,
+  };
+}
+
+/**
+ * On SQLite, the list conversion of each relation column that holds a list by its field yet has
+ * rows that are not JSON lists: a column an older Schema Builder created as one reference for a
+ * field it recorded as many. The field and the column agree on paper (text, a list), so nothing
+ * else plans it; the rows say otherwise. Counted per list column, only on an apply, and the
+ * conversion leaves a real list as it is, so it can run again. PostgreSQL and MySQL tell such a
+ * column by its type instead.
+ */
+async function legacyListRepairs(
+  args: RelationSwitchArgs
+): Promise<ChangeColumnTypeOp[]> {
+  if (args.dialect !== "sqlite") return [];
+  const planned = new Set(
+    args.planned.flatMap(op =>
+      op.type === "change_column_type" && op.conversion !== undefined
+        ? [`${op.tableName}.${op.columnName}`.toLowerCase()]
+        : []
+    )
+  );
+  const candidates = args.desiredSnapshot.tables.flatMap(table =>
+    table.columns
+      .filter(
+        column =>
+          column.referenceShape === "list" &&
+          !planned.has(`${table.name}.${column.name}`.toLowerCase())
+      )
+      .map(column => ({ table: table.name, column: column.name }))
+  );
+  const repairs: ChangeColumnTypeOp[] = [];
+  for (const candidate of candidates) {
+    const repair = await legacyListRepair(
+      args,
+      candidate.table,
+      candidate.column
+    );
+    if (repair !== undefined) repairs.push(repair);
+  }
+  return repairs;
+}
+
+/** One list column's repair, where it is live and holds a row that is not a JSON list. */
+async function legacyListRepair(
+  args: RelationSwitchArgs,
+  table: string,
+  column: string
+): Promise<ChangeColumnTypeOp | undefined> {
+  const live = args.live.tables
+    .find(t => t.name.toLowerCase() === table.toLowerCase())
+    ?.columns.find(c => c.name.toLowerCase() === column.toLowerCase());
+  if (live === undefined) return undefined;
+  const c = sql.identifier(column);
+  const [row] = await querySqlRows<{ n: number | string }>(
+    args.db,
+    args.dialect,
+    sql`SELECT COUNT(*) AS n FROM ${sql.identifier(table)} WHERE ${c} IS NOT NULL AND CASE WHEN json_valid(${c}) THEN json_type(${c}) <> 'array' ELSE 1 END`
+  );
+  if (Number(row?.n ?? 0) === 0) return undefined;
+  return {
+    type: "change_column_type",
+    tableName: table,
+    columnName: column,
+    fromType: live.type,
+    toType: live.type,
+    nullable: live.nullable,
+    fromNullable: live.nullable,
+    conversion: "referenceList",
   };
 }
 
@@ -506,5 +584,43 @@ export function refuseFieldGroupSwitches(
   throw NextlyError.validation({
     errors,
     logContext: { reason: "relationship-switch-not-carried" },
+  });
+}
+
+/**
+ * Refuses a translated relation renamed and switched between storage shapes in one save, before
+ * anything runs. The companion's rename (`resolveCompanionRename`) carries the values to the new
+ * name as they are, so the switch's conversion, planned for one name, reaches none of them.
+ *
+ * @throws NextlyError (validation, `RELATIONSHIP_SWITCH_WITH_RENAME`) naming the field
+ */
+export function refuseCompanionRenameSwitch(args: {
+  rename: { from: string; to: string } | null | undefined;
+  oldFields: readonly unknown[];
+  newFields: readonly unknown[];
+  /** How the refusal names the entity, as `Collection 'posts'`. */
+  subject: string;
+  component?: boolean;
+}): void {
+  if (!args.rename) return;
+  const named = (fields: readonly unknown[], name: string) =>
+    (fields as readonly FieldShape[]).find(field => field.name === name);
+  const was = named(args.oldFields, args.rename.from);
+  const now = named(args.newFields, args.rename.to);
+  if (was === undefined || now === undefined) return;
+  const switched = conversionBetweenShapes(
+    relationStorageShape(was, args.component),
+    relationStorageShape(now, args.component)
+  );
+  if (switched === undefined) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: `fields.${args.rename.to}`,
+        code: "RELATIONSHIP_SWITCH_WITH_RENAME",
+        message: `${args.subject}: field '${args.rename.to}' cannot be renamed and change how its related entries are stored in the same change. Make the two changes one at a time.`,
+      },
+    ],
+    logContext: { reason: "relationship-switch-with-rename" },
   });
 }

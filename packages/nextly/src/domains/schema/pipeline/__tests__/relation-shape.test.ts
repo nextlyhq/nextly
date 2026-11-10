@@ -18,7 +18,11 @@ import type {
   NextlySchemaSnapshot,
 } from "../diff/types";
 import { referenceConversionStatements } from "../reference-list-conversion";
-import { relationSwitches } from "../companion-shape-switches";
+import {
+  refuseCompanionRenameSwitch,
+  relationSwitches,
+} from "../companion-shape-switches";
+import { refuseSwitchesWithRename } from "../several-references-refusal";
 import { registryRows } from "../recorded-fields";
 import { withRecordedShapes } from "../recorded-shapes";
 import type { DesiredSchema } from "../types";
@@ -431,6 +435,7 @@ describe("a switch made while its field moves to or from the translations table"
         },
         live: withAuthor,
         desiredSnapshot: withoutAuthor,
+        planned: [],
       })
     ).rejects.toMatchObject({
       publicData: {
@@ -463,7 +468,82 @@ describe("a switch made while its field moves to or from the translations table"
         },
         live: withAuthor,
         desiredSnapshot: withAuthor,
+        planned: [],
       })
     ).resolves.toEqual({ ops: [], tables: [] });
+  });
+});
+
+describe("a relation renamed and switched in one change", () => {
+  const rename = {
+    type: "rename_column" as const,
+    tableName: "dc_posts",
+    fromColumn: "author",
+    toColumn: "writer",
+    fromType: "text",
+    toType: "text",
+  };
+  const named = (
+    name: string,
+    shape: "one" | "list"
+  ): NextlySchemaSnapshot => ({
+    tables: [
+      {
+        name: "dc_posts",
+        columns: [
+          ID,
+          { name, type: "text", nullable: true, referenceShape: shape },
+        ],
+      },
+    ],
+  });
+  const refusal = {
+    publicData: {
+      errors: [
+        expect.objectContaining({ code: "RELATIONSHIP_SWITCH_WITH_RENAME" }),
+      ],
+    },
+  };
+
+  it("is refused from the rename's two ends", () => {
+    expect(() =>
+      refuseSwitchesWithRename({
+        operations: [rename],
+        previous: named("author", "one"),
+        next: named("writer", "list"),
+      })
+    ).toThrow(expect.objectContaining(refusal));
+  });
+
+  it("passes a rename that keeps the shape", () => {
+    expect(() =>
+      refuseSwitchesWithRename({
+        operations: [rename],
+        previous: named("author", "one"),
+        next: named("writer", "one"),
+      })
+    ).not.toThrow();
+  });
+
+  it("is refused on a translated field's companion rename, and passed without a switch", () => {
+    const author = {
+      name: "author",
+      type: "relationship",
+      relationTo: "authors",
+    };
+    const writer = (hasMany: boolean) => ({
+      ...author,
+      name: "writer",
+      hasMany,
+    });
+    const check = (hasMany: boolean) => () =>
+      refuseCompanionRenameSwitch({
+        rename: { from: "author", to: "writer" },
+        oldFields: [author],
+        newFields: [writer(hasMany)],
+        subject: "Collection 'posts'",
+      });
+    expect(check(true)).toThrow(expect.objectContaining(refusal));
+    expect(check(false)).not.toThrow();
   });
 });

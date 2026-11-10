@@ -194,6 +194,39 @@ async function switchAuthor(
   return { accepted: true };
 }
 
+/** A Builder apply of `posts` with its stored fields mapped as given, and the rename answers given. */
+async function applyPosts(
+  adapter: DrizzleAdapter,
+  map: (field: Field) => Field,
+  renameResolutions: unknown[] = []
+): Promise<{ accepted: true } | { refused: string }> {
+  const stored = await storedPosts(adapter);
+  try {
+    await inDevelopment(() =>
+      dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "posts" },
+        {
+          fields: stored.fields.map(map),
+          confirmed: true,
+          schemaVersion: stored.version,
+          eventResolutions: [],
+          renameResolutions,
+        }
+      )
+    );
+  } catch (error) {
+    const e = error as {
+      publicData?: { errors?: { message: string }[] };
+      message?: string;
+    };
+    const messages = e.publicData?.errors?.map(x => x.message);
+    return { refused: messages ? messages.join(" ") : String(e.message) };
+  }
+  return { accepted: true };
+}
+
 for (const dialect of getConfiguredTestDialects()) {
   describe(`a relationship holding a list — ${dialect}`, () => {
     let database: CaseDatabase;
@@ -358,6 +391,81 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await authorOf(t, none)).toBeNull();
     });
 
+    // An older Schema Builder created a hasMany field's column as one reference while its registry
+    // row recorded the field as many. The next save finds the row and the field agreeing, so the
+    // stored ids are read to tell the column apart, and converted to the list the field holds.
+    it("repairs a column an older save created as one reference for a field recorded as many", async () => {
+      const t = await boot();
+      const { a } = await postsWithAuthors(t, false);
+      const post = (
+        await t.nextly.create({
+          collection: "posts",
+          data: { title: "P1", author: a },
+        })
+      ).item.id as string;
+      // The registry records the field as many, as that older save did.
+      const stored = await storedPosts(database.adapter);
+      const recorded = JSON.stringify(
+        stored.fields.map(f =>
+          f.name === "author"
+            ? {
+                name: "author",
+                type: "relationship",
+                relationTo: "authors",
+                hasMany: true,
+              }
+            : f
+        )
+      ).replace(/'/g, "''");
+      await database.adapter.executeQuery(
+        `UPDATE dynamic_collections SET fields = '${recorded}' WHERE slug = 'posts'`
+      );
+
+      expect(await switchAuthor(database.adapter, true)).toEqual({
+        accepted: true,
+      });
+
+      expect(await authorOf(t, post)).toEqual([a]);
+    });
+
+    it("refuses renaming a relationship and switching it to many in one save, changing nothing", async () => {
+      const t = await boot();
+      const { a } = await postsWithAuthors(t, false);
+      const post = (
+        await t.nextly.create({
+          collection: "posts",
+          data: { title: "P1", author: a },
+        })
+      ).item.id as string;
+
+      const outcome = await applyPosts(
+        database.adapter,
+        f =>
+          f.name === "author"
+            ? {
+                name: "writer",
+                type: "relationship",
+                relationTo: "authors",
+                hasMany: true,
+              }
+            : f,
+        [
+          {
+            tableName: "dc_posts",
+            fromColumn: "author",
+            toColumn: "writer",
+            choice: "rename",
+          },
+        ]
+      );
+      expect(outcome).toEqual({
+        refused: expect.stringContaining(
+          "cannot be renamed"
+        ) as unknown as string,
+      });
+      expect(await authorOf(t, post)).toBe(a);
+    });
+
     it("refuses switching a required relationship to one while a row holds none, before anything changes", async () => {
       const t = await boot();
       const { a } = await postsWithAuthors(t, true, "authors", true);
@@ -517,7 +625,11 @@ for (const dialect of getConfiguredTestDialects()) {
           }
         )
       );
-      await t.nextly.updateSingle({ slug: "site", data: { author: a } });
+      // A first write, so there is no version to send back.
+      await t.nextly.updateSingle({
+        slug: "site",
+        data: { author: a, _overwrite: true },
+      });
       const [row] = await database.adapter.executeQuery<{
         schema_version: unknown;
       }>(`SELECT schema_version FROM dynamic_singles WHERE slug = 'site'`);
