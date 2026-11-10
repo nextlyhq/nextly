@@ -89,6 +89,35 @@ function AwaitingPermissions({
   );
 }
 
+/**
+ * How the controls sit in each place. In the rail they stack and open to its
+ * right, and keep the foot clear below the avatar for Next.js's development
+ * badge (bottom-left by default). In the bar they sit in a row and open
+ * downwards, lined up with the bar's right edge, nowhere near the badge.
+ */
+const ACCOUNT_LAYOUT = {
+  rail: {
+    flow: "flex flex-col items-center gap-2",
+    side: "right",
+    devSpace: "pb-16",
+    testId: "rail-account",
+  },
+  bar: {
+    flow: "flex items-center gap-1",
+    side: "bottom",
+    devSpace: undefined,
+    testId: "bar-account",
+  },
+} as const satisfies Record<
+  AccountPlacement,
+  {
+    flow: string;
+    side: "right" | "bottom";
+    devSpace: string | undefined;
+    testId: string;
+  }
+>;
+
 function RailAccountItems({
   className,
   placement,
@@ -111,25 +140,12 @@ function RailAccountItems({
   // Next.js draws its development badge in the bottom-left corner, over the
   // rail's foot, while the host runs `next dev`.
   const devOverlay = useNextDevOverlay();
-  const inBar = placement === "bar";
-  // In the rail they stack and open to its right; in the bar they sit in a
-  // row and open downwards, lined up with the bar's right edge.
-  const flow = inBar
-    ? "flex items-center gap-1"
-    : "flex flex-col items-center gap-2";
-  const side = inBar ? "bottom" : "right";
+  const { flow, side, devSpace, testId } = ACCOUNT_LAYOUT[placement];
 
   return (
     <div
-      className={cn(
-        flow,
-        // In development the rail keeps its foot clear below the avatar, so
-        // Next.js's development badge (bottom-left by default) sits in that
-        // space instead of over the avatar. The bar is nowhere near it.
-        devOverlay && !inBar && "pb-16",
-        className
-      )}
-      data-testid={inBar ? "bar-account" : "rail-account"}
+      className={cn(flow, devOverlay && devSpace, className)}
+      data-testid={testId}
       data-shell-answers={shellAnswersMarker(settled)}
     >
       <div hidden={!settled} className={settled ? flow : undefined}>
