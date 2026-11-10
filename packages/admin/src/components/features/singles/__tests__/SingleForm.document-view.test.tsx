@@ -44,6 +44,7 @@ vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
 }));
 
 import { useHostedRecoveryPoint } from "@admin/components/features/entries/EntryForm/DocumentActionsContext";
+import { useDocumentValues } from "@admin/components/features/entries/EntryForm/document-values";
 import {
   SingleForm,
   type SingleDocumentData,
@@ -141,6 +142,23 @@ describe("SingleForm with a document view", () => {
     );
 
     expect(screen.getByText(storedAt.toISOString())).toBeInTheDocument();
+  });
+
+  it("lets a component in the view read the Single's live values", () => {
+    const VALUES_VIEW = "@acme/pb/admin#Values";
+    function ValuesView(): ReactElement {
+      const values = useDocumentValues(["heroTitle"]);
+      return <pre data-testid="values">{JSON.stringify(values)}</pre>;
+    }
+    registerComponent(VALUES_VIEW, ValuesView);
+    renderView(
+      vi.fn(async () => {}),
+      { documentView: { component: VALUES_VIEW, onExit: vi.fn() } }
+    );
+
+    expect(screen.getByTestId("values")).toHaveTextContent(
+      JSON.stringify({ heroTitle: "Welcome" })
+    );
   });
 
   it("tells the view which Single it is of, and renders no entry form element", () => {

@@ -29,6 +29,8 @@ const READERS: Record<string, string> = {
   "cli/commands/migrate-resolve.ts":
     "finds the file it records through `discoverMigrationGroups`",
   "cli/commands/build.ts": "reads through `readableMigrationFiles`",
+  "cli/commands/migrate-fresh.ts":
+    "its dry run lists the files through `discoverMigrationGroups` with the dialect and declared names `nextly migrate` reads them with",
   "domains/schema/migrate/pending-entities.ts":
     "reads through `discoverMigrationGroups`",
   "domains/schema/migrate/old-builder-ledger.ts":

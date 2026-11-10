@@ -32,6 +32,7 @@ import { validateCollectionConfig } from "../collections/config/validate-config"
 import { ALL_FIELD_TYPES } from "../collections/fields/types";
 import { extractFieldGroupReferences } from "../domains/field-groups/storage/field-group-field-type";
 import { isFieldLocalized } from "../domains/i18n/classify-fields";
+import { storesPerLanguage } from "../domains/i18n/per-language-storage";
 import {
   getColumnDescriptor,
   usesJunctionTable,
@@ -522,8 +523,10 @@ function assertFieldsKept(
       now === undefined
         ? "removes"
         : isDeepStrictEqual(
-              storageOf(was, kind, before.localized === true),
-              storageOf(now, kind, after.localized === true)
+              // Where each definition keeps a translatable value: per language when translated,
+              // or for every entity under `experimental.perLanguageStorage`.
+              storageOf(was, kind, storesPerLanguage(before)),
+              storageOf(now, kind, storesPerLanguage(after))
             )
           ? undefined
           : "changes how it stores";
