@@ -2020,15 +2020,60 @@ export class DynamicCollectionService extends BaseService {
   junctionStatements(
     tableName: string,
     oldFields: FieldDefinition[],
-    newFields: FieldDefinition[]
+    newFields: FieldDefinition[],
+    targetTables?: CollectionTables
   ): { up: string[]; down: string[] } {
     return {
-      up: this.schemaService.junctionLifecycle(tableName, oldFields, newFields),
+      up: this.schemaService.junctionLifecycle(
+        tableName,
+        oldFields,
+        newFields,
+        targetTables
+      ),
       down: this.schemaService.junctionLifecycle(
         tableName,
         newFields,
-        oldFields
+        oldFields,
+        targetTables
       ),
+    };
+  }
+
+  /**
+   * What a Builder save writes for a collection's relationships going from
+   * `oldFields` to `newFields`: its junction statements and its foreign keys
+   * before and after, every one naming the table each target is stored in
+   * (`collectionTablesBySlug`), so a key or a junction to a collection whose
+   * slug was renamed references the table it kept. One reading for every
+   * writer of a save: create, update, the schema dialog and delete.
+   */
+  async writerRelations(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): Promise<{
+    junctions: { up: string[]; down: string[] };
+    keys: { before: ForeignKeySpec[]; after: ForeignKeySpec[] };
+  }> {
+    const targetTables = await collectionTablesBySlug(this.adapter, [
+      ...oldFields,
+      ...newFields,
+    ]);
+    return {
+      junctions: this.junctionStatements(
+        tableName,
+        oldFields,
+        newFields,
+        targetTables
+      ),
+      keys: {
+        before: this.relationshipForeignKeys(
+          tableName,
+          oldFields,
+          targetTables
+        ),
+        after: this.relationshipForeignKeys(tableName, newFields, targetTables),
+      },
     };
   }
 

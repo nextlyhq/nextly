@@ -529,6 +529,55 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it.runIf(dialect !== "sqlite")(
+      "keys a relationship to the table a renamed target collection kept",
+      async () => {
+        vi.stubEnv("NODE_ENV", "development");
+        const service = t.getService("collectionService");
+        await service.createCollection(created("people"), {});
+        // The collection's slug renamed, its table kept: `writers` is stored in `dc_people`.
+        const adapter = t.adapter as unknown as DrizzleAdapter;
+        await adapter.executeQuery(
+          "UPDATE dynamic_collections SET slug = 'writers' WHERE slug = 'people'"
+        );
+
+        await service.createCollection(
+          {
+            name: "notes",
+            label: "Note",
+            fields: [
+              {
+                name: "author",
+                type: "relationship",
+                options: {
+                  target: "writers",
+                  relationType: "manyToOne",
+                  onDelete: "set null",
+                },
+              },
+            ],
+          } as Parameters<CollectionService["createCollection"]>[0],
+          {}
+        );
+
+        const live = await introspectLiveSnapshot(
+          adapter.getDrizzle(),
+          adapter.getCapabilities().dialect,
+          ["dc_notes"]
+        );
+        expect(
+          live.tables[0]?.foreignKeys?.map(fk => fk.referencesTable)
+        ).toEqual(["dc_people"]);
+        const folder = join(t.basePath, "database", "history");
+        const notes = readdirSync(folder).find(f =>
+          f.endsWith("_notes_create.sql")
+        );
+        expect(readFileSync(join(folder, notes!), "utf-8")).not.toMatch(
+          /dc_writers/
+        );
+      }
+    );
+
+    it.runIf(dialect !== "sqlite")(
       "changes a relationship's foreign-key action when its onDelete changes",
       async () => {
         vi.stubEnv("NODE_ENV", "development");

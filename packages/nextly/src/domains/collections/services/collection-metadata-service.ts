@@ -458,23 +458,19 @@ export class CollectionMetadataService extends BaseService {
     const deps = this.saveDeps();
     if (deps !== undefined && artifacts.manifestEntity !== undefined) {
       try {
+        // Keys and junctions to the tables their targets are stored in.
+        const relations = await this.collectionService.writerRelations(
+          artifacts.tableName,
+          [],
+          artifacts.metadata.fields
+        );
         await writeCollectionSave(deps, {
           slug: artifacts.metadata.slug,
           previous: null,
           entity: artifacts.manifestEntity,
           change: "create",
-          junctions: this.collectionService.junctionStatements(
-            artifacts.tableName,
-            [],
-            artifacts.metadata.fields
-          ),
-          keys: {
-            before: [],
-            after: this.collectionService.relationshipForeignKeys(
-              artifacts.tableName,
-              artifacts.metadata.fields
-            ),
-          },
+          junctions: relations.junctions,
+          keys: relations.keys,
         });
         return { rowWritten: this.isDevelopment() };
       } catch (error: unknown) {
@@ -544,6 +540,12 @@ export class CollectionMetadataService extends BaseService {
         definitionOfRow(slug, before);
       const beforeFields = before.fields ?? [];
       const fields = artifacts.metadataUpdates.fields ?? beforeFields;
+      // Keys and junctions to the tables their targets are stored in.
+      const relations = await this.collectionService.writerRelations(
+        before.tableName,
+        beforeFields,
+        fields
+      );
       await writeCollectionSave(
         deps,
         {
@@ -551,21 +553,8 @@ export class CollectionMetadataService extends BaseService {
           previous,
           entity: entityAfterUpdate(previous, update, fields),
           change: "update",
-          junctions: this.collectionService.junctionStatements(
-            before.tableName,
-            beforeFields,
-            fields
-          ),
-          keys: {
-            before: this.collectionService.relationshipForeignKeys(
-              before.tableName,
-              beforeFields
-            ),
-            after: this.collectionService.relationshipForeignKeys(
-              before.tableName,
-              fields
-            ),
-          },
+          junctions: relations.junctions,
+          keys: relations.keys,
         },
         { appliedBy: push ?? (() => Promise.resolve()) }
       );
@@ -1669,11 +1658,16 @@ export class CollectionMetadataService extends BaseService {
     // Every junction of the collections deleted together goes in the first
     // file, before any of their tables: a junction links two of them, and
     // dropping either table first would leave its rows pointing at nothing.
-    const junctions = ordered.map(({ collection }) =>
-      this.collectionService.junctionStatements(
-        collection.tableName,
-        collection.fields ?? [],
-        []
+    const junctions = await Promise.all(
+      ordered.map(
+        async ({ collection }) =>
+          (
+            await this.collectionService.writerRelations(
+              collection.tableName,
+              collection.fields ?? [],
+              []
+            )
+          ).junctions
       )
     );
     const allJunctions = {

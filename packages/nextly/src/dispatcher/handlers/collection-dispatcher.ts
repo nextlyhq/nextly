@@ -1756,21 +1756,12 @@ async function writerSaveOf(change: WriterChange): Promise<
     fields: change.fields,
     localized: change.localized,
     answers: change.answers,
-    junctions: dynamic.junctionStatements(
+    // Keys and junctions to the tables their targets are stored in.
+    ...(await dynamic.writerRelations(
       change.collection.tableName,
       before,
       change.fields
-    ),
-    keys: {
-      before: dynamic.relationshipForeignKeys(
-        change.collection.tableName,
-        before
-      ),
-      after: dynamic.relationshipForeignKeys(
-        change.collection.tableName,
-        change.fields
-      ),
-    },
+    )),
   });
   return {
     deps: {
