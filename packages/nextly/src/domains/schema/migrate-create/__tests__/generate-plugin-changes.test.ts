@@ -6,9 +6,6 @@
  * (better-sqlite3) holding rows, because the failures they guard against
  * happen only there: SQLite accepts the same statement on an empty table.
  */
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -26,7 +23,6 @@ import { generateSQL } from "../../pipeline/sql-templates/index";
 import {
   buildBlankPluginMigration,
   buildPluginMigration,
-  generatePluginMigration,
 } from "../generate-plugin";
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
@@ -234,13 +230,17 @@ describe("a change a dialect cannot make in place", () => {
     [v1]
   )!.module;
 
-  it("is written for its author's SQL, recording both sides, and the stream moves on", async () => {
+  it("is generated on every dialect, SQLite by rebuilding the table, and the stream moves on", () => {
     const declared = everyDialect(() => events([score("varchar(20)")]));
     const v3 = generate(3, declared, [v1, before])!;
 
-    // SQLite cannot change a column's type in place; the others can.
-    expect(v3.handWritten).toEqual(["sqlite"]);
-    expect(v3.module.dialects.sqlite).toEqual({ up: [], down: [] });
+    // SQLite has no statement that changes a column's type: the table is
+    // rebuilt to the declared shape, as a nullability change is, rather than
+    // left to the author.
+    expect(v3.handWritten).toEqual([]);
+    expect(v3.module.dialects.sqlite.up.join("\n")).toMatch(
+      /CREATE TABLE "__new_acme__events"/
+    );
     expect(v3.module.dialects.postgresql.up.length).toBeGreaterThan(0);
     expect(v3.module.dialects.mysql.up.length).toBeGreaterThan(0);
     for (const dialect of DIALECTS) {
@@ -250,35 +250,8 @@ describe("a change a dialect cannot make in place", () => {
       });
     }
 
-    // Written hand-sealed, so the SQL the author adds keeps it intact.
-    const dir = await mkdtemp(join(tmpdir(), "nextly-plugin-handwritten-"));
-    try {
-      const result = await generatePluginMigration({
-        pluginName: "acme",
-        schemaVersion: 3,
-        name: "v3",
-        now: new Date(Date.UTC(2026, 9, 1, 0, 0, 3)),
-        tablesByDialect: declared,
-        existing: [v1, before],
-        migrationsDir: dir,
-      });
-      expect(result?.handWritten).toEqual(["sqlite"]);
-      expect(await readFile(result!.modulePath, "utf-8")).toContain(
-        "checksum: migrationChecksum(content),"
-      );
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-
-    // Once the author writes it, the next generation starts from the
-    // changed shape and finds nothing to do.
-    const filled = written(
-      v3.module,
-      "sqlite",
-      [`-- the author's rebuild of "acme__events"`],
-      []
-    );
-    expect(generate(4, declared, [v1, before, filled])).toBeNull();
+    // The next generation starts from the changed shape and finds nothing to do.
+    expect(generate(4, declared, [v1, before, v3.module])).toBeNull();
   });
 
   it("generates a nullability change on every dialect", () => {

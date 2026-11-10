@@ -8,6 +8,9 @@
  * goes to `nextly_i18n_archive`, before the column is dropped; and if the archive cannot be
  * written, nothing changes at all.
  */
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../../../config";
@@ -21,7 +24,6 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
-import { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { getI18nArchiveDdl } from "../../../schemas/nextly-i18n-archive/ddl";
 import { restoreI18nArchive } from "../migration/restore-archive";
@@ -495,7 +497,8 @@ describeEachDialect("a field that stops being translated", dialect => {
     // archive refuses the write, the file must stop before the main table gains the column, since
     // a step that has run is not undone on a dialect without transactional DDL.
     await seedCollection();
-    const saved = vi.spyOn(CollectionFileManager.prototype, "saveMigration");
+    const folder = join(current.basePath, "src", "db", "migrations");
+    const before = new Set(readdirSync(folder));
 
     const result = await handler().updateCollection(
       { collectionName: "posts" },
@@ -503,7 +506,13 @@ describeEachDialect("a field that stops being translated", dialect => {
     );
     expect(result.success, JSON.stringify(result)).toBe(true);
 
-    const migration = String(saved.mock.calls.at(-1)?.[0] ?? "");
+    // The save's files in the order they run: the archive write in one before
+    // the main table changes in another, or in the same one, earlier.
+    const migration = readdirSync(folder)
+      .filter(f => f.endsWith(".sql") && !before.has(f))
+      .sort()
+      .map(f => readFileSync(join(folder, f), "utf-8").split("-- DOWN")[0])
+      .join("\n");
     const archiveWrite = migration.indexOf(
       `INSERT INTO ${quote(dialect, "nextly_i18n_archive")}`
     );
@@ -513,7 +522,6 @@ describeEachDialect("a field that stops being translated", dialect => {
     expect(archiveWrite).toBeGreaterThan(-1);
     expect(mainChange).toBeGreaterThan(-1);
     expect(archiveWrite).toBeLessThan(mainChange);
-    saved.mockRestore();
   });
 
   it.each(

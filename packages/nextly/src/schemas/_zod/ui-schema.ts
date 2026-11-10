@@ -94,6 +94,32 @@ const selectOption = z.object({
   value: z.string().min(1),
 });
 
+/**
+ * A field's options as the registry stores them: a text's variant, a number's
+ * or date's format and, for a relationship, the target, how it relates, its
+ * foreign-key actions and a many-to-many's junction table. A plugin or API
+ * save sends a field this way, and the definition holds it as sent, so a
+ * deploy's registry row, written from the definition, keeps every one of them
+ * and the column mapping reads them as it reads the registry's. Keys beyond
+ * these are kept too.
+ */
+const registryOptions = z.looseObject({
+  variant: z.enum(["short", "long"]).optional(),
+  format: z.enum(["float", "integer", "datetime", "date", "time"]).optional(),
+  target: z.string().min(1).optional(),
+  relationType: z
+    .enum(["oneToOne", "oneToMany", "manyToOne", "manyToMany"])
+    .optional(),
+  onDelete: z.enum(["cascade", "set null", "restrict", "no action"]).optional(),
+  onUpdate: z.enum(["cascade", "set null", "restrict", "no action"]).optional(),
+  junctionTable: z.string().min(1).optional(),
+  targetLabelField: z.string().optional(),
+  maxDepth: z.number().optional(),
+});
+
+/** A relationship's options, as `registryOptions` reads them. */
+export type RegistryFieldOptions = z.infer<typeof registryOptions>;
+
 const validation = z
   .object({
     minLength: z.number().optional(),
@@ -172,7 +198,21 @@ export type FieldNode = {
   localized?: boolean;
   hasMany?: boolean;
   relationTo?: string | string[];
-  options?: { id?: string; label: string; value: string }[];
+  /**
+   * A number's storage as the registry stores it: exact `decimal` with its
+   * `precision` and `scale`, or `integer`. The column is made from these, so
+   * the definition holds them for the next save and `migrate:create` to read.
+   */
+  dbType?: "integer" | "decimal";
+  precision?: number;
+  scale?: number;
+  /**
+   * A select's or radio's choices; on any other field, its options as the
+   * registry stores them (`registryOptions`).
+   */
+  options?:
+    | { id?: string; label: string; value: string }[]
+    | RegistryFieldOptions;
   defaultValue?: unknown;
   validation?: {
     minLength?: number;
@@ -226,12 +266,24 @@ export type FieldNode = {
  * enforces. One validator for both writers is what keeps the DB and the
  * committed manifest from ever disagreeing about what a legal field is.
  */
+/**
+ * The name the Schema Builder gives a field: snake case. The definition file
+ * takes a camelCase name too (a plugin's or the API's collection may declare
+ * one, and the file records it as the registry does). The Builder's own
+ * payload keeps this rule for every name it creates, and takes a name the
+ * entity already holds whatever its case (`assertBuilderFieldNames`).
+ */
+export const BUILDER_FIELD_NAME_RE = /^[a-z][a-z0-9_]*$/;
+
 export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
   z
     .object({
       name: z
         .string()
-        .regex(/^[a-z][a-z0-9_]*$/, "field name must match ^[a-z][a-z0-9_]*$"),
+        .regex(
+          /^[A-Za-z][A-Za-z0-9_]*$/,
+          "field name must match ^[A-Za-z][A-Za-z0-9_]*$"
+        ),
       // A canonical token, OR a plugin-contributed field type slug. Plugin
       // types aren't in the canonical enum; accept any slug-shaped token so the
       // manifest preserves the real type through to production. The field-type
@@ -280,7 +332,12 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       localized: z.boolean().optional(),
       hasMany: z.boolean().optional(),
       relationTo: z.union([z.string(), z.array(z.string())]).optional(),
-      options: z.array(selectOption).optional(),
+      // A number's storage, as `FieldDefinition` types it: kept, because the
+      // column is made from it and a key left out is stripped on the next load.
+      dbType: z.enum(["integer", "decimal"]).optional(),
+      precision: z.number().optional(),
+      scale: z.number().optional(),
+      options: z.union([z.array(selectOption), registryOptions]).optional(),
       defaultValue: z.unknown().optional(),
       validation: validation.optional(),
       admin: fieldAdmin.optional(),
@@ -312,9 +369,10 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       fields: z.array(uiSchemaFieldSchema).optional(),
     })
     .superRefine((f, ctx) => {
+      const choices = Array.isArray(f.options) ? f.options : undefined;
       if (
         (f.type === "select" || f.type === "radio") &&
-        (!f.options || f.options.length === 0)
+        (!choices || choices.length === 0)
       ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -327,15 +385,20 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       // media library and the builder's upload editor deliberately does
       // not collect relationTo, so requiring it here would reject every
       // builder-authored upload field the DB path accepts.
+      const related =
+        f.options !== undefined && !Array.isArray(f.options)
+          ? f.options
+          : undefined;
       if (
         f.type === "relationship" &&
+        related?.target === undefined &&
         (f.relationTo === undefined ||
           (typeof f.relationTo === "string" && f.relationTo.length === 0) ||
           (Array.isArray(f.relationTo) && f.relationTo.length === 0))
       ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `${f.type} fields require relationTo`,
+          message: `${f.type} fields require relationTo, or options.target`,
           path: ["relationTo"],
         });
       }

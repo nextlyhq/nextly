@@ -88,7 +88,8 @@ function configResult() {
     config: {
       collections: [],
       plugins: [],
-      db: { migrationsDir: seen.migrationsDir },
+      // A sanitized config always names its definition file; none is there.
+      db: { migrationsDir: seen.migrationsDir, uiSchemaFile: "ui-schema.json" },
     },
     appConfig: { collections: [], plugins: [], db: {} },
     projectRoot: seen.migrationsDir,
@@ -124,6 +125,10 @@ vi.mock("../../domains/schema/events/schema-events-repository", () => ({
     // No migration's removal is recorded.
     listFileRemovals() {
       return Promise.resolve([]);
+    }
+    // No old Schema Builder file is marked.
+    currentOldBuilderMarks() {
+      return Promise.resolve(new Map());
     }
   },
 }));
