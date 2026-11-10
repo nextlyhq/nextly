@@ -135,12 +135,7 @@ export function variableUses(source: string): VariableUse[] {
         variable.location.row,
         variable.location.col
       );
-      const outputIndex = enclosingOutput(outputs, at);
-      const output = outputIndex === -1 ? undefined : outputs[outputIndex];
-      const inDefaultArg =
-        output?.defaultArgs.some(
-          range => range.begin <= at && at < range.end
-        ) ?? false;
+      const place = writtenAt(outputs, at);
       const steps = variable.segments;
       const literal = steps.every(
         (step): step is string | number =>
@@ -150,17 +145,40 @@ export function variableUses(source: string): VariableUse[] {
         path: String(variable),
         root,
         segments: literal ? steps : null,
-        from: output ? output.begin : at,
-        to: output ? output.end : at + root.length,
-        written: output !== undefined,
-        fallback: inDefaultArg,
+        from: place.output ? place.output.begin : at,
+        to: place.output ? place.output.end : at + root.length,
+        written: place.output !== undefined,
+        fallback: place.inDefaultArg,
         at,
-        outputIndex: outputIndex === -1 ? null : outputIndex,
-        inDefaultArg,
+        outputIndex: place.outputIndex,
+        inDefaultArg: place.inDefaultArg,
       });
     }
   }
   return judged(pending, outputs).sort((a, b) => a.from - b.from);
+}
+
+/**
+ * Where a use at `at` is written: the output containing it, if any, and
+ * whether it is written inside one of that output's default arguments.
+ */
+function writtenAt(
+  outputs: OutputRange[],
+  at: number
+): {
+  output: OutputRange | undefined;
+  outputIndex: number | null;
+  inDefaultArg: boolean;
+} {
+  const outputIndex = enclosingOutput(outputs, at);
+  const output = outputIndex === -1 ? undefined : outputs[outputIndex];
+  return {
+    output,
+    outputIndex: outputIndex === -1 ? null : outputIndex,
+    inDefaultArg:
+      output?.defaultArgs.some(range => range.begin <= at && at < range.end) ??
+      false,
+  };
 }
 
 /**
