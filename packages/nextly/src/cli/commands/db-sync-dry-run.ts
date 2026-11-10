@@ -23,7 +23,7 @@ import { CollectionSyncService } from "../../services/collections/collection-syn
 import type { Logger as ServiceLogger } from "../../services/shared/types";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
-import type { DryRunChange, DryRunPlan } from "../dry-run";
+import { projectPath, type DryRunChange, type DryRunPlan } from "../dry-run";
 import type { CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
 import type { LoadConfigResult } from "../utils/config-loader";
@@ -33,7 +33,6 @@ import type { ResolvedDevOptions } from "./db-sync";
 import { syncRefusalOf } from "./db-sync-registry";
 import { collectOrphanDeletions, publishExtensionSchema } from "./dev-build";
 import { desiredSchemaForSync, productionSyncRefusal } from "./dev-server";
-import { shownPath } from "./generate-manifest";
 
 /** What a sync's dry run does not show, and what its schema plan is made against. */
 const SYNC_DRY_RUN_NOTE =
@@ -97,7 +96,7 @@ export async function planDbSync(
       changes.push(
         ...planned.generatedFiles.map(file => ({
           action: "write" as const,
-          target: shownPath(cwd, file),
+          target: projectPath(cwd, file),
         }))
       );
 
