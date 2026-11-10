@@ -36,6 +36,7 @@ import {
 import {
   checkSaveHistory,
   prepareCollectionSave,
+  undoThenThrow,
   writeCollectionSave,
   type PreparedCollectionSave,
   type BuilderSaveSetup,
@@ -1696,9 +1697,16 @@ export class CollectionMetadataService extends BaseService {
     };
     const prepared: PreparedCollectionSave[] = [];
     // Withdrawn newest first, so the definition ends as it was before the first.
-    const withdrawAll = async () => {
-      for (const save of [...prepared].reverse()) await save.withdraw();
-    };
+    // Withdrawn newest first, so the definition ends as it was before the
+    // first; a withdrawal that fails names the files it may have left.
+    const withdrawAllThenThrow = (error: unknown) =>
+      undoThenThrow(
+        error,
+        [...prepared].reverse().map(save => ({
+          files: save.files,
+          undo: () => save.withdraw(),
+        }))
+      );
     try {
       for (const [index, { slug, collection }] of ordered.entries()) {
         prepared.push(
@@ -1719,8 +1727,7 @@ export class CollectionMetadataService extends BaseService {
         );
       }
     } catch (error) {
-      await withdrawAll();
-      throw error;
+      return withdrawAllThenThrow(error);
     }
     // The registry rows and what the collections hold go next, as without
     // the writer; the tables are dropped by the files written above.
@@ -1728,8 +1735,7 @@ export class CollectionMetadataService extends BaseService {
     try {
       unregistered = await this.removeRegistered(ordered, []);
     } catch (error) {
-      await withdrawAll();
-      throw error;
+      return withdrawAllThenThrow(error);
     }
     for (const save of prepared) await save.run();
     for (const { slug, collection } of ordered) {

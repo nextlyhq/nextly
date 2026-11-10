@@ -232,9 +232,44 @@ export async function writeCollectionSave(
     }
     return { files: [...written.names], applied: deps.applies };
   } catch (error) {
-    if (!pushed) await written.undo(error);
+    if (!pushed) {
+      await undoThenThrow(error, [
+        { files: written.names, undo: () => written.undo(error) },
+      ]);
+    }
     throw error;
   }
+}
+
+/**
+ * Withdraw what failed saves wrote, each of `undos` tried in turn, then
+ * rethrow `error`, the failure that called for it. Where a withdrawal fails
+ * too, the error thrown instead keeps that failure's message and cause and
+ * names every file the failed withdrawals may have left: hidden, they would be
+ * applied by the next `nextly migrate` for a save the person was told failed.
+ */
+export async function undoThenThrow(
+  error: unknown,
+  undos: ReadonlyArray<{
+    files: readonly string[];
+    undo: () => Promise<void>;
+  }>
+): Promise<never> {
+  const left: string[] = [];
+  for (const { files, undo } of undos) {
+    try {
+      await undo();
+    } catch {
+      left.push(...files);
+    }
+  }
+  if (left.length === 0) throw error;
+  throw new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: `${NextlyError.is(error) ? error.publicMessage : "The save failed."} What it wrote could not all be withdrawn, and may remain: ${left.join(", ")}, with the definition file as the save left it. Remove them and restore the definition before the next \`nextly migrate\`.`,
+    logContext: { reason: "save-files-left", files: left },
+    ...(error instanceof Error ? { cause: error } : {}),
+  });
 }
 
 /**
@@ -310,8 +345,7 @@ async function writeSave(
     );
     return { files, names, table: plan.table, undo };
   } catch (error) {
-    await undo(error);
-    throw error;
+    return undoThenThrow(error, [{ files: names, undo: () => undo(error) }]);
   }
 }
 
