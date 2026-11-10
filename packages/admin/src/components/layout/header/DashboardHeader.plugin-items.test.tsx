@@ -50,16 +50,6 @@ describe("a plugin's own item in the top bar", () => {
     ).toEqual(["@acme/a/admin#Publish", "@acme/b/admin#Badge"]);
   });
 
-  it("keeps the bar drawn below the rail's width, for the item", () => {
-    mockBranding = {
-      plugins: [
-        { name: "@acme/b", collections: [], headerSlot: "@acme/b/admin#Host" },
-      ],
-    } as AdminBranding;
-    render(<DashboardHeader />);
-    expect(screen.getByRole("banner").className).not.toContain("max-lg:hidden");
-  });
-
   it("draws nothing where no plugin has an item", () => {
     mockBranding = {
       plugins: [

@@ -5,10 +5,12 @@ import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { cn } from "@admin/lib/utils";
 
+import { useSuppressedChrome } from "../ChromeSuppression";
 import { usePanelFold } from "../PanelFold";
+import { RailAccount } from "../sidebar/RailAccount";
 
 import { pluginHeaderItems } from "./header-visibility";
-import { HeaderTrail, useHasHeaderTrail } from "./HeaderTrail";
+import { HeaderTrail } from "./HeaderTrail";
 
 interface DashboardHeaderProps {
   className?: string;
@@ -26,28 +28,23 @@ interface DashboardHeaderProps {
  * some draw a button there, and some draw nothing and register what a page
  * needs, so it is mounted for as long as the bar is.
  *
- * Below the width where the rail shows, the phone header above it already
- * holds the logo and the menu, so the bar is drawn only while it has a trail,
- * the panel toggle or a plugin's item to show, rather than as an empty band. Both are
- * declared in layout effects, so this is settled before the first paint.
+ * A surface that takes the rail away but keeps the bar (translation mode)
+ * would take the Inbox and the account menu with it, so while the rail is
+ * suppressed they are drawn at the bar's right end instead.
  */
 export function DashboardHeader({
   className,
 }: DashboardHeaderProps): JSX.Element {
-  const hasTrail = useHasHeaderTrail();
-  const { declared } = usePanelFold();
   const pluginItems = pluginHeaderItems(useBranding()?.plugins);
-  const empty = !hasTrail && !declared && pluginItems.length === 0;
+  const railSuppressed = useSuppressedChrome().has("primaryRail");
   return (
     <header
-      data-empty={empty || undefined}
       className={cn(
         "h-16 border-b border-border bg-background/80 backdrop-blur-md sticky top-0 z-40 w-full",
         "flex items-center px-6",
         // A container, so the trail answers to the bar's own width: a sidebar
         // narrows it as much as a small window does.
         "@container/topbar",
-        empty && "max-lg:hidden",
         className
       )}
     >
@@ -65,6 +62,7 @@ export function DashboardHeader({
           ))}
         </div>
       )}
+      {railSuppressed && <RailAccount placement="bar" className="ml-2" />}
     </header>
   );
 }
