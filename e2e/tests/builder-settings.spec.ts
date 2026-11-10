@@ -849,15 +849,15 @@ test.describe("Removing a breakpoint in Settings", () => {
       await dialog.getByRole("button", { name: "Close" }).click();
 
       // Opened again, the tab's read reports that run still open, as it
-      // would while the removal job carries a large one on.
-      let reported = false;
+      // would while the removal job carries a large one on: every read until
+      // the run finishes, as the tab may read more than once.
+      let stillOpen = true;
       await page.route("**/plugin-page-builder/site/settings", async route => {
         try {
-          if (reported) {
+          if (!stillOpen) {
             await route.fallback();
             return;
           }
-          reported = true;
           const response = await route.fetch();
           const json = (await response.json()) as Record<string, unknown>;
           await route.fulfill({
@@ -894,6 +894,7 @@ test.describe("Removing a breakpoint in Settings", () => {
         "title",
         "Breakpoints can be changed again once it has finished."
       );
+      stillOpen = false;
       carried.release();
       await expect(step(again, "done")).toContainText("Small was removed");
       await expect(step(again, "done")).toContainText(

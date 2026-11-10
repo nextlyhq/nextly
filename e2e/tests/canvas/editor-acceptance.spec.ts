@@ -211,7 +211,7 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     await openLayers(page);
     expect(await selection(page)).not.toContain("ea-second");
     await clickBlock(page, "ea-second");
-    expect(await selection(page)).toEqual(["ea-second"]);
+    await expect.poll(() => selection(page)).toEqual(["ea-second"]);
     // The same SET on both surfaces: a stale row left marked in Layers would
     // pass a check of only the rows it names.
     await expect.poll(() => selectedLayers(page)).toEqual(["ea-second"]);
@@ -227,45 +227,37 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     // the third block alone, and a toggle would add it to the first and skip
     // what lies between. Nested blocks are not listed, since their container
     // is selected.
-    expect(await selection(page)).toEqual([
-      "ea-first",
-      "ea-second",
-      "ea-section",
-      "ea-third",
-    ]);
+    await expect
+      .poll(() => selection(page))
+      .toEqual(["ea-first", "ea-second", "ea-section", "ea-third"]);
 
     // Mod-click takes ONE block out and leaves the rest of the run as it was:
     // the whole set is compared, so a toggle that also loses part of the run
     // fails. The first block left becomes primary, the leader having gone.
     await clickBlock(page, "ea-first", ["ControlOrMeta"]);
-    expect(await selection(page)).toEqual([
-      "ea-second",
-      "ea-section",
-      "ea-third",
-    ]);
+    await expect
+      .poll(() => selection(page))
+      .toEqual(["ea-second", "ea-section", "ea-third"]);
 
     // And puts it back as the leader, the block the author just pointed at.
     await clickBlock(page, "ea-first", ["ControlOrMeta"]);
-    expect(await selection(page)).toEqual([
-      "ea-first",
-      "ea-second",
-      "ea-section",
-      "ea-third",
-    ]);
+    await expect
+      .poll(() => selection(page))
+      .toEqual(["ea-first", "ea-second", "ea-section", "ea-third"]);
   },
   3: async page => {
     // Up a level from a nested block, then cleared from the top.
     await clickBlock(page, "ea-inner");
-    expect(await selection(page)).toEqual(["ea-inner"]);
+    await expect.poll(() => selection(page)).toEqual(["ea-inner"]);
     await page.keyboard.press("Escape");
-    expect(await selection(page)).toEqual(["ea-section"]);
+    await expect.poll(() => selection(page)).toEqual(["ea-section"]);
     await page.keyboard.press("Escape");
-    expect(await selection(page)).toEqual([]);
+    await expect.poll(() => selection(page)).toEqual([]);
 
     await clickBlock(page, "ea-first");
-    expect(await selection(page)).toEqual(["ea-first"]);
+    await expect.poll(() => selection(page)).toEqual(["ea-first"]);
     await page.keyboard.press("Escape");
-    expect(await selection(page)).toEqual([]);
+    await expect.poll(() => selection(page)).toEqual([]);
     // Cleared, not removed: a handler that deleted the block would empty the
     // selection the same way.
     expect(await structure(page)).toEqual(SEEDED);
@@ -285,7 +277,7 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
       .toEqual(["ea-heading", "ea-second", "ea-first", ...SEEDED.slice(3)]);
     await expect(announcer(page)).toHaveText("Block moved");
     // Still selected, so a run of presses keeps moving the same block.
-    expect(await selection(page)).toEqual(["ea-second"]);
+    await expect.poll(() => selection(page)).toEqual(["ea-second"]);
 
     // The down move announces too, and FRESHLY: its words are the same as the
     // up move's, so the region alternates a zero-width space to make the text
