@@ -39,4 +39,36 @@ describe("partKeysOf", () => {
       "views",
     ]);
   });
+
+  // Every component is kept per language under the setting, wherever it sits:
+  // a named group or repeater stores its children under its own key, so a
+  // component inside one makes that key the language's.
+  it("gives a language the key of a named container that holds a component", async () => {
+    const layout = {
+      type: "group",
+      name: "layout",
+      fields: [{ type: "component", name: "hero", component: "hero" }],
+    };
+    const items = {
+      type: "repeater",
+      name: "items",
+      fields: [
+        {
+          type: "group",
+          name: "inner",
+          fields: [{ type: "component", name: "cta", component: "cta" }],
+        },
+      ],
+    };
+    const stats = {
+      type: "group",
+      name: "stats",
+      fields: [{ type: "number", name: "views" }],
+    };
+    const keys = await partKeysOf([layout, items, stats]);
+
+    expect([...keys.language].sort()).toEqual(["items", "layout"]);
+    // The control: a container with no component stays where it was.
+    expect([...keys.shared]).toEqual(["stats"]);
+  });
 });

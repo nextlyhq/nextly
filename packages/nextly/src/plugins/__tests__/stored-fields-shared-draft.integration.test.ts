@@ -100,7 +100,7 @@ async function heldSharedEdit(t: TestNextly): Promise<string> {
   const id = (created.data as { id: string }).id;
   const held = await entries.updateEntry(
     { collectionName: SLUG, entryId: id, overrideAccess: true, locale: "es" },
-    { body: { v: "held" } }
+    { body: { v: "held" }, _overwrite: true }
   );
   expect(held.success, JSON.stringify(held)).toBe(true);
   return id;

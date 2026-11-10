@@ -21,6 +21,7 @@ import {
   defineFieldGroup,
   defineSingle,
   fieldGroup,
+  group,
   number,
   text,
 } from "../../../config";
@@ -41,6 +42,11 @@ const PUBLISHER = "part-site-publisher";
 /** Untranslated, with no translatable field of its own: only a component. */
 const COMPONENTED = "partcompsite";
 const HERO = "partsitehero";
+/** Translated, with a component inside a named group. */
+const NESTED = "partnestsite";
+/** Translated, with a shared field no caller but a trusted one may update. */
+const FIELD_GUARDED = "partfieldsite";
+const EDITOR = "part-site-editor";
 const TRANSLATABLE = ["title", "tagline"];
 const SHARED = ["views"];
 
@@ -92,6 +98,31 @@ async function boot(dialect: TestDialect): Promise<SingleEntryService> {
         fields: [text({ name: "title" }), number({ name: "views" })],
       }),
       defineSingle({
+        slug: NESTED,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: { read: () => true, update: () => true },
+        fields: [
+          text({ name: "title" }),
+          group({
+            name: "layout",
+            fields: [fieldGroup({ name: "hero", component: HERO })],
+          }),
+        ],
+      }),
+      defineSingle({
+        slug: FIELD_GUARDED,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: { read: () => true, update: () => true },
+        fields: [
+          text({ name: "title" }),
+          number({ name: "views", access: { update: () => false } }),
+        ],
+      }),
+      defineSingle({
         slug: COMPONENTED,
         status: true,
         versions: { drafts: true },
@@ -115,10 +146,15 @@ async function save(
   locale: string,
   data: Record<string, unknown>
 ): Promise<void> {
-  const saved = await singles.update(SLUG, data, {
-    locale,
-    overrideAccess: true,
-  });
+  // Every save here replaces what is stored, as an editor's save does.
+  const saved = await singles.update(
+    SLUG,
+    { ...data, _overwrite: true },
+    {
+      locale,
+      overrideAccess: true,
+    }
+  );
   expect(saved.success, JSON.stringify(saved)).toBe(true);
 }
 
@@ -138,7 +174,9 @@ async function publishedInBoth(singles: SingleEntryService): Promise<void> {
 }
 
 /** The Single's working drafts as stored, by slot (`shared` for none). */
-async function drafts(): Promise<Record<string, Record<string, unknown>>> {
+async function drafts(
+  slug: string = SLUG
+): Promise<Record<string, Record<string, unknown>>> {
   const rows = await current!.adapter.select<{
     locale: string | null;
     snapshot: unknown;
@@ -146,7 +184,7 @@ async function drafts(): Promise<Record<string, Record<string, unknown>>> {
     where: {
       and: [
         { column: "scopeKind", op: "=", value: "single" },
-        { column: "scopeSlug", op: "=", value: SLUG },
+        { column: "scopeSlug", op: "=", value: slug },
         { column: "isAutosave", op: "=", value: false },
         { column: "versionNo", op: "IS NULL" },
         { column: "status", op: "=", value: "draft" },
@@ -260,6 +298,7 @@ describe.each(getConfiguredTestDialects())(
       await save(singles, "es", { views: 60 });
 
       const published = await singles.publishAllLocales(SLUG, {
+        data: { _overwrite: true },
         overrideAccess: true,
       });
 
@@ -285,6 +324,7 @@ describe.each(getConfiguredTestDialects())(
         const saved = await singles.update(
           GUARDED,
           {
+            _overwrite: true,
             title,
             ...(locale === "en" ? { views: 10 } : {}),
             status: "published",
@@ -295,7 +335,7 @@ describe.each(getConfiguredTestDialects())(
       }
       const held = await singles.update(
         GUARDED,
-        { views: 70 },
+        { _overwrite: true, views: 70 },
         { locale: "es", overrideAccess: true }
       );
       expect(held.success, JSON.stringify(held)).toBe(true);
@@ -303,7 +343,7 @@ describe.each(getConfiguredTestDialects())(
       const published = await singles
         .update(
           GUARDED,
-          { status: "published" },
+          { _overwrite: true, status: "published" },
           {
             locale: "*",
             user: { id: PUBLISHER, email: `${PUBLISHER}@example.test` },
@@ -329,6 +369,7 @@ describe.each(getConfiguredTestDialects())(
         const saved = await singles.update(
           REQUIRED,
           {
+            _overwrite: true,
             title,
             ...(locale === "en" ? { views: 10 } : {}),
             status: "published",
@@ -339,12 +380,13 @@ describe.each(getConfiguredTestDialects())(
       }
       const held = await singles.update(
         REQUIRED,
-        { views: 80 },
+        { _overwrite: true, views: 80 },
         { locale: "es", overrideAccess: true }
       );
       expect(held.success, JSON.stringify(held)).toBe(true);
 
       const published = await singles.publishAllLocales(REQUIRED, {
+        data: { _overwrite: true },
         overrideAccess: true,
       });
 
@@ -365,14 +407,19 @@ describe.each(getConfiguredTestDialects())(
       const singles = await boot(dialect);
       const first = await singles.update(
         COMPONENTED,
-        { views: 1, hero: { heading: "en heading" }, status: "published" },
+        {
+          _overwrite: true,
+          views: 1,
+          hero: { heading: "en heading" },
+          status: "published",
+        },
         { locale: "en", overrideAccess: true }
       );
       expect(first.success, JSON.stringify(first)).toBe(true);
 
       const held = await singles.update(
         COMPONENTED,
-        { hero: { heading: "es heading" } },
+        { _overwrite: true, hero: { heading: "es heading" } },
         { locale: "es", overrideAccess: true }
       );
       expect(held.success, JSON.stringify(held)).toBe(true);
@@ -392,6 +439,86 @@ describe.each(getConfiguredTestDialects())(
         }
       );
       expect(rows.map(row => row.locale ?? "shared")).toEqual(["es"]);
+    }, 90_000);
+
+    // A component is kept per language wherever it sits, so a held edit to
+    // one inside a named group is the language's, never the shared draft's.
+    it("keys a held edit to a component inside a named group by its language", async () => {
+      const singles = await boot(dialect);
+      for (const locale of ["en", "es"]) {
+        const saved = await singles.update(
+          NESTED,
+          {
+            _overwrite: true,
+            title: `${locale} title`,
+            layout: { hero: { heading: `${locale} heading` } },
+            status: "published",
+          },
+          { locale, overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+      }
+
+      const held = await singles.update(
+        NESTED,
+        { _overwrite: true, layout: { hero: { heading: "es held" } } },
+        { locale: "es", overrideAccess: true }
+      );
+      expect(held.success, JSON.stringify(held)).toBe(true);
+
+      expect(Object.keys(await drafts(NESTED)).sort()).toEqual(["es"]);
+    }, 90_000);
+
+    // A publish of every language judges a shared-only draft's values under
+    // the publisher's field rules, even where every language it puts live is
+    // already stored: a publisher who may not update a shared field cannot
+    // put another author's held edit to it live.
+    it("refuses a publish of every language whose shared draft holds a field the publisher may not update", async () => {
+      const singles = await boot(dialect);
+      await userWhoMay(current!, EDITOR, "update", [FIELD_GUARDED]);
+      for (const action of ["read", "publish"]) {
+        await grantTo(current!, EDITOR, action, [FIELD_GUARDED]);
+      }
+      for (const [locale, title] of [
+        ["en", "en title"],
+        ["es", "es title"],
+      ]) {
+        const saved = await singles.update(
+          FIELD_GUARDED,
+          {
+            _overwrite: true,
+            title,
+            ...(locale === "en" ? { views: 10 } : {}),
+            status: "published",
+          },
+          { locale, overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+      }
+      // Another author's held edit to the guarded shared field.
+      const held = await singles.update(
+        FIELD_GUARDED,
+        { _overwrite: true, views: 70 },
+        { locale: "es", overrideAccess: true }
+      );
+      expect(held.success, JSON.stringify(held)).toBe(true);
+
+      const published = await singles
+        .publishAllLocales(FIELD_GUARDED, {
+          data: { _overwrite: true },
+          user: { id: EDITOR, email: `${EDITOR}@example.test` },
+          overrideAccess: false,
+        })
+        .catch((error: unknown) => ({ success: false, error }));
+
+      expect(published.success, JSON.stringify(published)).toBe(false);
+      // Refused by the field rule, not for a missing version.
+      expect(JSON.stringify(published)).not.toContain("VERSION_REQUIRED");
+      const live = await singles.get(FIELD_GUARDED, {
+        locale: "en",
+        overrideAccess: true,
+      });
+      expect((live.data as { views?: unknown }).views).toBe(10);
     }, 90_000);
   }
 );

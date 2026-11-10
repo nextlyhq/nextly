@@ -118,7 +118,8 @@ async function save(
 ): Promise<void> {
   const saved = await entries.updateEntry(
     { collectionName: slug, entryId: id, overrideAccess: true, locale },
-    data
+    // Every save here replaces what is stored, as an editor's save does.
+    { ...data, _overwrite: true }
   );
   expect(saved.success, JSON.stringify(saved)).toBe(true);
 }
@@ -385,6 +386,7 @@ describe.each(getConfiguredTestDialects())(
       await save(entries, TRANSLATED, id, "es", { views: 60 });
 
       const published = await entries.publishAllLocales({
+        data: { _overwrite: true },
         collectionName: TRANSLATED,
         entryId: id,
         overrideAccess: true,
@@ -420,7 +422,7 @@ describe.each(getConfiguredTestDialects())(
           user: { id: PUBLISHER, email: `${PUBLISHER}@example.test` },
           overrideAccess: false,
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(published.statusCode, JSON.stringify(published)).toBe(403);
@@ -445,6 +447,7 @@ describe.each(getConfiguredTestDialects())(
       await save(entries, REQUIRED, id, "es", { views: 80 });
 
       const published = await entries.publishAllLocales({
+        data: { _overwrite: true },
         collectionName: REQUIRED,
         entryId: id,
         overrideAccess: true,

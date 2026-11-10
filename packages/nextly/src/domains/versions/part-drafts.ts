@@ -25,6 +25,7 @@
  * @module domains/versions/part-drafts
  */
 
+import { isFieldGroupField } from "../../collections/fields/guards";
 import { addressableFields } from "../../shared/addressable-fields";
 import { resolveLocalizedFieldNames } from "../i18n/classify-fields";
 import { perLanguageFieldNames } from "../i18n/per-language-fields";
@@ -73,12 +74,43 @@ function isNamedPartField(
   return typeof name === "string" && name.length > 0;
 }
 
+/** Whether `field` is a component field. */
+function isComponentField(field: unknown): boolean {
+  if (typeof field !== "object" || field === null) return false;
+  const { type } = field as { type?: unknown };
+  return typeof type === "string" && isFieldGroupField({ type });
+}
+
+/**
+ * Whether a container stores a component among its own fields, at any depth.
+ * A named group or repeater stores its children under its own key, so a
+ * component inside one is kept under that key. Each container is looked at
+ * once, so a definition that holds itself ends the walk.
+ */
+function holdsComponent(
+  field: unknown,
+  looked = new WeakSet<object>()
+): boolean {
+  if (typeof field !== "object" || field === null || looked.has(field)) {
+    return false;
+  }
+  looked.add(field);
+  const { fields: children } = field as { fields?: unknown };
+  return (
+    Array.isArray(children) &&
+    children.some(
+      child => isComponentField(child) || holdsComponent(child, looked)
+    )
+  );
+}
+
 /**
  * Which keys of a document with `fields` belong to a language and which are
  * shared. Under per-language storage every entity keeps its translatable
  * values per language, so they are classified as an entity that stores per
  * language; every component is kept per language too, so a component field
- * belongs to the language whatever its own fields are.
+ * belongs to the language whatever its own fields are, and so does a named
+ * container that holds one.
  *
  * The keys are the fields addressable at the document's top level: an unnamed
  * group stores its children there, so each child is classified as a top-level
@@ -94,6 +126,10 @@ export async function partKeysOf(
     new Set(resolveLocalizedFieldNames(named, true)),
     () => Promise.resolve(true)
   );
+  // A container's key is the language's where a component is kept under it.
+  for (const field of named) {
+    if (holdsComponent(field)) language.add(field.name);
+  }
   return {
     language,
     shared: new Set(
