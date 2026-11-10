@@ -59,6 +59,10 @@ import {
 } from "../../domains/schema/migrate/plugin/plugin-migration";
 import { appMigrationInputs } from "../../domains/schema/migrate-create/app-migration-inputs";
 import { contributedElementsOf } from "../../domains/schema/migrate-create/app-stream";
+import {
+  declaredPermissionsOf,
+  describePermissionChange,
+} from "../../domains/schema/migrate-create/declared-permissions";
 import { describeSettingsChange } from "../../domains/schema/migrate-create/entity-settings";
 import {
   formatBlankFile,
@@ -501,6 +505,12 @@ export async function runMigrateCreate(
       components,
       metadataUpserts,
       previousMetadataUpserts,
+      // Every permission the config declares, by owner, which every snapshot records; a plugin
+      // release that only adds or removes one is a migration of its own.
+      permissions: declaredPermissionsOf(configResult.config, {
+        collections,
+        singles,
+      }),
       nonInteractive,
       autoAcceptRenames: options.acceptRenames === true,
       recordSnapshot: options.recordSnapshot === true,
@@ -544,12 +554,15 @@ export async function runMigrateCreate(
   }
 
   const duration = Date.now() - startTime;
-  // A settings change is written as the settings-only migration it is, below; its snapshot is
+  // A settings or permissions change is written as the migration it is, below; its snapshot is
   // the record.
-  if (options.recordSnapshot === true && result.settingsChanges.length > 0) {
+  if (
+    options.recordSnapshot === true &&
+    result.settingsChanges.length + result.permissionChanges.length > 0
+  ) {
     logger.newline();
     logger.info(
-      "The config's settings have changes to migrate, so they are written as a settings-only migration, whose snapshot records which fields are translated."
+      "The config's settings or permissions have changes to migrate, so they are written as a migration with no table statements, whose snapshot records which fields are translated."
     );
   } else if (options.recordSnapshot === true) {
     logger.newline();
@@ -570,6 +583,9 @@ export async function runMigrateCreate(
   logger.keyValue("Operations", result.operationCount);
   for (const change of result.settingsChanges) {
     logger.item(`Settings: ${describeSettingsChange(change)}`, 1);
+  }
+  for (const change of result.permissionChanges) {
+    logger.item(`Permissions: ${describePermissionChange(change)}`, 1);
   }
   if (result.renamesAccepted > 0) {
     logger.keyValue("Renames accepted", result.renamesAccepted);
