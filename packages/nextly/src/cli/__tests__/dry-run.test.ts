@@ -4,10 +4,12 @@
  * simulate, and a last line saying nothing was changed. One meaning and one
  * help line for the flag on every command.
  */
+import { posix, win32 } from "node:path";
+
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 
-import { DRY_RUN_HELP, dryRunLines, withDryRun } from "../dry-run";
+import { DRY_RUN_HELP, dryRunLines, shownPath, withDryRun } from "../dry-run";
 
 describe("dryRunLines", () => {
   it("says what each change would be, then that nothing was changed", () => {
@@ -47,6 +49,37 @@ describe("dryRunLines", () => {
       "Nothing would change.",
       "Dry run: nothing was changed.",
     ]);
+  });
+});
+
+describe("shownPath", () => {
+  // Windows' own path functions, on whatever machine runs the suite: the
+  // project and the file as a Windows run resolves them.
+  it("names a file with forward slashes from a Windows path", () => {
+    expect(
+      shownPath(
+        "C:\\Users\\you\\app",
+        "C:\\Users\\you\\app\\src\\types\\nextly-types.ts",
+        win32
+      )
+    ).toBe("src/types/nextly-types.ts");
+    expect(
+      shownPath(
+        "C:\\Users\\you\\app",
+        "C:\\Users\\you\\app\\migrations\\meta\\0001_init.snapshot.json",
+        win32
+      )
+    ).toBe("migrations/meta/0001_init.snapshot.json");
+  });
+
+  it("names a file the same way from a POSIX path", () => {
+    expect(
+      shownPath(
+        "/home/you/app",
+        "/home/you/app/src/types/nextly-types.ts",
+        posix
+      )
+    ).toBe("src/types/nextly-types.ts");
   });
 });
 

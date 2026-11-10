@@ -81,3 +81,34 @@ export function planFieldAddedToTranslationMigration(args: {
     downSql: asFile(between(withAdded, [...args.recorded])),
   };
 }
+
+/**
+ * The statements of an `adds` file with each ADD of a column the translations table already has
+ * left out, so a run adopts the column it finds instead of failing on a duplicate column name.
+ *
+ * A companion file is snapshotless and runs verbatim, and the column it adds may already be
+ * there: a dev push or the Schema Builder added it, or a change that stopped part-way left it.
+ * The companion reconcile it is rendered by adds only a missing column, and the file does the
+ * same. Whether a column already there can hold the field is not judged here: `nextly migrate`
+ * judges it once its files have applied, against the registry as the run found it
+ * (`refuseCompanionColumnsThatCannotHold`), which refuses one that cannot.
+ *
+ * Matched on the table and column the statement adds, as the builder spells it: one column per
+ * `ALTER TABLE ... ADD COLUMN`.
+ */
+export function withoutColumnsAlreadyThere(
+  statements: readonly string[],
+  companionTable: string,
+  live: ReadonlySet<string>
+): string[] {
+  if (live.size === 0) return [...statements];
+  return statements.filter(statement => {
+    const added =
+      /^\s*ALTER\s+TABLE\s+[`"]?([^`"\s]+)[`"]?\s+ADD\s+COLUMN\s+[`"]?([^`"\s]+)[`"]?/i.exec(
+        statement
+      );
+    return (
+      added === null || added[1] !== companionTable || !live.has(added[2] ?? "")
+    );
+  });
+}

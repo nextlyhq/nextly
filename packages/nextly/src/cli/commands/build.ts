@@ -29,7 +29,7 @@
 
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { relative, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
@@ -45,7 +45,7 @@ import { generatedZodDir } from "../../shared/lib/generated-output-paths";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import type { SingleConfig } from "../../singles/config/types";
 import { assertValidSingleConfig } from "../../singles/config/validate-single";
-import { reportDryRun, type DryRunChange } from "../dry-run";
+import { reportDryRun, shownPath, type DryRunChange } from "../dry-run";
 import { exitWithError, type CliError } from "../errors";
 import {
   buildDeclarationsInvalid,
@@ -394,7 +394,7 @@ export async function runBuild(
       for (const file of generationResult.files) {
         dryRunChanges.push({
           action: "write",
-          target: relative(options.cwd ?? process.cwd(), file.path),
+          target: shownPath(options.cwd ?? process.cwd(), file.path),
         });
       }
 
