@@ -87,10 +87,16 @@ function removedButStillUsed(
  * Judges the merged entities' addresses against the latest snapshot (`null`
  * when there is none): `refused` for a new address the rule refuses,
  * `existing` for an address an entity already has that it refuses.
+ *
+ * `judged` names the one collection a scoped save writes. Only it can be new
+ * then; every other entity is judged as one that already holds its address,
+ * so it still counts as used (a saved collection sharing its snake_case form
+ * is refused) while its own address is not this save's to refuse.
  */
 export function judgeMigrationAddresses(
   merged: { collections: Tabled; singles: Tabled; components: Tabled },
-  latest: LatestSnapshot
+  latest: LatestSnapshot,
+  judged?: string
 ): { refused: JudgedAddress[]; existing: JudgedAddress[] } {
   const kinds: Array<[AddressKind, Tabled]> = [
     ["collection", merged.collections],
@@ -101,7 +107,10 @@ export function judgeMigrationAddresses(
     list.map(entity => ({
       kind,
       address: entity.slug,
-      isNew: isNewAgainst(latest, kind, entity),
+      isNew:
+        (judged === undefined ||
+          (kind === "collection" && entity.slug === judged)) &&
+        isNewAgainst(latest, kind, entity),
     }))
   );
   return judgeAddresses(entities, removedButStillUsed(latest, entities));
@@ -129,9 +138,10 @@ function describeJudgedAddresses(judged: readonly JudgedAddress[]): string[] {
 export function assertMigrationAddresses(
   merged: { collections: Tabled; singles: Tabled; components: Tabled },
   latest: LatestSnapshot,
-  logger: { error(message: string): void }
+  logger: { error(message: string): void },
+  judged?: string
 ): void {
-  const { refused } = judgeMigrationAddresses(merged, latest);
+  const { refused } = judgeMigrationAddresses(merged, latest, judged);
   if (refused.length === 0) return;
   for (const line of describeJudgedAddresses(refused)) logger.error(line);
   if (refused.length > 0) logger.error(REFUSED_ADDRESS_NEXT_STEP);

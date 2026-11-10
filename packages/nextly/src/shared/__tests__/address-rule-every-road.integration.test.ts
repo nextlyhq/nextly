@@ -626,20 +626,22 @@ for (const dialect of getConfiguredTestDialects()) {
         }
 
         // Edited in the Builder: a field added to the collection under `admin`, applied as the
-        // Builder's save applies it.
+        // Builder's save applies it, in development, where a save runs its migration.
         const { schemaVersion } = (await new DynamicCollectionRegistryService(
           t.adapter as never,
           consoleLogger
         ).getCollection("admin")) as { schemaVersion?: number };
-        await dispatchCollections(
-          {} as ServiceContainer,
-          "applySchemaChanges",
-          { collectionName: "admin" },
-          {
-            fields: [...BODY, { name: "summary", type: "text" }],
-            confirmed: true,
-            schemaVersion: schemaVersion ?? 1,
-          }
+        await inDevelopment(() =>
+          dispatchCollections(
+            {} as ServiceContainer,
+            "applySchemaChanges",
+            { collectionName: "admin" },
+            {
+              fields: [...BODY, { name: "summary", type: "text" }],
+              confirmed: true,
+              schemaVersion: schemaVersion ?? 1,
+            }
+          )
         );
         const edited = await t.nextly.create({
           collection: "admin",

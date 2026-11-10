@@ -367,23 +367,10 @@ export async function withAdapter<T>(
 }
 
 /**
- * Get a human-readable name for a dialect
- *
- * @param dialect - Database dialect
- * @returns Human-readable name
+ * A dialect's human-readable name; it lives with the migration file writer,
+ * which the server also runs, and is re-exported for the commands.
  */
-export function getDialectDisplayName(dialect: SupportedDialect): string {
-  switch (dialect) {
-    case "postgresql":
-      return "PostgreSQL";
-    case "mysql":
-      return "MySQL";
-    case "sqlite":
-      return "SQLite";
-    default:
-      return dialect;
-  }
-}
+export { getDialectDisplayName } from "../../domains/schema/migrate-create/dialect-name";
 
 /**
  * Check if a dialect supports a specific feature

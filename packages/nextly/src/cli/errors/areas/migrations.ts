@@ -636,6 +636,14 @@ export const MIGRATION_CODES = defineCodes({
     cause:
       "A migration recorded as applied has no file in the migrations folder.",
   },
+  OLD_BUILDER_FILE_SNAPSHOT_ADDED: {
+    cause:
+      "A migration file recognised as an old Schema Builder file now has a snapshot beside it, so it would be read as a migration.",
+  },
+  OLD_BUILDER_FILE_VARIANT_ADDED: {
+    cause:
+      "A dialect variant now shares the name of a migration file recognised as an old Schema Builder file, so its ledger rows and the Builder's cannot be told apart.",
+  },
   BASELINE_LOCK_RELEASED: {
     cause:
       "The schema lock was released before `nextly migrate:baseline` adopted the database, so nothing was written.",
@@ -1054,17 +1062,6 @@ export function resolveModeRequired(given: number): CliError {
         : `It was given ${given} of \`--applied\`, \`--rolled-back\`, \`--failed-cleanup\` and \`--removed\`.`,
     next: "Provide exactly one of --applied, --rolled-back, --failed-cleanup, or --removed.",
   });
-}
-
-/** Builder-written files with no snapshot, as the command that found them reports them. */
-export function builderSnapshotMissing(
-  what: string,
-  files: readonly string[]
-): CliError {
-  return new CliError(
-    "BUILDER_MIGRATION_SNAPSHOT_MISSING",
-    builderSnapshotParts(what, files)
-  );
 }
 
 /** A migration file whose content differs from the hash its snapshot recorded. */
