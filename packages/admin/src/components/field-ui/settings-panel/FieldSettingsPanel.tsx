@@ -145,7 +145,11 @@ export function FieldSettingsPanel({
           ))}
         </TabsList>
 
-        <div className="flex-1 overflow-y-auto p-4">
+        {/* Keyed by the field, so the controls' own state (a number's typed
+            text, a list's unsent entry) starts from the field shown even for
+            a host that hands this panel another field without remounting it:
+            otherwise one field's text could be written into the next. */}
+        <div key={field.id} className="flex-1 overflow-y-auto p-4">
           <TabsContent value="general">
             <GeneralTab
               field={field}

@@ -722,6 +722,59 @@ describe("FieldSettingsPanel", () => {
       }
     });
 
+    it("shows the next field's own number when the host switches fields without remounting", async () => {
+      const user = userEvent.setup();
+      branding.current = withSettings([
+        { key: "max", label: "Most stars", control: "number" },
+      ]);
+      try {
+        const first: BuilderField = {
+          ...rating,
+          id: "f-a",
+          pluginOptions: { max: 5 },
+        };
+        const second: BuilderField = {
+          ...rating,
+          id: "f-b",
+          pluginOptions: { max: 9 },
+        };
+        const onChange = vi.fn();
+        // One panel instance given another field, as a host that does not key
+        // the panel by field would do.
+        const view = render(
+          <FieldSettingsPanel
+            surface={entries}
+            field={first}
+            ancestors={[]}
+            siblings={[]}
+            saved
+            onChange={onChange}
+          />
+        );
+        expect(screen.getByLabelText("Most stars")).toHaveValue("5");
+        view.rerender(
+          <FieldSettingsPanel
+            surface={entries}
+            field={second}
+            ancestors={[]}
+            siblings={[]}
+            saved
+            onChange={onChange}
+          />
+        );
+        const max = screen.getByLabelText("Most stars");
+        expect(max).toHaveValue("9");
+        // An edit there changes the field being shown, from its own value.
+        await user.type(max, "1");
+        expect(onChange.mock.lastCall?.[0]).toMatchObject({
+          id: "f-b",
+          pluginOptions: { max: 91 },
+        });
+      } finally {
+        branding.current = {};
+      }
+    });
+
     it("says a number it cannot read is not saved, and shows the saved one again on leaving", async () => {
       const user = userEvent.setup();
       branding.current = withSettings([
