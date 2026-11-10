@@ -171,16 +171,40 @@ export const PageTabs: ForwardRefExoticComponent<
 );
 PageTabs.displayName = "PageTabs";
 
-/** @experimental */
-export interface PageTabProps extends AnchorHTMLAttributes<HTMLAnchorElement> {
+/**
+ * The anchor attributes a tab passes through. `aria-current` is not among
+ * them: it is derived from `current`, so the tab is announced as current
+ * exactly when it is drawn as current.
+ */
+type PageTabAnchorProps = Omit<
+  AnchorHTMLAttributes<HTMLAnchorElement>,
+  "aria-current" | "href"
+>;
+
+/**
+ * A tab changes the address, so it always has a destination: its own `href`,
+ * or, with `asChild`, the router link it wraps.
+ * @experimental
+ */
+export type PageTabProps = PageTabAnchorProps & {
   /** Whether this tab is the section being shown. */
   current?: boolean;
-  /**
-   * Render the caller's own link element (a router link) in place of an
-   * `<a>`, keeping this tab's look and its `aria-current`.
-   */
-  asChild?: boolean;
-}
+} & (
+    | {
+        /** Where the tab leads. */
+        href: string;
+        asChild?: false;
+      }
+    | {
+        /**
+         * Render the caller's own link element (a router link) in place of
+         * an `<a>`; that element carries the destination. The tab keeps its
+         * look and its `aria-current`.
+         */
+        asChild: true;
+        href?: undefined;
+      }
+  );
 
 /**
  * One section of a `PageTabs` row: a link, underlined when current.
@@ -193,6 +217,9 @@ export const PageTab: ForwardRefExoticComponent<
     const Comp = asChild ? Slot : "a";
     return (
       <Comp
+        // The caller's attributes first, so nothing they pass can replace the
+        // current marker or the slot this component sets.
+        {...props}
         ref={ref}
         data-slot="page-tab"
         aria-current={current ? "page" : undefined}
@@ -205,7 +232,6 @@ export const PageTab: ForwardRefExoticComponent<
             : "border-transparent text-muted-foreground hover:text-foreground",
           className
         )}
-        {...props}
       />
     );
   }

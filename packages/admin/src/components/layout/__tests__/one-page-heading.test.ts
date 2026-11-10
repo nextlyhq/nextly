@@ -1,12 +1,13 @@
 /**
- * Every page's `h1` comes from the shared page header, so a page's title,
- * summary and actions look and read the same everywhere, and each page has
- * exactly one top-level heading. A page that hand-draws its own `h1` drifts
- * from the rest the day its markup is copied.
+ * No admin page hand-draws its own `h1`: page titles come from the shared
+ * `PageHeader`, so a title, its summary and its actions look and read the same
+ * everywhere, and a copied header cannot drift from the rest.
  *
- * The scan reads the admin's pages and feature components, with comments
- * removed, for a literal `<h1`. The few places allowed one are listed below
- * with the reason; anything else is a page that should use `PageHeader`.
+ * This is a prohibition on raw `h1` markup, read from the source with comments
+ * and string literals removed. It does not count the headings a rendered page
+ * ends up with: a page that renders no header, or two, passes here, and the
+ * count is not checked by this suite. The few places allowed their own `h1`
+ * are listed below with the reason.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
@@ -75,7 +76,7 @@ const files = [
   draws: /<h1[\s>]/.test(withoutComments(readFileSync(path, "utf8"))),
 }));
 
-describe("one page heading", () => {
+describe("no hand-drawn page headings", () => {
   it("draws no h1 outside the shared page header, except where listed", () => {
     const hand = files
       .filter(f => f.draws && !(f.path in ALLOWED))

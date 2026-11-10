@@ -93,6 +93,32 @@ describe("page shell stylesheet", () => {
     expect(flat).not.toContain("[content-end] var(--nx-gutter)");
   });
 
+  it("insets a list page by the gutter, as padding on a plain block", () => {
+    // A list page is a padded block rather than a grid, so its inset must come
+    // from this declaration; without it every list loses its gutter.
+    const pad = flat.match(/\.nx-page-pad \{([^}]*)\}/);
+    expect(pad, "the list inset rule exists").not.toBeNull();
+    expect(pad?.[1] ?? "").toContain("padding-inline: var(--nx-gutter)");
+  });
+
+  it("steps a list page's gutter with the panel, as a shell's does", () => {
+    // Both container queries must narrow the list's gutter too, or a list on
+    // a narrow panel keeps the widest inset while a form beside it narrows.
+    for (const [width, gutter] of [
+      ["1024px", "1.5rem"],
+      ["768px", "1rem"],
+    ]) {
+      const block = flat.match(
+        new RegExp(
+          `@container content \\(max-width: ${width}\\) \\{([^}]*)\\{([^}]*)\\}`
+        )
+      );
+      expect(block, `the ${width} step exists`).not.toBeNull();
+      expect(block?.[1] ?? "").toContain(".nx-page-pad");
+      expect(block?.[2] ?? "").toContain(`--nx-gutter: ${gutter}`);
+    }
+  });
+
   it("starts a start-aligned column at the gutter and gives the surplus to the trailing track", () => {
     const start = flat.match(
       /\.nx-page-shell\[data-align="start"\] \{([^}]*)\}/

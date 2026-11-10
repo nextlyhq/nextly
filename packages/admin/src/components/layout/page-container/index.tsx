@@ -108,12 +108,7 @@ import type { PageContainerProps } from "@admin/types/layout/page-container";
  * ```
  */
 export const PageContainer: React.ForwardRefExoticComponent<
-  React.HTMLAttributes<HTMLDivElement> & {
-    children: React.ReactNode;
-    className?: string;
-    width?: "form" | "wide" | "full";
-    type?: "list" | "form" | "editor" | "workspace";
-  } & React.RefAttributes<HTMLDivElement>
+  PageContainerProps & React.RefAttributes<HTMLDivElement>
 > = React.forwardRef<HTMLDivElement, PageContainerProps>(
   ({ children, className, width, type, ...props }, ref) => {
     // What every page gets regardless of how its content is laid out: the panel

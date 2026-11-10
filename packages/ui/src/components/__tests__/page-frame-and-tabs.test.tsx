@@ -101,6 +101,35 @@ describe("a page header's tabs", () => {
     expect(link.getAttribute("aria-current")).toBe("page");
   });
 
+  it("keeps the current marker its own, whatever the caller passes", () => {
+    // A stray attribute from a caller (here spread from elsewhere) must not
+    // replace the marker `current` sets, or a tab drawn as current would not
+    // be announced as the current page.
+    const stray = { "aria-current": "step" } as const;
+    render(
+      <PageTabs label="Sections">
+        <PageTab href="/builder" current {...stray}>
+          Builder
+        </PageTab>
+      </PageTabs>
+    );
+    expect(
+      screen.getByRole("link", { name: "Builder" }).getAttribute("aria-current")
+    ).toBe("page");
+  });
+
+  it("renders a plain tab as a link with its destination", () => {
+    render(
+      <PageTabs label="Sections">
+        <PageTab href="/settings">Settings</PageTab>
+      </PageTabs>
+    );
+    // An anchor without an href is neither a link nor focusable.
+    expect(
+      screen.getByRole("link", { name: "Settings" }).getAttribute("href")
+    ).toBe("/settings");
+  });
+
   it("draws no tab row when the page has no sections", () => {
     render(<PageHeader title="Users" />);
     expect(screen.queryByRole("navigation")).toBeNull();

@@ -1,5 +1,6 @@
 "use client";
 
+import type { PageType } from "@nextlyhq/ui";
 import type React from "react";
 
 /**
@@ -130,7 +131,7 @@ export type PageContainerProps = React.HTMLAttributes<HTMLDivElement> & {
    *
    * Prefer this to `width`. When both are given, `type` wins.
    */
-  type?: "list" | "form" | "editor" | "workspace";
+  type?: PageType;
 };
 
 /**
