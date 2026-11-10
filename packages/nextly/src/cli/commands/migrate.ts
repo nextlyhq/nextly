@@ -857,6 +857,20 @@ export interface MigrateCoreDeps {
   /** Seam for tests; defaults to the real metadata reconciliation. */
   reconcileMetadataFn?: typeof reconcileMigrationMetadata;
   /**
+   * What the run does with the registry rows the migrations record:
+   * `write` (the default, for `nextly migrate` and the production boot
+   * step) brings each to the newest applied snapshot; `insert-missing`
+   * only inserts absent ones, for the development boot, whose start keeps
+   * the rows in step with the code as it is edited.
+   */
+  registryRows?: "write" | "insert-missing";
+  /**
+   * Asked before each registry row is written; throws once the run can no
+   * longer show it holds the schema lock, so a run that lost it writes no
+   * further row. Absent, every write goes ahead.
+   */
+  assertLockHeld?: () => Promise<void> | void;
+  /**
    * Seam for tests; defaults to recording and retiring element owner rows
    * against the database.
    */
@@ -921,6 +935,8 @@ export interface MigrateCoreResult {
   metadata: {
     collectionsRegistered: number;
     singlesRegistered: number;
+    fieldGroupsRegistered: number;
+    rowsNotWritten: string[];
     marked: number;
     stillPending: number;
     awaitingMigration: number;
@@ -1978,11 +1994,61 @@ export async function migrateCore(
   let metadata = {
     collectionsRegistered: 0,
     singlesRegistered: 0,
+    fieldGroupsRegistered: 0,
+    rowsNotWritten: [] as string[],
     marked: 0,
     stillPending: 0,
     awaitingMigration: 0,
     unscopedMigrations: [] as string[],
     unreadable: [] as string[],
+  };
+
+  /**
+   * Phase 3: the registry rows the applied migrations record, and the status
+   * of the rows they settled. Called under the lock, after the files run, and
+   * again when a file fails, so the migrations that did apply still have
+   * their rows: the registry source is the newest APPLIED snapshot, which a
+   * failed file never reaches.
+   *
+   * CAUGHT, and the command still succeeds. The DDL has landed by now, and
+   * MySQL commits DDL implicitly, so there is no transaction to roll back
+   * into: a bookkeeping failure leaves working tables beside a row that is
+   * behind. Failing here would report a migration that worked as broken,
+   * and the next invocation repairs the row because this runs every time.
+   */
+  const recordMetadata = async (): Promise<void> => {
+    deps.logger.info("Phase 3: recording migration metadata...");
+    try {
+      metadata = await reconcileMetadata({
+        adapter: deps.adapter as unknown as DrizzleAdapter,
+        dialect: deps.dialect,
+        migrationsDir: deps.migrationsDir,
+        ...(deps.declared === undefined ? {} : { declared: deps.declared }),
+        ...(deps.registryRows === undefined
+          ? {}
+          : { registryRows: deps.registryRows }),
+        ...(deps.assertLockHeld === undefined
+          ? {}
+          : { assertLockHeld: deps.assertLockHeld }),
+        logger: {
+          info: (m: string) => deps.logger.debug(m),
+          warn: (m: string) => deps.logger.warn(m),
+          debug: (m: string) => deps.logger.debug(m),
+        },
+      });
+    } catch (error) {
+      // The whole pass failed, so nothing was read: say so in the result
+      // rather than returning zeroes that read like "nothing needed doing".
+      metadata = {
+        ...metadata,
+        unreadable: ["collection", "single", "field group"],
+      };
+      deps.logger.warn(
+        `Migration metadata was not recorded: ${
+          error instanceof Error ? error.message : String(error)
+        }. The tables are in place; run \`nextly migrate\` again to record it.`
+      );
+    }
   };
 
   const outcome = await lock(
@@ -2109,11 +2175,19 @@ export async function migrateCore(
       // rebuild a SQLite table, copying them from the live one.
       await (deps.documentColumnsFn ?? addDocumentColumnsFor)(deps);
       await recordAppTableOwners(deps);
-      ({ pluginModulesApplied, applied } = await runMigrationStreams(
-        deps,
-        runFiles,
-        judgedFiles
-      ));
+      try {
+        ({ pluginModulesApplied, applied } = await runMigrationStreams(
+          deps,
+          runFiles,
+          judgedFiles
+        ));
+      } catch (error) {
+        // A file failed after earlier ones applied: their registry rows are
+        // still written, from the newest snapshot that did apply, before the
+        // failure ends the run.
+        await recordMetadata();
+        throw error;
+      }
 
       // Element rows for contributed elements: written AFTER every stream has
       // applied, so a row exists exactly when the element does — then rows
@@ -2127,46 +2201,16 @@ export async function migrateCore(
       await deps.beforeMetadata?.();
 
       /*
-       * Phase 3 — make the registry agree with the tables Phase 2 just created.
+       * Phase 3 — make the registry agree with the migrations Phase 2 just
+       * applied (`recordMetadata`).
        *
        * 🔴 Inside the lock. The development boot runs a snapshot pass of its
        * own after this one, outside the lock, because several dev-server
        * workers race there (`registerMigrationMetadata`). A run of this
        * function already holds the lock, so this sweep cannot interleave with
        * another migrate and needs no conflict tolerance of its own.
-       *
-       * CAUGHT, and the command still succeeds. The DDL has landed by now, and
-       * MySQL commits DDL implicitly, so there is no transaction to roll back
-       * into: a bookkeeping failure leaves working tables beside a row that is
-       * behind. Failing here would report a migration that worked as broken,
-       * and the next invocation repairs the row because this runs every time.
        */
-      deps.logger.info("Phase 3: recording migration metadata...");
-      try {
-        metadata = await reconcileMetadata({
-          adapter: deps.adapter as unknown as DrizzleAdapter,
-          dialect: deps.dialect,
-          migrationsDir: deps.migrationsDir,
-          ...(deps.declared === undefined ? {} : { declared: deps.declared }),
-          logger: {
-            info: (m: string) => deps.logger.debug(m),
-            warn: (m: string) => deps.logger.warn(m),
-            debug: (m: string) => deps.logger.debug(m),
-          },
-        });
-      } catch (error) {
-        // The whole pass failed, so nothing was read: say so in the result
-        // rather than returning zeroes that read like "nothing needed doing".
-        metadata = {
-          ...metadata,
-          unreadable: ["collection", "single", "field group"],
-        };
-        deps.logger.warn(
-          `Migration metadata was not recorded: ${
-            error instanceof Error ? error.message : String(error)
-          }. The tables are in place; run \`nextly migrate\` again to record it.`
-        );
-      }
+      await recordMetadata();
 
       // After the files and after Phase 3: a file written before these
       // columns creates tables without them, and an entity whose registry

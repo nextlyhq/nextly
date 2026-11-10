@@ -154,6 +154,87 @@ export interface CodeFirstCollectionConfig {
   source?: CollectionSource;
 }
 
+/**
+ * The columns a collection's declaration gives a row it registers, before
+ * where the row came from (source, lock, config path), which each caller
+ * adds. One projection for the start's sync and `nextly migrate`'s writer.
+ */
+function declaredRegistration(
+  config: CodeFirstCollectionConfig,
+  schemaHash: string,
+  tableName: string
+): Omit<DynamicCollectionInsert, "source" | "locked" | "configPath"> {
+  return {
+    slug: config.slug,
+    labels: config.labels,
+    tableName,
+    description: config.description,
+    fields: config.fields,
+    timestamps: config.timestamps ?? true,
+    admin: config.admin,
+    // Forward Draft/Published flag so code-first collections that
+    // opt in actually write the column on first sync.
+    status: config.status === true,
+    // Forward the resolved versioning config on first sync.
+    versions: config.versions,
+    // Forward the cache-revalidation config on first sync.
+    revalidate: config.revalidate,
+    // Forward the webhook recording policy on first sync.
+    webhooks: config.webhooks,
+    localized: config.localized === true,
+    schemaHash,
+  };
+}
+
+/**
+ * The columns a collection's declaration rewrites on a schema change: its
+ * fields, the switches that change its tables, its table and its metadata.
+ * Where the row came from is the caller's to add, or to leave.
+ */
+function declaredRow(
+  config: CodeFirstCollectionConfig,
+  schemaHash: string,
+  tableName: string
+): Partial<DynamicCollectionInsert> {
+  return {
+    ...declaredMetadata(config),
+    fields: config.fields,
+    timestamps: config.timestamps,
+    schemaHash,
+    status: config.status === true,
+    versions: config.versions,
+    // Send explicit null (not undefined) when the config removed
+    // `revalidate`, so updateCollection actually clears the column
+    // instead of leaving the stale config persisted.
+    revalidate: config.revalidate ?? null,
+    // Send explicit null (not undefined) when the config removed
+    // `webhooks`, so updateCollection actually clears the column
+    // instead of leaving a stale opt-out suppressing the outbox.
+    webhooks: config.webhooks ?? null,
+    localized: config.localized === true,
+    tableName,
+  };
+}
+
+/** The columns a metadata-only change rewrites: labels, description and admin options. */
+function declaredMetadata(
+  config: CodeFirstCollectionConfig
+): Partial<DynamicCollectionInsert> {
+  return {
+    labels: config.labels,
+    // Resolved, because a collection may spell its description under `admin` — and
+    // compared in `codeFirstSyncStep` for the same reason: without it, editing or removing
+    // that spelling leaves the row stale until some unrelated schema change happens to
+    // trigger a write.
+    description: resolveDescription(config) ?? null,
+    // Explicit null when the config no longer declares an admin block, so
+    // `updateCollection` clears the column instead of reading `undefined` as "leave
+    // unchanged" and stranding a sidebar position the config has dropped. Same
+    // reasoning as `revalidate` and `webhooks` in `declaredRow`.
+    admin: config.admin ?? null,
+  };
+}
+
 /** Result of syncing code-first collections. */
 export interface SyncResult {
   created: string[];
@@ -891,6 +972,48 @@ export class CollectionRegistryService extends BaseRegistryService<
     return planned;
   }
 
+  /**
+   * Brings the registry row of a collection the registry source records to
+   * that record, as `nextly migrate` does after its migrations apply, and
+   * writes nothing where the row already matches. The decision is the
+   * code-first sync's (`codeFirstSyncStep`) and the columns are the ones it
+   * writes (`declaredRow`), so migrate and a start agree on what matching
+   * means.
+   *
+   * Unlike the sync it changes only what the declaration says: never where
+   * the row came from (its source, lock or config path), never a physical
+   * table (the migrations moved it), and no permission, which is another
+   * writer's. `origin` is used only for a row it creates.
+   */
+  async writeRecordedCollection(
+    config: CodeFirstCollectionConfig,
+    origin: { source: CollectionSource; locked: boolean }
+  ): Promise<"created" | "updated" | "unchanged"> {
+    const decision = this.codeFirstSyncStep(
+      config,
+      await this.getCollectionBySlug(config.slug)
+    );
+    const { schemaHash, desiredTableName } = decision;
+    if (decision.step === "unchanged") return "unchanged";
+    if (decision.step === "create") {
+      await this.registerCollection({
+        ...declaredRegistration(config, schemaHash, desiredTableName),
+        ...origin,
+      });
+      return "created";
+    }
+    await this.updateCollection(
+      config.slug,
+      decision.step === "update"
+        ? declaredRow(config, schemaHash, desiredTableName)
+        : declaredMetadata(config),
+      // The row's own source, so a row defined in code is written as the
+      // pipeline writes it, and its source is left as it is.
+      { source: decision.existing.source }
+    );
+    return "updated";
+  }
+
   async syncCodeFirstCollections(
     configs: CodeFirstCollectionConfig[]
   ): Promise<SyncResult> {
@@ -915,27 +1038,10 @@ export class CollectionRegistryService extends BaseRegistryService<
 
         if (decision.step === "create") {
           await this.registerCollection({
-            slug: config.slug,
-            labels: config.labels,
-            tableName: desiredTableName,
-            description: config.description,
-            fields: config.fields,
-            timestamps: config.timestamps ?? true,
-            admin: config.admin,
+            ...declaredRegistration(config, schemaHash, desiredTableName),
             source: config.source ?? "code",
             locked: true,
-            // Forward Draft/Published flag so code-first collections that
-            // opt in actually write the column on first sync.
-            status: config.status === true,
-            // Forward the resolved versioning config on first sync.
-            versions: config.versions,
-            // Forward the cache-revalidation config on first sync.
-            revalidate: config.revalidate,
-            // Forward the webhook recording policy on first sync.
-            webhooks: config.webhooks,
-            localized: config.localized === true,
             configPath: config.configPath,
-            schemaHash,
           });
           result.created.push(config.slug);
           await this.seedPermissionsForCollection(config.slug);
@@ -954,30 +1060,9 @@ export class CollectionRegistryService extends BaseRegistryService<
           await this.updateCollection(
             config.slug,
             {
-              labels: config.labels,
-              description: resolveDescription(config) ?? null,
-              fields: config.fields,
-              timestamps: config.timestamps,
-              // Explicit null when the config no longer declares an admin block, matching the
-              // metadata-only branch below. Removing `admin` usually accompanies some other
-              // edit, and that edit selects THIS branch — so without it the common case is the
-              // one where stale placement survives.
-              admin: config.admin ?? null,
+              ...declaredRow(config, schemaHash, desiredTableName),
               configPath: config.configPath,
-              schemaHash,
               locked: true,
-              status: config.status === true,
-              versions: config.versions,
-              // Send explicit null (not undefined) when the config removed
-              // `revalidate`, so updateCollection actually clears the column
-              // instead of leaving the stale config persisted.
-              revalidate: config.revalidate ?? null,
-              // Send explicit null (not undefined) when the config removed
-              // `webhooks`, so updateCollection actually clears the column
-              // instead of leaving a stale opt-out suppressing the outbox.
-              webhooks: config.webhooks ?? null,
-              localized: config.localized === true,
-              tableName: desiredTableName,
             },
             { source: config.source ?? "code" }
           );
@@ -986,20 +1071,7 @@ export class CollectionRegistryService extends BaseRegistryService<
         } else if (decision.step === "metadata") {
           await this.updateCollection(
             config.slug,
-            {
-              labels: config.labels,
-              // Resolved, because a collection may spell its description under `admin` — and
-              // compared above for the same reason: without it, editing or removing that
-              // spelling leaves the row stale until some unrelated schema change happens to
-              // trigger a write.
-              description: resolveDescription(config) ?? null,
-              // Explicit null when the config no longer declares an admin block, so
-              // `updateCollection` clears the column instead of reading `undefined` as "leave
-              // unchanged" and stranding a sidebar position the config has dropped. Same
-              // reasoning as `revalidate` and `webhooks` above.
-              admin: config.admin ?? null,
-              locked: true,
-            },
+            { ...declaredMetadata(config), locked: true },
             { source: config.source ?? "code" }
           );
           result.updated.push(config.slug);

@@ -133,10 +133,8 @@ import type {
   SingleRegistryService,
   CodeFirstSingleConfig,
 } from "../domains/singles/services/single-registry-service";
-import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import type { VersionsService } from "../domains/versions/versions-service";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
-import { storedWebhookRecording } from "../domains/webhooks/builder-webhooks";
 import { resetWebhookActivation } from "../domains/webhooks/recording-activation";
 import {
   resetWebhookRecordingPolicy,
@@ -4026,20 +4024,15 @@ async function syncCodeFirstComponents(
     "fieldGroupRegistryService"
   );
 
+  // The one projection from a config entry to the sync payload, shared with
+  // `nextly migrate` so both write a component's row the same way. Loaded
+  // here, as the registry service is elsewhere in this file, rather than with
+  // this module.
+  const { toCodeFirstComponentConfig } = await import(
+    "../domains/field-groups/services/field-group-registry-service"
+  );
   const codeFirstComponentConfigs: CodeFirstComponentConfig[] =
-    transformedConfig.fieldGroups.map(comp => ({
-      slug: comp.slug,
-      label:
-        comp.label?.singular ??
-        comp.slug.replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
-      fields: comp.fields,
-      description: comp.description,
-      admin: comp.admin,
-      configPath: `${STORAGE_FORMAT.configPathDir}/${comp.slug}.ts`,
-      // i18n: forward the localized flag from defineFieldGroup so the registry persists
-      // it and the companion is provisioned for embedded per-language values.
-      localized: (comp as { localized?: boolean }).localized === true,
-    }));
+    transformedConfig.fieldGroups.map(comp => toCodeFirstComponentConfig(comp));
 
   const componentSyncResult = await componentRegistry.syncCodeFirstComponents(
     codeFirstComponentConfigs
@@ -4237,37 +4230,15 @@ async function syncCodeFirstSingles(
     "singleRegistryService"
   );
 
+  // The one projection from a config entry to the sync payload, shared with
+  // `nextly migrate` so both write a Single's row the same way. Loaded here,
+  // as the registry service is elsewhere in this file, rather than with this
+  // module.
+  const { toCodeFirstSingleConfig } = await import(
+    "../domains/singles/services/single-registry-service"
+  );
   const codeFirstSingleConfigs: CodeFirstSingleConfig[] =
-    transformedConfig.singles.map(single => ({
-      slug: single.slug,
-      label:
-        single.label?.singular ??
-        single.slug
-          .split("-")
-          .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-          .join(" "),
-      fields: single.fields,
-      description: single.description,
-      tableName: single.dbName,
-      admin: single.admin,
-      // Forward Draft/Published flag from code-first config so the boot-time
-      // sync persists it to dynamic_singles.status.
-      status: single.status === true,
-      // Forward the i18n flag so a code-first single with localized:true
-      // persists it to dynamic_singles.localized at boot (parity with
-      // collections; previously dropped here).
-      localized: single.localized === true,
-      // Resolve + forward the versioning config so it persists to
-      // dynamic_singles.versions (status:true aliases to a versioned config).
-      versions: resolveVersionsConfig(single.versions, single.status),
-      // Forward the cache-revalidation config verbatim so it persists to
-      // dynamic_singles.revalidate; the write path reads it to honor `disable`
-      // and merge extra `tags`.
-      revalidate: single.revalidate,
-      // Mirror the recording opt-out onto the registry row (same reason as
-      // collections).
-      webhooks: storedWebhookRecording(single.webhooks),
-    }));
+    transformedConfig.singles.map(single => toCodeFirstSingleConfig(single));
 
   // Declared out here so the per-single failures can be judged AFTER the catch
   // below. Judged inside it, the refusal this raises would be caught by the
