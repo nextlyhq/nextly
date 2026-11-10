@@ -129,6 +129,46 @@ describe("NewMenuView in the rail", () => {
     expect(screen.queryByText("Nothing matches.")).toBeNull();
   });
 
+  it("tells apart two types that share a singular label", async () => {
+    const user = userEvent.setup();
+    const articles = {
+      ...collection("articles", "Article"),
+      label: "Articles",
+    };
+    const news = {
+      ...collection("news", "Article"),
+      label: "News",
+      labels: { singular: "Article", plural: "News" },
+    };
+    render(
+      <NewMenuView variant="rail" types={[articles, news, posts]} isReady />
+    );
+    await user.click(screen.getByRole("button", { name: "New" }));
+    expect(
+      screen.getByRole("option", { name: /^Article,\s*Articles$/ })
+    ).toBeVisible();
+    expect(
+      screen.getByRole("option", { name: /^Article,\s*News$/ })
+    ).toBeVisible();
+    // A label of its own shows alone.
+    expect(screen.getByRole("option", { name: "Post" })).toBeVisible();
+  });
+
+  it("keeps an open list, and its button, when loading ends with nothing to create", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <NewMenuView variant="rail" types={[]} isReady={false} />
+    );
+    const button = screen.getByRole("button", { name: "New" });
+    await user.click(button);
+    expect(screen.getByText("Loading…")).toBeVisible();
+    rerender(<NewMenuView variant="rail" types={[]} isReady />);
+    expect(screen.getByText("Nothing to create.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "New" })).toBe(button);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByText("Nothing to create.")).toBeNull();
+  });
+
   it("draws nothing once it is known that nothing can be created", () => {
     const { container } = render(
       <NewMenuView variant="rail" types={[]} isReady />
@@ -149,8 +189,10 @@ describe("NewMenuView in the phone menu drawer", () => {
     expect(row).toHaveAttribute("aria-expanded", "false");
     await user.click(row);
     expect(row).toHaveAttribute("aria-expanded", "true");
-    // In place: no popover dialog, the list follows the row.
+    // In place: no popover dialog, the list follows the row, and its search
+    // takes focus as it opens, as the rail's does.
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("combobox")).toHaveFocus();
     expect(optionNames()).toEqual(["Post", "Page", "Form"]);
     await user.click(screen.getByRole("option", { name: "Form" }));
     expect(navigateTo).toHaveBeenCalledWith("/admin/collections/forms/create");

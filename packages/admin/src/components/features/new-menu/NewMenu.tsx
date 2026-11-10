@@ -113,16 +113,48 @@ function useNewMenuTypes(): {
   };
 }
 
+/**
+ * What tells two types apart when they share a singular label (an "Article"
+ * collection and a "News" collection whose entries are also "Article"): their
+ * plural name, or their slug when that is shared too. Null for a type whose
+ * label is its own, which shows its label alone.
+ */
+function distinguishers(
+  types: readonly ApiCollection[]
+): Map<string, string | null> {
+  const bySingular = new Map<string, ApiCollection[]>();
+  for (const type of types) {
+    const label = collectionSingularLabel(type);
+    bySingular.set(label, [...(bySingular.get(label) ?? []), type]);
+  }
+  const out = new Map<string, string | null>();
+  for (const group of bySingular.values()) {
+    const plurals = group.map(collectionDisplayName);
+    const pluralsDiffer = new Set(plurals).size === group.length;
+    group.forEach((type, i) =>
+      out.set(
+        type.name,
+        group.length === 1 ? null : pluralsDiffer ? plurals[i] : type.name
+      )
+    );
+  }
+  return out;
+}
+
 /** The search and the list, the same in both placements. */
 function NewMenuList({
   types,
   isReady,
   onChoose,
+  focusSearch = false,
 }: {
   types: readonly ApiCollection[];
   isReady: boolean;
   onChoose: (collection: ApiCollection) => void;
+  /** Whether the search takes focus as the list mounts: the drawer's list is not in a popover, whose own focus scope does this for the rail. */
+  focusSearch?: boolean;
 }): JSX.Element {
+  const second = distinguishers(types);
   return (
     // The root's `label` names the search box (cmdk labels its input with it).
     <Command
@@ -130,9 +162,17 @@ function NewMenuList({
       filter={matchesSearch}
       className={SEARCH_ROW_FOCUS_CLASS}
     >
-      <CommandInput placeholder="Create…" data-testid="new-menu-search" />
+      <CommandInput
+        placeholder="Create…"
+        autoFocus={focusSearch}
+        data-testid="new-menu-search"
+      />
       <CommandList label={LIST_LABEL} data-testid="new-menu-list">
-        {isReady ? (
+        {isReady && types.length === 0 ? (
+          <p className="px-3 py-2 text-sm text-muted-foreground">
+            Nothing to create.
+          </p>
+        ) : isReady ? (
           <CommandEmpty>Nothing matches.</CommandEmpty>
         ) : (
           <p className="px-3 py-2 text-sm text-muted-foreground">Loading…</p>
@@ -151,6 +191,13 @@ function NewMenuList({
             data-testid={`new-menu-type-${collection.name}`}
           >
             {collectionSingularLabel(collection)}
+            {second.get(collection.name) ? (
+              <span className="ml-auto pl-3 text-xs text-muted-foreground">
+                {/* Said as "Article, News", never run together. */}
+                <span className="sr-only">, </span>
+                {second.get(collection.name)}
+              </span>
+            ) : null}
           </CommandItem>
         ))}
       </CommandList>
@@ -186,7 +233,11 @@ export function NewMenuView({
   const [open, setOpen] = useState(false);
   const listId = useId();
 
-  if (isReady && types.length === 0) return null;
+  // Nothing is drawn once it is known the reader may create nothing, unless
+  // the list is open: one opened while the types were loading stays, saying
+  // there is nothing to create, so the control holding focus is not removed
+  // from under it.
+  if (isReady && types.length === 0 && !open) return null;
 
   const choose = (collection: ApiCollection) => {
     setOpen(false);
@@ -234,7 +285,12 @@ export function NewMenuView({
               if (trigger instanceof HTMLElement) trigger.focus();
             }}
           >
-            <NewMenuList types={types} isReady={isReady} onChoose={choose} />
+            <NewMenuList
+              types={types}
+              isReady={isReady}
+              onChoose={choose}
+              focusSearch
+            />
           </div>
         ) : null}
       </div>
