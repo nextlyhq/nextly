@@ -556,6 +556,7 @@ export type {
  * `@nextlyhq/builder`) may import.
  */
 export { useSuppressAdminChrome } from "./components/layout/ChromeSuppression";
+export { useFoldedPanel } from "./components/layout/PanelFold";
 /**
  * An admin place's renderer and its tab strip, for `plugin-sdk/admin`: a
  * plugin's own page draws the contributions sent to a place it declared with

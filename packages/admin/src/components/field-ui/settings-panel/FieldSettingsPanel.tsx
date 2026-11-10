@@ -113,7 +113,7 @@ export function FieldSettingsPanel({
             {field.label || "Untitled field"}
           </h2>
           <p className="text-xs text-muted-foreground">
-            <span className="opacity-70">Type:</span> {typeLabel}
+            <span>Type:</span> {typeLabel}
           </p>
           {typeFixedReason && (
             <p className="text-xs text-muted-foreground">{typeFixedReason}</p>
@@ -141,7 +141,9 @@ export function FieldSettingsPanel({
         onValueChange={value => setTab(value as FieldSettingsTab)}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <TabsList className="mt-3 w-full justify-start px-4">
+        {/* Scrolls sideways where the panel is too narrow for five tabs (a
+            phone, a card), rather than cutting the last ones off. */}
+        <TabsList scrollable className="mt-3 justify-start px-4">
           {TABS.map(each => (
             <TabsTrigger key={each.value} value={each.value}>
               {each.label}

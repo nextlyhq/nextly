@@ -15,7 +15,7 @@ import { CardHeightContext } from "@admin/components/features/widgets/frame/tier
 import { HiddenWhileEmptyContext } from "@admin/components/features/widgets/hidden-while-empty";
 import { fireEvent, render, screen, within } from "@admin/__tests__/utils";
 
-import type { ReleaseListResponse } from "@admin/types/releases";
+import type { ReleaseListResponse } from "@admin/services/releaseApi";
 
 import { NeedsAttention } from "./NeedsAttention";
 
