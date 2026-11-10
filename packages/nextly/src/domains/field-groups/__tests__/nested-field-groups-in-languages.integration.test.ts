@@ -59,8 +59,9 @@ for (const dialect of getConfiguredTestDialects()) {
         ],
         localization: { locales: ["en", "es"], defaultLocale: "en" },
       });
-      const handler =
-        current.getService<CollectionsHandler>("collectionsHandler");
+      const handler = current.getService(
+        "collectionsHandler"
+      ) as CollectionsHandler;
       const entries = handler.getEntryService();
 
       const created = await entries.createEntry(
