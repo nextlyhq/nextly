@@ -9,26 +9,31 @@
  */
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import type { UpdateCollectionInput } from "../../dynamic-collections/services/dynamic-collection-service";
 
-/** The settings an update may name, as the update's input spells them. */
-export interface UpdateSettings {
-  label?: string;
-  labels?: { singular: string; plural: string };
-  description?: string;
-  icon?: string;
-  group?: string;
-  useAsTitle?: string;
-  hidden?: boolean;
-  order?: number;
-  sidebarGroup?: string;
-  status?: boolean;
-  localized?: boolean;
-  versions?: unknown;
-  versionsMaxPerDoc?: unknown;
-  revalidate?: unknown;
-  webhooks?: unknown;
-  hooks?: unknown;
-}
+/**
+ * The settings an update may name, as the update's input spells them: taken
+ * from `UpdateCollectionInput`, so the two cannot disagree on a setting.
+ */
+export type UpdateSettings = Pick<
+  UpdateCollectionInput,
+  | "label"
+  | "labels"
+  | "description"
+  | "icon"
+  | "group"
+  | "useAsTitle"
+  | "hidden"
+  | "order"
+  | "sidebarGroup"
+  | "status"
+  | "localized"
+  | "versions"
+  | "versionsMaxPerDoc"
+  | "revalidate"
+  | "webhooks"
+  | "hooks"
+>;
 
 /** `previous` after the update: each named setting replaced, its fields as they are now. */
 export function entityAfterUpdate(
