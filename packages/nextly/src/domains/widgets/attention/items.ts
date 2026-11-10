@@ -34,6 +34,7 @@ import {
   readAccessCaller,
 } from "../../../auth/entity-read-access";
 import { NextlyError } from "../../../errors/nextly-error";
+import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import { getNextlyLogger } from "../../../observability/logger";
 import type { PluginDashboardSnapshot } from "../../../plugins/dashboard-declarations";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
@@ -402,11 +403,16 @@ export function pluginItemReaders(
   if (held.items.length === 0) return [];
   let readableOnce: Promise<ReadonlySet<string>> | undefined;
   // Read once for every item. A read that fails denies, as a permission check
-  // that fails does: no item is shown on an unknown answer.
+  // that fails does: no item is shown on an unknown answer. A rule that could
+  // not run never answered, so the kept read rejects with that rather than
+  // holding an empty set, and every item asking it ends the request with it.
   const readable = () =>
     (readableOnce ??= readableCollectionSlugs(caller).then(
       slugs => new Set(slugs),
-      () => new Set<string>()
+      (error: unknown) => {
+        rethrowIfRuleCouldNotRun(error);
+        return new Set<string>();
+      }
     ));
   // One scope per answer, each plugin with its own keys, so two items of one
   // plugin can share a scan and no plugin reads another's.

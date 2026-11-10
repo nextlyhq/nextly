@@ -6,6 +6,7 @@
  * resolution time) for component-field read/write support.
  */
 
+import type { SchemaRegistry } from "../../database/schema-registry";
 import { FieldGroupMetadataService } from "../../domains/field-groups/services/field-group-metadata-service";
 import type { CollectionRelationshipService } from "../../services/collections/collection-relationship-service";
 import {
@@ -70,7 +71,12 @@ export function registerComponentServices(ctx: RegistrationContext): void {
         relationshipService,
         // i18n: forward the normalized localization config so a localized embedded
         // component resolves/writes translatable fields via its companion per language.
-        ctx.languages
+        ctx.languages,
+        // The tables the adapter resolves through, so a component's instances are read with
+        // their translations in one statement.
+        container.has("schemaRegistry")
+          ? container.get<SchemaRegistry>("schemaRegistry")
+          : undefined
       );
     }
   );

@@ -70,6 +70,7 @@ import type { ContentServices } from "./content-controls";
 import { ImageBindingFallback } from "./image-binding-fallback";
 import { fieldLabel, propLabel, type EditableProp } from "./inspector";
 import { useItemSource, type ItemSource } from "./item-binding-source";
+import { withArticle } from "./with-article";
 
 /** One field the picker offers, with where it is read from. */
 interface FieldOption extends ListedChoice {
@@ -595,8 +596,8 @@ function BindingPicker({
       />
       <p className="nx-binding-picker__hint">
         {options.length === 0
-          ? `No field can fill a ${blockLabel.toLowerCase()}'s ${name.toLowerCase()}.`
-          : `Only fields a ${blockLabel.toLowerCase()}'s ${name.toLowerCase()} can show are listed.`}
+          ? `No field can fill ${withArticle(blockLabel.toLowerCase())}'s ${name.toLowerCase()}.`
+          : `Only fields ${withArticle(blockLabel.toLowerCase())}'s ${name.toLowerCase()} can show are listed.`}
       </p>
     </div>
   );

@@ -17,6 +17,7 @@ import { CardHeightContext } from "../widgets/frame/tier";
 import { useCardTitleCount } from "../widgets/frame/title-count";
 import { useRevealedWhileViewed } from "../widgets/hidden-while-empty";
 
+import { AttentionReleaseNames } from "./AttentionReleaseNames";
 import {
   attentionRows,
   type AttentionRow,
@@ -93,6 +94,11 @@ export const NeedsAttention: React.FC<DeclaredComponentProps> = ({
             data-testid="needs-attention-item"
           >
             <AttentionItem row={row} refreshing={refreshing} retry={retry} />
+            {/* A stopped or overdue release row names those releases, so the
+                card says which as well as how many. */}
+            {row.releases !== undefined && (
+              <AttentionReleaseNames reason={row.releases} />
+            )}
           </li>
         ))}
       </ul>

@@ -111,19 +111,33 @@ async function boot(dialect: TestDialect): Promise<string> {
  */
 function countComponentReads(tx: TransactionContext): string[] {
   const read: string[] = [];
+  type Joins = { leftJoin?: (table: unknown, ...rest: unknown[]) => unknown };
   type Select = (...args: unknown[]) => {
-    from: (table: unknown, ...rest: unknown[]) => unknown;
+    from: (table: unknown, ...rest: unknown[]) => Joins;
   };
   const db = tx.getDrizzle<{ select: Select }>();
   const select = db.select.bind(db);
+  const record = (table: unknown) => {
+    if (isTable(table) && getTableName(table).startsWith("comp_")) {
+      read.push(getTableName(table));
+    }
+  };
   vi.spyOn(db, "select").mockImplementation((...args: unknown[]) => {
     const builder = select(...args);
     const from = builder.from.bind(builder);
     builder.from = (table: unknown, ...rest: unknown[]) => {
-      if (isTable(table) && getTableName(table).startsWith("comp_")) {
-        read.push(getTableName(table));
+      record(table);
+      const joined = from(table, ...rest);
+      // A table read through a join is read too: a read in one language takes a component's
+      // translations in the same statement as its instances.
+      const leftJoin = joined.leftJoin?.bind(joined);
+      if (leftJoin) {
+        joined.leftJoin = (other: unknown, ...on: unknown[]) => {
+          record(other);
+          return leftJoin(other, ...on);
+        };
       }
-      return from(table, ...rest);
+      return joined;
     };
     return builder;
   });

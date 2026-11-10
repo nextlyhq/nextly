@@ -223,6 +223,7 @@ import {
   type FieldGroupWriteAccess,
 } from "../../field-groups/services/field-group-mutation-service";
 import { referencedFieldGroupFields } from "../../field-groups/storage/field-group-field-type";
+import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   COMPANION_LOCALE_COLUMN,
   COMPANION_PARENT_COLUMN,
@@ -403,6 +404,10 @@ import {
 import type { SensitiveFieldSource } from "../../webhooks/sensitive-fields";
 import { statusEventsFor } from "../../webhooks/status-events";
 import type { WebhookResource } from "../../webhooks/types";
+import {
+  releaseWorkflowPinsOnPublish,
+  withdrawApprovalsOnSave,
+} from "../../workflows/approval-follows-content";
 import {
   localizedFilterContext,
   type FilterConditionSources,
@@ -2117,21 +2122,61 @@ export class CollectionMutationService extends BaseService {
     }
   }
 
-  /** A save in this document's history; see `recordSaveEvent`. */
-  private recordSaveHistory(
+  /**
+   * A save in this document's history; see `recordSaveEvent`. Every save that records a version
+   * comes through here, so here, on the same transaction, a save that changed an approved part
+   * also withdraws that approval (`withdrawApprovalsOnSave`). `inPlaceTranslated` names the
+   * translated fields of a save written in place on a translated document, which changes what
+   * every language shows of the fields they share; a held save, or one on a document without
+   * translations, leaves it out.
+   */
+  private async recordSaveHistory(
     tx: TransactionContext,
     collection: string,
     id: string,
-    save: Omit<Parameters<typeof recordSaveEvent>[2], "subject">
+    save: Omit<Parameters<typeof recordSaveEvent>[2], "subject">,
+    inPlaceTranslated: readonly string[] | null = null
   ): Promise<void> {
-    return recordSaveEvent(
-      tx,
-      { adapter: this.adapter },
-      { subject: { kind: "collection", slug: collection, id }, ...save }
-    ).catch(err => {
-      // See `recordHistoryEvent`: the transaction must not keep the write.
+    try {
+      await recordSaveEvent(
+        tx,
+        { adapter: this.adapter },
+        { subject: { kind: "collection", slug: collection, id }, ...save }
+      );
+      await withdrawApprovalsOnSave(
+        tx,
+        { adapter: this.adapter },
+        {
+          document: {
+            scopeKind: "collection",
+            scopeSlug: collection,
+            entryId: id,
+          },
+          versionNo: save.versionNo,
+          locale: save.locale ?? null,
+          actor: save.actor,
+          personName: save.personName ?? null,
+          inPlaceTranslated,
+        }
+      );
+    } catch (err) {
+      // See `recordHistoryEvent`: the transaction must not keep the write, and a save that left
+      // an approval standing over content it no longer covers must not be kept either.
       throw markWriteIntegrityFailure(err);
-    });
+    }
+  }
+
+  /**
+   * The translated fields of a collection written in place, for the approvals a save withdraws
+   * (`recordSaveHistory`): every field a language keeps on its own, or null when the collection
+   * keeps no translations.
+   */
+  private translatedFieldsOf(
+    collection: { localized?: unknown },
+    fields: readonly FieldDefinition[]
+  ): string[] | null {
+    if (collection.localized !== true) return null;
+    return resolveLocalizedFieldNames([...fields], true);
   }
 
   /**
@@ -2188,15 +2233,28 @@ export class CollectionMutationService extends BaseService {
     },
     moves: readonly StatusMove[]
   ): Promise<void> {
-    return recordTransitionEvents(
-      tx,
-      { adapter: this.adapter },
-      { subject: { kind: "collection", slug: collection, id }, ...write },
-      moves
-    ).catch(err => {
-      // See `recordHistoryEvent`: the transaction must not keep the write.
-      throw markWriteIntegrityFailure(err);
-    });
+    return (
+      recordTransitionEvents(
+        tx,
+        { adapter: this.adapter },
+        { subject: { kind: "collection", slug: collection, id }, ...write },
+        moves
+      )
+        // A publish closes the published parts' review cycles: what workflows pinned for them is
+        // released on the same transaction, decided by the same moves the history records.
+        .then(() =>
+          releaseWorkflowPinsOnPublish(
+            tx,
+            { scopeKind: "collection", scopeSlug: collection, entryId: id },
+            write,
+            moves
+          )
+        )
+        .catch(err => {
+          // See `recordHistoryEvent`: the transaction must not keep the write.
+          throw markWriteIntegrityFailure(err);
+        })
+    );
   }
 
   /**
@@ -15559,7 +15617,9 @@ export class CollectionMutationService extends BaseService {
                   toState: typeof savedStatus === "string" ? savedStatus : null,
                   versionNo,
                   sourceVersionNo: params.sourceVersionNo ?? null,
-                }
+                },
+                // Written in place: every language shows the shared values it wrote.
+                this.translatedFieldsOf(collection, fields)
               );
             }
 
@@ -17593,6 +17653,14 @@ export class CollectionMutationService extends BaseService {
           [...left],
           { promoted: { heldEdits, fields } }
         );
+        // A rule that could not run never answered: the request ends with
+        // that, not with no entry within as though the gate refused them.
+        if (
+          "denied" in inLanguage &&
+          inLanguage.denied.code === "RULE_COULD_NOT_RUN"
+        ) {
+          throw errorFromServiceEnvelope(inLanguage.denied);
+        }
         left = "within" in inLanguage ? inLanguage.within : new Set();
         return null;
       });
@@ -20308,13 +20376,20 @@ export class CollectionMutationService extends BaseService {
           localeTag,
         });
         producedVersionNo = versionNo;
-        await this.recordSaveHistory(tx, params.collectionName, entryId, {
-          actor: actorForWrite(params.actor, params.user),
-          personName: params.user?.name ?? null,
-          locale: localeTag ?? null,
-          toState: typeof savedStatus === "string" ? savedStatus : null,
-          versionNo,
-        });
+        await this.recordSaveHistory(
+          tx,
+          params.collectionName,
+          entryId,
+          {
+            actor: actorForWrite(params.actor, params.user),
+            personName: params.user?.name ?? null,
+            locale: localeTag ?? null,
+            toState: typeof savedStatus === "string" ? savedStatus : null,
+            versionNo,
+          },
+          // Written in place: every language shows the shared values it wrote.
+          this.translatedFieldsOf(collection, fields)
+        );
       }
       const eventFields = await this.webhookFieldTreeIfRecording(
         params.collectionName,

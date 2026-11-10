@@ -200,14 +200,14 @@ const CHANGES: ReadonlyArray<{
   },
 ];
 
-const SERVER_DIALECTS = getConfiguredTestDialects().filter(
-  dialect => dialect !== "sqlite"
-);
-
-describe.each(SERVER_DIALECTS)(
+// Skipped, not absent, on SQLite, so a run with no server database still
+// reports the suite rather than failing the file for having none.
+describe.each(getConfiguredTestDialects())(
   "a role change inside a plugin's transaction (%s)",
   dialect => {
-    it.each(CHANGES)(
+    const oneConnection = dialect === "sqlite";
+
+    it.skipIf(oneConnection).each(CHANGES)(
       "is seen by the first check after the commit: $name",
       async ({ from, change, whileOpen, after }) => {
         const b = await boot(dialect);
@@ -232,30 +232,35 @@ describe.each(SERVER_DIALECTS)(
     // told of the account while what was cached about it, the account holding
     // no role, still stands: the role version has not moved yet. Read when the
     // event is delivered, since handlers are called as it is emitted.
-    it("retires the new account's cached access before announcing user.created", async () => {
-      const b = await boot(dialect);
-      const announced: Array<{ revision: string; mayRead: Promise<boolean> }> =
-        [];
-      current!.events.on<{ userId: string }>("user.created", event => {
-        announced.push({
-          revision: rbacRevision(),
-          mayRead: mayRead(event.payload.userId),
+    it.skipIf(oneConnection)(
+      "retires the new account's cached access before announcing user.created",
+      async () => {
+        const b = await boot(dialect);
+        const announced: Array<{
+          revision: string;
+          mayRead: Promise<boolean>;
+        }> = [];
+        current!.events.on<{ userId: string }>("user.created", event => {
+          announced.push({
+            revision: rbacRevision(),
+            mayRead: mayRead(event.payload.userId),
+          });
         });
-      });
 
-      let written: string | undefined;
-      const asked = await askedWhileOpen(b, async () => {
-        const userId = await newUser(b, true);
-        written = rbacRevision();
-        return userId;
-      });
-      await current!.events.settle();
+        let written: string | undefined;
+        const asked = await askedWhileOpen(b, async () => {
+          const userId = await newUser(b, true);
+          written = rbacRevision();
+          return userId;
+        });
+        await current!.events.settle();
 
-      expect(asked.whileOpen).toBe(false);
-      expect(announced).toHaveLength(1);
-      expect(written).toBeDefined();
-      expect(announced[0].revision).not.toBe(written);
-      expect(await announced[0].mayRead).toBe(true);
-    });
+        expect(asked.whileOpen).toBe(false);
+        expect(announced).toHaveLength(1);
+        expect(written).toBeDefined();
+        expect(announced[0].revision).not.toBe(written);
+        expect(await announced[0].mayRead).toBe(true);
+      }
+    );
   }
 );
