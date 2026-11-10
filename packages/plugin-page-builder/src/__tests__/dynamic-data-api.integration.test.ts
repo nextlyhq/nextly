@@ -178,6 +178,9 @@ describe.each(getConfiguredTestDialects())(
             slug: STORIES,
             labels: { singular: "Story", plural: "Stories" },
             status: true,
+            // Working drafts, so an edit is saved to a draft, as the editor
+            // saves it, and a published value can differ from a pending one.
+            versions: { drafts: true },
             access: { read: () => true },
             fields: [
               text({ name: "title" }),

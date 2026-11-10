@@ -193,6 +193,7 @@ import {
 import { readLayoutSettings } from "./default-layout/store";
 import { definitionActionsRoute } from "./definition-actions-route";
 import { entriesRoute, titleFieldIn } from "./entries-route";
+import type { BindingJudging } from "./fields/binding-judgement";
 import type {
   CompositionSetup,
   LayersLockUnjudged,
@@ -1908,6 +1909,21 @@ export const pageBuilder = (
   let composition: CompositionSetup | undefined;
 
   /**
+   * What a page action's bindings are judged with, as a save judges them;
+   * nothing until the plugin is installed.
+   */
+  const pageActionBindings = (): BindingJudging | undefined => {
+    if (composition?.bindingShapes === undefined) return undefined;
+    const { bindingShapes, templates, namedQueries, limits } = composition;
+    return {
+      shapesOf: bindingShapes,
+      maxNodes: limits.maxNodes,
+      ...(templates === undefined ? {} : { templates }),
+      ...(namedQueries === undefined ? {} : { namedQueries }),
+    };
+  };
+
+  /**
    * What the component-delete rewrite needs from the installed plugin,
    * published by `init` for the reason `installed` is: the service is
    * contributed before `init` runs and called long after it.
@@ -3611,6 +3627,7 @@ export const pageBuilder = (
             readRetired: readRetiredFor,
             templates: templateActions,
             namedQueries: namedQueryDeclarations,
+            bindings: pageActionBindings,
           }),
         // Who holds a path, for the site's one content route: a page, or a
         // collection's entry under its template address. Read as committed,
@@ -3876,6 +3893,7 @@ export const pageBuilder = (
         pageActionsRoute({
           store: componentStoreOf(opts),
           limits: () => opts.limits ?? DEFAULT_LIMITS,
+          bindings: pageActionBindings,
         }),
         definitionActionsRoute({
           store: componentStoreOf(opts),

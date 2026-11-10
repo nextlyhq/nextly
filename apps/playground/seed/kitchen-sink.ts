@@ -298,6 +298,12 @@ export const KITCHEN_SINK_DOCUMENT: BlockDocument = {
               caption: "An image can carry a caption.",
             },
           },
+          {
+            id: "ks-icon",
+            type: "core/icon",
+            version: 1,
+            props: { icon: "lucide:star", label: "A star" },
+          },
           // A gallery admits only images, which is the asymmetry it documents:
           // `core/image` declares no parent, so an image is placeable anywhere.
           {

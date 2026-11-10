@@ -77,6 +77,9 @@ describe.each(getConfiguredTestDialects())(
           defineCollection({
             slug: ARTICLES,
             status: true,
+            // Working drafts, so an edit is saved to a draft, as the editor
+            // saves it, and a published value can differ from a pending one.
+            versions: { drafts: true },
             access: { read: () => true },
             fields: [
               text({ name: "title" }),
@@ -192,6 +195,50 @@ describe.each(getConfiguredTestDialects())(
         "headline"
       );
       expect((await act(cookie, at, missing)).status).toBe(422);
+    });
+
+    it("keeps a broken binding the page already held, and refuses only a new one", async () => {
+      const t = await boot();
+      const id = await article(t, "Spring sale", [heading("h"), heading("i")]);
+      // Planted past every check, as a save before a rename left it.
+      const registry = t.getService("collectionRegistryService") as unknown as {
+        getCollectionBySlug(
+          slug: string
+        ): Promise<{ tableName: string } | null>;
+      };
+      const table = (await registry.getCollectionBySlug(ARTICLES))!.tableName;
+      const held = page("page", [
+        { ...heading("h"), bindings: { text: { $bind: "headline" } } },
+        heading("i"),
+      ]);
+      await t.adapter.update(
+        table,
+        { content: dialect === "sqlite" ? JSON.stringify(held) : held },
+        { and: [{ column: "id", op: "=", value: id }] }
+      );
+      const { cookie } = await holding(t, AUTHOR);
+      const at = { collection: ARTICLES, id };
+
+      const beside = {
+        kind: "bind-prop",
+        nodeId: "i",
+        prop: "text",
+        binding: { $bind: "title" },
+      };
+      const dryBeside = await act(cookie, at, beside, true);
+      expect(dryBeside.status, JSON.stringify(dryBeside.body)).toBe(200);
+      expect((dryBeside.body.item as PageActionResult).refusals).toEqual([]);
+
+      // The control: the same field, on a block that did not hold it.
+      const dryNew = await act(
+        cookie,
+        at,
+        { ...beside, binding: { $bind: "subtitle" } },
+        true
+      );
+      expect(
+        (dryNew.body.item as PageActionResult).refusals.join("\n")
+      ).toContain("subtitle");
     });
 
     it("keeps a link's related entry by its reference, naming the entry visitors were sent to", async () => {
