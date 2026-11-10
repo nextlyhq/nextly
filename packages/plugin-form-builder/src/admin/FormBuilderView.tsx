@@ -53,10 +53,10 @@ import {
 import { notificationsBlockingSave } from "./components/builder/notification-addresses";
 import {
   FormBuilderProvider,
-  useFormBuilder,
   createFieldFromType,
   createNotification,
   generateFieldName,
+  useFieldBookkeeping,
   type FormNotification,
 } from "./context/FormBuilderContext";
 
@@ -191,7 +191,8 @@ function FormBuilderViewInner({
     seedNotifications,
     updateFormData,
     markAsSaved,
-  } = useFormBuilder();
+    markFieldsSaved,
+  } = useFieldBookkeeping();
 
   const queryClient = useQueryClient();
 
@@ -307,20 +308,14 @@ function FormBuilderViewInner({
     ]);
   }, [isCreating, notificationDefaults, seedNotifications]);
 
-  // A field from the picker: the type's defaults, the label the person typed,
-  // and the name it gives, made unique on this form (a second "Email" becomes
-  // `email_2`). A label that gives no name falls back to one from the type.
+  // A field from the picker, added and opened (`fieldFromChoice`).
   const handleAddField = useCallback(
     (type: FormFieldTypeId, choice?: FieldPickerChoice) => {
-      const names = fields.map(f => f.name);
-      const fromType = createFieldFromType(type, names);
-      const newField: AnyFormField = {
-        ...fromType,
-        label: choice?.label.trim() || fromType.label,
-        name: choice?.name
-          ? generateFieldName(choice.name, names)
-          : fromType.name,
-      };
+      const newField = fieldFromChoice(
+        type,
+        choice,
+        fields.map(f => f.name)
+      );
       addField(newField);
       selectField(newField.name);
     },
@@ -329,6 +324,12 @@ function FormBuilderViewInner({
 
   // ── Save / Cancel ─────────────────────────────────────────────────────────
   const handleSave = useCallback(async () => {
+    // A failed save, said in the page and as a toast.
+    const showSaveError = (message: string) => {
+      setSaveError(message);
+      toast.error(message);
+    };
+
     // The commit is where the refusal lives, following the rule the entry
     // editor sets: a write passes one gate rather than each control being
     // disabled separately. The button below reads the same fact, so the
@@ -365,18 +366,14 @@ function FormBuilderViewInner({
     };
 
     if (onSave) {
-      // The host's save: what it stored is what the stored form now holds, so
-      // a field it saved has its type fixed like one the builder saved itself.
-      try {
-        await onSave(saveData);
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Failed to save form";
-        setSaveError(message);
-        toast.error(message);
-        return;
-      }
-      markAsSaved();
+      // The host's save. A field it stored is stored like one the builder
+      // saved itself, so its type is fixed; the form's unsaved state is the
+      // host's to clear, as before.
+      setSaveError(null);
+      await saveThroughHost(onSave, saveData, {
+        saved: markFieldsSaved,
+        failed: showSaveError,
+      });
       return;
     }
 
@@ -419,15 +416,14 @@ function FormBuilderViewInner({
         });
       }
       markAsSaved();
+      // What the stored form now holds, whatever was edited meanwhile.
+      markFieldsSaved(namesOf(saveData.fields));
       toast.success(
         isCreating ? "Form created successfully" : "Form updated successfully"
       );
       if (onSuccess) onSuccess(savedEntry);
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to save form";
-      setSaveError(message);
-      toast.error(message);
+      showSaveError(saveFailureMessage(error));
     } finally {
       setIsSaving(false);
     }
@@ -443,6 +439,7 @@ function FormBuilderViewInner({
     entryId,
     queryClient,
     markAsSaved,
+    markFieldsSaved,
     // Read inside, so it belongs here. Without it the callback closes over the
     // claim as it stood when the form mounted, and a colleague taking the
     // document over mid-session would leave this still committing.
@@ -667,7 +664,6 @@ function FormBuilderViewInner({
           enabledTypes={enabledTypes}
           disabledFieldTypes={disabledFieldTypes}
           onAddField={handleAddField}
-          readOnly={documentLock?.readOnly === true}
         />
       )}
 
@@ -798,6 +794,58 @@ export function saveErrorMessage(body: unknown, statusText: string): string {
     error?.message ||
     `Failed to save form: ${statusText}`
   );
+}
+
+/**
+ * A new field from the picker: the type's defaults, the label the person
+ * typed, and the name it gives, made unique among `names` (a second "Email"
+ * becomes `email_2`). Without a choice, or a label that gives no name, the
+ * type's own label and name.
+ */
+function fieldFromChoice(
+  type: FormFieldTypeId,
+  choice: FieldPickerChoice | undefined,
+  names: readonly string[]
+): AnyFormField {
+  const fromType = createFieldFromType(type, names);
+  const label = choice?.label.trim();
+  return {
+    ...fromType,
+    label: label || fromType.label,
+    name: choice?.name ? generateFieldName(choice.name, names) : fromType.name,
+  };
+}
+
+/** What a failed save tells the person. */
+function saveFailureMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Failed to save form";
+}
+
+/** The names fields are stored under. */
+function namesOf(fields: readonly AnyFormField[]): string[] {
+  return fields.map(field => field.name);
+}
+
+/**
+ * Saves through the host's own callback, waiting for the promise it may
+ * return, then reports which way it went: on success, the names of the fields
+ * it was handed, which the stored form now holds whatever was edited meanwhile.
+ */
+async function saveThroughHost(
+  onSave: (data: unknown) => void | Promise<void>,
+  data: { fields: readonly AnyFormField[] },
+  report: {
+    saved: (names: readonly string[]) => void;
+    failed: (message: string) => void;
+  }
+): Promise<void> {
+  try {
+    await onSave(data);
+  } catch (error) {
+    report.failed(saveFailureMessage(error));
+    return;
+  }
+  report.saved(namesOf(data.fields));
 }
 
 export function FormBuilderView({

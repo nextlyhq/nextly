@@ -82,7 +82,8 @@ const TEAM: FormNotification = {
 /** The builder on a saved form, answering its settings read with `config`. */
 function view(
   config: Record<string, unknown> = {},
-  notifications: FormNotification[] = []
+  notifications: FormNotification[] = [],
+  onSave: (data: unknown) => void | Promise<void> = () => {}
 ) {
   vi.stubGlobal(
     "fetch",
@@ -95,7 +96,7 @@ function view(
       )
     )
   );
-  const onSave = vi.fn();
+  const save = vi.fn(onSave);
   render(
     // The admin's own providers: queries, and the tooltip a refused Delete
     // explains itself with.
@@ -109,7 +110,7 @@ function view(
             fields: [EMAIL, TOPIC, DETAILS],
             notifications,
           }}
-          onSave={onSave}
+          onSave={save}
         />
       </TooltipProvider>
     </QueryClientProvider>
@@ -117,11 +118,10 @@ function view(
   return {
     user: userEvent.setup(),
     /** The fields the last save sent. */
-    saved: () =>
-      (onSave.mock.lastCall?.[0] as { fields: AnyFormField[] }).fields,
+    saved: () => (save.mock.lastCall?.[0] as { fields: AnyFormField[] }).fields,
     /** The notifications the last save sent. */
     savedNotifications: () =>
-      (onSave.mock.lastCall?.[0] as { notifications: FormNotification[] })
+      (save.mock.lastCall?.[0] as { notifications: FormNotification[] })
         .notifications,
   };
 }
@@ -137,6 +137,24 @@ async function open(user: ReturnType<typeof userEvent.setup>, label: string) {
     );
   if (!toggle) throw new Error(`no card for ${label}`);
   await user.click(toggle);
+}
+
+/** Adds a phone field through the picker, with the label given. */
+async function addPhone(
+  user: ReturnType<typeof userEvent.setup>,
+  label: string
+) {
+  await user.click(await screen.findByRole("button", { name: "Add field" }));
+  const picker = screen.getByRole("dialog");
+  await user.type(
+    within(picker).getByRole("combobox", { name: "Search field types" }),
+    "phone{Enter}"
+  );
+  await user.type(
+    within(picker).getByRole("textbox", { name: "Label" }),
+    label
+  );
+  await user.click(within(picker).getByRole("button", { name: "Add field" }));
 }
 
 async function save(user: ReturnType<typeof userEvent.setup>) {
@@ -366,6 +384,34 @@ describe("the Form Builder on the shared picker and panel", () => {
     // Saved through the host's callback: the field is now a stored one.
     await save(user);
     expect(await screen.findByText(SAVED_TYPE_REASON)).toBeInTheDocument();
+  });
+
+  it("counts as stored only the fields a pending host save was handed", async () => {
+    let finish!: () => void;
+    const { user } = view({}, [], () => new Promise<void>(r => (finish = r)));
+    await addPhone(user, "Mobile");
+    await save(user);
+    // Added while the host is still saving: not part of what it stores.
+    await addPhone(user, "Landline");
+    finish();
+
+    // Once the save has landed (Mobile reads as stored), Landline still is not.
+    await open(user, "Mobile");
+    expect(await screen.findByText(SAVED_TYPE_REASON)).toBeInTheDocument();
+    await open(user, "Landline");
+    expect(screen.queryByText(SAVED_TYPE_REASON)).toBeNull();
+  });
+
+  it("clears a failed host save's message once a retry succeeds", async () => {
+    let attempt = 0;
+    const { user } = view({}, [], () => {
+      attempt += 1;
+      if (attempt === 1) throw new Error("The host is offline");
+    });
+    await save(user);
+    expect(await screen.findByText("The host is offline")).toBeInTheDocument();
+    await save(user);
+    expect(screen.queryByText("The host is offline")).toBeNull();
   });
 
   it("hands a host's add callback the type first, then the picker's choice", async () => {

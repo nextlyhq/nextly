@@ -72,6 +72,7 @@ import type { AnyFormField, FormFieldTypeId } from "../../../types";
 import { buildFieldReferenceMap } from "../../../utils/field-references";
 import {
   generateFieldName,
+  useFieldBookkeeping,
   useFormBuilder,
 } from "../../context/FormBuilderContext";
 
@@ -347,27 +348,24 @@ export interface FieldCardsProps {
    * reads it there.
    */
   onAddField: (type: FormFieldTypeId, choice?: FieldPickerChoice) => void;
-  /** Shows every setting without letting any change. */
-  readOnly?: boolean;
 }
 
 export function FieldCards({
   enabledTypes,
   disabledFieldTypes,
   onAddField,
-  readOnly = false,
 }: FieldCardsProps): JSX.Element {
   const {
     fields,
     notifications,
-    savedFieldNames,
     selectedFieldId,
     selectField,
-    replaceField,
     deleteField,
     duplicateField,
     moveField,
   } = useFormBuilder();
+  // A colleague's claim makes every setting read-only, as the provider holds it.
+  const { savedFieldNames, replaceField, readOnly } = useFieldBookkeeping();
 
   const [isAddOpen, setIsAddOpen] = useState(false);
   const docked = useDocked();

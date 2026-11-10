@@ -65,12 +65,6 @@ export interface FormBuilderState {
   activeTab: "builder" | "preview" | "settings" | "notifications";
   /** Whether form has unsaved changes */
   isDirty: boolean;
-  /**
-   * The names of the fields the stored form holds, as of the last load or
-   * save. A field named here has answers stored under its name and type, so
-   * its type is fixed; a renamed one keeps its place here under its new name.
-   */
-  savedFieldNames: ReadonlySet<string>;
   /** Form metadata */
   formData: {
     id?: string;
@@ -94,17 +88,6 @@ export interface FormBuilderActions {
   addField: (field: AnyFormField, index?: number) => void;
   /** Update a field by name */
   updateField: (fieldName: string, updates: Partial<AnyFormField>) => void;
-  /**
-   * Replace a field by name with the whole of its next definition, so a
-   * setting the next one leaves out is gone rather than kept from before.
-   * Given `referencesFrom`, the name other fields' conditions and the
-   * notifications know the field by, those references move to its new name.
-   */
-  replaceField: (
-    fieldName: string,
-    next: AnyFormField,
-    referencesFrom?: string
-  ) => void;
   /** Delete a field by name */
   deleteField: (fieldName: string) => void;
   /** Move a field from one index to another */
@@ -138,6 +121,43 @@ export interface FormBuilderActions {
 export interface FormBuilderContextValue
   extends FormBuilderState,
     FormBuilderActions {}
+
+/**
+ * The builder's own field bookkeeping, kept off the exported state and
+ * actions so a host that builds or mocks those types is not asked for it.
+ * The provider supplies it; the builder's field list reads it through
+ * `useFieldBookkeeping`, which the package does not export.
+ */
+export interface FieldBookkeeping {
+  /**
+   * The names of the fields the stored form holds, as of the last load or
+   * save. A field named here has answers stored under its name and type, so
+   * its type is fixed; a renamed one keeps its place here under its new name.
+   */
+  savedFieldNames: ReadonlySet<string>;
+  /**
+   * Replace a field by name with the whole of its next definition, so a
+   * setting the next one leaves out is gone rather than kept from before.
+   * Given `referencesFrom`, the name other fields' conditions and the
+   * notifications know the field by, those references move to its new name.
+   */
+  replaceField: (
+    fieldName: string,
+    next: AnyFormField,
+    referencesFrom?: string
+  ) => void;
+  /**
+   * Records the fields a save stored, by the names they were saved under.
+   * Given the names the save was handed, so an edit made while it was under
+   * way is not counted as stored.
+   */
+  markFieldsSaved: (names: readonly string[]) => void;
+  /** Whether a colleague holds the form, so nothing in it may change. */
+  readOnly: boolean;
+}
+
+export type FormBuilderInternalValue = FormBuilderContextValue &
+  FieldBookkeeping;
 
 export interface FormBuilderProviderProps {
   /** Initial form data (for editing existing forms) */
@@ -175,7 +195,12 @@ export interface FormBuilderProviderProps {
  * rather than a second list of what to block. `markAsSaved` is the save's own
  * bookkeeping and cannot run while the save is withheld anyway.
  */
-const READS_ONLY = new Set(["selectField", "setActiveTab", "markAsSaved"]);
+const READS_ONLY = new Set([
+  "selectField",
+  "setActiveTab",
+  "markAsSaved",
+  "markFieldsSaved",
+]);
 
 /** Default form settings (the canonical defaults from the settings reader) */
 export const DEFAULT_SETTINGS: FormSettings = DEFAULT_FORM_SETTINGS;
@@ -201,7 +226,7 @@ export function createNotification(): FormNotification {
 // Context
 // ============================================================================
 
-const FormBuilderContext = createContext<FormBuilderContextValue | null>(null);
+const FormBuilderContext = createContext<FormBuilderInternalValue | null>(null);
 
 // ============================================================================
 // Utilities
@@ -586,12 +611,15 @@ export function FormBuilderProvider({
 
   const markAsSaved = useCallback(() => {
     setIsDirty(false);
+  }, []);
+
+  const markFieldsSaved = useCallback((names: readonly string[]) => {
     // What was saved is what the stored form now holds.
-    setSavedFieldNames(new Set(fields.map(field => field.name)));
-  }, [fields]);
+    setSavedFieldNames(new Set(names));
+  }, []);
 
   // Memoized context value
-  const value = useMemo<FormBuilderContextValue>(
+  const value = useMemo<FormBuilderInternalValue>(
     () => ({
       // State
       fields,
@@ -620,6 +648,8 @@ export function FormBuilderProvider({
       deleteNotification,
       seedNotifications,
       markAsSaved,
+      markFieldsSaved,
+      readOnly,
     }),
     [
       fields,
@@ -646,6 +676,8 @@ export function FormBuilderProvider({
       deleteNotification,
       seedNotifications,
       markAsSaved,
+      markFieldsSaved,
+      readOnly,
     ]
   );
 
@@ -660,7 +692,7 @@ export function FormBuilderProvider({
    * What stays is navigation and the save's own bookkeeping. Neither changes
    * the document, and both are what "you can read it" has to mean.
    */
-  const guarded = useMemo<FormBuilderContextValue>(() => {
+  const guarded = useMemo<FormBuilderInternalValue>(() => {
     if (!readOnly) return value;
     return Object.fromEntries(
       Object.entries(value).map(([name, member]) =>
@@ -668,7 +700,7 @@ export function FormBuilderProvider({
           ? [name, () => undefined]
           : [name, member]
       )
-    ) as FormBuilderContextValue;
+    ) as FormBuilderInternalValue;
   }, [value, readOnly]);
 
   return (
@@ -729,4 +761,19 @@ export function useFormBuilder(): FormBuilderContextValue {
  */
 export function useOptionalFormBuilder(): FormBuilderContextValue | null {
   return useContext(FormBuilderContext);
+}
+
+/**
+ * The builder's state and actions with its field bookkeeping (see
+ * `FieldBookkeeping`), for the builder's own components. Not exported from
+ * the package.
+ */
+export function useFieldBookkeeping(): FormBuilderInternalValue {
+  const context = useContext(FormBuilderContext);
+  if (!context) {
+    throw new Error(
+      "useFieldBookkeeping must be used within a FormBuilderProvider"
+    );
+  }
+  return context;
 }
