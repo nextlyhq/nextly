@@ -34,6 +34,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { Logger } from "../../../shared/types";
 
@@ -125,7 +126,8 @@ for (const dialect of getConfiguredTestDialects()) {
     /** Start the app over this case's database, with `fieldGroups` defined in code. */
     async function start(
       fieldGroups: FieldGroupConfig[] = [],
-      logger?: Logger
+      logger?: Logger,
+      plugins: PluginDefinition[] = []
     ): Promise<TestNextly> {
       // A start evaluates the app's `defineConfig` first, as its config file does; the harness
       // boots from the parts and would not.
@@ -135,6 +137,7 @@ for (const dialect of getConfiguredTestDialects()) {
       instance = await createTestNextly({
         adapter: database.adapter as never,
         fieldGroups,
+        plugins,
         ...(logger === undefined ? {} : { logger }),
       });
       return instance;
@@ -273,6 +276,41 @@ for (const dialect of getConfiguredTestDialects()) {
 
       expect(await thrownBy(start([codeFieldGroup("hero", "card")]))).toEqual(
         cycleRefusal("hero → card → hero")
+      );
+    });
+
+    it("refuses a start whose plugin extends a Builder field group into a cycle", async () => {
+      await start();
+      await create("b");
+      await create("a", "b");
+      // Adds to `b` a placement of `a`, which already places `b`.
+      const extender: PluginDefinition = {
+        name: "@t/extender",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: {
+          extend: [
+            {
+              target: "b",
+              fields: [{ name: "a", type: "component", component: "a" }],
+            },
+          ],
+        },
+      };
+
+      const refused = await thrownBy(start([], undefined, [extender]));
+      expect(refused).toEqual(
+        expect.objectContaining({
+          code: "VALIDATION_ERROR",
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                code: "FIELD_GROUP_CYCLE",
+                message: expect.stringMatching(/a → b → a|b → a → b/),
+              }),
+            ],
+          },
+        })
       );
     });
 

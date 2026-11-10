@@ -172,6 +172,22 @@ describe("judgeFieldGroupCyclesAtStart", () => {
     expect(warn.mock.calls[0][0]).toContain("a → b → a");
   });
 
+  it("refuses a cycle among Builder field groups that only a plugin's extension at start closes", () => {
+    const warn = vi.fn();
+    const issue = refusal(() =>
+      judgeFieldGroupCyclesAtStart({
+        code: [],
+        // As the start reconciles them, with a plugin's field extended onto `b`.
+        registered: [places("a", "b"), places("b", "a")],
+        // As the Builder stored them.
+        stored: [places("a", "b"), places("b")],
+        warn,
+      })
+    );
+    expect(issue.message).toMatch(/a → b → a|b → a → b/);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("judges the code's definition where a slug is both", () => {
     const warn = vi.fn();
     judgeFieldGroupCyclesAtStart({

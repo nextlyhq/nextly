@@ -1839,11 +1839,6 @@ async function reconcileBuilderTargets<T>(
   const builderEntities = await loadBuilderEntities(adapter);
 
   assertRegisteredKeepTheirKind(transformedConfig, builderEntities);
-  judgeFieldGroupCyclesAtStart({
-    code: transformedConfig.fieldGroups ?? [],
-    registered: builderEntities.components ?? [],
-    warn: message => logger.warn(message),
-  });
 
   // The configuration's addresses, judged by the one address rule before the boot writes
   // anything. Only an address no registry row holds, and whose table does not exist yet, is new
@@ -1911,6 +1906,14 @@ async function reconcileBuilderTargets<T>(
     builderEntities,
     table => adapter.tableExists(table)
   );
+  // Field groups placed in a cycle, judged over code and the Builder's field groups as this start
+  // reconciled them, plugin extensions included, before anything below writes.
+  judgeFieldGroupCyclesAtStart({
+    code: transformedConfig.fieldGroups ?? [],
+    registered: entities.components ?? [],
+    stored: builderEntities.components ?? [],
+    warn: message => logger.warn(message),
+  });
 
   // Only touch the DB for entities whose merged field set actually differs
   // from what's persisted — keeps an unchanged/plugin-free boot write-free and

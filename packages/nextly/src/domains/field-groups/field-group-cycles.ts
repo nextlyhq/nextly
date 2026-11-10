@@ -140,12 +140,17 @@ export function assertNoFieldGroupCycleInCode(
  * Judge the field groups an application starts with: the ones its code defines together with the
  * Builder's. A cycle taking in a code field group is refused, since code is written at start. A
  * cycle among Builder field groups alone was written by earlier saves, so it is named through
- * `warn`, once per cycle, and the start goes on. Where a slug is both, the code's definition is
- * the one judged, as it is the one the application uses.
+ * `warn`, once per cycle, and the start goes on; unless the stored field groups hold no such cycle
+ * and the start's own additions to them close it (a plugin extending a Builder field group), which
+ * is code written at start like any other and refused. Where a slug is both, the code's definition
+ * is the one judged, as it is the one the application uses.
  */
 export function judgeFieldGroupCyclesAtStart(args: {
   code: readonly FieldGroupDefinition[];
+  /** The Builder's field groups as the start uses them, with any field a plugin extends onto one. */
   registered: readonly FieldGroupDefinition[];
+  /** The Builder's field groups as stored, before the start's additions; `registered` when absent. */
+  stored?: readonly FieldGroupDefinition[];
   warn: (message: string) => void;
 }): void {
   const codeKeys = new Set(args.code.map(({ slug }) => slug.toLowerCase()));
@@ -161,11 +166,16 @@ export function judgeFieldGroupCyclesAtStart(args: {
     if (cycle !== null) throw cycleRefusal(named(cycle), "fieldGroups");
   }
 
+  const storedEdges =
+    args.stored === undefined ? edges : placementGraph(args.stored).edges;
   const reported = new Set<string>();
   for (const key of edges.keys()) {
     if (reported.has(key)) continue;
     const cycle = cycleThrough(edges, key);
     if (cycle === null) continue;
+    if (cycleThrough(storedEdges, key) === null) {
+      throw cycleRefusal(named(cycle), "fieldGroups");
+    }
     for (const member of cycle) reported.add(member);
     args.warn(
       `Field groups place each other in a cycle: ${describeCycle(named(cycle))}. ` +
