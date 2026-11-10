@@ -1,54 +1,74 @@
 import type { JSX } from "react";
 
-import { PanelLeftClose, PanelLeftOpen } from "@admin/components/icons";
+import {
+  Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
+} from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
 import { usePanelFold } from "../PanelFold";
 
-import { HeaderTrail, useHasHeaderTrail } from "./HeaderTrail";
+import { HeaderTrail } from "./HeaderTrail";
+import { TopBarPlaceTarget } from "./TopBarPlaces";
 
 interface DashboardHeaderProps {
   className?: string;
+  /** Opens the navigation drawer, below the width where the rail shows. */
+  onOpenMenu?: () => void;
 }
 
 /**
- * The admin's top bar: the page's own place, and nothing global.
+ * The admin's one top bar: the page's own place, and nothing global.
  *
- * It holds the trail the page on screen registered (such as an open
- * document's place under Content) and, on a page that started its panel
- * folded, the toggle that brings the panel back. The reader's Inbox and
- * account menu are at the foot of the icon rail, and Docs, GitHub, Discord,
- * the theme and plugins' header items are in that menu, so the bar's width
- * belongs to the page.
+ * Its left part says where the page is: the trail an open document registered,
+ * or the breadcrumb the page drew into the bar's `start` place. Its right part,
+ * the `end` place, holds the page's own actions. On a page that started its
+ * panel folded, the toggle that brings the panel back comes first, and below
+ * the width where the rail shows, the menu button that opens it in a drawer
+ * comes before that. The reader's Inbox and account menu are at the foot of the
+ * icon rail, so the bar's width belongs to the page.
  *
- * Below the width where the rail shows, the phone header above it already
- * holds the logo and the menu, so the bar is drawn only while it has a trail
- * or the panel toggle to show, rather than as an empty band. Both are
- * declared in layout effects, so this is settled before the first paint.
+ * Its height is `--admin-bar-height`, which whatever measures against the bar
+ * reads too.
  */
 export function DashboardHeader({
   className,
+  onOpenMenu,
 }: DashboardHeaderProps): JSX.Element {
-  const hasTrail = useHasHeaderTrail();
-  const { declared } = usePanelFold();
-  const empty = !hasTrail && !declared;
   return (
     <header
-      data-empty={empty || undefined}
       className={cn(
-        "h-16 border-b border-border bg-background/80 backdrop-blur-md sticky top-0 z-40 w-full",
-        "flex items-center px-6",
+        "h-(--admin-bar-height) shrink-0 border-b border-border bg-background/80 backdrop-blur-md sticky top-0 z-40 w-full",
+        "flex items-center gap-3 px-6 max-lg:px-3",
         // A container, so the trail answers to the bar's own width: a sidebar
         // narrows it as much as a small window does.
         "@container/topbar",
-        empty && "max-lg:hidden",
         className
       )}
     >
+      {onOpenMenu && (
+        <button
+          type="button"
+          onClick={onOpenMenu}
+          aria-label="Open the navigation menu"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary lg:hidden"
+        >
+          <Menu className="h-5 w-5" aria-hidden="true" />
+        </button>
+      )}
       <div className="flex min-w-0 flex-1 items-center gap-4">
         <PanelFoldToggle />
         <HeaderTrail />
+        <TopBarPlaceTarget
+          name="start"
+          className="flex min-w-0 items-center empty:hidden"
+        />
       </div>
+      <TopBarPlaceTarget
+        name="end"
+        className="flex shrink-0 items-center gap-2 empty:hidden"
+      />
     </header>
   );
 }
