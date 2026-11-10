@@ -217,7 +217,11 @@ async function boot(
 const handlerOf = (n: TestNextly) =>
   n.getService("collectionsHandler") as CollectionsHandler;
 
-/** Saves `data` as an editor's ordinary save: as `userId` when given, else trusted code. */
+/**
+ * Saves `data` as an editor's ordinary save: as `userId` when given, else trusted code. It says it
+ * replaces whatever is stored (`_overwrite`), as a save that read no version must, and a refused
+ * save fails the test rather than leaving the document as it was.
+ */
 async function save(
   slug: string,
   entryId: string,
@@ -228,7 +232,7 @@ async function save(
     keyId?: string;
   } = {}
 ): Promise<void> {
-  await handlerOf(app()).updateEntry(
+  const result = await handlerOf(app()).updateEntry(
     {
       collectionName: slug,
       entryId,
@@ -239,8 +243,11 @@ async function save(
         ? { actor: { type: "apiKey" as const, id: options.keyId } }
         : {}),
     },
-    data
+    { ...data, _overwrite: true }
   );
+  if (!result.success) {
+    throw new Error(`save refused: ${result.statusCode} ${result.message}`);
+  }
 }
 
 /** Takes `name` on one part, as a caller that just read it. */
