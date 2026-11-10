@@ -22,7 +22,7 @@ describe("partKeysOf", () => {
     const keys = await partKeysOf([{ type: "text", name: "title" }, details]);
 
     expect([...keys.language].sort()).toEqual(["caption", "title"]);
-    expect([...keys.shared]).toEqual(["rank"]);
+    expect([...keys.shared].sort()).toEqual(["rank", "slug"]);
   });
 
   it("keeps a named group as one key of its own", async () => {
@@ -36,14 +36,17 @@ describe("partKeysOf", () => {
     // The group's value is one stored key; its children are not top-level.
     expect([...keys.language, ...keys.shared].sort()).toEqual([
       "meta",
+      "slug",
+      "title",
       "views",
     ]);
   });
 
-  // Every component is kept per language under the setting, wherever it sits:
-  // a named group or repeater stores its children under its own key, so a
-  // component inside one makes that key the language's.
-  it("gives a language the key of a named container that holds a component", async () => {
+  // A draft's part follows where the value is stored. A named group or
+  // repeater is stored whole on the shared row, a component inside it
+  // included, so its key is the shared draft's: a publish of it writes the
+  // shared row, and every language shows it.
+  it("keeps a named container that holds a component in the shared part, where it is stored", async () => {
     const layout = {
       type: "group",
       name: "layout",
@@ -67,8 +70,30 @@ describe("partKeysOf", () => {
     };
     const keys = await partKeysOf([layout, items, stats]);
 
-    expect([...keys.language].sort()).toEqual(["items", "layout"]);
-    // The control: a container with no component stays where it was.
-    expect([...keys.shared]).toEqual(["stats"]);
+    expect([...keys.language]).toEqual([]);
+    expect([...keys.shared].sort()).toEqual([
+      "items",
+      "layout",
+      "slug",
+      "stats",
+      "title",
+    ]);
+  });
+
+  // Every collection's entries carry a system `title` and `slug`, stored on
+  // the shared row and left out of the stored field list. Undeclared, they are
+  // the shared draft's, so a held edit to one is kept; declared, the
+  // declaration decides.
+  it("keeps the system title and slug in the shared part unless they are declared", async () => {
+    const undeclared = await partKeysOf([{ type: "text", name: "body" }]);
+    expect([...undeclared.language]).toEqual(["body"]);
+    expect([...undeclared.shared].sort()).toEqual(["slug", "title"]);
+
+    const declared = await partKeysOf([
+      { type: "text", name: "title" },
+      { type: "text", name: "body" },
+    ]);
+    expect([...declared.language].sort()).toEqual(["body", "title"]);
+    expect([...declared.shared]).toEqual(["slug"]);
   });
 });

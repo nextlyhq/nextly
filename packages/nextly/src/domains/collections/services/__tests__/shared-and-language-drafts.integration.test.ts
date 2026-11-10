@@ -334,8 +334,7 @@ describe.each(getConfiguredTestDialects())(
       expect(stored.shared.views).toBe(30);
     }, 90_000);
 
-    // Until the publish service lands, publishing goes on doing what it did:
-    // a language's publish carries the shared changes with it.
+    // A language's publish carries the shared changes with it.
     it("publishes a language's draft with the shared draft, and keeps the other language's", async () => {
       const entries = await boot(dialect);
       const id = await publishedInBoth(entries, TRANSLATED);
@@ -354,9 +353,8 @@ describe.each(getConfiguredTestDialects())(
       expect(Object.keys(await drafts(id))).toEqual(["en"]);
     }, 90_000);
 
-    // Until the publish service lands, an untranslated document is published
-    // from one language as a translated one is: that language's draft with the
-    // shared draft. Another language's draft stays pending, unchanged, and is
+    // An untranslated document is published from one language as a
+    // translated one is: that language's draft with the shared draft. Another language's draft stays pending, unchanged, and is
     // published from its own language.
     it("publishes an untranslated document's language with the shared draft, and keeps the other language's", async () => {
       const entries = await boot(dialect);

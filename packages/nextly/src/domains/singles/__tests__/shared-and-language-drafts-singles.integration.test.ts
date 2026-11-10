@@ -207,9 +207,10 @@ const carried = (draft: Record<string, unknown>, names: string[]) =>
 async function read(
   singles: SingleEntryService,
   locale: string,
-  editor = false
+  editor = false,
+  slug: string = SLUG
 ): Promise<Record<string, unknown>> {
-  const res = await singles.get(SLUG, {
+  const res = await singles.get(slug, {
     locale,
     overrideAccess: true,
     ...(editor ? { includeWorkingDraft: true, status: "all" as const } : {}),
@@ -441,9 +442,10 @@ describe.each(getConfiguredTestDialects())(
       expect(rows.map(row => row.locale ?? "shared")).toEqual(["es"]);
     }, 90_000);
 
-    // A component is kept per language wherever it sits, so a held edit to
-    // one inside a named group is the language's, never the shared draft's.
-    it("keys a held edit to a component inside a named group by its language", async () => {
+    // A named group is stored whole on the shared row, a component inside it
+    // included, so a held edit to that component is the shared draft's, as its
+    // publish writes the shared row.
+    it("keeps a held edit to a component inside a named group in the shared draft", async () => {
       const singles = await boot(dialect);
       for (const locale of ["en", "es"]) {
         const saved = await singles.update(
@@ -466,7 +468,51 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(held.success, JSON.stringify(held)).toBe(true);
 
-      expect(Object.keys(await drafts(NESTED)).sort()).toEqual(["es"]);
+      expect(Object.keys(await drafts(NESTED)).sort()).toEqual(["shared"]);
+    }, 90_000);
+
+    // The draft and the publish agree on where the value lives: every
+    // language's editor sees the held edit, and its publish puts the same
+    // value live in every language.
+    it("shows a held edit inside a named group to every language, and publishes it to every language", async () => {
+      const singles = await boot(dialect);
+      for (const locale of ["en", "es"]) {
+        const saved = await singles.update(
+          NESTED,
+          {
+            _overwrite: true,
+            title: `${locale} title`,
+            layout: { hero: { heading: "live heading" } },
+            status: "published",
+          },
+          { locale, overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+      }
+      const held = await singles.update(
+        NESTED,
+        { _overwrite: true, layout: { hero: { heading: "es held" } } },
+        { locale: "es", overrideAccess: true }
+      );
+      expect(held.success, JSON.stringify(held)).toBe(true);
+      const heading = (data: Record<string, unknown>) =>
+        (data.layout as { hero?: { heading?: unknown } } | undefined)?.hero
+          ?.heading;
+
+      // English's editor sees the pending edit too: it is the shared draft's.
+      expect(heading(await read(singles, "en", true, NESTED))).toBe("es held");
+
+      const published = await singles.update(
+        NESTED,
+        { _overwrite: true, status: "published" },
+        { locale: "es", overrideAccess: true }
+      );
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      for (const locale of ["en", "es"]) {
+        expect(heading(await read(singles, locale, false, NESTED))).toBe(
+          "es held"
+        );
+      }
     }, 90_000);
 
     // A publish of every language judges a shared-only draft's values under
