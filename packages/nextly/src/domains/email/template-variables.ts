@@ -90,13 +90,17 @@ const PRESENTATION_KEYS = ["type", "label", "example", "fields"] as const;
  */
 export function declarationSubstance(variables: unknown): unknown {
   if (!Array.isArray(variables)) return variables ?? null;
-  return variables.map((variable: unknown) => {
-    if (!variable || typeof variable !== "object") return variable;
+  // An entry that is not an object declares nothing, and is dropped rather
+  // than kept: kept, it reached the registry's defaults and every reader
+  // that dereferences an entry's name — withOwnerPresentation among them —
+  // took the whole template list down on the first row it read.
+  return variables.flatMap((variable: unknown) => {
+    if (!variable || typeof variable !== "object") return [];
     const rest: Record<string, unknown> = {
       ...(variable as Record<string, unknown>),
     };
     for (const key of PRESENTATION_KEYS) delete rest[key];
-    return rest;
+    return [rest];
   });
 }
 

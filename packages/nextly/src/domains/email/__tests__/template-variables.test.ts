@@ -193,4 +193,32 @@ describe("pluginDeclarations", () => {
     ]);
     expect(result.problem).toContain("0.type");
   });
+
+  it("drops an entry that declares nothing rather than carrying it to readers", async () => {
+    // A null or string entry is not a declaration: kept, it reached the
+    // registry's defaults and every reader that dereferences an entry's
+    // name (withOwnerPresentation among them) threw on the first row it
+    // read — one bad plugin took the whole template list down. Watched
+    // failing: the null came back through.
+    const { withOwnerPresentation } = await import("../template-variables");
+    const result = pluginDeclarations([
+      null,
+      "total",
+      {
+        name: "user",
+        description: "The user",
+      },
+    ] as unknown[]);
+    expect(result.variables).toEqual([
+      { name: "user", description: "The user" },
+    ]);
+    expect(result.problem).toBeTruthy();
+    // The owner defaults so built are safe to read beside a site's row.
+    expect(() =>
+      withOwnerPresentation(
+        [{ name: "user", description: "The site's" }],
+        result.variables
+      )
+    ).not.toThrow();
+  });
 });
