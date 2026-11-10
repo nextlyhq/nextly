@@ -11,12 +11,9 @@
  *
  * @module admin
  */
-import {
-  registerComponents,
-  registerKnownPlugin,
-} from "@nextlyhq/plugin-sdk/admin";
+import { registerComponents } from "@nextlyhq/plugin-sdk/admin";
 
-import { ADMIN_PAGES, PLUGIN_NAME } from "../admin-contract";
+import { ADMIN_PAGES } from "../admin-contract";
 
 import { AccountPage } from "./AccountPage";
 import { AccountsListPage } from "./AccountsListPage";
@@ -26,14 +23,8 @@ const COMPONENTS = {
   [ADMIN_PAGES.account.component]: AccountPage,
 };
 
+// Registered as the module loads, which is when the component map imports it.
 registerComponents(COMPONENTS);
-
-// The admin can also ask for the components by the plugin's name, when it
-// meets one of its pages before this module was imported.
-registerKnownPlugin(PLUGIN_NAME, () => {
-  registerComponents(COMPONENTS);
-  return Promise.resolve();
-});
 
 export { AccountPage, type AccountPageProps } from "./AccountPage";
 export { AccountsListPage } from "./AccountsListPage";

@@ -10,6 +10,28 @@
 
 import { LOCALIZATION_INTENT_HEADER } from "../../i18n/migration/migration-intent";
 
+/**
+ * Whether a trimmed line opens a migration file's UP section: `-- UP`, and
+ * the `-- UP:` and `-- UP <note>` spellings. The one test both the section
+ * parser and the old-Builder-file signature read.
+ */
+export function isUpMarker(trimmedLine: string): boolean {
+  return (
+    trimmedLine === "-- UP" ||
+    trimmedLine.startsWith("-- UP ") ||
+    trimmedLine.startsWith("-- UP:")
+  );
+}
+
+/** Whether a trimmed line opens the DOWN section, in the same spellings as `isUpMarker`. */
+export function isDownMarker(trimmedLine: string): boolean {
+  return (
+    trimmedLine === "-- DOWN" ||
+    trimmedLine.startsWith("-- DOWN ") ||
+    trimmedLine.startsWith("-- DOWN:")
+  );
+}
+
 export function parseSqlSections(content: string): {
   upSql: string;
   downSql: string;
@@ -23,21 +45,11 @@ export function parseSqlSections(content: string): {
   for (const line of lines) {
     const trimmedLine = line.trim();
 
-    // Handle both "-- UP" and "-- UP:" formats
-    if (
-      trimmedLine === "-- UP" ||
-      trimmedLine.startsWith("-- UP ") ||
-      trimmedLine.startsWith("-- UP:")
-    ) {
+    if (isUpMarker(trimmedLine)) {
       currentSection = "up";
       continue;
     }
-    // Handle both "-- DOWN" and "-- DOWN:" formats
-    if (
-      trimmedLine === "-- DOWN" ||
-      trimmedLine.startsWith("-- DOWN ") ||
-      trimmedLine.startsWith("-- DOWN:")
-    ) {
+    if (isDownMarker(trimmedLine)) {
       currentSection = "down";
       continue;
     }

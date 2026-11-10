@@ -331,6 +331,9 @@ export {
   type SidebarSectionProps,
   type DocumentViewProps,
 } from "./lib/plugins/component-registry";
+// The app's generated component map registers through this, not a plugin:
+// it is not part of the plugin SDK's surface.
+export { registerComponentMap } from "./lib/plugins/component-registry";
 export type { DocumentLockGates } from "./components/features/entries/EntryForm/document-lock-affordances";
 // Navigation a plugin may perform: a page of this admin, judged before it moves.
 export { navigateWithinAdmin } from "./lib/navigation";

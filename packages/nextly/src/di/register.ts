@@ -249,6 +249,7 @@ import {
 } from "../plugins/services/plugin-services-registry";
 import { assertSettingsPermissionsOwned } from "../plugins/settings-permission";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
+import { assertFieldTypeSettings } from "../plugins/validate-field-type-settings";
 import { setBootedConfig } from "../route-handler/auth-handler";
 import {
   installTagExpiryLedger,
@@ -1008,7 +1009,8 @@ async function registerServicesOnce(
   // of the framework's two schema modes had no queryable source.
   resetWidgetRegistries(
     transformedConfig.plugins ?? [],
-    transformedConfig.admin?.dashboard
+    transformedConfig.admin?.dashboard,
+    transformedConfig.collections
   );
 
   // Every schema write a development start makes runs inside one hold of the
@@ -1146,6 +1148,7 @@ async function registerServicesOnce(
         }),
         schemasDir,
         migrationsDir,
+        deferredExtends,
         storage,
         mediaStorage,
         imageProcessor,
@@ -1595,6 +1598,9 @@ function validateBootContributions(
  * boot; fail-fast on collision.
  */
 function registerPluginFieldTypes(plugins: PluginDefinition[]): void {
+  // A type's declared settings are checked before any type is registered, so
+  // a malformed list refuses boot naming the plugin, not a panel control later.
+  assertFieldTypeSettings(plugins);
   clearFieldTypes();
   for (const fieldTypePlugin of plugins) {
     for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {

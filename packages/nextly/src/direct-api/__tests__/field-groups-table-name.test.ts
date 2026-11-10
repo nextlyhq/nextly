@@ -32,6 +32,8 @@ describe("fieldGroups.create derives its table name", () => {
     const registry = {
       registerComponent,
       getAllComponents: vi.fn().mockResolvedValue([]),
+      // No field group stored, so the create's cycle check finds nothing to close a cycle with.
+      getAllFieldLists: vi.fn().mockResolvedValue([]),
     };
     const ctx = {
       fieldGroupRegistryService: registry,
