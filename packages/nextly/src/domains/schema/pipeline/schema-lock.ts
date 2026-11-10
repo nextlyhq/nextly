@@ -220,6 +220,8 @@ interface HeldHere {
   readonly claim: string;
   readonly session: MigrationSession;
   released: boolean;
+  /** Throws the lost-lock refusal unless the hold can still show it holds the lock. */
+  readonly assertHeld: () => void;
 }
 
 /**
@@ -234,6 +236,51 @@ interface HeldHere {
  * however long work started inside it lives on.
  */
 const heldHere = new AsyncLocalStorage<readonly HeldHere[]>();
+
+/** The innermost lock this async context holds, or undefined outside every holder. */
+function heldNow(): HeldHere | undefined {
+  const store = heldHere.getStore() ?? [];
+  for (let at = store.length - 1; at >= 0; at -= 1) {
+    if (!store[at].released) return store[at];
+  }
+  return undefined;
+}
+
+/**
+ * Refuse, before a statement, a commit or a write to the ledger or the registry, a run that can no
+ * longer show it holds the schema lock (`SchemaLockHold.assertHeld`). Outside every holder of the
+ * lock there is no hold to lose, and nothing is refused.
+ */
+export function assertSchemaLockHeld(): void {
+  heldNow()?.assertHeld();
+}
+
+/** The comment a statement is marked with while `claim` holds the lock (`markedForSchemaLock`). */
+export function schemaLockMarker(claim: string): string {
+  return `/* nextly-lock:${claim} */`;
+}
+
+/**
+ * `statement` marked with the claim of the lock this context holds, so a run that takes over a
+ * lapsed lock can find it still running in the database and stop it (`stopEarlierStatements`).
+ * Unmarked outside every holder.
+ */
+export function markedForSchemaLock(statement: string): string {
+  const held = heldNow();
+  return held === undefined
+    ? statement
+    : `${schemaLockMarker(held.claim)} ${statement}`;
+}
+
+/** The refusal of a run that can no longer show it holds the lock. */
+function lostLockError(command: string): NextlyError {
+  return NextlyError.serviceUnavailable({
+    publicMessage:
+      `${command} lost the schema lock: it could no longer show it held it, so it started no ` +
+      "further statement and recorded nothing further. Check the database before running it again.",
+    logContext: { reason: "schema lock lost while held", command },
+  });
+}
 
 /** The claim this process would write: who it is, unique per acquisition. */
 function newClaim(): string {
@@ -876,6 +923,12 @@ class SchemaLockHold {
   interrupted = false;
   /** Another run took a lock this run held. */
   lost = false;
+  /**
+   * When the lease was last confirmed, by this process's clock, dated from before the attempt
+   * that confirmed it: the acquisition, then each renewal that found the lock still this run's.
+   * Zero until the lock is taken.
+   */
+  private confirmedAt = 0;
   /** Whether the field-group claim's table has an expiry for the renewal to extend. */
   fieldGroupRenewable = false;
   private renewal: ReturnType<typeof setInterval> | undefined;
@@ -901,6 +954,7 @@ class SchemaLockHold {
 
   /** Every lock at once, all or nothing. */
   async acquireOnce(): Promise<Attempt> {
+    const asked = Date.now();
     // The earlier migrate lock first. On MySQL it is the named lock, held on a connection for the
     // whole run, so a contender refused by it leaves this lock's row alone: taking the row first
     // would let a contender overwrite a row whose renewal was waiting behind a long transaction
@@ -928,6 +982,7 @@ class SchemaLockHold {
       }
       this.rowHeld = true;
     }
+    this.confirmedAt = asked;
     // The earlier field-group lock is taken by the session the work runs in; asked first so a
     // held one is waited for like any other, rather than refused by the session outright.
     const fieldGroup = await observeMigrationLock(this.adapter, this.dialect);
@@ -1018,10 +1073,12 @@ class SchemaLockHold {
       // second queued beneath it.
       if (renewing) return;
       renewing = true;
+      const asked = Date.now();
       this.outstandingRenewal = this.renewOnce().then(
         ({ disproved }) => {
           renewing = false;
           if (disproved) this.lost = true;
+          else this.confirmedAt = Math.max(this.confirmedAt, asked);
         },
         () => {
           // A failed attempt proves nothing either way; the next one asks again, and the end of
@@ -1063,6 +1120,25 @@ class SchemaLockHold {
         targets
       )
     );
+  }
+
+  /**
+   * Refuse to go on unless this run can still show it holds the lock: no other run has taken it,
+   * and a confirmation of its lease is younger than the loss deadline, which leaves two renewal
+   * intervals of lease in hand (`lossAfterMs`). A run that stalled past that, or whose renewals
+   * all failed, cannot show it, and a run that lost the lock starts no further statement and
+   * records nothing further.
+   */
+  assertHeld(): void {
+    if (
+      !this.lost &&
+      this.confirmedAt > 0 &&
+      Date.now() - this.confirmedAt < this.timings.lossAfterMs
+    ) {
+      return;
+    }
+    this.lost = true;
+    throw lostLockError(this.options.command);
   }
 
   /**
@@ -1327,6 +1403,7 @@ async function runHeld<T>(
           claim: hold.claim,
           session,
           released: false,
+          assertHeld: () => hold.assertHeld(),
         };
         const result = heldHere
           .run([...(heldHere.getStore() ?? []), held], () => work(session))
