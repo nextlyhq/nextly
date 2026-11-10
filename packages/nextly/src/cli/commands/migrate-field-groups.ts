@@ -68,6 +68,25 @@ export async function runMigrateFieldGroups(
   // command that needs a connection.
   requireDatabaseEnv(logger);
 
+  // The site's per-language storage choice decides which field groups keep a translations table
+  // the rename has to carry with their own table: under `experimental.perLanguageStorage` an
+  // untranslated group keeps one too. A CLI process holds the choice only once it has read the
+  // site's config (`loadConfig` adopts it), so it is read before the migration plans anything. A
+  // site with no config file holds the default, which is off; a config that cannot be read stops
+  // the command rather than planning on a guess.
+  const { loadConfig } = await import("../utils/config-loader");
+  const configResult = await loadConfig({
+    configPath: options.config,
+    cwd: options.cwd,
+    debug: options.verbose,
+  });
+  // Reported beside the direction and mode rather than as a warning: a site without a config file
+  // is ordinary here, and the report's own warnings are about the plan.
+  logger.keyValue(
+    "Config",
+    configResult.configPath ?? "none found (defaults: per-language storage off)"
+  );
+
   const dryRun = options.apply !== true;
   const direction = options.down === true ? "down" : "up";
 

@@ -75,7 +75,7 @@ async function boot(
   // A rule only narrows a permission, so the reader holds both reads and the
   // target's rule is what decides.
   await userWhoMay(current, READER, "read", [PAGES, REFS]);
-  const handler = current.getService<CollectionsHandler>("collectionsHandler");
+  const handler = current.getService("collectionsHandler");
   const page = await handler.createEntry(
     { collectionName: PAGES, overrideAccess: true },
     { title: "Related page" }

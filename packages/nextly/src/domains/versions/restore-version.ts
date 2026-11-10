@@ -171,7 +171,9 @@ async function readComponentSchema(
     // fields is legitimate and must stay restorable.
     return {
       fields: record?.fields ?? [],
-      localized: (record as { localized?: unknown } | null)?.localized === true,
+      // Kept per language when the component is translated, or for every component under
+      // `experimental.perLanguageStorage`.
+      localized: storesPerLanguage(record ?? { localized: false }),
       resolved: record !== null && record !== undefined,
     };
   } catch (cause) {
