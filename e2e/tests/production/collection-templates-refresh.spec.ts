@@ -185,6 +185,9 @@ test.describe("a post's page as its template, the post and the access to it chan
       );
     const readable = [...new Set([...heldBefore, readPosts])];
     await setPublic(readable, "letting visitors read posts");
+    // A collection holds one template, so the one made here is deleted at
+    // the end, or the next spec to give Posts a template is refused.
+    const madeTemplates: string[] = [];
     try {
       // The Posts template and one post, both published.
       const templateId = await idOf(
@@ -198,6 +201,7 @@ test.describe("a post's page as its template, the post and the access to it chan
         }),
         "publishing the Posts template"
       );
+      madeTemplates.push(templateId);
       const postId = await idOf(
         await api.post(`${API}/collections/posts/entries`, {
           data: { ...POST, status: "published" },
@@ -282,6 +286,12 @@ test.describe("a post's page as its template, the post and the access to it chan
         });
       });
     } finally {
+      for (const id of madeTemplates) {
+        await expectOk(
+          await api.delete(`${API}/collections/templates/entries/${id}`),
+          "deleting the Posts template"
+        );
+      }
       // Every other spec meets visitors as the Public role left them.
       await setPublic(
         heldBefore,

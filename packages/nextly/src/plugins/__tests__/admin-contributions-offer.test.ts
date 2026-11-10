@@ -288,7 +288,10 @@ describe("contributionsForReader", () => {
     const { audience } = reader(["read-audit"]);
     const meta = await contributionsForReader([SUPPORT], audience, "login");
     expect(Object.keys(meta)).toEqual(["login"]);
+    // The sign-in form is the login page's built-in block, so the list
+    // places the contribution after it.
     expect(meta.login?.block).toEqual([
+      { builtIn: "form" },
       expect.objectContaining({ id: "acme-support.hello" }),
     ]);
   });

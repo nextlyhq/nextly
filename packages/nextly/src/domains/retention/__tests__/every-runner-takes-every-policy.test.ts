@@ -179,6 +179,9 @@ describe("the derived policy list", () => {
       // Recorded preview links long past their end, with nothing to configure,
       // as the one-purpose secrets beside them.
       "preview-links.retention.lastPassAt",
+      // Plugins' received-webhook claims, kept a fixed 30 days, with nothing
+      // to configure, as the one-purpose secrets beside them.
+      "received-webhooks.retention.lastPassAt",
       "secrets.retention.lastPassAt",
       "webhooks.retention.lastPassAt",
     ]);

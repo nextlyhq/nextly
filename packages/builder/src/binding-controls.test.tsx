@@ -95,7 +95,8 @@ const SOURCES: readonly BindingFieldSource[] = [
 
 function mount(
   bindings: BlockNode["bindings"],
-  services: Partial<ContentServices> = {}
+  services: Partial<ContentServices> = {},
+  blockLabel = "Badge"
 ): EditorState {
   registerBlocks(
     [
@@ -104,7 +105,7 @@ function mount(
         version: 1,
         description: "A badge.",
         example: { props: {} },
-        editor: { label: "Badge" },
+        editor: { label: blockLabel },
         props: {
           label: { label: "Text", role: "content", type: "text" },
           // A second prop, which an edit made during an unbind's plan changes.
@@ -221,6 +222,28 @@ describe("the field picker", () => {
       "Author › NameAda",
     ]);
     expect(within(list).getByRole("group", { name: "Site" })).toBeTruthy();
+  });
+
+  it("names the block with the article its label takes", async () => {
+    mount(undefined, {}, "Image");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Text to a field" })
+    );
+    expect(
+      await screen.findByText(
+        "Only fields an image's text can show are listed."
+      )
+    ).toBeTruthy();
+    cleanup();
+    clearBlocks();
+    // The control: a label starting with a consonant keeps "a".
+    mount(undefined);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Text to a field" })
+    );
+    expect(
+      await screen.findByText("Only fields a badge's text can show are listed.")
+    ).toBeTruthy();
   });
 
   it("says which source could not be read, and lists the others", async () => {

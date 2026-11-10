@@ -491,11 +491,69 @@ function codeFirstKeysRefusal(
   });
 }
 
-/** The check itself; bounded by its caller. */
+/**
+ * Warns when the registry tables in `live` still hold rules in the retired
+ * `access_rules` column, which this release no longer enforces. The column's
+ * presence is what decides whether there is anything to count: asking a table
+ * that no longer has it would be the error this check exists to avoid causing.
+ */
+async function warnOfRetiredAccessRules(
+  adapter: AdapterLike,
+  logger: LoggerLike,
+  live: NextlySchemaSnapshot
+): Promise<void> {
+  const [
+    {
+      countRetiredAccessRules,
+      findRetiredAccessRulesColumns,
+      formatRetiredAccessRulesWarning,
+    },
+    { countNulls, countRows },
+  ] = await Promise.all([
+    import("./retired-access-rules"),
+    import("../domains/schema/pipeline/classifier/count-helpers"),
+  ]);
+  const carrying = findRetiredAccessRulesColumns(live);
+  if (carrying.length === 0) return;
+  const found = await countRetiredAccessRules(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    carrying,
+    { countNulls, countRows }
+  );
+  if (found.length > 0) {
+    logger.warn(formatRetiredAccessRulesWarning(found));
+  }
+}
+
+/**
+ * The check itself; bounded by its caller.
+ *
+ * A production start compares nothing of the core schema with the database:
+ * `nextly migrate` brings the core tables up to date and names what it finds.
+ * It reads only the two registry tables, for the rules left in their retired
+ * `access_rules` column, which nothing else names and which look enforced
+ * while they are not. Every other report here is a development start's.
+ */
 async function runCoreSchemaChecks(
   adapter: AdapterLike,
   logger: LoggerLike
 ): Promise<void> {
+  if (process.env.NODE_ENV !== "development") {
+    const [{ introspectLiveSnapshot }, { RETIRED_ACCESS_RULES_TABLES }] =
+      await Promise.all([
+        import("../domains/schema/pipeline/diff/introspect-live"),
+        import("./retired-access-rules"),
+      ]);
+    await warnOfRetiredAccessRules(
+      adapter,
+      logger,
+      await introspectLiveSnapshot(adapter.getDrizzle(), adapter.dialect, [
+        ...RETIRED_ACCESS_RULES_TABLES,
+      ])
+    );
+    return;
+  }
   const [{ introspectLiveSnapshot }, { getCoreSchema, getCoreTableNames }] =
     await Promise.all([
       import("../domains/schema/pipeline/diff/introspect-live"),
@@ -509,17 +567,9 @@ async function runCoreSchemaChecks(
     formatCoreSchemaDriftWarning,
     formatMissingCoreTablesWarning,
   } = await import("./core-schema-drift");
-  const [
-    {
-      countRetiredAccessRules,
-      findRetiredAccessRulesColumns,
-      formatRetiredAccessRulesWarning,
-    },
-    { countNulls, countRows },
-  ] = await Promise.all([
-    import("./retired-access-rules"),
-    import("../domains/schema/pipeline/classifier/count-helpers"),
-  ]);
+  const { countRows } = await import(
+    "../domains/schema/pipeline/classifier/count-helpers"
+  );
 
   // 🔴 Both sides take the registry this database actually holds. Checking for
   // the legacy name on a migrated database misses the table that is really
@@ -553,21 +603,8 @@ async function runCoreSchemaChecks(
   }
 
   // The mirror case, read off the SAME snapshot: the two registry tables are
-  // core tables, so their columns are already in hand. The column's presence
-  // is what decides whether there is anything to count — asking a table that
-  // no longer has it would be the error this check exists to avoid causing.
-  const carrying = findRetiredAccessRulesColumns(live);
-  if (carrying.length > 0) {
-    const found = await countRetiredAccessRules(
-      adapter.getDrizzle(),
-      adapter.dialect,
-      carrying,
-      { countNulls, countRows }
-    );
-    if (found.length > 0) {
-      logger.warn(formatRetiredAccessRulesWarning(found));
-    }
-  }
+  // core tables, so their columns are already in hand.
+  await warnOfRetiredAccessRules(adapter, logger, live);
 
   // Asked of the database directly rather than read off the snapshot above:
   // these tables are no longer core, so `getCoreTableNames` does not name them

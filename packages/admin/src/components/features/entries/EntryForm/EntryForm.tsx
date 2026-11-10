@@ -42,7 +42,6 @@ import {
 } from "@admin/components/features/versions/viewed-version-host";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { toast } from "@admin/components/ui";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
@@ -61,10 +60,6 @@ import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
 import { versionForLanguage } from "@admin/lib/document-version";
-import {
-  panelOrderFor,
-  placePanelParts,
-} from "@admin/lib/plugins/document-surfaces";
 import { cn } from "@admin/lib/utils";
 import { entryApi } from "@admin/services/entryApi";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
@@ -81,6 +76,7 @@ import { TranslationPanes } from "../TranslationMode/TranslationPanes";
 import { useTranslationSource } from "../TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "../useEntryLocaleContext";
 
+import { useDocumentPanelParts, useDocumentPlace } from "./document-place";
 import type { ContributedAction } from "./DocumentActionBar";
 import {
   DocumentActionsHost,
@@ -95,6 +91,7 @@ import {
   DocumentEditorLayout,
 } from "./DocumentEditorLayout";
 import { DocumentLockBanner } from "./DocumentLockBanner";
+import { DocumentPlaceTabs } from "./DocumentPlaceTabs";
 import { DocumentSidePanel } from "./DocumentSidePanel";
 import { DocumentTitleBlock } from "./DocumentTitleBlock";
 import { DocumentTrail } from "./DocumentTrail";
@@ -116,6 +113,7 @@ import {
   EntryFormContextProvider,
   hasPendingWorkingDraft,
 } from "./EntryFormContext";
+import { EntryFormPlace } from "./EntryFormPlace";
 import { EntryFormProvider } from "./EntryFormProvider";
 import { EntryFormSidebar } from "./EntryFormSidebar";
 import { EntryMetaStrip } from "./EntryMetaStrip";
@@ -1100,6 +1098,16 @@ export function EntryForm({
   // Where the docked column is on screen, it carries the id and the language
   // panel, so the field column's own copies of them step aside.
   const panelDocked = mode === "edit" && panel.docked;
+  // The edit page's place: plugins' blocks around the bar and the editor,
+  // their tabs over the field column and their sections in the panel.
+  const documentPlace = useDocumentPlace(
+    {
+      kind: "collection",
+      collection: collectionSlug,
+      entryId: entry?.id ?? null,
+    },
+    entry ?? undefined
+  );
 
   /*
    * What deciding this document's actions reads. Every write handler goes
@@ -1134,21 +1142,15 @@ export function EntryForm({
     onOwnChange: expectOwnChange,
     locale,
   });
-  // The panel's sections in the order the server placed them, with the side
-  // panel sections plugins declared for this collection's entries among them,
-  // each judged on the entry as this reader's read returned it.
-  const { contributions } = useBranding();
-  // On a phone the panel is a sheet opened only from the document's menu, so
-  // a section declared to sit above the form there moves out of the panel
-  // and above the fields, where the author meets it first.
-  const { panel: panelOrder, aboveForm: sectionsAboveForm } = useMemo(
-    () =>
-      placePanelParts(
-        panelOrderFor(contributions, collection.name, entry),
-        panel.mode === "sheet"
-      ),
-    [contributions, collection.name, entry, panel.mode]
-  );
+  // The side panel's sections in the order the server placed them, with the
+  // sections plugins declared at this page's place among them, and what each
+  // is handed: the place's context and entry, with the document's handles.
+  const { panelOrder, sectionsAboveForm, placedSectionProps } =
+    useDocumentPanelParts(
+      documentPlace,
+      panel.mode === "sheet",
+      pluginSurfaces.sectionProps
+    );
 
   const documentActionsInput: DocumentActionBindingsInput = {
     mode,
@@ -1469,6 +1471,7 @@ export function EntryForm({
                               row, so they sit above it rather than inside the
                               measured field column. */}
                             <DocumentEditorLayout
+                              place={documentPlace}
                               frameRef={panel.measure}
                               panelMode={panel.mode}
                               bar={
@@ -1576,91 +1579,88 @@ export function EntryForm({
                                 // once the rail has taken its share.
                                 style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
                               >
-                                {/* The title first and largest, then the slug
+                                <DocumentPlaceTabs place={documentPlace}>
+                                  {/* The title first and largest, then the slug
                                   on the line under it. The slug is a write,
                                   and the same claim withholds it. */}
-                                <DocumentTitleBlock
-                                  mode={mode}
-                                  titleField={titleField}
-                                  documentLocked={lock.readOnly}
-                                  // A save alone: the title's own `disabled`
-                                  // follows it, and a recovery holds the title
-                                  // read-only through the lock instead.
-                                  isSubmitting={savePending}
-                                  slug={
-                                    slugField
-                                      ? {
-                                          field: slugField,
-                                          locked: lock.readOnly,
-                                          hasPublicAddress,
-                                        }
-                                      : undefined
-                                  }
-                                />
-                                <EntryMetaStrip
-                                  panelCarriesId={panelDocked}
-                                  documentId={entry?.id}
-                                />
-                                {/* A plugin's section that asks to be met
-                                  first, above the fields on a phone rather
-                                  than in the sheet. */}
-                                {mode === "edit" ? (
-                                  <PanelSectionsAboveForm
-                                    sections={sectionsAboveForm}
-                                    className={DOCUMENT_COLUMN_INSET}
-                                    {...(pluginSurfaces.sectionProps ===
-                                    undefined
-                                      ? {}
-                                      : {
-                                          pluginSectionProps:
-                                            pluginSurfaces.sectionProps,
-                                        })}
+                                  <DocumentTitleBlock
+                                    mode={mode}
+                                    titleField={titleField}
+                                    documentLocked={lock.readOnly}
+                                    // A save alone: the title's own `disabled`
+                                    // follows it, and a recovery holds the title
+                                    // read-only through the lock instead.
+                                    isSubmitting={savePending}
+                                    slug={
+                                      slugField
+                                        ? {
+                                            field: slugField,
+                                            locked: lock.readOnly,
+                                            hasPublicAddress,
+                                          }
+                                        : undefined
+                                    }
                                   />
-                                ) : null}
+                                  <EntryMetaStrip
+                                    panelCarriesId={panelDocked}
+                                    documentId={entry?.id}
+                                  />
+                                  {/* A plugin's section that asks to be met
+                                    first, above the fields on a phone rather
+                                    than in the sheet. */}
+                                  {mode === "edit" ? (
+                                    <PanelSectionsAboveForm
+                                      sections={sectionsAboveForm}
+                                      className={DOCUMENT_COLUMN_INSET}
+                                      {...(placedSectionProps === undefined
+                                        ? {}
+                                        : { placedSectionProps })}
+                                    />
+                                  ) : null}
 
-                                {/* The language panel, inline: the exact
+                                  {/* The language panel, inline: the exact
                         complement of the docked panel, shown wherever that
                         column is not on screen — create mode, a folded panel,
                         and every width the panel floats or is a sheet at,
                         where it opens only when asked for. */}
-                                {localizationEnabled && (
-                                  <div
-                                    className={cn(
-                                      // In line with the title and the
-                                      // fields, not indented past them.
-                                      "pt-4",
-                                      DOCUMENT_COLUMN_INSET,
-                                      panelDocked && "hidden"
-                                    )}
-                                  >
-                                    <DocumentLanguagePanel
-                                      translations={
-                                        entry?._translations as
-                                          | Record<
-                                              string,
-                                              {
-                                                translated: boolean;
-                                                status?: string;
-                                              }
-                                            >
-                                          | undefined
-                                      }
-                                      locale={locale}
-                                      onLocaleChange={switchLocale}
-                                      hasStatus={hasStatus}
-                                      actionsDisabled={contentHeld}
-                                      // Publishing every language is a write
-                                      // too, so a recovery holds it as well.
-                                      publishAllDisabled={
-                                        publishAllHeld || recovering
-                                      }
-                                      // A reader may still open the other languages.
-                                      navigationDisabled={navigationHeld}
-                                    />
-                                  </div>
-                                )}
+                                  {localizationEnabled && (
+                                    <div
+                                      className={cn(
+                                        // In line with the title and the
+                                        // fields, not indented past them.
+                                        "pt-4",
+                                        DOCUMENT_COLUMN_INSET,
+                                        panelDocked && "hidden"
+                                      )}
+                                    >
+                                      <DocumentLanguagePanel
+                                        translations={
+                                          entry?._translations as
+                                            | Record<
+                                                string,
+                                                {
+                                                  translated: boolean;
+                                                  status?: string;
+                                                }
+                                              >
+                                            | undefined
+                                        }
+                                        locale={locale}
+                                        onLocaleChange={switchLocale}
+                                        hasStatus={hasStatus}
+                                        actionsDisabled={contentHeld}
+                                        // Publishing every language is a write
+                                        // too, so a recovery holds it as well.
+                                        publishAllDisabled={
+                                          publishAllHeld || recovering
+                                        }
+                                        // A reader may still open the other languages.
+                                        navigationDisabled={navigationHeld}
+                                      />
+                                    </div>
+                                  )}
 
-                                {/* Reading a past version replaces the document rather than
+                                  {/* Reading a past version replaces the document rather than
                       opening beside it: the question an editor is asking is how
                       this page read then, and that is answered by the page. The
                       live form stays mounted underneath — the historical values
@@ -1669,35 +1669,43 @@ export function EntryForm({
                       The swap itself is the shared host's, so the Single editor
                       answers a published version through the same surface. Its
                       comparison bar is drawn among the banners under the bar. */}
-                                <ViewedVersionBody
-                                  fields={historicalFields ?? mainFields}
-                                  values={historicalValues ?? undefined}
-                                  // A submit in flight withholds restore too: a
-                                  // restore racing the ordinary save would let
-                                  // completion order decide which contents
-                                  // survive.
-                                  // A reader's page holds restoring as well.
-                                  actionsDisabled={
-                                    versionWritesHeld || isSubmitting
-                                  }
-                                  bannerSlot={versionBannerSlot}
-                                >
-                                  {mainFields.length > 0 && (
-                                    <div className="@4xl/content:p-8 pt-6">
-                                      {/* Forward the form mode: in edit mode a blank password
+                                  <ViewedVersionBody
+                                    fields={historicalFields ?? mainFields}
+                                    values={historicalValues ?? undefined}
+                                    // A submit in flight withholds restore too: a
+                                    // restore racing the ordinary save would let
+                                    // completion order decide which contents
+                                    // survive.
+                                    // A reader's page holds restoring as well.
+                                    actionsDisabled={
+                                      versionWritesHeld || isSubmitting
+                                    }
+                                    bannerSlot={versionBannerSlot}
+                                  >
+                                    <EntryFormPlace
+                                      kind="collection"
+                                      slug={collectionSlug}
+                                      entryId={entry?.id ?? null}
+                                      {...(entry ? { entry } : {})}
+                                    >
+                                      {mainFields.length > 0 && (
+                                        <div className="@4xl/content:p-8 pt-6">
+                                          {/* Forward the form mode: in edit mode a blank password
                         field means "keep the current password" rather than a
                         required-field violation (see note on the layout form
                         above). */}
-                                      <EntryFormContent
-                                        fields={mainFields}
-                                        disabled={savePending}
-                                        readOnly={lock.readOnly}
-                                        withCard
-                                        mode={mode}
-                                      />
-                                    </div>
-                                  )}
-                                </ViewedVersionBody>
+                                          <EntryFormContent
+                                            fields={mainFields}
+                                            disabled={savePending}
+                                            readOnly={lock.readOnly}
+                                            withCard
+                                            mode={mode}
+                                          />
+                                        </div>
+                                      )}
+                                    </EntryFormPlace>
+                                  </ViewedVersionBody>
+                                </DocumentPlaceTabs>
                               </div>
 
                               {/* The document panel, framed for the editor's
@@ -1752,6 +1760,9 @@ export function EntryForm({
                                           pluginSectionProps:
                                             pluginSurfaces.sectionProps,
                                         })}
+                                    {...(placedSectionProps === undefined
+                                      ? {}
+                                      : { placedSectionProps })}
                                   />
                                 </DocumentSidePanel>
                               ) : null}

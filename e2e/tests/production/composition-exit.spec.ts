@@ -800,21 +800,21 @@ test.describe("the composition exit tests", () => {
     expect(count(framed.drawn, `From the pattern ${STAMP}`)).toBe(2);
     expect(framed.drawn).toContain(`Set through the API ${STAMP}`);
     expect(framed.drawn).toContain(`API card body ${STAMP}`);
+    // The first visit after a publish is drawn on demand, and Next.js then
+    // stores the page in the background from what that visit read. A publish
+    // made while that store is still running is older than the page it
+    // stores, so the old page would stay current. Waiting for the cached page
+    // keeps this step about the action, not about that window, which any
+    // write shares.
+    await warmed(page.request, `/site/through-the-api-${STAMP}`);
 
     await act(
       { kind: "set-layout", layout, noHeaderFooter: true },
       { publish: true }
     );
-    // A page read right after a write can be served its previous entry once.
-    await expect
-      .poll(
-        async () =>
-          (await served(page.request, `/site/through-the-api-${STAMP}`)).drawn,
-        { timeout: 30_000 }
-      )
-      .not.toContain(`API header ${STAMP}`);
     const bare = await served(page.request, `/site/through-the-api-${STAMP}`);
     expect(bare.drawn).toContain(`Set through the API ${STAMP}`);
+    expect(bare.drawn).not.toContain(`API header ${STAMP}`);
 
     // Making a Layout the site's default, as a dry run: answered, and the
     // default is as it was.
@@ -854,17 +854,22 @@ test.describe("the composition exit tests", () => {
      */
     const scriptsOf = async (path: string) => {
       const loaded: string[] = [];
-      const listen = (response: {
-        request(): { resourceType(): string };
-        url(): string;
-      }) => {
-        if (response.request().resourceType() === "script") {
-          loaded.push(new URL(response.url()).pathname);
+      // Counted as the page asks for them. A response can arrive for a
+      // request the previous page made, and the page before the first
+      // measurement is the admin the test signed in through, whose own
+      // scripts were still arriving: one of those counted against the page
+      // that happened to be loading.
+      const listen = (request: { resourceType(): string; url(): string }) => {
+        if (request.resourceType() === "script") {
+          loaded.push(new URL(request.url()).pathname);
         }
       };
-      page.on("response", listen);
+      // And from a blank page, so nothing of the previous one is still
+      // running to ask for more while this one loads.
+      await page.goto("about:blank");
+      page.on("request", listen);
       await page.goto(path, { waitUntil: "networkidle" });
-      page.off("response", listen);
+      page.off("request", listen);
       const { clientReferences, inContent } = await page.evaluate(() => {
         // The payload as the server sent it, read from the inline scripts
         // that pushed it: hydration empties `self.__next_f` itself.

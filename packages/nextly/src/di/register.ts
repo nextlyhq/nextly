@@ -144,6 +144,7 @@ import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/w
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
 import type { DeferrableEntityKind } from "../domains/widgets/deferred-entities";
+import { withdrawApprovalsUnderEarlierDefinitions } from "../domains/workflows/approval-follows-content";
 import {
   buildWorkflowRegistry,
   publishWorkflows,
@@ -1178,6 +1179,14 @@ async function registerServicesOnce(
         adapter,
         logger: resolvedLogger,
       });
+
+      // Approvals given under an earlier definition of a workflow are withdrawn now the workflows
+      // this boot registered are published, unless the definition keeps them. After the migrations,
+      // so the review states table is there to read where it exists at all.
+      await withdrawApprovalsUnderEarlierDefinitions(
+        adapter,
+        workflows.values()
+      );
 
       // The stored language list is read before any plugin starts and before registration publishes:
       // until its first read the registry knows no stored languages, and a plugin's `init` writing

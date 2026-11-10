@@ -17,10 +17,12 @@
  * @module plugins/security/inbound-webhooks
  * @experimental
  */
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 import { standardWebhooksSignature } from "../../domains/webhooks/signing";
 import { NextlyError } from "../../errors/nextly-error";
+
+import type { TxOption } from "./one-time-secrets";
 
 /** @experimental A delivery as a scheme reads it. */
 export interface InboundWebhookDelivery {
@@ -97,6 +99,55 @@ export type WebhookVerification =
     }
   | { readonly verified: false; readonly reason: WebhookRefusal };
 
+/** @experimental A verified answer, exactly as `verify` returned it. */
+export type VerifiedWebhook = Extract<WebhookVerification, { verified: true }>;
+
+/** @experimental How a verified delivery is claimed. */
+export interface ClaimDeliveryOptions extends TxOption {
+  /**
+   * Who sent it, in the plugin's own words, such as `stripe`: a delivery id is
+   * unique only within its sender. At most 191 characters.
+   */
+  readonly provider: string;
+  /**
+   * The delivery's id, for a provider that puts it in the body rather than
+   * where the scheme reads it. Without one, the scheme's id is used, and
+   * without that a SHA-256 of the body. At most 191 characters.
+   */
+  readonly id?: string;
+  /**
+   * How long a claim made without `tx` is held for its handler, in seconds:
+   * 300 by default, 1 to 3600. A handler that neither completes nor releases
+   * it within that time loses it to the provider's next retry.
+   */
+  readonly leaseSeconds?: number;
+}
+
+/** @experimental A claim this call won, for its handler to end. */
+export interface DeliveryClaim {
+  /**
+   * Mark the delivery processed: a retry is answered as a duplicate from now
+   * on. `completed: false` when the lease expired and a retry took the claim
+   * over, so the work may run twice.
+   */
+  complete(options?: TxOption): Promise<{ completed: boolean }>;
+  /**
+   * Give a pending claim up, so the provider's next retry is processed at
+   * once. A processed delivery stays processed: `released: false`.
+   */
+  release(options?: TxOption): Promise<{ released: boolean }>;
+}
+
+/**
+ * @experimental What claiming a delivery answers. `first`: process it.
+ * `duplicate`: it was processed already; answer it as a success. `in-progress`:
+ * another handler holds it; answer with a status the provider retries.
+ */
+export type DeliveryClaimResult =
+  | { readonly status: "first"; readonly claim: DeliveryClaim }
+  | { readonly status: "duplicate" }
+  | { readonly status: "in-progress" };
+
 /** @experimental Verifying the webhooks a plugin receives (`ctx.security.webhooks`). */
 export interface PluginReceivedWebhooks {
   /**
@@ -107,6 +158,41 @@ export interface PluginReceivedWebhooks {
     request: Request,
     options: VerifyWebhookOptions
   ): Promise<WebhookVerification>;
+  /**
+   * Claim a delivery `verify` verified, once per plugin, provider and
+   * delivery. With `tx` the claim commits with the plugin's writes and is
+   * gone if they roll back. Without one it is a lease the handler ends with
+   * `complete` or `release`; called so while the calling flow has a
+   * transaction open, it is refused. Only the object `verify` returned is
+   * accepted, and the delivery it names is the one that was verified.
+   */
+  claimDelivery(
+    verified: VerifiedWebhook,
+    options: ClaimDeliveryOptions
+  ): Promise<DeliveryClaimResult>;
+}
+
+/** What a verified answer is claimed by, recorded when it was verified. */
+export interface VerifiedFacts {
+  readonly deliveryId?: string;
+  /** SHA-256 hex of the verified body. */
+  readonly bodyDigest: string;
+  readonly freshness: "checked" | "unchecked";
+}
+
+/**
+ * Every verified answer this module returned, with what it verified. Held
+ * here and nowhere else, so an object built by hand, or a copy of a real
+ * answer, is not one; and read from here rather than from the answer, so an
+ * answer changed afterwards still names the delivery that was verified.
+ */
+const VERIFIED = new WeakMap<object, VerifiedFacts>();
+
+/** What `value` verified, if it is an answer `verify` returned. */
+export function verifiedFacts(value: unknown): VerifiedFacts | undefined {
+  return typeof value === "object" && value !== null
+    ? VERIFIED.get(value)
+    : undefined;
 }
 
 const DEFAULT_TOLERANCE_SECONDS = 300;
@@ -255,17 +341,33 @@ export function verifyWebhookDelivery(
   if (!anySecretSigned(options.scheme, reading, secrets)) {
     return { verified: false, reason: "mismatch" };
   }
-  return {
-    verified: true,
+  const freshness = reading.timestamp === "none" ? "unchecked" : "checked";
+  // Frozen, and recorded with what it verified: `claimDelivery` accepts only
+  // an answer recorded here, and claims what the record says.
+  const verified: VerifiedWebhook = Object.freeze({
+    verified: true as const,
     body: new TextDecoder().decode(delivery.bytes),
     bytes: delivery.bytes,
     ...(reading.deliveryId !== undefined
       ? { deliveryId: reading.deliveryId }
       : {}),
     ...(reading.timestamp === "none"
-      ? { freshness: "unchecked" as const }
-      : { timestamp: reading.timestamp, freshness: "checked" as const }),
-  };
+      ? { freshness }
+      : { timestamp: reading.timestamp, freshness }),
+  });
+  VERIFIED.set(
+    verified,
+    Object.freeze({
+      // An empty id names no delivery: such a delivery is claimed by its
+      // body, or every one of them would be the same delivery.
+      ...(reading.deliveryId !== undefined && reading.deliveryId.length > 0
+        ? { deliveryId: reading.deliveryId }
+        : {}),
+      bodyDigest: createHash("sha256").update(delivery.bytes).digest("hex"),
+      freshness,
+    })
+  );
+  return verified;
 }
 
 /**
@@ -296,24 +398,27 @@ async function readBounded(
   return Buffer.concat(chunks);
 }
 
-/** `ctx.security.webhooks`, telling time by `now`. */
-export function createPluginReceivedWebhooks(
-  clock: { now: () => Date } = { now: () => new Date() }
-): PluginReceivedWebhooks {
-  return {
-    async verify(request, options) {
-      const maxBytes = finiteAtLeast(
-        options.maxBytes ?? DEFAULT_MAX_BYTES,
-        1,
-        "maxBytes"
-      );
-      const bytes = await readBounded(request, maxBytes);
-      if (bytes === null) return { verified: false, reason: "too-large" };
-      return verifyWebhookDelivery(
-        { headers: request.headers, bytes },
-        options,
-        clock.now()
-      );
-    },
-  };
+/**
+ * Verify `request`, reading a copy of its body no longer than the options
+ * allow: what `ctx.security.webhooks.verify` does. The clock is read once the
+ * body is whole, so a body that trickles in is judged by when it arrived, not
+ * by when its request began.
+ */
+export async function verifyWebhookRequest(
+  request: Request,
+  options: VerifyWebhookOptions,
+  now: () => Date
+): Promise<WebhookVerification> {
+  const maxBytes = finiteAtLeast(
+    options.maxBytes ?? DEFAULT_MAX_BYTES,
+    1,
+    "maxBytes"
+  );
+  const bytes = await readBounded(request, maxBytes);
+  if (bytes === null) return { verified: false, reason: "too-large" };
+  return verifyWebhookDelivery(
+    { headers: request.headers, bytes },
+    options,
+    now()
+  );
 }

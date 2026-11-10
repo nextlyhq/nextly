@@ -9,8 +9,11 @@
  * branch, the only branch the warning runs on. `tableExists` answers from the
  * live catalogue, so the namesake check sees the same columns a boot would.
  * On every dialect with a database in this run.
+ *
+ * In a development start: a production start compares nothing of the core
+ * schema with the database, so it names no retired table.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   availableDialects,
@@ -23,6 +26,14 @@ import {
   createRetiredAuthTables,
   createStoredPermissionAnswersTable,
 } from "./retired-auth-tables-fixture";
+
+// The core schema is compared in a development start only.
+beforeEach(() => {
+  vi.stubEnv("NODE_ENV", "development");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const WARNING_OPENING = "still has auth tables";
 
