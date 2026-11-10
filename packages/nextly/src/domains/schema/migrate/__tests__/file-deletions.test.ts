@@ -48,6 +48,11 @@ interface Facts {
   rewrite?: Record<string, boolean | undefined>;
   /** The tables the database has before the run, beyond those `columns` names; "unreadable" for none known. */
   live?: readonly string[] | "unreadable";
+  /**
+   * MySQL: per table in `columns`, the columns whose character set is not the table's default;
+   * none when left out. "unreadable": not read for any table.
+   */
+  charsets?: Record<string, readonly string[]> | "unreadable";
 }
 
 /** Live facts answering exactly from `facts`, with no case folding. */
@@ -94,6 +99,18 @@ function fake(facts: Facts = {}): DeletionFacts {
         new Map(Object.entries(columns)),
       ])
     ),
+    ...(facts.charsets === "unreadable"
+      ? {}
+      : {
+          otherCharsets: new Map(
+            tables.map(([table]) => {
+              const charsets = facts.charsets as
+                | Record<string, readonly string[]>
+                | undefined;
+              return [table, new Set(charsets?.[table] ?? [])];
+            })
+          ),
+        }),
   };
 }
 
@@ -231,6 +248,126 @@ describe("columns dropped or converted", () => {
         "ALTER TABLE posts ADD COLUMN body text DEFAULT replace('a', 'b', 'c')",
       ])
     ).toEqual([]);
+  });
+});
+
+describe("a string column widened", () => {
+  // Live types as introspection spells them; `body` is already TEXT.
+  const posts = {
+    columns: {
+      posts: {
+        title: "varchar(255)",
+        slug: "varchar(20)",
+        body: "text",
+        a: "varchar(255)",
+      },
+    },
+  };
+
+  it("names nothing for a MySQL widening to TEXT or a longer VARCHAR, nor for TEXT restated", () => {
+    expect(
+      read(
+        "mysql",
+        [
+          "ALTER TABLE `posts` MODIFY COLUMN `title` text NULL",
+          "ALTER TABLE posts MODIFY slug varchar(40) NOT NULL DEFAULT 'x'",
+          "ALTER TABLE posts MODIFY COLUMN body TEXT",
+          "ALTER TABLE posts CHANGE COLUMN a b text",
+        ],
+        posts
+      )
+    ).toEqual([]);
+  });
+
+  it("still names a MySQL narrowing, and TEXT to VARCHAR", () => {
+    expect(
+      read(
+        "mysql",
+        [
+          "ALTER TABLE posts MODIFY COLUMN slug varchar(10)",
+          "ALTER TABLE posts MODIFY COLUMN body varchar(255)",
+          "ALTER TABLE posts MODIFY COLUMN title mediumint",
+        ],
+        posts
+      )
+    ).toEqual([
+      column("posts", "slug"),
+      column("posts", "body"),
+      column("posts", "title"),
+    ]);
+  });
+
+  it("still names a MySQL widening that names a character set or collation, or whose column's character set is not its table's", () => {
+    expect(
+      read(
+        "mysql",
+        [
+          "ALTER TABLE posts MODIFY COLUMN title text CHARACTER SET latin1",
+          "ALTER TABLE posts MODIFY COLUMN slug varchar(40) COLLATE latin1_bin",
+          "ALTER TABLE posts MODIFY COLUMN a text",
+        ],
+        { ...posts, charsets: { posts: ["a"] } }
+      )
+    ).toEqual([
+      column("posts", "title"),
+      column("posts", "slug"),
+      column("posts", "a"),
+    ]);
+    // Character sets that could not be read leave a widening judged as any type change.
+    expect(
+      read("mysql", ["ALTER TABLE posts MODIFY COLUMN title text"], {
+        ...posts,
+        charsets: "unreadable",
+      })
+    ).toEqual([column("posts", "title")]);
+  });
+
+  it("judges a second change against the type the first gave, not the live one", () => {
+    expect(
+      read(
+        "mysql",
+        [
+          "ALTER TABLE posts MODIFY COLUMN title varchar(300)",
+          "ALTER TABLE posts MODIFY COLUMN title varchar(280)",
+        ],
+        posts
+      )
+    ).toEqual([column("posts", "title")]);
+  });
+
+  it("names nothing for a PostgreSQL widening cast plainly, and still names a narrowing or another conversion", () => {
+    expect(
+      read(
+        "postgresql",
+        [
+          'ALTER TABLE "posts" ALTER COLUMN "title" TYPE text USING "title"::text',
+          "ALTER TABLE posts ALTER COLUMN slug TYPE varchar(40) USING slug::varchar(40)",
+          "ALTER TABLE posts ALTER body SET DATA TYPE text",
+        ],
+        posts
+      )
+    ).toEqual([]);
+    expect(
+      read(
+        "postgresql",
+        [
+          "ALTER TABLE posts ALTER COLUMN slug TYPE varchar(10) USING slug",
+          "ALTER TABLE posts ALTER COLUMN title TYPE text USING lower(title)",
+          "ALTER TABLE posts ALTER COLUMN body TYPE varchar(255) USING body::varchar(255)",
+        ],
+        posts
+      )
+    ).toEqual([
+      column("posts", "slug"),
+      column("posts", "title"),
+      column("posts", "body"),
+    ]);
+  });
+
+  it("names a widened column whose live type is not known", () => {
+    expect(
+      read("mysql", ["ALTER TABLE posts MODIFY COLUMN title text"])
+    ).toEqual([column("posts", "title")]);
   });
 });
 

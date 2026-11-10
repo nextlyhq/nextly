@@ -9,7 +9,10 @@
  *   dropping it again deletes nothing that was there before the file.
  * - drops a column, or changes its type (`ALTER ... TYPE`, MySQL's `MODIFY`
  *   and `CHANGE`): a `column` deletion. A changed type may not hold every
- *   value, so it needs consent naming the column like a drop does.
+ *   value, so it needs consent naming the column like a drop does. A string
+ *   column widened (`varchar(n)` to `text` or a `varchar` at least as long,
+ *   `keepsEveryStringValue`), with nothing else that converts it stated, keeps
+ *   every value and deletes nothing.
  * - removes rows (`DELETE`, `TRUNCATE`, `REPLACE`, SQLite's `OR REPLACE`): a
  *   `rows` deletion, and one for each table a foreign key's `ON DELETE
  *   CASCADE` (or PostgreSQL's `TRUNCATE ... CASCADE`) reaches from it, read
@@ -39,10 +42,12 @@ import { createHash } from "node:crypto";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
 import type { LiveColumns } from "../ownership/drop-guard";
+import { keepsEveryStringValue } from "../pipeline/classifier/type-widening";
 import { introspectTableNames } from "../pipeline/diff/introspect-live";
 import { queryLiveColumnTypes } from "../pipeline/live-column-types";
 import {
   readHiddenCode,
+  readMysqlOtherCharsets,
   readPgDescendants,
   readReferencingKeys,
   readUserFunctions,
@@ -111,6 +116,13 @@ export interface DeletionFacts {
    * without it judge every carried column a possible deletion rather than none.
    */
   liveColumnTypes?: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /**
+   * MySQL: by lower-cased table, the columns whose character set is not their table's default,
+   * read for the tables whose column types are read. A `MODIFY` or `CHANGE` naming none gives the
+   * column the table's default, converting its values. A table absent here was not read, and a
+   * widening of its columns is judged as any type change.
+   */
+  otherCharsets?: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 type Token = string | QuotedToken;
@@ -131,6 +143,8 @@ interface FactSource {
   unseenRebuild: "drop" | "deferred";
   liveColumns(table: string): ReadonlySet<string> | undefined;
   liveType(table: string, column: string): string | undefined;
+  /** MySQL: whether `column` has its table's default character set; undefined when unread. */
+  keepsCharacterSet(table: string, column: string): boolean | undefined;
 }
 
 /** A column whose values a row removal elsewhere blanks. */
@@ -187,7 +201,13 @@ type Step =
       /** PostgreSQL's ONLY: the table without its descendants. */
       only?: boolean;
     }
-  | { kind: "column"; table: string; column: string }
+  | {
+      kind: "column";
+      table: string;
+      column: string;
+      /** The type the change gives the column, when it states nothing else that converts it (`plainTypeStated`). */
+      to?: string;
+    }
   | { kind: "drop-column"; table: string; column: string }
   | { kind: "rename-table"; from: string; to: string }
   | { kind: "rename-column"; table: string; from: string; to: string }
@@ -1075,7 +1095,7 @@ function readMysqlAlterClause(
     const column = clause.name();
     return column === undefined
       ? undefined
-      : [{ kind: "column", table, column }];
+      : [typeChange(table, column, plainTypeStated(clause.rest(), column))];
   }
   if (clause.accept("CHANGE")) return readChangeColumn(clause, table);
   // Converting the table's character set rewrites every text column, and
@@ -1100,7 +1120,9 @@ function readChangeColumn(
   const from = clause.name();
   const to = clause.name();
   if (from === undefined || to === undefined) return undefined;
-  const changed: Step[] = [{ kind: "column", table, column: from }];
+  const changed: Step[] = [
+    typeChange(table, from, plainTypeStated(clause.rest(), from)),
+  ];
   if (from !== to) changed.push({ kind: "rename-column", table, from, to });
   return changed;
 }
@@ -1190,8 +1212,57 @@ function readAlterColumn(
   const column = clause.name();
   if (column === undefined) return undefined;
   return clause.accept("TYPE") || clause.accept("SET", "DATA", "TYPE")
-    ? [{ kind: "column", table, column }]
+    ? [typeChange(table, column, plainTypeStated(clause.rest(), column))]
     : [];
+}
+
+/** A change of `column`'s type, with the type it is given when that is all the change states. */
+function typeChange(
+  table: string,
+  column: string,
+  to: string | undefined
+): Step {
+  return to === undefined
+    ? { kind: "column", table, column }
+    : { kind: "column", table, column, to };
+}
+
+/** Words of a column's restated definition that convert its values whatever its type. */
+const CONVERTING_ATTRIBUTES = new Set(["CHARACTER", "CHARSET", "COLLATE"]);
+
+/**
+ * The type a type-changing clause gives `column`, spelled for comparison, when
+ * the clause states nothing else that converts a value: no character set or
+ * collation, and for PostgreSQL's `USING` only the column itself, plainly cast
+ * to that type. Undefined otherwise, and the change is judged as any type
+ * change is.
+ */
+function plainTypeStated(
+  tokens: readonly Token[],
+  column: string
+): string | undefined {
+  const at = tokens.indexOf("USING");
+  const stated = at === -1 ? tokens : tokens.slice(0, at);
+  if (
+    stated.some(
+      token => typeof token === "string" && CONVERTING_ATTRIBUTES.has(token)
+    )
+  ) {
+    return undefined;
+  }
+  const type = declaredType(stated);
+  if (type === undefined || type === "") return undefined;
+  if (at === -1) return type;
+  const using = new StatementCursor(tokens.slice(at + 1));
+  if (using.name() !== column) return undefined;
+  // A quoted unit in the cast (a string, a name) makes it no plain cast.
+  const cast: string[] = [];
+  for (const token of using.rest()) {
+    if (typeof token !== "string") return undefined;
+    cast.push(token);
+  }
+  const spelled = typeSpelling(cast.join(""));
+  return spelled === "" || spelled === `::${type}` ? type : undefined;
 }
 
 /** A rebuild twin's column: its declared type spelled for comparison, or undefined when unreadable. */
@@ -1476,7 +1547,17 @@ class FileWalk {
     onDelete: KeyAction;
   }[] = [];
 
-  constructor(private readonly facts: FactSource) {}
+  /**
+   * Per live table and column (`table` NUL `column`), the type the list's
+   * last change of it gave, or undefined when that change stated none: a
+   * later change is judged against it rather than the live type.
+   */
+  private readonly changedTypes = new Map<string, string | undefined>();
+
+  constructor(
+    private readonly facts: FactSource,
+    private readonly dialect: SupportedDialect
+  ) {}
 
   /** The live table a name reaches here, or null for one the list made. */
   private origin(name: string): string | null {
@@ -1564,7 +1645,7 @@ class FileWalk {
   private applyToColumn(step: Step): boolean {
     switch (step.kind) {
       case "column":
-        this.changeColumn(step.table, step.column);
+        this.changeColumn(step.table, step.column, step.to);
         return true;
       case "drop-column":
         this.dropColumn(step.table, step.column);
@@ -1638,17 +1719,48 @@ class FileWalk {
     this.origins.set(name, null);
   }
 
-  private changeColumn(name: string, column: string): void {
+  private changeColumn(
+    name: string,
+    column: string,
+    to: string | undefined
+  ): void {
     const table = this.origin(name);
     if (table === null) return;
     if (!this.made(table, column)) {
-      this.emit({
-        kind: "column",
-        table,
-        column: this.columnOrigin(table, column),
-      });
+      const live = this.columnOrigin(table, column);
+      if (!this.keepsEveryValue(table, live, to)) {
+        this.emit({ kind: "column", table, column: live });
+      }
+      this.changedTypes.set(`${table}\0${live}`, to);
     }
     this.rewrite(table);
+  }
+
+  /**
+   * Whether changing live `column` of `table` to type `to` keeps every value:
+   * a string column widened (`keepsEveryStringValue`) from the type it has
+   * now, the list's last change of it or else the live type, and on MySQL
+   * with the table's default character set, which the restated column takes.
+   * Any type unknown, or a character set unread, keeps nothing.
+   */
+  private keepsEveryValue(
+    table: string,
+    column: string,
+    to: string | undefined
+  ): boolean {
+    if (to === undefined) return false;
+    const key = `${table}\0${column}`;
+    const from = this.changedTypes.has(key)
+      ? this.changedTypes.get(key)
+      : this.facts.liveType(table, column);
+    if (from === undefined) return false;
+    if (
+      this.dialect === "mysql" &&
+      this.facts.keepsCharacterSet(table, column) !== true
+    ) {
+      return false;
+    }
+    return keepsEveryStringValue(from, to, this.dialect);
   }
 
   /**
@@ -2121,7 +2233,7 @@ function walk(
   facts: FactSource,
   partOf: (at: number) => number = () => 0
 ): { deletion: Deletion; part: number }[] {
-  const file = new FileWalk(facts);
+  const file = new FileWalk(facts, dialect);
   const rebuilds = rebuildsIn(statements, dialect);
   const byDrop = new Map(rebuilds.map(rebuild => [rebuild.dropAt, rebuild]));
   // The twin's creation, its copies and its rename back are the rebuild's
@@ -2305,6 +2417,10 @@ function factSource(facts: DeletionFacts): FactSource {
     unseenRebuild: facts.unseenRebuild ?? "drop",
     liveColumns: table => facts.liveColumns.get(table),
     liveType: (table, column) => facts.liveColumnTypes?.get(table)?.get(column),
+    keepsCharacterSet: (table, column) => {
+      const other = facts.otherCharsets?.get(table);
+      return other === undefined ? undefined : !other.has(column);
+    },
   };
 }
 
@@ -2496,6 +2612,8 @@ class FactReading {
     string,
     Map<string, string> | undefined
   >();
+  /** MySQL: per table read with its column types, its columns of another character set. */
+  private readonly charsets = new Map<string, Set<string> | undefined>();
   private readonly spellings = new Map<string, string>();
   /**
    * Lower-cased names two live tables share but for case ("Posts" beside posts, which
@@ -2568,7 +2686,15 @@ class FactReading {
           ? undefined
           : new Set(known.value.keys());
       },
-      liveType: (table, column) => this.columnTypes.get(table)?.get(column),
+      // Asked for a column whose type a statement changes: its table's
+      // column types (and, on MySQL, character sets) are read with a
+      // rebuilt table's, in one reading.
+      liveType: (table, column) =>
+        lookup(this.columnTypes, table, asked.rebuilt)?.value?.get(column),
+      keepsCharacterSet: (table, column) => {
+        const other = lookup(this.charsets, table, asked.rebuilt)?.value;
+        return other === undefined ? undefined : !other.has(column);
+      },
     };
   }
 
@@ -2695,6 +2821,20 @@ class FactReading {
       ])
     );
     for (const table of tables) this.columnTypes.set(table, byTable.get(table));
+    // Elsewhere a type change keeps the column's character set, so nothing
+    // is read; a MySQL table whose sets could not be read stays unknown.
+    const other =
+      this.dialect !== "mysql"
+        ? new Map<string, Set<string>>()
+        : await settle(() => readMysqlOtherCharsets(this.db, live));
+    for (const table of tables) {
+      this.charsets.set(
+        table,
+        other === undefined
+          ? undefined
+          : (other.get(table) ?? new Set<string>())
+      );
+    }
   }
 
   /** The facts read, as the walk's judgement takes them. */
@@ -2704,6 +2844,10 @@ class FactReading {
     const liveColumnTypes = new Map<string, Map<string, string>>();
     for (const [table, columns] of this.columnTypes) {
       if (columns !== undefined) liveColumnTypes.set(table, columns);
+    }
+    const otherCharsets = new Map<string, Set<string>>();
+    for (const [table, columns] of this.charsets) {
+      if (columns !== undefined) otherCharsets.set(table, columns);
     }
     const liveColumns: LiveColumns = new Map(
       [...liveColumnTypes].map(([table, columns]) => [
@@ -2723,6 +2867,7 @@ class FactReading {
       ...(userFunctions === undefined ? {} : { userFunctions }),
       liveColumns,
       liveColumnTypes,
+      otherCharsets,
     };
   }
 }
