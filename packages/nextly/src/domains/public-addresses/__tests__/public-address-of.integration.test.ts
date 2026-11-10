@@ -16,10 +16,11 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection } from "../../../collections/config/define-collection";
 import { text } from "../../../collections/fields/helpers";
+import { container } from "../../../di";
 import { resetFilterRegistry } from "../../../filters";
 import { definePlugin } from "../../../plugins/plugin-context";
 import {
@@ -236,6 +237,28 @@ describe.each(getConfiguredTestDialects())(
       expect(slugs).not.toContain("addr_orders");
       // Nor is a collection the system keeps for itself.
       expect(slugs).not.toContain("users");
+    });
+
+    it("lists them from the rows it read, looking no type up again", async () => {
+      const t = await boot(dialect);
+      await builderCollection(t);
+      const collections = container.get<{
+        getCollectionBySlug: (slug: string) => Promise<unknown>;
+      }>("collectionRegistryService");
+      const singles = container.get<{
+        getSingleBySlug: (slug: string) => Promise<unknown>;
+      }>("singleRegistryService");
+      const byCollectionSlug = vi.spyOn(collections, "getCollectionBySlug");
+      const bySingleSlug = vi.spyOn(singles, "getSingleBySlug");
+
+      try {
+        await typesWithoutAddress();
+        expect(byCollectionSlug).not.toHaveBeenCalled();
+        expect(bySingleSlug).not.toHaveBeenCalled();
+      } finally {
+        byCollectionSlug.mockRestore();
+        bySingleSlug.mockRestore();
+      }
     });
 
     describe("for a type made in the Schema Builder", () => {

@@ -121,11 +121,15 @@ async function supplied(
  * from a plugin where it was made in the Schema Builder, and nothing for a
  * plugin's own or a system type, which are never pages of the site.
  *
+ * `row` is the type's registry row where the caller has read it already, so
+ * a list of types costs no lookup per type; without it, the row is read.
+ *
  * @throws NextlyError `NOT_FOUND` when no such type exists
  */
 async function declaredFor(
   type: PublicAddressType,
-  locale?: string
+  locale?: string,
+  row?: TypeRecord
 ): Promise<Declared | undefined> {
   await getCachedNextly();
   const code = configured(type);
@@ -136,7 +140,7 @@ async function declaredFor(
       pathFields: code.db?.slugPaths === true ? ["slug"] : [],
     };
   }
-  const record = await registered(type);
+  const record = row ?? (await registered(type));
   if (record === undefined) {
     throw NextlyError.notFound({
       logContext: { reason: "no such content type", ...type },
@@ -183,25 +187,23 @@ export async function typesWithoutAddress(): Promise<PublicAddressType[]> {
   const collections = container.get<CollectionRegistryService>(
     "collectionRegistryService"
   );
-  const singles = container.get<SingleRegistryService>(
-    "singleRegistryService"
-  );
-  const rows: (PublicAddressType & { source?: string })[] = [
+  const singles = container.get<SingleRegistryService>("singleRegistryService");
+  const rows: { type: PublicAddressType; row: TypeRecord }[] = [
     ...(await collections.getAllCollections()).map(row => ({
-      kind: "collection" as const,
-      slug: row.slug,
-      source: row.source,
+      type: { kind: "collection" as const, slug: row.slug },
+      row: row as TypeRecord,
     })),
     ...(await singles.getAllSingles()).map(row => ({
-      kind: "single" as const,
-      slug: row.slug,
-      source: row.source,
+      type: { kind: "single" as const, slug: row.slug },
+      row: row as TypeRecord,
     })),
   ];
   const without: PublicAddressType[] = [];
-  for (const { source, ...type } of rows) {
-    if (source !== "code" && source !== "ui") continue;
-    if ((await declaredFor(type)) === undefined) without.push(type);
+  for (const { type, row } of rows) {
+    if (row.source !== "code" && row.source !== "ui") continue;
+    if ((await declaredFor(type, undefined, row)) === undefined) {
+      without.push(type);
+    }
   }
   return without;
 }
