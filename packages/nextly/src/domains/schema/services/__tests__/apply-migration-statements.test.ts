@@ -12,7 +12,10 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { applyMigrationStatements } from "../apply-migration-statements";
+import {
+  applyMigrationStatements,
+  applyMigrationWhole,
+} from "../apply-migration-statements";
 
 /** Records what it was asked to run, and fails on whichever statements are named. */
 function runner(failures: Record<string, Error> = {}) {
@@ -121,5 +124,68 @@ describe("applyMigrationStatements", () => {
     await expect(applyMigrationStatements(adapter, broken)).rejects.toThrow(
       /SQL syntax/
     );
+  });
+});
+
+/**
+ * A rename the database refuses because its target exists is a rename that could not be made. Both
+ * runners pass over "Duplicate column name" for a column an earlier run already ADDED, and must
+ * never do so for a RENAME: that recorded a rename while the values stayed in the old column.
+ */
+describe("a rename whose target already exists", () => {
+  const duplicateColumn = () => new Error("Duplicate column name 'headline'");
+  const RENAME =
+    "ALTER TABLE `single_hero` RENAME COLUMN `heading` TO `headline`";
+  const ADD = "ALTER TABLE `single_hero` ADD COLUMN `headline` text";
+
+  it("fails applyMigrationStatements", async () => {
+    const adapter = runner({ [RENAME]: duplicateColumn() });
+    await expect(applyMigrationStatements(adapter, RENAME)).rejects.toThrow(
+      /Duplicate column name/
+    );
+  });
+
+  // The control: the same refusal for an ADD is still the re-run it always was.
+  it("is not confused with an ADD an earlier run made, which applyMigrationStatements still passes over", async () => {
+    const adapter = runner({ [ADD]: duplicateColumn() });
+    await expect(
+      applyMigrationStatements(adapter, ADD)
+    ).resolves.toBeUndefined();
+  });
+
+  /** A MySQL database whose every statement is refused as a duplicate column. */
+  function mysqlRefusingEach() {
+    return {
+      execute: vi.fn(async () => {
+        throw duplicateColumn();
+      }),
+    };
+  }
+
+  it("fails applyMigrationWhole on MySQL, even where it passes over what an earlier run applied", async () => {
+    const db = mysqlRefusingEach();
+    await expect(
+      applyMigrationWhole({
+        db: db as never,
+        dialect: "mysql",
+        migrationSQL: `${RENAME};`,
+        entity: "single",
+        tolerateApplied: true,
+      })
+    ).rejects.toBeDefined();
+    expect(db.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("is not confused with an ADD, which applyMigrationWhole still passes over on MySQL", async () => {
+    const db = mysqlRefusingEach();
+    await expect(
+      applyMigrationWhole({
+        db: db as never,
+        dialect: "mysql",
+        migrationSQL: `${ADD};`,
+        entity: "single",
+        tolerateApplied: true,
+      })
+    ).resolves.toBeUndefined();
   });
 });

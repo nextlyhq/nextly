@@ -79,6 +79,10 @@ import {
 } from "../../i18n/per-language-storage";
 import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
 import {
+  columnRenamesIn,
+  refuseRenamesOntoTakenColumns,
+} from "../../schema/rename-target";
+import {
   applyMigrationStatements,
   applyMigrationWhole,
 } from "../../schema/services/apply-migration-statements";
@@ -1629,9 +1633,14 @@ export class SingleMetadataService {
   private async renameTranslatedColumnFirst(
     adapter: DrizzleAdapter,
     input: UpdateSingleSchemaInput,
-    plan: UpdateDdlPlan
+    rename:
+      | {
+          renamed: { from: string; to: string };
+          forward: string[];
+          back: string[];
+        }
+      | undefined
   ): Promise<string[]> {
-    const rename = await this.companionRenameFirst(adapter, input, plan);
     if (!rename) return [];
     try {
       for (const statement of rename.forward) {
@@ -1821,6 +1830,24 @@ export class SingleMetadataService {
       };
     }
 
+    // Every column rename this save is about to run, on the main table and the companion, checked
+    // before its first statement: a rename onto a column the table already has is refused, naming
+    // the table and both columns, while nothing has changed. The companion's rename is decided once
+    // here and run below as decided.
+    const companionRename = await this.companionRenameFirst(
+      adapter,
+      input,
+      plan
+    );
+    await refuseRenamesOntoTakenColumns(
+      adapter,
+      columnRenamesIn([
+        plan.migrationSQL ?? "",
+        ...(companionRename?.forward ?? []),
+      ]),
+      { single: input.slug }
+    );
+
     // A field becoming translated takes its value to the default language's companion row first:
     // the main ALTER below drops its column. Before the try below, as the migration is: a failure
     // here stops the save before the main table changes.
@@ -1833,7 +1860,7 @@ export class SingleMetadataService {
     const undoRename = await this.renameTranslatedColumnFirst(
       adapter,
       input,
-      plan
+      companionRename
     );
 
     // Before the try below, which records what it catches: a refusal here has changed nothing
