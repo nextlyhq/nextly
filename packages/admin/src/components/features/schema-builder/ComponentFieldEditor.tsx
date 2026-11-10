@@ -236,6 +236,8 @@ export function ComponentFieldEditor({
           {/* Full-strength foreground on hover so the border state change is perceivable. */}
           <button
             type="button"
+            // aria-pressed says which one is chosen, which the fill alone does not.
+            aria-pressed={currentMode === "single"}
             onClick={() => handleModeChange("single")}
             className={`
               flex items-center gap-3 p-4 rounded-md  border border-border transition-all duration-200 cursor-pointer
@@ -259,6 +261,7 @@ export function ComponentFieldEditor({
           {/* Full-strength foreground on hover so the border state change is perceivable. */}
           <button
             type="button"
+            aria-pressed={currentMode === "multi"}
             onClick={() => handleModeChange("multi")}
             className={`
               flex items-center gap-3 p-4 rounded-md  border border-border transition-all duration-200 cursor-pointer
@@ -301,7 +304,7 @@ export function ComponentFieldEditor({
             value={component || "__none__"}
             onValueChange={handleSingleComponentChange}
           >
-            <SelectTrigger className="h-8 text-sm">
+            <SelectTrigger aria-label="Field group" className="h-8 text-sm">
               <SelectValue placeholder="Select a field group" />
             </SelectTrigger>
             <SelectContent>
@@ -387,6 +390,7 @@ export function ComponentFieldEditor({
             </p>
           </div>
           <Switch
+            aria-label="Repeatable"
             checked={repeatable || false}
             onCheckedChange={onRepeatableChange}
           />
@@ -442,6 +446,7 @@ export function ComponentFieldEditor({
             </p>
           </div>
           <Switch
+            aria-label="Collapsed by default"
             checked={initCollapsed || false}
             onCheckedChange={onInitCollapsedChange}
           />
@@ -457,6 +462,7 @@ export function ComponentFieldEditor({
               </p>
             </div>
             <Switch
+              aria-label="Allow reordering"
               checked={isSortable !== false}
               onCheckedChange={onIsSortableChange}
             />

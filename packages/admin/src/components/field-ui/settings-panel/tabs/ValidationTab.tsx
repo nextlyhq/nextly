@@ -11,11 +11,14 @@
 import { validationRulesForFieldType } from "nextly/field-catalog";
 import type { JSX } from "react";
 
-import { ValidationRulesEditor } from "@admin/components/field-ui";
+import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { pluginFieldTypeStorage } from "@admin/lib/builder/plugin-field-type-entries";
 
-import type { BuilderField } from "../types";
+import {
+  drawsAnyValidationRule,
+  ValidationRulesEditor,
+} from "../../ValidationRulesEditor";
 
 type Props = {
   field: BuilderField;
@@ -38,6 +41,16 @@ export function ValidationTab({
     field.type,
     pluginFieldTypeStorage(branding.plugins, field.type)
   );
+
+  // A type that takes none of the rules drawn here (a link, a group) says so,
+  // rather than leaving the tab blank: Required is in General for every type.
+  if (!drawsAnyValidationRule(allowed)) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        This type has no validation rules besides Required, which is in General.
+      </p>
+    );
+  }
 
   return (
     <ValidationRulesEditor

@@ -22,7 +22,7 @@ export { SafeChangeConfirmDialog } from "./SafeChangeConfirmDialog";
 // Builder UI/UX redesign — new shared components (PR 1).
 export { BuilderSettingsModal } from "./BuilderSettingsModal";
 export type { BuilderSettingsValues } from "./BuilderSettingsModal";
-export { FieldEditorSheet } from "./FieldEditorSheet";
+export { BuilderFieldSettings } from "./BuilderFieldSettings";
 export { BuilderToolbar } from "./BuilderToolbar";
 export { BuilderReadOnlyNotice } from "./BuilderReadOnlyNotice";
 export { DirectFieldGroupsNotice } from "./DirectFieldGroupsNotice";

@@ -127,6 +127,7 @@ export default function SingleBuilderEditPage({
     setSettings,
     isInitialized,
     unsavedCount,
+    savedFieldIds,
     pinFields,
     pinSettings,
   } = useBuilderEntityState({
@@ -316,6 +317,7 @@ export default function SingleBuilderEditPage({
       locked={isLocked}
       configPath={single?.configPath}
       unsavedCount={unsavedCount}
+      savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
       onSettingsChange={setSettings}
