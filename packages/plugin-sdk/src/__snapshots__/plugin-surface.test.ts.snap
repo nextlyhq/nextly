@@ -568,6 +568,8 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginEmailService (type)",
   "PluginEmailSettings (type)",
   "PluginEmailTemplate (type)",
+  "PluginEmitOptions (type)",
+  "PluginEvents (type)",
   "PluginFieldCodegen (type)",
   "PluginFieldCodegenImport (type)",
   "PluginFieldInput (type)",

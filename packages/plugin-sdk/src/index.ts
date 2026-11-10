@@ -1014,10 +1014,25 @@ export type {
 export { recordAdvisoryNotice, type AdvisoryNotice } from "nextly";
 
 /**
- * Event bus (D8/D51) — `ctx.events` surface + types.
- * @public Exercised by seo (`ctx.events.on`).
+ * Event bus (D8/D51) — `ctx.events` surface + types. A plugin's `ctx.events`
+ * is `PluginEvents`: the bus's methods, with an `emit` that waits for the
+ * work that emitted it to commit (`PluginEmitOptions` names its transaction).
+ * @public
  */
-export type { EventBus, EventEnvelope, EventHandler, EventName } from "nextly";
+export type {
+  EventBus,
+  EventEnvelope,
+  EventHandler,
+  EventName,
+  PluginEvents,
+} from "nextly";
+
+/**
+ * Where a plugin's event is delivered from: `{ tx }`, the handle
+ * `ctx.db.transaction` passes its callback.
+ * @experimental
+ */
+export type { PluginEmitOptions } from "nextly";
 
 /**
  * Event-name constants (D69) — document/auth/media families. The event names

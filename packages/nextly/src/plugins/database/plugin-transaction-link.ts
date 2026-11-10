@@ -15,6 +15,8 @@
  * @module plugins/database/plugin-transaction-link
  */
 
+import { AsyncResource } from "node:async_hooks";
+
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../errors/nextly-error";
@@ -89,6 +91,12 @@ export function linkPluginTransaction(
 ): void {
   // The contained run before which the next one waits.
   let lastContained: Promise<unknown> = Promise.resolve();
+  // The transaction's own async context, taken as it is linked: an effect
+  // registered through the handle from another flow is held by this
+  // transaction, not by whatever transaction that flow is in, or none.
+  const inTransaction = AsyncResource.bind(<T>(register: () => T): T =>
+    register()
+  );
   links.set(surface, {
     // Async so a refusal, or work that throws before it returns its promise,
     // rejects rather than throws, as every other path does. Nothing here
@@ -108,7 +116,7 @@ export function linkPluginTransaction(
     },
     afterCommit(effect: () => unknown): void {
       scope.assertOpen();
-      onCommit(effect);
+      inTransaction(() => onCommit(effect));
     },
   });
 }
