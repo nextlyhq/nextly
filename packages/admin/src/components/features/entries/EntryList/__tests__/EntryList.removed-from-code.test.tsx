@@ -49,8 +49,36 @@ vi.mock("@admin/hooks/usePluginAutoRegistration", () => ({
 vi.mock("@admin/hooks/useSearchParams", () => ({
   useSearchParams: () => ({}),
 }));
+// The list place's contributions, as the server sent them: none unless a
+// test sets them.
+const branding = vi.hoisted(() => ({ contributions: undefined as unknown }));
+vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => {
+  const actual =
+    await importOriginal<
+      typeof import("@admin/context/providers/BrandingProvider")
+    >();
+  return {
+    ...actual,
+    useBranding: () => ({
+      ...actual.useBranding(),
+      contributions: branding.contributions,
+    }),
+  };
+});
+// A known viewer, so the place draws what it was sent.
+vi.mock("@admin/hooks/useDashboardUser", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/useDashboardUser")>()),
+  useDashboardUser: () => ({ user: { id: "u1" } }),
+}));
+
+import { registerComponent } from "@admin/lib/plugins/component-registry";
 
 import { EntryList } from "../EntryList";
+
+const REPLACED_LIST = "@acme/a/admin#ReplacedList";
+registerComponent(REPLACED_LIST, () => (
+  <div data-testid="replaced-list">a plugin's list</div>
+));
 
 const ONE_ENTRY = {
   items: [{ id: "e1", title: "About us", status: "published" }],
@@ -80,6 +108,7 @@ function pages(state?: RemovedFromCodeState): Record<string, unknown> {
 beforeEach(() => {
   entriesQuery = { data: ONE_ENTRY, isLoading: false, error: null };
   entriesAsked = [];
+  branding.contributions = undefined;
 });
 
 describe("EntryList for a collection removed from code", () => {
@@ -100,6 +129,31 @@ describe("EntryList for a collection removed from code", () => {
     expect(screen.queryByRole("button", { name: /new page/i })).toBeNull();
     expect(screen.queryAllByRole("checkbox")).toEqual([]);
     expect(screen.queryByRole("menuitem", { name: /delete/i })).toBeNull();
+  });
+
+  it("keeps the notice where a plugin replaces the list itself", () => {
+    collection = pages({ state: "not-dropped" });
+    // As the server sends it: the replacement where the list was.
+    branding.contributions = {
+      "collection.list": {
+        block: [
+          { builtIn: "toolbar" },
+          {
+            plugin: "@acme/a",
+            id: "acme-a.list",
+            kind: "block",
+            component: REPLACED_LIST,
+            replaces: "table",
+          },
+        ],
+      },
+    };
+    renderWithProviders(<EntryList collectionSlug="pages" />);
+
+    expect(screen.getByTestId("replaced-list")).toBeTruthy();
+    expect(screen.getByTestId("removed-from-code-notice")).toHaveTextContent(
+      "“Pages” is no longer in the configuration"
+    );
   });
 
   it("names the migration that retires it while that is pending", () => {

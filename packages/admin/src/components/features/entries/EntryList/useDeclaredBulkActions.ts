@@ -8,8 +8,9 @@
  * every row before its handler runs, and refuses the whole request when one
  * row fails. A selected row not on this page cannot be judged here, so an
  * action carrying a rule is not offered while one is selected. Nor is any
- * action on more rows than one request to its route may name, which the
- * route would refuse whole: the bar says why.
+ * action that calls its route on more rows than one request to it may name,
+ * which the route would refuse whole: the bar says why. One that opens a
+ * component takes any number, as nothing is sent.
  *
  * @module components/features/entries/EntryList/useDeclaredBulkActions
  */
@@ -37,6 +38,18 @@ export interface DeclaredBulkAction {
   /** Why it is held back, where the bar should say so. */
   heldBackNote: (selectedIds: readonly string[]) => string | undefined;
   onSelect: (selectedIds: readonly string[]) => void;
+}
+
+/**
+ * Whether `ids` are more rows than one request to `action`'s route may name.
+ * Only an action that calls its route sends them: one that opens a component
+ * hands them to it in the page, and takes any number.
+ */
+function overRouteLimit(
+  action: DeclaredAction,
+  ids: readonly string[]
+): boolean {
+  return "run" in action.action && ids.length > MAX_ACTION_ROWS;
 }
 
 export function useDeclaredBulkActions<Row extends { id?: unknown }>(
@@ -88,19 +101,23 @@ export function useDeclaredBulkActions<Row extends { id?: unknown }>(
   const bulkActions = useMemo(
     () =>
       declaredBulkActionsFor(contributions, collection).map(
-        (action): DeclaredBulkAction => ({
-          id: `declared:${action.id}`,
-          label: action.label,
-          isDisabled: ids =>
-            pending.has(action.id) ||
-            ids.length > MAX_ACTION_ROWS ||
-            !offeredOn(action, ids),
-          heldBackNote: ids =>
-            ids.length > MAX_ACTION_ROWS
-              ? `${action.label} runs on at most ${MAX_ACTION_ROWS} entries at a time.`
-              : undefined,
-          onSelect: ids => void run(action, ids),
-        })
+        (action): DeclaredBulkAction => {
+          const overLimit = (ids: readonly string[]) =>
+            overRouteLimit(action, ids);
+          return {
+            id: `declared:${action.id}`,
+            label: action.label,
+            isDisabled: ids =>
+              pending.has(action.id) ||
+              overLimit(ids) ||
+              !offeredOn(action, ids),
+            heldBackNote: ids =>
+              overLimit(ids)
+                ? `${action.label} runs on at most ${MAX_ACTION_ROWS} entries at a time.`
+                : undefined,
+            onSelect: ids => void run(action, ids),
+          };
+        }
       ),
     [contributions, collection, run, pending, offeredOn]
   );

@@ -124,21 +124,69 @@ describe("the declared bulk actions a list offers", () => {
 });
 
 describe("the most rows a declared bulk action runs on", () => {
-  it("holds an action back on more rows than its route takes, and says why", () => {
+  // A route action without a rule, so only the count decides.
+  const ARCHIVE: DeclaredAction = {
+    ...CLOSE,
+    id: "acme-support.archive",
+    label: "Archive",
+    visibleWhen: undefined,
+  };
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => `id-${i}`);
+
+  it("holds an action that calls its route back on more rows than the route takes, and says why", () => {
+    branding.contributions = {
+      "collection.list": { bulkAction: [ARCHIVE, INSPECT] },
+    };
     const { result } = renderHook(
       () => useDeclaredBulkActions("tickets", ROWS),
       { wrapper }
     );
-    // An action without a rule, so only the count decides.
-    const inspect = result.current.bulkActions[1]!;
-    const ids = (n: number) => Array.from({ length: n }, (_, i) => `id-${i}`);
+    const archive = result.current.bulkActions[0]!;
 
-    expect(inspect.isDisabled(ids(MAX_ACTION_ROWS))).toBe(false);
-    expect(inspect.heldBackNote(ids(MAX_ACTION_ROWS))).toBeUndefined();
-    expect(inspect.isDisabled(ids(MAX_ACTION_ROWS + 1))).toBe(true);
-    expect(inspect.heldBackNote(ids(MAX_ACTION_ROWS + 1))).toBe(
-      `Inspect runs on at most ${MAX_ACTION_ROWS} entries at a time.`
+    expect(archive.isDisabled(ids(MAX_ACTION_ROWS))).toBe(false);
+    expect(archive.heldBackNote(ids(MAX_ACTION_ROWS))).toBeUndefined();
+    expect(archive.isDisabled(ids(MAX_ACTION_ROWS + 1))).toBe(true);
+    expect(archive.heldBackNote(ids(MAX_ACTION_ROWS + 1))).toBe(
+      `Archive runs on at most ${MAX_ACTION_ROWS} entries at a time.`
     );
+  });
+
+  it("offers one that opens a component on any number, as it sends nothing", () => {
+    branding.contributions = {
+      "collection.list": { bulkAction: [ARCHIVE, INSPECT] },
+    };
+    const { result } = renderHook(
+      () => useDeclaredBulkActions("tickets", ROWS),
+      { wrapper }
+    );
+    const inspect = result.current.bulkActions[1]!;
+
+    expect(inspect.isDisabled(ids(MAX_ACTION_ROWS + 1))).toBe(false);
+    expect(inspect.heldBackNote(ids(MAX_ACTION_ROWS + 1))).toBeUndefined();
+  });
+});
+
+describe("what a declared bulk action opened", () => {
+  it("closes when the list moves to another collection", async () => {
+    branding.contributions = {
+      "collection.list": {
+        bulkAction: [{ ...INSPECT, collections: undefined }],
+      },
+    };
+    const { result, rerender } = renderHook(
+      ({ collection }: { collection: string }) =>
+        useDeclaredBulkActions(collection, ROWS),
+      { wrapper, initialProps: { collection: "tickets" } }
+    );
+
+    act(() => {
+      result.current.bulkActions[0]?.onSelect(["1"]);
+    });
+    await waitFor(() => expect(result.current.opened).not.toBeNull());
+
+    // The same page, another collection: its rows are not this one's.
+    rerender({ collection: "orders" });
+    expect(result.current.opened).toBeNull();
   });
 });
 

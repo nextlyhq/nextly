@@ -46,6 +46,15 @@ export function useDeclaredActionRunner(collection: string): {
 } {
   const queryClient = useQueryClient();
   const [opened, setOpened] = useState<OpenedAction | null>(null);
+  // The list's page stays mounted from one collection to the next, so what an
+  // action opened on one closes when the list moves to another: otherwise the
+  // next collection would draw it, with rows that are not its own. Reset while
+  // rendering, before anything draws it.
+  const [openedOn, setOpenedOn] = useState(collection);
+  if (openedOn !== collection) {
+    setOpenedOn(collection);
+    setOpened(null);
+  }
   // Held in a ref for the guard, mirrored in state for what the list offers.
   const inFlight = useRef(new Set<string>());
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
