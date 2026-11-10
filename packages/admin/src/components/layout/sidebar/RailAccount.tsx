@@ -6,8 +6,8 @@
  *
  * They lived at the right end of the top bar on every page. At the rail's
  * foot they stay in one place whatever the page, and the bar is left to the
- * page's own breadcrumb and actions. Docs, GitHub, Discord, the theme and any
- * plugin's header item are in the account menu.
+ * page's own breadcrumb and actions. Docs, GitHub, Discord and the theme are
+ * in the account menu.
  */
 import type { JSX } from "react";
 
@@ -28,14 +28,8 @@ import {
 } from "../header/header-visibility";
 import { shellAnswersMarker } from "../lib/shell-answers";
 
+import { useNextDevOverlay } from "./use-next-dev-overlay";
 import { UserProfileDropdown } from "./UserProfileDropdown";
-
-/**
- * Whether the admin runs in development, where Next.js draws its own badge in
- * the bottom-left corner, over the rail's foot. Read from the build, since the
- * host's `devIndicators` setting cannot be read from the page.
- */
-const DEVELOPMENT = process.env.NODE_ENV === "development";
 
 export function RailAccount({
   className,
@@ -95,13 +89,13 @@ function RailAccountItems({
   const logout = useLogout();
   const branding = useBranding();
   const hidden = computeHiddenHeaderButtons(branding?.plugins);
-  const pluginItems = (branding?.plugins ?? [])
-    .map(p => ({ name: p.name, slot: p.header?.slot ?? p.headerSlot }))
-    .filter((p): p is { name: string; slot: string } => Boolean(p.slot));
   const journalOffered = branding?.showBuilder !== false;
   // Drawn only once every answer it depends on is in, so neither the bell nor
   // the avatar arrives after the rest and moves the foot.
   const settled = headerControlsSettled(pending, bellOffered);
+  // Next.js draws its development badge in the bottom-left corner, over the
+  // rail's foot, while the host runs `next dev`.
+  const devOverlay = useNextDevOverlay();
 
   return (
     <div
@@ -110,7 +104,7 @@ function RailAccountItems({
         // In development the rail keeps its foot clear below the avatar, so
         // Next.js's development badge (bottom-left by default) sits in that
         // space instead of over the avatar.
-        DEVELOPMENT && "pb-16",
+        devOverlay && "pb-16",
         className
       )}
       data-testid="rail-account"
@@ -133,7 +127,6 @@ function RailAccountItems({
             void logout();
           }}
           hidden={hidden}
-          pluginItems={pluginItems}
           side="right"
           align="end"
         />

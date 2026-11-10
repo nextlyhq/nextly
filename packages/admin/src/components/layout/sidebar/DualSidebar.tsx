@@ -509,7 +509,10 @@ export function DualSidebar({
       {/* 1. Icon Sidebar (Main Menu) */}
       <aside
         className={cn(
-          "flex flex-col items-center py-4 bg-sidebar  border-r border-border z-50",
+          // `min-h-0`, so on a short window the rail is as tall as the window
+          // and its navigation scrolls, rather than the rail growing past the
+          // window and pushing its foot out of sight.
+          "flex min-h-0 flex-col items-center py-4 bg-sidebar  border-r border-border z-50",
           "w-[72px] shrink-0"
         )}
         // Whether every answer the rail draws from is in, so a reader of the
@@ -520,7 +523,7 @@ export function DualSidebar({
         <Link
           href={ROUTES.DASHBOARD}
           className={cn(
-            "mb-8 flex items-center justify-center h-10 w-10 rounded-md group",
+            "mb-8 flex shrink-0 items-center justify-center h-10 w-10 rounded-md group",
             RAIL_FOCUS_RING
           )}
         >
@@ -532,7 +535,11 @@ export function DualSidebar({
         </Link>
 
         {/* Main Icons */}
-        <nav className="flex-1 flex flex-col gap-4 w-full px-3">
+        {/* The one part of the rail that gives way on a short window: it
+            scrolls, so the logo above and the account foot below stay in
+            view. Padded vertically so a focus ring at either end is not cut
+            off by the scroll edge. */}
+        <nav className="flex min-h-0 w-full flex-1 flex-col gap-4 overflow-y-auto px-3 py-1 [scrollbar-width:none]">
           {rail.items.map(item => {
             const Icon = item.icon;
             const isSelected = railItemOf(shownMain) === item.id;
@@ -551,7 +558,7 @@ export function DualSidebar({
 
             // Unselected items use muted foreground so the resting icon meets contrast; a faint primary alpha did not.
             const className = cn(
-              "flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative",
+              "flex shrink-0 items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative",
               RAIL_FOCUS_RING,
               isSelected
                 ? // `sidebar-accent` rather than `muted`: it is the surface
@@ -613,7 +620,7 @@ export function DualSidebar({
 
         {/* The rail's foot: the reader's Inbox and account menu, the same on
             every page. */}
-        <RailAccount className="mt-4" />
+        <RailAccount className="mt-4 shrink-0" />
       </aside>
 
       {/* 2. Sub Sidebar (Detail Menu) */}

@@ -1,10 +1,13 @@
 import type { JSX } from "react";
 
 import { PanelLeftClose, PanelLeftOpen } from "@admin/components/icons";
+import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { cn } from "@admin/lib/utils";
 
 import { usePanelFold } from "../PanelFold";
 
+import { pluginHeaderItems } from "./header-visibility";
 import { HeaderTrail, useHasHeaderTrail } from "./HeaderTrail";
 
 interface DashboardHeaderProps {
@@ -17,13 +20,15 @@ interface DashboardHeaderProps {
  * It holds the trail the page on screen registered (such as an open
  * document's place under Content) and, on a page that started its panel
  * folded, the toggle that brings the panel back. The reader's Inbox and
- * account menu are at the foot of the icon rail, and Docs, GitHub, Discord,
- * the theme and plugins' header items are in that menu, so the bar's width
- * belongs to the page.
+ * account menu are at the foot of the icon rail, and Docs, GitHub, Discord and
+ * the theme are in that menu. A plugin's own header item (`header.slot`) stays
+ * at the bar's right end, on every page, where plugins have always put it:
+ * some draw a button there, and some draw nothing and register what a page
+ * needs, so it is mounted for as long as the bar is.
  *
  * Below the width where the rail shows, the phone header above it already
- * holds the logo and the menu, so the bar is drawn only while it has a trail
- * or the panel toggle to show, rather than as an empty band. Both are
+ * holds the logo and the menu, so the bar is drawn only while it has a trail,
+ * the panel toggle or a plugin's item to show, rather than as an empty band. Both are
  * declared in layout effects, so this is settled before the first paint.
  */
 export function DashboardHeader({
@@ -31,7 +36,8 @@ export function DashboardHeader({
 }: DashboardHeaderProps): JSX.Element {
   const hasTrail = useHasHeaderTrail();
   const { declared } = usePanelFold();
-  const empty = !hasTrail && !declared;
+  const pluginItems = pluginHeaderItems(useBranding()?.plugins);
+  const empty = !hasTrail && !declared && pluginItems.length === 0;
   return (
     <header
       data-empty={empty || undefined}
@@ -49,6 +55,16 @@ export function DashboardHeader({
         <PanelFoldToggle />
         <HeaderTrail />
       </div>
+      {pluginItems.length > 0 && (
+        <div
+          className="flex shrink-0 items-center gap-1"
+          data-testid="plugin-header-items"
+        >
+          {pluginItems.map(item => (
+            <PluginSlot key={item.name} path={item.slot} />
+          ))}
+        </div>
+      )}
     </header>
   );
 }
