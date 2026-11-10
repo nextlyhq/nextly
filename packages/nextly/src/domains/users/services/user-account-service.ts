@@ -63,7 +63,9 @@ function assertProfileTextFits(changes: {
   const tooLong = (["name", "image"] as const).filter(
     field =>
       typeof changes[field] === "string" &&
-      changes[field].length > PROFILE_TEXT_MAX
+      // Characters, as the column counts them, not UTF-16 units: an emoji
+      // is one character and two units.
+      [...changes[field]].length > PROFILE_TEXT_MAX
   );
   if (tooLong.length === 0) return;
   throw NextlyError.validation({
