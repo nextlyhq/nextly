@@ -23,6 +23,15 @@ vi.mock("../../schema/services/schema-change-exclusion", () => ({
   ),
 }));
 
+// The database's catalog of keys pointing into a table, which a delete reads before it removes
+// anything. Answered as holding none here: the catalog read is the integration suites' to prove.
+vi.mock("../../schema/pipeline/live-table-facts", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../schema/pipeline/live-table-facts")
+  >()),
+  readReferencingTables: vi.fn(async () => []),
+}));
+
 // The service throws NextlyError, so `rejects.toThrow(...)` asserts against
 // that class for the instanceof check to line up with the thrown type.
 import { NextlyError } from "../../../errors";
