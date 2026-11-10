@@ -336,19 +336,25 @@ function unreadableRefusal(
 }
 
 /**
- * The refusal for a delete of a collection whose own stored fields are not a
- * list: its junction tables, and so what could depend on them, cannot be
- * named. The same refusal as any unreadable fields.
+ * The refusal for a delete of a collection or Single whose own stored fields
+ * are not a list: its junction tables, and so what could depend on them,
+ * cannot be named. The same refusal as any unreadable fields.
+ *
+ * @param slugs every entity the operation was deleting
+ * @param slug the one whose stored fields are not a list
+ * @param kind what it is, for the log; a collection unless said
  */
 export function unreadableFieldsRefusal(
   slugs: readonly string[],
-  slug: string
+  slug: string,
+  kind: EntityKind = "collection"
 ): NextlyError {
   return unreadableRefusal(
     slugs,
     new Map([
       ["fields", new Error(`The stored fields of "${slug}" are not a list.`)],
-    ])
+    ]),
+    slugs.map(() => kind)
   );
 }
 

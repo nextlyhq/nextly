@@ -839,12 +839,17 @@ export class SingleRegistryService extends BaseRegistryService<
   async assertNothingDependsOn(single: {
     slug: string;
     tableName: string;
-    fields?: readonly { name?: string; type?: unknown; options?: unknown }[];
+    /** As stored: a damaged row may hold something that is not a list. */
+    fields?: unknown;
   }): Promise<void> {
     // Loaded when a delete asks, not with the registry: every caller of the
     // registry would otherwise load the dependents readers it never uses.
     const [
-      { assertNothingDependsOn, databaseDependentsSources },
+      {
+        assertNothingDependsOn,
+        databaseDependentsSources,
+        unreadableFieldsRefusal,
+      },
       { collectionOwnTables },
       { getActiveExtensionSchema },
     ] = await Promise.all([
@@ -852,12 +857,26 @@ export class SingleRegistryService extends BaseRegistryService<
       import("../../schema/services/field-column-descriptor"),
       import("../../schema/extension/active-schema"),
     ]);
+    // A stored field list that is not a list names no junction tables, so
+    // what depends on them would go unasked: refused as unreadable fields,
+    // as a collection's delete refuses it, before anything else is read.
+    const fields = single.fields ?? [];
+    if (!Array.isArray(fields)) {
+      throw unreadableFieldsRefusal([single.slug], single.slug, "single");
+    }
     await assertNothingDependsOn(
       [
         {
           kind: "single",
           slug: single.slug,
-          tables: collectionOwnTables(single.tableName, single.fields ?? []),
+          tables: collectionOwnTables(
+            single.tableName,
+            fields as readonly {
+              name?: string;
+              type?: unknown;
+              options?: unknown;
+            }[]
+          ),
         },
       ],
       databaseDependentsSources(

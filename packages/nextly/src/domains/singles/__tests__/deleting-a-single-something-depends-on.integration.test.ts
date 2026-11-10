@@ -250,6 +250,36 @@ describeEachDialect("deleting a Single something depends on", dialect => {
     }, 120_000);
   }
 
+  for (const way of WAYS) {
+    it(`refuses the ${way} delete when the Single's own stored fields are not a list, and removes nothing`, async () => {
+      const t = await boot(dialect);
+      // A damaged row: JSON, but not a list, so its junction tables, and what
+      // could depend on them, cannot be named.
+      const row = `${q(t, "dynamic_singles")} WHERE ${q(t, "slug")} = '${HOME}'`;
+      const [{ fields: stored }] = await t.adapter.executeQuery<{
+        fields: unknown;
+      }>(`SELECT ${q(t, "fields")} AS ${q(t, "fields")} FROM ${row}`);
+      await t.adapter.executeQuery(
+        `UPDATE ${q(t, "dynamic_singles")} SET ${q(t, "fields")} = '{}' WHERE ${q(t, "slug")} = '${HOME}'`
+      );
+
+      const outcome = await deleteVia(way, t, HOME);
+
+      expect(outcome).toEqual({
+        status: 503,
+        message: UNREADABLE(
+          "the fields of collections, Singles and field groups"
+        ),
+      });
+      // Repaired, so the counts read the Single as it was: nothing removed.
+      const text = typeof stored === "string" ? stored : JSON.stringify(stored);
+      await t.adapter.executeQuery(
+        `UPDATE ${q(t, "dynamic_singles")} SET ${q(t, "fields")} = '${text.replaceAll("'", "''")}' WHERE ${q(t, "slug")} = '${HOME}'`
+      );
+      expect(await homeState(t)).toEqual(INTACT);
+    }, 120_000);
+  }
+
   it("refuses the Builder's delete when the record of other owners' elements cannot be read, and removes nothing", async () => {
     const t = await boot(dialect);
     // The table is there, so the record is not merely absent, but it holds
