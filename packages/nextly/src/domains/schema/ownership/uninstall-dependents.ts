@@ -23,7 +23,7 @@
  * one whose definition cannot be read is counted.
  *
  * The first three are the question a collection delete already asks
- * (`findCollectionDependents`), asked here over the plugin's tables. The
+ * (`findEntityDependents`), asked here over the plugin's tables. The
  * recorded element rows outlive the configuration that declared them, so a
  * disabled or removed owner's retained elements are found too. Where a
  * recorded element on a table the plugin contributed a column to cannot be
@@ -40,7 +40,7 @@ import type { PluginDefinition } from "../../../plugins/plugin-context";
 import type { FieldsAddedByPlugins } from "../../../plugins/schema/apply-contributions";
 import { resolvePluginSelf } from "../../../plugins/self";
 import {
-  findCollectionDependents,
+  findEntityDependents,
   type DependentsSources,
 } from "../../collections/services/collection-dependents";
 import { enumCheckName } from "../extension/enum-check";
@@ -430,7 +430,7 @@ async function onItsTables(
   ownTables: readonly string[],
   found: Found
 ): Promise<void> {
-  const onTables = await findCollectionDependents(
+  const onTables = await findEntityDependents(
     ownTables.map(table => ({
       slug: table,
       tables: [table],

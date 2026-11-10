@@ -601,9 +601,31 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   }
 
   /**
-   * Delete a Component from the registry.
+   * Delete a Component: its nested instances, its translations, its table and
+   * its registry row.
+   *
+   * Every way a field group is deleted reaches this method (the Builder, the
+   * schema route and the Direct API), so the check that nothing depends on it
+   * lives here. It holds the schema lock from the check to the last drop: a
+   * Builder save that places the field group, or a migration that keys its
+   * table, cannot land between the two and be dropped with it.
    */
   async deleteComponent(slug: string): Promise<void> {
+    const { withSchemaChangeExcluded } = await import(
+      "../../schema/services/schema-change-exclusion"
+    );
+    return withSchemaChangeExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: `delete field group "${slug}"`,
+        issuesDdl: true,
+      },
+      () => this.deleteComponentExcluded(slug)
+    );
+  }
+
+  private async deleteComponentExcluded(slug: string): Promise<void> {
     this.logger.debug("Deleting Component", { slug });
 
     const existing = await this.getRecordForWrite(slug);
@@ -617,17 +639,10 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       });
     }
 
-    const references = await this.findComponentReferences(slug);
-
-    if (references.length > 0) {
-      // The CONFLICT factory carries a stable generic public message.
-      // The structured `references` payload is operator-only — putting it on
-      // logContext keeps it out of the wire while preserving full debug info.
-      throw NextlyError.conflict({
-        reason: "state",
-        logContext: { reason: "component-has-references", slug, references },
-      });
-    }
+    // Before anything is torn down: a field that places it, a declared key
+    // into its tables, or another owner's element on them refuses the delete
+    // by name, and so does any of those that cannot be read.
+    await this.assertNothingDependsOn(slug, existing.tableName);
 
     try {
       // Tear down the localization artifacts BEFORE the main table: the companion
@@ -913,116 +928,94 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   }
 
   /**
-   * Find all references to a Component across Collections, Singles, and other Components.
+   * Refuse, before anything is removed, to delete the field group `slug` while
+   * something depends on it: a field of a collection, a Single or another
+   * field group that places it, a foreign key a plugin or the app declares
+   * into its tables, or another owner's element on them. Refused too when any
+   * of those cannot be read (`collection-dependents`, the one check every
+   * entity delete asks).
+   *
+   * @param slug the field group being deleted
+   * @param tableName its table, as its registry row records it
+   */
+  private async assertNothingDependsOn(
+    slug: string,
+    tableName: string
+  ): Promise<void> {
+    // Loaded when a delete asks, not with the registry: every caller of the
+    // registry would otherwise load the dependents readers it never uses.
+    const [
+      { assertNothingDependsOn, databaseDependentsSources },
+      { collectionOwnTables },
+      { getActiveExtensionSchema },
+    ] = await Promise.all([
+      import("../../collections/services/collection-dependents"),
+      import("../../schema/services/field-column-descriptor"),
+      import("../../schema/extension/active-schema"),
+    ]);
+    await assertNothingDependsOn(
+      [
+        {
+          kind: "fieldGroup",
+          slug,
+          // Its table and its translation table: a field group keeps a
+          // many-to-many as a list on its own row, so it has no junction table.
+          tables: collectionOwnTables(tableName, []),
+        },
+      ],
+      databaseDependentsSources(
+        this.adapter,
+        // The extension schema this process published at boot or on its last
+        // reload, read when the delete asks, so a failure to read it refuses.
+        () =>
+          Promise.resolve().then(() => getActiveExtensionSchema(this.dialect)),
+        { fieldGroupRegistryName: () => this.resolveRegistryTableName() }
+      )
+    );
+  }
+
+  /**
+   * Find every field of a Collection, Single or other Component that places
+   * the Component `componentSlug`, at any depth inside repeaters and groups.
+   *
+   * Reads the registries as the delete's check does, and fails as it does: a
+   * registry that does not exist yet has nothing in it, but any other failure
+   * to read one, or a stored field list that does not parse, is thrown rather
+   * than taken for no references.
+   *
+   * @deprecated A delete now refuses by itself, naming every field that
+   * places the field group along with the foreign keys and other owners'
+   * elements that depend on it; call `deleteComponent` and read its refusal.
+   * Kept because the registry is reachable through `getService`.
    */
   async findComponentReferences(
     componentSlug: string
   ): Promise<ComponentReference[]> {
-    this.logger.debug("Checking for component references", {
-      slug: componentSlug,
+    const { fieldsPlacing, readFieldOwners } = await import(
+      "../../collections/services/collection-dependents"
+    );
+    const owners = await readFieldOwners(this.adapter, {
+      fieldGroupRegistryName: () => this.resolveRegistryTableName(),
     });
-
-    const references: ComponentReference[] = [];
-
-    try {
-      const collections = await this.adapter.select<Record<string, unknown>>(
-        "dynamic_collections",
-        { columns: ["slug", "fields"] }
+    return owners
+      .filter(
+        owner =>
+          !(
+            owner.entityType === "fieldGroup" &&
+            owner.entitySlug === componentSlug
+          )
+      )
+      .flatMap(owner =>
+        fieldsPlacing(owner.fields, componentSlug).map(fieldPath => ({
+          entityType:
+            owner.entityType === "fieldGroup"
+              ? ("component" as const)
+              : owner.entityType,
+          entitySlug: owner.entitySlug,
+          fieldName: fieldPath.slice(fieldPath.lastIndexOf(".") + 1),
+          fieldPath,
+        }))
       );
-
-      for (const collection of collections) {
-        const slug = collection.slug as string;
-        const fields = this.parseJsonField(collection.fields);
-        if (fields) {
-          const found = this.scanFieldsForComponentRef(
-            fields,
-            componentSlug,
-            slug,
-            "collection"
-          );
-          references.push(...found);
-        }
-      }
-    } catch (error) {
-      // Table may not exist yet (fresh install) — not an error.
-      this.logger.debug("Could not scan dynamic_collections for references", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    try {
-      const singles = await this.adapter.select<Record<string, unknown>>(
-        "dynamic_singles",
-        { columns: ["slug", "fields"] }
-      );
-
-      for (const single of singles) {
-        const slug = single.slug as string;
-        const fields = this.parseJsonField(single.fields);
-        if (fields) {
-          const found = this.scanFieldsForComponentRef(
-            fields,
-            componentSlug,
-            slug,
-            "single"
-          );
-          references.push(...found);
-        }
-      }
-    } catch (error) {
-      this.logger.debug("Could not scan dynamic_singles for references", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    // Declared out here so the failure log can name it, ASSIGNED inside the
-    // try so a failed resolution is contained like any other read failure.
-    // This scan is best effort — it informs a reference check, and a catalog
-    // hiccup must not turn that into a hard failure — so the resolution has to
-    // sit inside the same boundary as the read it feeds. Its initial value is
-    // the name this release's DDL creates, which is what the message should say
-    // when resolution itself is what failed.
-    let registryTable: string = STORAGE_FORMAT.registryTable;
-    try {
-      registryTable = await this.resolveRegistryTableName();
-      const components = await this.adapter.select<Record<string, unknown>>(
-        registryTable,
-        { columns: ["slug", "fields"] }
-      );
-
-      for (const comp of components) {
-        const slug = comp.slug as string;
-        if (slug === componentSlug) {
-          continue;
-        }
-        const fields = this.parseJsonField(comp.fields);
-        if (fields) {
-          const found = this.scanFieldsForComponentRef(
-            fields,
-            componentSlug,
-            slug,
-            "component"
-          );
-          references.push(...found);
-        }
-      }
-    } catch (error) {
-      this.logger.debug(`Could not scan ${registryTable} for references`, {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    if (references.length > 0) {
-      this.logger.debug("Found component references", {
-        slug: componentSlug,
-        count: references.length,
-        references: references.map(
-          r => `${r.entityType}:${r.entitySlug}.${r.fieldPath}`
-        ),
-      });
-    }
-
-    return references;
   }
 
   /**
@@ -1233,70 +1226,6 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       new Set([...drawing, component.slug]),
       inContainer
     );
-  }
-
-  private parseJsonField(value: unknown): Record<string, unknown>[] | null {
-    if (!value) {
-      return null;
-    }
-    try {
-      if (typeof value === "string") {
-        return JSON.parse(value);
-      }
-      if (Array.isArray(value)) {
-        return value;
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
-  private scanFieldsForComponentRef(
-    fields: Record<string, unknown>[],
-    targetSlug: string,
-    entitySlug: string,
-    entityType: ComponentReference["entityType"],
-    parentPath = ""
-  ): ComponentReference[] {
-    const references: ComponentReference[] = [];
-
-    for (const field of fields) {
-      const fieldName = field.name as string;
-      if (!fieldName) {
-        continue;
-      }
-
-      const fieldPath = parentPath ? `${parentPath}.${fieldName}` : fieldName;
-      const fieldType = field.type as string;
-
-      if (isFieldGroupFieldType(fieldType)) {
-        const { single, many } = extractFieldGroupReferences(field);
-        if (single === targetSlug) {
-          references.push({ entityType, entitySlug, fieldName, fieldPath });
-        }
-
-        if (many && many.includes(targetSlug)) {
-          references.push({ entityType, entitySlug, fieldName, fieldPath });
-        }
-      }
-
-      if (
-        (fieldType === "repeater" || fieldType === "group") &&
-        Array.isArray(field.fields)
-      ) {
-        const nested = this.scanFieldsForComponentRef(
-          field.fields as Record<string, unknown>[],
-          targetSlug,
-          entitySlug,
-          entityType,
-          fieldPath
-        );
-        references.push(...nested);
-      }
-    }
-
-    return references;
   }
 
   protected deserializeRecord(

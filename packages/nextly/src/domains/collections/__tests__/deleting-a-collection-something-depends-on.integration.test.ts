@@ -26,8 +26,6 @@ process.env.NEXTLY_SECRET =
 import { afterEach, expect, it, vi } from "vitest";
 
 import { DELETE as deleteCollectionRoute } from "../../../api/collections-schema-detail";
-import { buildClaims } from "../../../auth/jwt/claims";
-import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
 import { pruneUnderSchemaLock, runPrune } from "../../../cli/commands/prune";
 import { defineCollection, relationship, text } from "../../../config";
@@ -69,6 +67,7 @@ import {
   plainTags,
   posts,
   settings,
+  superAdminSession,
   tags,
 } from "./helpers/collection-dependents-fixtures";
 
@@ -118,44 +117,6 @@ function builderBulkDelete(slugs: readonly string[]): Promise<unknown> {
     { collectionName: slugs[0], together: slugs.slice(1).join(",") },
     undefined
   );
-}
-
-/** A super-admin's session cookie: the first user created is the super-admin. */
-async function superAdminSession(
-  t: TestNextly
-): Promise<Record<string, string>> {
-  const direct = t.nextly as unknown as {
-    users: {
-      create(a: {
-        email: string;
-        password: string;
-        data: Record<string, unknown>;
-      }): Promise<{ item: { id: string } }>;
-    };
-  };
-  const seeder = t.getService("permissionSeedService") as unknown as {
-    seedSystemPermissions: () => Promise<unknown>;
-  };
-  await seeder.seedSystemPermissions();
-  const userId = (
-    await direct.users.create({
-      email: "owner@example.com",
-      password: "Password123!",
-      data: { name: "Owner", isActive: true },
-    })
-  ).item.id;
-  const token = await signAccessToken(
-    buildClaims({
-      userId,
-      email: "owner@example.com",
-      name: "Owner",
-      image: null,
-      roleIds: [],
-      sessionEpoch: 0,
-    }),
-    process.env.NEXTLY_SECRET!
-  );
-  return { cookie: `nextly_session=${token}` };
 }
 
 /** The schema route's delete, answered as the Builder's admin would be. */
@@ -416,6 +377,52 @@ describeEachDialect("deleting a collection something depends on", dialect => {
     expect(refusal.statusCode).toBe(403);
     expect(await tagsState(current, false)).toEqual(INTACT);
     expect(await registryOf(current).getCollectionBySlug(POSTS)).not.toBeNull();
+  }, 120_000);
+
+  it("refuses the Builder's delete while a field inside a group with no name points at it, naming it where it is stored", async () => {
+    // A group with no name only lays fields out: its fields are stored at the
+    // level it sits in, so the relationship is `meta.tag`. The code-first
+    // config refuses a field with no name, so the Builder creates the shape.
+    const LAID_OUT = "dep_laid_out";
+    current = await createTestNextly({ dialect, collections: [plainTags] });
+    await current.nextly.create({ collection: TAGS, data: { label: "kept" } });
+    await unlock(current, TAGS);
+    await dispatchCollections(
+      {} as ServiceContainer,
+      "createCollection",
+      {},
+      {
+        name: LAID_OUT,
+        label: "Laid out",
+        fields: [
+          { name: "title", type: "text" },
+          {
+            name: "meta",
+            type: "group",
+            fields: [
+              {
+                type: "group",
+                label: "Layout",
+                fields: [
+                  { name: "tag", type: "relationship", relationTo: TAGS },
+                ],
+              },
+            ],
+          },
+        ],
+      }
+    );
+
+    const result = await handlerOf(current).deleteCollection({
+      collectionName: TAGS,
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      statusCode: 409,
+      message: `"${TAGS}" cannot be deleted while other schema depends on it. Fields that point at it: ${LAID_OUT}.meta.tag. Remove those fields, or point them at another collection, then delete "${TAGS}".`,
+    });
+    expect(await tagsState(current, false)).toEqual(INTACT);
   }, 120_000);
 
   it("deletes a collection whose only reference is to itself", async () => {
