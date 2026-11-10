@@ -55,7 +55,7 @@ describe("buildNotificationEmails", () => {
       { label: "Message", value: "Hello" },
     ];
     expect(
-      emails.map(e => (e.variables.submission as { answers: unknown }).answers)
+      emails.map(e => (e.variables._submission as { answers: unknown }).answers)
     ).toEqual([expected, expected]);
     // Templates that name answers by field keep reading them.
     expect(emails[0].variables.topic).toBe("sales");
@@ -70,6 +70,10 @@ describe("buildNotificationEmails", () => {
 
     expect(emails[0].variables.answers).toBe("B, C");
     expect(emails[0].variables.submission).toBe("My own field");
+    // And the list is still there for the starter messages.
+    expect(emails[0].variables._submission).toEqual(
+      expect.objectContaining({ answers: [] })
+    );
   });
 
   it("resolves the sender from the rule first, then the plugin default, then leaves it to the provider chain", () => {

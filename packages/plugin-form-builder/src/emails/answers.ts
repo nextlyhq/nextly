@@ -63,7 +63,7 @@ function wasShown(field: AnyFormField, data: Record<string, unknown>): boolean {
   return evaluateConditions(logic, data);
 }
 
-/** The answers in a submission, for a notification's `submission.answers`. */
+/** The answers in a submission, for a notification's `_submission.answers`. */
 export function submissionAnswers(
   fields: readonly AnyFormField[],
   data: Record<string, unknown>

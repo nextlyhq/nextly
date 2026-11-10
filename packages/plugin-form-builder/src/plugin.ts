@@ -759,7 +759,7 @@ export function buildNotificationEmails(input: {
   submissionId: unknown;
   defaultFrom?: string;
   /**
-   * The form's fields, which turn the answers into `submission.answers`, the
+   * The form's fields, which turn the answers into `_submission.answers`, the
    * list the starter messages loop over. Absent, the list is empty and
    * templates that name answers by field (`{{ full_name }}`) still read them
    * as before.
@@ -838,14 +838,14 @@ export function buildNotificationEmails(input: {
     emails.push({
       to,
       templateSlug: notification.templateSlug,
-      // `submission` (its answers by label, and its id) goes under the
-      // submitted fields, so a form with a field of that name keeps sending
-      // that field's value to the templates that read it, as it always has.
+      // `_submission` holds the answers by label and the id. A field name must
+      // start with a letter, so no submitted field can share this name, and
+      // every field still reaches templates under its own name as before.
       variables: {
-        submission: { id: submissionId, answers },
         ...submittedData,
         formName,
         submissionId,
+        _submission: { id: submissionId, answers },
       },
       providerId: notification.providerId,
       from,

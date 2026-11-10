@@ -37,10 +37,20 @@ describe("formsEmailTemplates", () => {
     ]);
   });
 
+  it("gives every message a plain-text body, so text-only clients get one answer per line", () => {
+    for (const template of formsEmailTemplates()) {
+      expect(template.plainTextContent, template.slug).toContain(
+        "{{ answer.label }}: {{ answer.value }}"
+      );
+    }
+  });
+
   it("declares every variable its subject and body read", () => {
     for (const template of formsEmailTemplates()) {
       const declared = new Set((template.variables ?? []).map(v => v.name));
-      const read = namesRead(`${template.subject} ${template.htmlContent}`);
+      const read = namesRead(
+        `${template.subject} ${template.htmlContent} ${template.plainTextContent ?? ""}`
+      );
       expect(read.length).toBeGreaterThan(0);
       for (const name of read) expect(declared, template.slug).toContain(name);
     }

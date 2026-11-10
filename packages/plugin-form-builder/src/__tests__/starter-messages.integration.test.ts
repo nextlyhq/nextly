@@ -32,6 +32,7 @@ interface Captured {
   to: string | string[];
   subject: string;
   html: string;
+  text?: string;
 }
 
 const sent: Captured[] = [];
@@ -60,7 +61,12 @@ const mailer = definePlugin({
         }),
         createAdapter: () => ({
           send: async (opts: Captured) => {
-            sent.push({ to: opts.to, subject: opts.subject, html: opts.html });
+            sent.push({
+              to: opts.to,
+              subject: opts.subject,
+              html: opts.html,
+              text: opts.text,
+            });
             return { success: true, messageId: `captured-${sent.length}` };
           },
         }),
@@ -192,6 +198,10 @@ describe.each(getConfiguredTestDialects())(
       expect(email.html).not.toContain("backend-engineer");
       // Left blank, so not listed.
       expect(email.html).not.toContain("Why this role?");
+      // The preview's placeholder never reaches a sent email.
+      expect(email.html).not.toContain("Each answer appears here");
+      // Text-only clients get each answer on its own line, label then value.
+      expect(email.text).toContain("Role: Backend engineer");
     }, 60_000);
 
     // An existing rule saved without a message stays unsent: the starters are
