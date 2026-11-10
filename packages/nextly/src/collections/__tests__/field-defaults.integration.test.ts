@@ -248,7 +248,7 @@ describe("field defaults on a collection create (integration)", () => {
         userId: "u1",
         overrideAccess: true,
       },
-      { title: "Renamed" }
+      { title: "Renamed", _overwrite: true }
     );
 
     const read = await handler.getEntry({

@@ -151,7 +151,7 @@ export async function saveIn(
   const handler = t.getService("collectionsHandler") as CollectionsHandler;
   await handler.updateEntry(
     { collectionName: slug, entryId, overrideAccess: true, locale },
-    data
+    { ...data, _overwrite: true }
   );
 }
 

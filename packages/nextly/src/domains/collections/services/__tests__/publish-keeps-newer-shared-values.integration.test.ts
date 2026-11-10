@@ -91,7 +91,7 @@ function save(
 ) {
   return entries.updateEntry(
     { collectionName: COLLECTION, entryId: id, overrideAccess: true, locale },
-    body
+    { ...body, _overwrite: true }
   );
 }
 
@@ -313,6 +313,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: true,
         locale: "en",
+        version: { _overwrite: true },
       });
       expect(taken.success).toBe(true);
       expect(taken.data).toEqual({ taken: ["articleCount"], outOfDate: [] });
@@ -391,6 +392,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: false,
           routeAuthorized: true,
           user: { id: "u1" },
+          version: { _overwrite: true },
         });
 
         expect(result.data, JSON.stringify(result)).toEqual({
@@ -492,6 +494,7 @@ describe.each(getConfiguredTestDialects())(
             entryId: id,
             overrideAccess: true,
             locale: "en",
+            version: { _overwrite: true },
           })
         ).success
       ).toBe(true);
@@ -607,7 +610,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(refused.statusCode).toBe(409);
@@ -624,6 +627,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: true,
         locale: "en",
+        version: { _overwrite: true },
       });
 
       expect({ statusCode: missing.statusCode, code: missing.code }).toEqual({
@@ -645,7 +649,7 @@ describe.each(getConfiguredTestDialects())(
         (
           await entries.updateEntry(
             { collectionName: "plain", entryId: id, overrideAccess: true },
-            { title: "pending", total: 2 }
+            { title: "pending", total: 2, _overwrite: true }
           )
         ).success
       ).toBe(true);

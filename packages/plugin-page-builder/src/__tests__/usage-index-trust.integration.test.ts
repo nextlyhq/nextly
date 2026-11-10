@@ -319,7 +319,10 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "pages",
           id: home,
-          data: { content: document("page", [placing("i1", footer)]) },
+          data: {
+            content: document("page", [placing("i1", footer)]),
+            _overwrite: true,
+          },
           overrideAccess: true,
         });
         expect(await referencesOf(t, [home])).toEqual({ [home]: [footer] });

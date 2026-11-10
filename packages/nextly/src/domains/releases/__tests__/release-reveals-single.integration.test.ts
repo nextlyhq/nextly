@@ -70,7 +70,7 @@ async function draftedSingleInRelease(
   const singles = singlesOf(t);
   await singles.update(
     SLUG,
-    { headline: "pending", status: "draft" },
+    { headline: "pending", status: "draft", _overwrite: true },
     { overrideAccess: true }
   );
 
@@ -106,7 +106,7 @@ async function publishedSingleInTakedown(
   const singles = singlesOf(t);
   await singles.update(
     SLUG,
-    { headline: "live", status: "published" },
+    { headline: "live", status: "published", _overwrite: true },
     { overrideAccess: true }
   );
 

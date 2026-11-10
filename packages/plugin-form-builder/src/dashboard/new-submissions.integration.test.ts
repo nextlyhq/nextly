@@ -495,7 +495,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "leads",
           where: { id: { equals: id } },
-          data: { status: "read" },
+          data: { status: "read", _overwrite: true },
         });
       }
       const empty = await runWidgetLoad(t, card, { as: { id: owner } });

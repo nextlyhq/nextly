@@ -87,7 +87,7 @@ describe.each(getConfiguredTestDialects())(
       });
       await current.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { tokens: TOKENS, classes: CLASSES },
+        data: { tokens: TOKENS, classes: CLASSES, _overwrite: true },
         overrideAccess: true,
       });
       return current;

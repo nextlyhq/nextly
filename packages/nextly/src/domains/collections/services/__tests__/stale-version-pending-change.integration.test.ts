@@ -223,7 +223,8 @@ describe.each(getConfiguredTestDialects())(
         const read = await englishRev(t, id);
         // Ana saves the English pending change after it was read.
         expect(
-          (await save(t, id, "en", { title: "Ana's draft" }, ANA)).success
+          (await save(t, id, "en", { title: "Ana's draft", _rev: read }, ANA))
+            .success
         ).toBe(true);
         const asAnaLeftIt = await pendingTitle(t, id);
 
@@ -256,8 +257,13 @@ describe.each(getConfiguredTestDialects())(
         // Published straight away: the version read is out of date, and
         // English holds no pending change.
         expect(
-          (await save(t, id, "en", { title: "en again", status: "published" }))
-            .success
+          (
+            await save(t, id, "en", {
+              title: "en again",
+              status: "published",
+              _rev: read,
+            })
+          ).success
         ).toBe(true);
 
         const unversioned = await takeLive(t, id);
@@ -277,7 +283,13 @@ describe.each(getConfiguredTestDialects())(
       it("takes the live values with no version, until a version is required", async () => {
         const t = await boot(dialect);
         const id = await englishBehindSpanish(t);
-        await save(t, id, "en", { title: "Ana's draft" }, ANA);
+        await save(
+          t,
+          id,
+          "en",
+          { title: "Ana's draft", _overwrite: true },
+          ANA
+        );
         expect((await takeLive(t, id)).success).toBe(true);
       });
 
@@ -285,7 +297,7 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot(dialect);
         const id = await englishBehindSpanish(t);
         const read = await englishRev(t, id);
-        await save(t, id, "en", { title: "Ana's draft" }, ANA);
+        await save(t, id, "en", { title: "Ana's draft", _rev: read }, ANA);
         const taken = await takeLive(t, id, { _rev: read, _overwrite: true });
         expect(taken.success, JSON.stringify(taken)).toBe(true);
         expect((await overwritesOf(t, id)).map(e => e.payload)).toEqual([
@@ -318,7 +330,7 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot(dialect);
         const id = await englishBehindSpanish(t);
         const read = await englishRev(t, id);
-        await save(t, id, "en", { title: "Ana's draft" }, ANA);
+        await save(t, id, "en", { title: "Ana's draft", _rev: read }, ANA);
         const asAnaLeftIt = await pendingTitle(t, id);
 
         const refused = await restDiscard(t, id, { _rev: read });
@@ -336,7 +348,7 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot(dialect);
         const id = await englishBehindSpanish(t);
         const read = await englishRev(t, id);
-        await save(t, id, "en", { title: "Ana's draft" }, ANA);
+        await save(t, id, "en", { title: "Ana's draft", _rev: read }, ANA);
         // A removal that fails: a discard that removed before judging would
         // answer with this failure rather than with the refusal.
         const removal = vi
@@ -366,7 +378,7 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot(dialect);
         const id = await englishBehindSpanish(t);
         const read = await englishRev(t, id);
-        await save(t, id, "en", { title: "Ana's draft" }, ANA);
+        await save(t, id, "en", { title: "Ana's draft", _rev: read }, ANA);
         const discarded = await restDiscard(t, id, {
           _rev: read,
           _overwrite: "true",
@@ -386,7 +398,7 @@ describe.each(getConfiguredTestDialects())(
         const id = await englishBehindSpanish(t);
         const read = await englishRev(t, id);
         // Ana publishes English, so there is no pending change left.
-        await save(t, id, "en", { status: "published" }, ANA);
+        await save(t, id, "en", { status: "published", _rev: read }, ANA);
         const answered = await restDiscard(t, id, { _rev: read });
         expect(answered.status, JSON.stringify(answered.json)).toBe(200);
       });
@@ -394,7 +406,13 @@ describe.each(getConfiguredTestDialects())(
       it("discards with no version, until a version is required", async () => {
         const t = await boot(dialect);
         const id = await englishBehindSpanish(t);
-        await save(t, id, "en", { title: "Ana's draft" }, ANA);
+        await save(
+          t,
+          id,
+          "en",
+          { title: "Ana's draft", _overwrite: true },
+          ANA
+        );
         const discarded = await restDiscard(t, id, {});
         expect(discarded.status, JSON.stringify(discarded.json)).toBe(200);
       });
@@ -403,7 +421,7 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot(dialect);
         const id = await englishBehindSpanish(t);
         const read = await englishRev(t, id);
-        await save(t, id, "en", { title: "Ana's draft" }, ANA);
+        await save(t, id, "en", { title: "Ana's draft", _rev: read }, ANA);
         const asAnaLeftIt = await pendingTitle(t, id);
         const ref = {
           scopeKind: "collection" as const,

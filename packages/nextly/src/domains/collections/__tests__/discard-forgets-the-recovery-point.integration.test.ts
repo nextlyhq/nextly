@@ -67,6 +67,7 @@ async function heldInBoth(entries: CollectionEntryService): Promise<string> {
     const live = await entries.updateEntry(at(id, locale), {
       body,
       status: "published",
+      _overwrite: true,
     });
     expect(live.success, JSON.stringify(live)).toBe(true);
   }
@@ -74,7 +75,10 @@ async function heldInBoth(entries: CollectionEntryService): Promise<string> {
     ["en", "Hello again"],
     ["de", "Hallo wieder"],
   ] as const) {
-    const held = await entries.updateEntry(at(id, locale), { body });
+    const held = await entries.updateEntry(at(id, locale), {
+      body,
+      _overwrite: true,
+    });
     expect(held.success, JSON.stringify(held)).toBe(true);
   }
   return id;
@@ -115,6 +119,7 @@ describe.each(getConfiguredTestDialects())(
       await entries.discardWorkingDraft({
         collectionName: NOTES,
         entryId: id,
+        version: { _overwrite: true },
         locale: "en",
         user: AUTHOR,
       });
@@ -125,6 +130,7 @@ describe.each(getConfiguredTestDialects())(
       await entries.discardWorkingDraft({
         collectionName: NOTES,
         entryId: id,
+        version: { _overwrite: true },
         locale: "de",
         user: AUTHOR,
       });
@@ -156,6 +162,7 @@ describe.each(getConfiguredTestDialects())(
       await entries.discardWorkingDraft({
         collectionName: NOTES,
         entryId: id,
+        version: { _overwrite: true },
         locale: "en",
         user: AUTHOR,
       });
@@ -196,6 +203,7 @@ describe.each(getConfiguredTestDialects())(
         .discardWorkingDraft({
           collectionName: NOTES,
           entryId: id,
+          version: { _overwrite: true },
           locale: "en",
           user: AUTHOR,
         })

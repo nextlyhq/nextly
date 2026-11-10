@@ -206,6 +206,7 @@ describe.each(getConfiguredTestDialects())(
         data: {
           content: hero(fields),
           ...(status === undefined ? {} : { status }),
+          _overwrite: true,
         },
         overrideAccess: true,
       });

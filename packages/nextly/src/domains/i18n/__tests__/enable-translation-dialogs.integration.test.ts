@@ -181,7 +181,7 @@ describeEachDialect(
             current.getService("singleEntryService");
           const written = await singles.update(
             "hero",
-            { heading: "Hello", views: 7 },
+            { heading: "Hello", views: 7, _overwrite: true },
             { overrideAccess: true }
           );
           expect(written.success, JSON.stringify(written)).toBe(true);

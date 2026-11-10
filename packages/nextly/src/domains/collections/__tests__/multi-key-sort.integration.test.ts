@@ -216,7 +216,7 @@ describe.each(getConfiguredTestDialects())(
           await t.nextly.update({
             collection: LOCALIZED,
             id,
-            data: { title: fr },
+            data: { title: fr, _overwrite: true },
             locale: "fr",
           });
         }

@@ -262,7 +262,7 @@ describe.each(getConfiguredTestDialects())(
       ).getEntryService();
       const result = await entries.updateEntries(
         { collectionName: LAYOUTS_SLUG, overrideAccess: true },
-        [{ id, data: { status: "draft" } }],
+        [{ id, data: { status: "draft", _overwrite: true } }],
         { skipHooks: true }
       );
       expect(result.successful, JSON.stringify(result)).toBe(1);
@@ -600,7 +600,7 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: LAYOUTS_SLUG,
             id,
-            data: { status: "draft" },
+            data: { status: "draft", _overwrite: true },
             overrideAccess: true,
           })
         );
@@ -635,7 +635,7 @@ describe.each(getConfiguredTestDialects())(
         const error = await refusalOf(
           t.nextly.updateSingle({
             slug: PAGE_BUILDER_SETTINGS_SLUG,
-            data: { defaultLayout: other },
+            data: { defaultLayout: other, _overwrite: true },
             overrideAccess: true,
           })
         );
@@ -822,7 +822,7 @@ describe.each(getConfiguredTestDialects())(
 
         const answer = await batchWriter(t).updateEntries(
           { collectionName: LAYOUTS_SLUG, overrideAccess: true },
-          [{ id: fallback, data: { status: "draft" } }]
+          [{ id: fallback, data: { status: "draft", _overwrite: true } }]
         );
 
         expect(answer.failed, JSON.stringify(answer)).toBe(1);
@@ -838,7 +838,7 @@ describe.each(getConfiguredTestDialects())(
 
         const answer = await batchWriter(t).updateEntries(
           { collectionName: LAYOUTS_SLUG, overrideAccess: true },
-          [{ id: draft, data: { title: "Still unfinished" } }]
+          [{ id: draft, data: { title: "Still unfinished", _overwrite: true } }]
         );
 
         expect(answer.successful, JSON.stringify(answer)).toBe(1);

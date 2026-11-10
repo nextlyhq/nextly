@@ -4,11 +4,15 @@ import type { JSX } from "react";
 
 import { Lock } from "@admin/components/icons";
 import { StatusPage } from "@admin/components/shared/status-page";
+import { useT } from "@admin/lib/i18n/I18nProvider";
+import type { MessageKey } from "@admin/lib/i18n/translate";
 import type { AccessSubject } from "@admin/types/access-subject";
 
-const SUBJECT_NOUN: Record<AccessSubject, string> = {
-  collection: "this collection",
-  single: "this Single",
+// A whole title per subject rather than a noun spliced into one sentence, so
+// a language can agree the rest of the sentence with the noun.
+const SUBJECT_TITLE: Record<AccessSubject, MessageKey> = {
+  collection: "nextly.status.noAccess.title.collection",
+  single: "nextly.status.noAccess.title.single",
 };
 
 export interface NoAccessPageProps {
@@ -26,7 +30,10 @@ export interface NoAccessPageProps {
  * beyond the address the user already typed.
  */
 export function NoAccessPage({ subject }: NoAccessPageProps): JSX.Element {
-  const noun = subject ? SUBJECT_NOUN[subject] : "this page";
+  const t = useT();
+  const title = subject
+    ? SUBJECT_TITLE[subject]
+    : "nextly.status.noAccess.title.page";
   return (
     <StatusPage
       visual={
@@ -36,9 +43,9 @@ export function NoAccessPage({ subject }: NoAccessPageProps): JSX.Element {
           <Lock className="h-9 w-9" aria-hidden="true" />
         </div>
       }
-      label="No access"
-      title={`You don't have access to ${noun}`}
-      description="Your account doesn't have permission to open it. If you need it, ask an admin."
+      label={t("nextly.status.noAccess.label")}
+      title={t(title)}
+      description={t("nextly.status.noAccess.description")}
     />
   );
 }

@@ -137,7 +137,7 @@ describe("cache revalidation — write path (sqlite)", () => {
 
     await entries.updateEntry(
       { collectionName: "pages", entryId: id, overrideAccess: true },
-      { slug: "new" }
+      { slug: "new", _overwrite: true }
     );
 
     expect(spy.tags).toContain("nextly:pages:slug:new");
@@ -189,7 +189,7 @@ describe("cache revalidation — write path (sqlite)", () => {
 
     await entries.updateEntries(
       { collectionName: "batchren", overrideAccess: true },
-      [{ id, data: { slug: "after" } }]
+      [{ id, data: { slug: "after", _overwrite: true } }]
     );
 
     // The batch update worker carries the previous slug, so a batch rename busts
@@ -211,6 +211,7 @@ describe("cache revalidation — write path (sqlite)", () => {
       collectionName: "pub",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     expect(spy.tags).toContain(`nextly:pub:id:${id}`);
@@ -491,7 +492,7 @@ describe("cache revalidation — write path (sqlite)", () => {
         entryId: "does-not-exist",
         overrideAccess: true,
       },
-      { title: "x" }
+      { title: "x", _overwrite: true }
     );
     expect(result.success).toBe(false);
     expect(spy.flushed).toHaveLength(0);
@@ -513,7 +514,7 @@ describe("cache revalidation — write path (sqlite)", () => {
       handle.getService<SingleEntryService>("singleEntryService");
     await singleEntry.update(
       "header",
-      { title: "Site" },
+      { title: "Site", _overwrite: true },
       { overrideAccess: true }
     );
     expect(spy.tags).toContain("nextly:single:header");
@@ -586,7 +587,7 @@ describe("cache revalidation — write path (sqlite)", () => {
       handle.getService<SingleEntryService>("singleEntryService");
     await singleEntry.update(
       "footer",
-      { title: "Site" },
+      { title: "Site", _overwrite: true },
       { overrideAccess: true, disableRevalidate: true }
     );
     expect(spy.flushed).toHaveLength(0);
@@ -611,7 +612,7 @@ describe("cache revalidation — write path (sqlite)", () => {
       handle.getService<SingleEntryService>("singleEntryService");
     await singleEntry.update(
       "footer",
-      { title: "Site" },
+      { title: "Site", _overwrite: true },
       { overrideAccess: true }
     );
     expect(spy.flushed).toHaveLength(0);

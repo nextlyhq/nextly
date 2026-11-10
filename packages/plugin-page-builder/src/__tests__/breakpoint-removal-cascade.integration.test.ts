@@ -303,6 +303,7 @@ describe.each(getConfiguredTestDialects())(
               styles: { base: { mobile: { color: "#555555" } } },
             },
           ],
+          _overwrite: true,
         },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
@@ -604,6 +605,7 @@ describe.each(getConfiguredTestDialects())(
         id: withDraft,
         data: {
           content: doc("page", [heading("a", styledAtMobile), heading("b")]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -728,7 +730,10 @@ describe.each(getConfiguredTestDialects())(
       const run = await svc.begin(["mobile"], null, "user:someone");
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        data: {
+          breakpoints: { viewport: [TABLET], container: [] },
+          _overwrite: true,
+        },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
@@ -760,7 +765,10 @@ describe.each(getConfiguredTestDialects())(
       const run = await svc.begin(["mobile"], null, "user:someone");
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        data: {
+          breakpoints: { viewport: [TABLET], container: [] },
+          _overwrite: true,
+        },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
@@ -817,7 +825,10 @@ describe.each(getConfiguredTestDialects())(
       const run = await svc.begin(["mobile"], null, "user:someone");
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        data: {
+          breakpoints: { viewport: [TABLET], container: [] },
+          _overwrite: true,
+        },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
@@ -863,7 +874,10 @@ describe.each(getConfiguredTestDialects())(
       const run = await svc.begin(["mobile"], null, "user:someone");
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        data: {
+          breakpoints: { viewport: [TABLET], container: [] },
+          _overwrite: true,
+        },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
@@ -912,6 +926,7 @@ describe.each(getConfiguredTestDialects())(
         id,
         data: {
           content: doc("page", [heading("a", styledAtMobile), heading("b")]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -938,7 +953,11 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "pages",
         id,
-        data: { content: doc("page", draft), status: "published" },
+        data: {
+          content: doc("page", draft),
+          status: "published",
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       const carried = await carryOn(cookie, runId);
@@ -1082,7 +1101,10 @@ describe.each(getConfiguredTestDialects())(
       const run = await svc.begin(["mobile"], null, "user:someone");
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        data: {
+          breakpoints: { viewport: [TABLET], container: [] },
+          _overwrite: true,
+        },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
@@ -1183,6 +1205,7 @@ describe.each(getConfiguredTestDialects())(
         id,
         data: {
           content: doc("page", [heading("a", styledAtMobile), heading("b")]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -1201,7 +1224,11 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "pages",
         id,
-        data: { content: doc("page", draft), status: "published" },
+        data: {
+          content: doc("page", draft),
+          status: "published",
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       await jobPass();
@@ -1249,6 +1276,7 @@ describe.each(getConfiguredTestDialects())(
             heading("a", styledAtMobile),
             heading("b", styledAtMobile),
           ]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -1272,7 +1300,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "features",
         id: fid,
-        data: { hero: { body: doc("page", [heading("a")]) } },
+        data: { hero: { body: doc("page", [heading("a")]) }, _overwrite: true },
         overrideAccess: true,
       });
       await jobPass();
@@ -1302,7 +1330,10 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "pages",
         id,
-        data: { content: doc("page", [heading("a", styledAtMobile)]) },
+        data: {
+          content: doc("page", [heading("a", styledAtMobile)]),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       const unconfirmed = await post(cookie, ["site", "breakpoints"], {
@@ -1332,6 +1363,7 @@ describe.each(getConfiguredTestDialects())(
         id,
         data: {
           content: doc("page", [heading("a", styledAtMobile), heading("b")]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -1386,7 +1418,10 @@ describe.each(getConfiguredTestDialects())(
       // The save stores its set and walks: the page is stripped.
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        data: {
+          breakpoints: { viewport: [TABLET], container: [] },
+          _overwrite: true,
+        },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
@@ -1453,6 +1488,7 @@ describe.each(getConfiguredTestDialects())(
             ],
             container: [],
           },
+          _overwrite: true,
         },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
@@ -1490,7 +1526,10 @@ describe.each(getConfiguredTestDialects())(
       expect(typeof read._rev).toBe("string");
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        data: {
+          breakpoints: { viewport: [TABLET], container: [] },
+          _overwrite: true,
+        },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });

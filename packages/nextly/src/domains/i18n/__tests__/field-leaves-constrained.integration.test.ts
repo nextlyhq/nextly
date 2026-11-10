@@ -184,7 +184,10 @@ describeEachDialect(
       const [value] = english;
       const written = await singles.update(
         "hero",
-        value === undefined ? { views: 1 } : { code: value, views: 1 },
+        {
+          ...(value === undefined ? { views: 1 } : { code: value, views: 1 }),
+          _overwrite: true,
+        },
         { locale: "en", overrideAccess: true }
       );
       expect(written.success, JSON.stringify(written)).toBe(true);
@@ -657,7 +660,7 @@ describeEachDialect(
           current.getService("singleEntryService");
         const written = await singles.update(
           "hero",
-          { code: value },
+          { code: value, _overwrite: true },
           { locale: "en", overrideAccess: true }
         );
         expect(written.success, JSON.stringify(written)).toBe(true);
@@ -880,7 +883,7 @@ describeEachDialect(
         current.getService("singleEntryService");
       const written = await singles.update(
         "hero",
-        { code: "b2@example.com" },
+        { code: "b2@example.com", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
       expect(written.success, JSON.stringify(written)).toBe(true);

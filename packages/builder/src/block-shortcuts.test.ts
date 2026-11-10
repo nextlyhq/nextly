@@ -305,3 +305,58 @@ describe("what reaches beneath a shortcut set here", () => {
     expect(reaching("font-size")).toBeUndefined();
   });
 });
+
+describe("a reset written over a value from elsewhere, read back", () => {
+  it("reads Auto for the min height it wrote over a wider Full screen", () => {
+    const section = node("core/section", {
+      base: { sm: { minHeight: "auto" } },
+    });
+    const tall = (cssProperty: string) =>
+      cssProperty === "min-height" ? "100svh" : undefined;
+    expect(heightOf(section, mobile, tall)).toBe("auto");
+  });
+
+  it("reads Medium for the button's own padding and inherited text it wrote", () => {
+    const button = node("core/button", {
+      base: { sm: { padding, fontSize: "inherit" } },
+    });
+    expect(sizeOf(button, mobile)).toBe("medium");
+  });
+});
+
+describe("a scaled token reaching from elsewhere, matched exactly", () => {
+  /** Each side as a scaled token compiles under a prefix, for given tokens. */
+  const sides = (prefix: string, y: string, x: string, times: number) => ({
+    "font-size": "0.875em",
+    "padding-block-start": `calc(var(${prefix}${y}) * ${times})`,
+    "padding-block-end": `calc(var(${prefix}${y}) * ${times})`,
+    "padding-inline-start": `calc(var(${prefix}${x}) * ${times})`,
+    "padding-inline-end": `calc(var(${prefix}${x}) * ${times})`,
+  });
+  const reading =
+    (values: Record<string, string>) =>
+    (cssProperty: string): string | undefined =>
+      values[cssProperty];
+
+  it("reads Small for the button's own tokens under the site's prefix", () => {
+    const button = node("core/button");
+    const own = sides("--brand-", "button-padding-y", "button-padding-x", 0.75);
+    expect(
+      sizeOf(button, { ...mobile, tokenPrefix: "--brand-" }, reading(own))
+    ).toBe("small");
+  });
+
+  it("reads no size for another token whose name ends the same way", () => {
+    // `brand.button.padding-y` under `--site-`, not the button's own token.
+    const button = node("core/button");
+    const other = sides(
+      "--site-",
+      "brand-button-padding-y",
+      "brand-button-padding-x",
+      0.75
+    );
+    expect(
+      sizeOf(button, { ...mobile, tokenPrefix: "--site-" }, reading(other))
+    ).toBeUndefined();
+  });
+});

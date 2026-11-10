@@ -87,12 +87,14 @@ describeEachDialect("a Single's saves in Recent activity", dialect => {
 
   /** Save a Single as the owner, returning its live document id. */
   const save = async (slug: string, data: Record<string, unknown>) => {
-    const result = await handle!
-      .getService("singleEntryService")
-      .update(slug, data, {
+    const result = await handle!.getService("singleEntryService").update(
+      slug,
+      { ...data, _overwrite: true },
+      {
         overrideAccess: true,
         actor: { type: "user", id: String(owner.user.id) },
-      });
+      }
+    );
     expect(result.success, JSON.stringify(result)).toBe(true);
     return (result.data as { id: string }).id;
   };

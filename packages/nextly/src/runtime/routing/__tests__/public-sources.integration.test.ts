@@ -215,11 +215,12 @@ describe.each(getConfiguredTestDialects())(
           internal: "staff only",
           adminNote: "admin eyes",
           status: "published",
+          _overwrite: true,
         },
       });
       await t.nextly.updateSingle({
         slug: UNPUBLISHED,
-        data: { headline: "Not yet", status: "draft" },
+        data: { headline: "Not yet", status: "draft", _overwrite: true },
       });
       for (const [title, adminOnly] of [
         ["First", "a1"],

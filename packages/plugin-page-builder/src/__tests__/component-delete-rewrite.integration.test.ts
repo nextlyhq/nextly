@@ -465,7 +465,11 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: NOTES,
         id: holding,
-        data: { title: "Renamed", content: pageDoc([copyOf("i1", cardId)]) },
+        data: {
+          title: "Renamed",
+          content: pageDoc([copyOf("i1", cardId)]),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
 
@@ -498,6 +502,7 @@ describe.each(getConfiguredTestDialects())(
               copyOf("i1", cardId),
               heading("edit", "Author edit"),
             ]),
+            _overwrite: true,
           },
           overrideAccess: true,
         });
@@ -536,6 +541,7 @@ describe.each(getConfiguredTestDialects())(
             copyOf("i1", cardId),
             heading("edit", "Author edit"),
           ]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -622,6 +628,7 @@ describe.each(getConfiguredTestDialects())(
         id: pageId,
         data: {
           content: pageDoc([copyOf("i1", cardId), heading("d", "Draft edit")]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -684,7 +691,10 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.updateSingle({
         slug: HOME,
         locale: "en",
-        data: { content: pageDoc([heading("en", "English")]) },
+        data: {
+          content: pageDoc([heading("en", "English")]),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       // The copy is only in German, which the default language never shows.
@@ -693,6 +703,7 @@ describe.each(getConfiguredTestDialects())(
         locale: "de",
         data: {
           content: pageDoc([heading("de", "Deutsch"), copyOf("i1", cardId)]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -768,7 +779,7 @@ describe.each(getConfiguredTestDialects())(
           await t.nextly.update({
             collection: "pages",
             id: pageId,
-            data: { title: "Author draft" },
+            data: { title: "Author draft", _overwrite: true },
             overrideAccess: true,
           });
         },
@@ -853,6 +864,7 @@ describe.each(getConfiguredTestDialects())(
         id: withDraft,
         data: {
           content: pageDoc([copyOf("i1", cardId), heading("d", "Draft edit")]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -867,6 +879,7 @@ describe.each(getConfiguredTestDialects())(
             kind: "component",
             nodes: [heading("t", "New title")],
           },
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -908,7 +921,11 @@ describe.each(getConfiguredTestDialects())(
         [
           {
             id,
-            data: { title: "Bulk", content: pageDoc([copyOf("i1", cardId)]) },
+            data: {
+              title: "Bulk",
+              content: pageDoc([copyOf("i1", cardId)]),
+              _overwrite: true,
+            },
           },
         ],
         { skipHooks: true }
@@ -919,7 +936,11 @@ describe.each(getConfiguredTestDialects())(
         [
           {
             id,
-            data: { title: "Bulk", content: pageDoc([heading("h", "Plain")]) },
+            data: {
+              title: "Bulk",
+              content: pageDoc([heading("h", "Plain")]),
+              _overwrite: true,
+            },
           },
         ],
         { skipHooks: true }

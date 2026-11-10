@@ -76,7 +76,10 @@ describe("a publish that retries after a lost race", () => {
       locale: "en",
     };
     // English's pending change: held, not yet live.
-    await entries.updateEntry(scope, { title: "Hello again" });
+    await entries.updateEntry(scope, {
+      title: "Hello again",
+      _overwrite: true,
+    });
     expect(await titleOf(entries, id)).toBe("Hello");
 
     const adapter = handle!.adapter;
@@ -107,6 +110,7 @@ describe("a publish that retries after a lost race", () => {
 
     const published = await entries.updateEntry(scope, {
       status: "published",
+      _overwrite: true,
     });
     expect(published.success, JSON.stringify(published)).toBe(true);
     expect(attempts).toBeGreaterThanOrEqual(2);

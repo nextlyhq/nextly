@@ -360,7 +360,7 @@ describe.each(
       await t.nextly.update({
         collection,
         id,
-        data: { title: "two", status: long },
+        data: { title: "two", status: long, _overwrite: true },
       });
 
       const versions = await historyOf(reader, collection, id);
