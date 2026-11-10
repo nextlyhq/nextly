@@ -33,6 +33,18 @@ registerComponent(ECHO, ((props: { context?: unknown; entry?: unknown }) => (
   </pre>
 )) as never);
 registerComponent(TAB, () => <p>plugin tab body</p>);
+const PLUGIN_FORM = "@acme/a/admin#PluginForm";
+const pluginSubmit = vi.fn();
+registerComponent(PLUGIN_FORM, () => (
+  <form
+    onSubmit={event => {
+      event.preventDefault();
+      pluginSubmit();
+    }}
+  >
+    <button type="submit">Send plugin form</button>
+  </form>
+));
 
 afterEach(() => {
   meta.contributions = undefined;
@@ -507,5 +519,62 @@ describe("a contribution whose component cannot be found", () => {
     expect(
       await screen.findByText("This part of the page couldn't be loaded.")
     ).toBeTruthy();
+  });
+});
+
+describe("a plugin's own form inside a place", () => {
+  // The edit pages draw their places inside the document's own form, whose
+  // handler saves the document. A plugin's submit must stay the plugin's.
+  afterEach(() => pluginSubmit.mockReset());
+
+  it("a plugin's form submits without saving the document", async () => {
+    const saveDocument = vi.fn((event: { preventDefault: () => void }) =>
+      event.preventDefault()
+    );
+    meta.contributions = {
+      "user.detail": {
+        block: [{ builtIn: "content" }, block("acme-a.form", PLUGIN_FORM)],
+        tab: [{ ...billingTab(), component: PLUGIN_FORM }],
+      },
+    };
+    const user = userEvent.setup();
+
+    render(
+      <form onSubmit={saveDocument}>
+        <PlaceTabs place="user.detail" context={CONTEXT} contentLabel="Profile">
+          <TargetSlot
+            place="user.detail"
+            context={CONTEXT}
+            builtIns={{
+              content: <div data-testid="page-content">content</div>,
+            }}
+          />
+        </PlaceTabs>
+      </form>
+    );
+
+    // A block's form.
+    await user.click(screen.getByRole("button", { name: "Send plugin form" }));
+    expect(pluginSubmit).toHaveBeenCalledTimes(1);
+    expect(saveDocument).not.toHaveBeenCalled();
+
+    // A tab's form.
+    await user.click(screen.getByRole("tab", { name: "Billing" }));
+    const inTab = within(screen.getByRole("tabpanel"));
+    await user.click(inTab.getByRole("button", { name: "Send plugin form" }));
+    expect(pluginSubmit).toHaveBeenCalledTimes(2);
+    expect(saveDocument).not.toHaveBeenCalled();
+  });
+
+  it("with nothing contributed, the page's own parts are not wrapped", () => {
+    const { container } = render(
+      <TargetSlot
+        place="user.detail"
+        context={CONTEXT}
+        builtIns={{ content: <div data-testid="page-content">content</div> }}
+      />
+    );
+
+    expect(screen.getByTestId("page-content").parentElement).toBe(container);
   });
 });
