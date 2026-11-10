@@ -83,6 +83,10 @@ export type { DocumentViewProps } from "@nextlyhq/admin";
  *   `collectionSlug` and `entryId`, `documentLock` (hold writes while
  *   `actionsDisabled`), `mayWrite()`, and `documentChanged(result)`, the same
  *   two results.
+ * - `SidebarSectionProps`: a side panel section declared at an edit page's
+ *   place (`kind: "sidebarSection"`): the place's `context` and `entry`, as
+ *   every contributed component receives them, and on a collection entry's
+ *   page also every field of `DocumentPanelSectionProps`.
  *
  * Both are drawn inside the document's editor, so `useDocumentLocale()` names
  * the language being edited — the one a replaced Unpublish acts on — and
@@ -107,6 +111,7 @@ export type {
   DocumentActionReplacementProps,
   DocumentChangeResult,
   DocumentPanelSectionProps,
+  SidebarSectionProps,
 } from "@nextlyhq/admin";
 
 /**
