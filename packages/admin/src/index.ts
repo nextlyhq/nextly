@@ -413,6 +413,20 @@ export {
 // `@nextlyhq/plugin-sdk/admin`.
 export { usePluginTranslate } from "./lib/i18n/I18nProvider";
 
+// The shared settings panel that adds and edits a field, configured per
+// surface. Re-exported by `@nextlyhq/plugin-sdk/admin` as experimental.
+export { FieldSettingsPanel } from "./components/field-ui";
+export type {
+  FieldSettingsControlProps,
+  FieldSettingsField,
+  FieldSettingsPanelProps,
+  FieldSettingsSurface,
+  FieldSettingsSurfaceControlProps,
+  FieldSettingsTab,
+  FieldTypeSettings,
+  FixedFieldSetting,
+} from "./components/field-ui";
+
 export {
   FieldPicker,
   describeFieldTypes,

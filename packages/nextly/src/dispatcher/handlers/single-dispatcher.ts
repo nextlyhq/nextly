@@ -48,10 +48,12 @@ import { resolveCompanionRename } from "../../domains/i18n/migration/companion-r
 import { translationLayoutChange } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
+import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
+import { recordedFieldsOf } from "../../domains/schema/services/collection-schema-apply";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
@@ -1192,6 +1194,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           (single as { localized?: boolean }).localized === true,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
+        // What the fields were before this save, as the apply states it.
+        recordedFields: recordedFieldsOf(single),
       };
 
       return respondData(
@@ -1339,6 +1343,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               builtBy: "collection",
             }
           );
+          // A translated relation renamed and switched at once is refused: the companion's
+          // rename carries its values as they are.
+          refuseCompanionRenameSwitch({
+            rename: companionRename,
+            oldFields: single.fields,
+            newFields: fields,
+            subject: `Single '${slug}'`,
+          });
           // A field leaving translation has preconditions of its own, asked before the push alters
           // anything.
           await archiveFieldsLeavingTranslation({
@@ -1391,6 +1403,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             localized: isLocalized,
             // Authored in the Schema Builder: this is the Builder's own save path.
             builderOwned: true,
+            // What the fields were before this save: on SQLite a relationship switched between
+            // one related entry and many is told by nothing else.
+            recordedFields: recordedFieldsOf(single),
           };
 
           const push = builderSchemaPush({

@@ -27,6 +27,7 @@ import {
   SYSTEM_FIELD_NAMES,
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
+import { collectFieldIds } from "@admin/lib/builder/field-placement";
 import type { FieldDefinition } from "@admin/types/collection";
 
 export interface UseBuilderEntityStateOptions<TEntity> {
@@ -66,6 +67,12 @@ export interface BuilderEntityState {
   /** Fields changed since load, plus one if any setting differs. Drives the
    *  toolbar's Save enable state. */
   unsavedCount: number;
+  /**
+   * The id of every field in the saved baseline, nested ones included. A field
+   * whose id is here has been saved, so its name no longer follows its label;
+   * one added since has not. Re-pinning the fields moves the line.
+   */
+  savedFieldIds: ReadonlySet<string>;
   /** Re-pin the field baseline: the current fields are now what is saved. */
   pinFields: () => void;
   /** Re-pin the settings baseline. Called when the write lands, not when it is
@@ -139,6 +146,13 @@ export function useBuilderEntityState<TEntity>({
     return fieldChanges + (isDirty(originalSettings, settings) ? 1 : 0);
   }, [builder.fields, originalFields, originalSettings, settings, isDirty]);
 
+  // Derived from the same baseline the unsaved count reads, so "saved" and
+  // "changed since saved" cannot disagree about which fields were saved.
+  const savedFieldIds = useMemo(
+    () => collectFieldIds(originalFields ?? []),
+    [originalFields]
+  );
+
   const pinFields = useCallback(() => {
     setOriginalFields(builder.fields.filter(f => !f.isSystem));
   }, [builder.fields]);
@@ -152,6 +166,7 @@ export function useBuilderEntityState<TEntity>({
     setSettings,
     isInitialized,
     unsavedCount,
+    savedFieldIds,
     pinFields,
     pinSettings,
   };

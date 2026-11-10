@@ -40,10 +40,25 @@ function sourceFiles(dir: string): string[] {
 }
 
 /**
+ * Whether an insert's argument names the email delivery table, by the ways
+ * the table is reached: the service's `deliveries` (bare, or as a property
+ * such as `this.deliveries`), `deliveriesTableFor(…)`, an `emailDeliveries…`
+ * table object or the `"email_deliveries"` name, in any letter case. Another
+ * table whose name merely contains "deliveries", such as plugin event or
+ * webhook deliveries, is not this one.
+ */
+function namesEmailDeliveries(argument: string): boolean {
+  return (
+    /email_?deliveries/i.test(argument) ||
+    /\bdeliveriesTableFor\b/.test(argument) ||
+    /(?:^|\.)deliveries$/.test(argument.trim())
+  );
+}
+
+/**
  * Every `.insert(...)` whose target names the delivery table, as
- * `file#enclosing function`. Matched on the argument's text: the table is
- * reached as `deliveries`, `emailDeliveries…` or `"email_deliveries"`, and an
- * insert into anything else names none of them.
+ * `file#enclosing function`. Matched on the argument's text by
+ * `namesEmailDeliveries`.
  *
  * The enclosing name is the nearest named function declaration or method,
  * class or object-literal, around the call; arrow functions and function
@@ -79,7 +94,7 @@ function deliveryInserts(): string[] {
           callee.property.type === "Identifier" &&
           callee.property.name === "insert" &&
           node.arguments.some(arg =>
-            /deliveries|email_deliveries/i.test(text.slice(arg.start, arg.end))
+            namesEmailDeliveries(text.slice(arg.start, arg.end))
           )
         ) {
           let name = "(module)";
@@ -99,6 +114,28 @@ function deliveryInserts(): string[] {
 }
 
 describe("email delivery records", () => {
+  it("are recognised by every way the table is reached, and only by those", () => {
+    for (const reached of [
+      "deliveries",
+      "this.deliveries",
+      "deliveriesTableFor(this.dialect)",
+      "emailDeliveriesPg",
+      "tables.emailDeliveries",
+      '"email_deliveries"',
+      "EMAIL_DELIVERIES_TABLE",
+    ]) {
+      expect(namesEmailDeliveries(reached)).toBe(true);
+    }
+    for (const other of [
+      "PLUGIN_EVENT_DELIVERIES_TABLE",
+      '"nextly_plugin_event_deliveries"',
+      "nextlyWebhookDeliveries",
+      "deliveriesCount",
+    ]) {
+      expect(namesEmailDeliveries(other)).toBe(false);
+    }
+  });
+
   it("are inserted only by the delivery service's one person-aware path", () => {
     expect(deliveryInserts()).toEqual([
       // A chunk naming a person, decided under the deleted-people lock.

@@ -286,7 +286,5 @@ export async function hydrateSnapshotReferences(
 /**
  * The walk above, for other callers: every relationship and upload leaf in a
  * value, components and dynamic zones included, against enriched fields.
- *
- * @experimental
  */
 export { walk as walkReferenceFields };

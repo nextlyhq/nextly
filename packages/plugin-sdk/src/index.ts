@@ -17,6 +17,36 @@
 export { definePlugin } from "nextly";
 
 /**
+ * @experimental The page-metadata contract, for the one plugin that works out
+ * every page's head. Intended to become stable once `@nextlyhq/plugin-seo`
+ * has exercised it.
+ *
+ * A plugin provides it by declaring the `"page-metadata"` capability and
+ * contributing its resolver as the `pageMetadata` service:
+ *
+ * ```ts
+ * definePlugin({
+ *   provides: ["page-metadata"],
+ *   contributes: { services: { pageMetadata: () => resolver } },
+ * });
+ * ```
+ *
+ * The route helpers then ask it for every page they serve, with no wiring in
+ * the route, and turn its `PageMetadataAnswer` into the page's head. Its
+ * `tags` name what the answer depends on, so a change to them refreshes every
+ * page. Boot refuses a second provider, and a provider without the service.
+ * Type-only, so importing it pulls no runtime into the plugin.
+ */
+export type {
+  PageMetadataAnswer,
+  PageMetadataImage,
+  PageMetadataInput,
+  PageMetadataResolver,
+  PageMetadataSource,
+  PageMetadataValues,
+} from "nextly/runtime";
+
+/**
  * @experimental `defineWidget` — declares a dashboard widget once: its
  * settings, its data, its size and how it draws. A widget drawn by its own
  * component is handed `WidgetProps<typeof widget>`; the types are here and in
@@ -309,7 +339,8 @@ export type {
 /**
  * The runtime surfaces a plugin receives when it declares them, and the
  * declarations that ask for them.
- * @experimental `PluginSettingsApi` (`ctx.settings`), `PluginAuditApi`
+ * @experimental `PluginSettingsApi` (`ctx.settings`), `PluginCacheApi`
+ *   (`ctx.cache`), `PluginAuditApi`
  *   (`ctx.audit`), `PluginAuthApi` and `CompleteLoginOptions` (`ctx.auth`),
  *   `PluginCapabilities` (`capabilities`), `PluginAuditDeclaration`
  *   (`contributes.audit`) and `PluginHookPointDeclaration`
@@ -318,6 +349,7 @@ export type {
  */
 export type {
   PluginSettingsApi,
+  PluginCacheApi,
   PluginAuditApi,
   PluginAuthApi,
   CompleteLoginOptions,
@@ -475,6 +507,23 @@ export type {
   AddressableFieldsOptions,
   AddressableField,
   UnvalidatedAddressableField,
+} from "nextly";
+
+/**
+ * "Every content type the site defines, except these": the target a
+ * `contributes.extend` clause takes to reach types it cannot name, and the one
+ * function that says which types a scope covers. The site's own collections
+ * and Singles, Schema Builder ones made later included; never a plugin's own
+ * types, Nextly's system types or field groups. Anything else that needs to
+ * know what a scope covers asks `typesReachedBy` rather than deciding again.
+ *
+ * @experimental
+ */
+export { isContentTypeScope, typesReachedBy } from "nextly";
+export type {
+  ContentTypeCandidate,
+  ContentTypeKind,
+  ContentTypeScope,
 } from "nextly";
 
 /**
@@ -639,6 +688,14 @@ export type {
  *   still be reaching past the boundary that makes one possible.
  */
 export { getCachedNextly } from "nextly";
+
+/**
+ * @experimental The cache tag `ctx.cache.tag(part)` gives, for code that
+ * renders a plugin's data outside its context (a route an app owns), so the
+ * read it caches carries the tag `ctx.cache.expire(part)` clears. Intended to
+ * be stable once a first-party plugin expires its pages through `ctx.cache`.
+ */
+export { pluginCacheTag } from "nextly";
 
 /**
  * @experimental The canonical response envelopes, and the trusted-client-IP

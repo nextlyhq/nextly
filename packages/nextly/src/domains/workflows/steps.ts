@@ -700,7 +700,7 @@ type StepOutcome = { taken: TakeStepResult } | { hidden: HiddenRefusal };
 /** The changed fields an approval would cover that the reviewer cannot read, and what decides who could. */
 interface HiddenRefusal {
   fields: string[];
-  parts: Array<{ shown: unknown; changed: string[] }>;
+  parts: Array<{ part: string | null; shown: unknown; changed: string[] }>;
   excluded: string[];
 }
 
@@ -1163,6 +1163,7 @@ async function hiddenInPart(
   );
   const hidden = await hiddenFrom(
     c.input.document,
+    entry.part,
     shown.snapshot,
     changed,
     approver.user,
@@ -1212,7 +1213,7 @@ async function hiddenFieldRefusal(
       entry,
       shown
     );
-    parts.push({ shown: shown.snapshot, changed });
+    parts.push({ part: entry.part, shown: shown.snapshot, changed });
     for (const name of hidden) fields.add(name);
   }
   if (fields.size === 0) return null;

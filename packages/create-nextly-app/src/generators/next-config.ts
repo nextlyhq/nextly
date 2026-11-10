@@ -126,15 +126,29 @@ const requireDeclaration = (createRequireName: string) =>
 const require = ${createRequireName}(import.meta.url);`;
 const REQUIRE_DECLARATION = requireDeclaration("createRequire");
 
+/** Where a new app's config takes the crawlers that wait for the whole head. */
+const HTML_LIMITED_BOTS_IMPORT =
+  'import { nextlyHtmlLimitedBots } from "nextly/next";';
+/**
+ * The crawlers answered with each page's whole head in the first HTML rather
+ * than streamed it: Next.js's own list, the main Googlebot and the AI
+ * crawlers (`nextlyHtmlLimitedBots`).
+ */
+const HTML_LIMITED_BOTS_LINE = `  // Search engines and AI crawlers read each page's whole head in the first
+  // HTML, rather than metadata streamed in after it.
+  htmlLimitedBots: nextlyHtmlLimitedBots,`;
+
 /**
  * Render a complete next.config.ts file for the selected database.
  */
 export function buildNextConfigTemplate(database: DatabaseConfig): string {
   return `import type { NextConfig } from "next";
+${HTML_LIMITED_BOTS_IMPORT}
 
 const nextConfig: NextConfig = {
 ${CACHE_COMPONENTS_ON}
   serverExternalPackages: ${packageListLiteral(database)},
+${HTML_LIMITED_BOTS_LINE}
 };
 
 export default nextConfig;
@@ -144,6 +158,7 @@ export default nextConfig;
 /** The same config as a JavaScript module, for an app without TypeScript. */
 function buildNextConfigModule(database: DatabaseConfig): string {
   return `${REQUIRE_IMPORT}
+${HTML_LIMITED_BOTS_IMPORT}
 
 ${REQUIRE_DECLARATION}
 
@@ -151,6 +166,7 @@ ${REQUIRE_DECLARATION}
 const nextConfig = {
 ${CACHE_COMPONENTS_ON}
   serverExternalPackages: ${packageListLiteral(database)},
+${HTML_LIMITED_BOTS_LINE}
 };
 
 export default nextConfig;
