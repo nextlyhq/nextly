@@ -1,0 +1,245 @@
+/**
+ * `ctx.publicAddresses`: a plugin takes part in keeping every public address
+ * to one page, moves addresses itself through the same question, and reads
+ * what it needs to catch its record up at start.
+ */
+process.env.NEXTLY_SECRET =
+  process.env.NEXTLY_SECRET ??
+  "test-secret-must-be-at-least-32-characters-long!!";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import { defineCollection } from "../../../collections/config/define-collection";
+import { text } from "../../../collections/fields/helpers";
+import {
+  definePlugin,
+  type PluginContext,
+} from "../../../plugins/plugin-context";
+import type { PublicAddressParticipant } from "../../../plugins/plugin-public-addresses";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+
+import { memoryParticipant } from "./memory-participant";
+
+let current: TestNextly | undefined;
+
+afterEach(async () => {
+  await current?.destroy();
+  current = undefined;
+});
+
+/** A plugin keeping its record in memory, handing its context to the test. */
+function recordPlugin(participant: PublicAddressParticipant | undefined) {
+  const seen: { ctx?: PluginContext } = {};
+  const plugin = definePlugin({
+    name: "@test/address-record",
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    init(ctx) {
+      seen.ctx = ctx;
+      if (participant) ctx.publicAddresses.participate(participant);
+    },
+  });
+  return { plugin, seen };
+}
+
+/** {@link memoryParticipant} as a plugin hands it over, noting each `db`. */
+function asPluginParticipant(record = memoryParticipant()) {
+  const dbs: unknown[] = [];
+  const participant: PublicAddressParticipant = {
+    holderOf: (address, asker, batch, { db }) => {
+      dbs.push(db);
+      return record.runner.holderOf(address, asker, batch, undefined as never);
+    },
+    record: (batch, { db }) => {
+      dbs.push(db);
+      return record.runner.record(batch, undefined as never);
+    },
+  };
+  return { record, participant, dbs };
+}
+
+async function boot(
+  dialect: TestDialect,
+  participant?: PublicAddressParticipant,
+  postsAddress = "/blog/{slug}"
+) {
+  const { plugin, seen } = recordPlugin(participant);
+  current = await createTestNextly({
+    dialect,
+    plugins: [plugin],
+    collections: [
+      defineCollection({
+        slug: "posts",
+        status: true,
+        fields: [text({ name: "title" }), text({ name: "slug" })],
+        publicAddress: postsAddress,
+      }),
+    ],
+  });
+  const ctx = seen.ctx;
+  if (!ctx) throw new Error("the plugin never started");
+  return { t: current, ctx };
+}
+
+async function publish(t: TestNextly, slug: string): Promise<string> {
+  const created = await t.nextly.create({
+    collection: "posts",
+    data: { title: slug, slug, status: "published" },
+  });
+  return String(created.item.id);
+}
+
+describe.each(getConfiguredTestDialects())(
+  "a plugin takes part through ctx.publicAddresses (%s)",
+  dialect => {
+    it("is asked on a save, on its own database bound to the save", async () => {
+      const { record, participant, dbs } = asPluginParticipant();
+      const { t } = await boot(dialect, participant);
+
+      const post = await publish(t, "hello");
+
+      expect(record.held()).toEqual({ "en|/blog/hello": `posts:${post}` });
+      expect(dbs.length).toBeGreaterThan(0);
+      expect(dbs.every(db => typeof db === "object" && db !== null)).toBe(true);
+    });
+
+    it("move returns the refused updates and records the rest", async () => {
+      const { record, participant } = asPluginParticipant();
+      const { t, ctx } = await boot(dialect, participant);
+      const post = await publish(t, "hello");
+
+      const { refused } = await ctx.services.collections.withTransaction(tx =>
+        ctx.publicAddresses.move(
+          [
+            {
+              holder: { collection: "pages", id: "p1", label: "Taken" },
+              holds: [{ locale: "en", path: "/blog/hello" }],
+            },
+            {
+              holder: { collection: "pages", id: "p2" },
+              holds: [{ locale: "en", path: "/free" }],
+            },
+          ],
+          tx
+        )
+      );
+
+      expect(refused).toEqual([
+        {
+          update: {
+            holder: { collection: "pages", id: "p1", label: "Taken" },
+            holds: [{ locale: "en", path: "/blog/hello" }],
+          },
+          address: { locale: "en", path: "/blog/hello" },
+          heldBy: { collection: "posts", id: post, label: "hello" },
+        },
+      ]);
+      expect(record.held()).toEqual({
+        "en|/blog/hello": `posts:${post}`,
+        "en|/free": "pages:p2",
+      });
+    });
+
+    it("move lets two documents swap addresses in one batch", async () => {
+      const { record, participant } = asPluginParticipant();
+      const { ctx } = await boot(dialect, participant);
+      const a = { collection: "pages", id: "a" };
+      const b = { collection: "pages", id: "b" };
+      await ctx.services.collections.withTransaction(tx =>
+        ctx.publicAddresses.move(
+          [
+            { holder: a, holds: [{ locale: "en", path: "/one" }] },
+            { holder: b, holds: [{ locale: "en", path: "/two" }] },
+          ],
+          tx
+        )
+      );
+
+      const { refused } = await ctx.services.collections.withTransaction(tx =>
+        ctx.publicAddresses.move(
+          [
+            { holder: a, holds: [{ locale: "en", path: "/two" }] },
+            { holder: b, holds: [{ locale: "en", path: "/one" }] },
+          ],
+          tx
+        )
+      );
+
+      expect(refused).toEqual([]);
+      expect(record.held()).toEqual({
+        "en|/two": "pages:a",
+        "en|/one": "pages:b",
+      });
+    });
+
+    it("held pages through a type oldest first, each once", async () => {
+      const { t, ctx } = await boot(dialect);
+      const ids = [
+        await publish(t, "one"),
+        await publish(t, "two"),
+        await publish(t, "three"),
+      ];
+
+      const page = await ctx.publicAddresses.held({
+        type: { kind: "collection", slug: "posts" },
+        limit: 2,
+      });
+      const rest = await ctx.publicAddresses.held({
+        type: { kind: "collection", slug: "posts" },
+        limit: 2,
+        after: page.next,
+      });
+      const listed = [...page.items, ...rest.items];
+
+      expect(page.items).toHaveLength(2);
+      expect(rest.next).toBeUndefined();
+      expect(listed.map(item => item.holder.id).sort()).toEqual(
+        [...ids].sort()
+      );
+      // Oldest first: by creation, then id, which settles entries made in
+      // the same second (SQLite keeps seconds).
+      const created = await t.nextly.find({
+        collection: "posts",
+        sort: ["createdAt", "id"],
+      });
+      expect(listed.map(item => item.holder.id)).toEqual(
+        created.items.map(item => String(item.id))
+      );
+      const one = listed.find(item => item.holder.id === ids[0]);
+      expect(one?.holds).toEqual([{ locale: "en", path: "/blog/one" }]);
+    });
+
+    it("fingerprint changes with a declared address, and only then", async () => {
+      const before = await (
+        await boot(dialect)
+      ).ctx.publicAddresses.fingerprint();
+      await current?.destroy();
+      const same = await (
+        await boot(dialect)
+      ).ctx.publicAddresses.fingerprint();
+      await current?.destroy();
+      const moved = await (
+        await boot(dialect, undefined, "/news/{slug}")
+      ).ctx.publicAddresses.fingerprint();
+
+      expect(same).toBe(before);
+      expect(moved).not.toBe(before);
+    });
+
+    it("withdraw stops the asking", async () => {
+      const { record, participant } = asPluginParticipant();
+      const { t, ctx } = await boot(dialect, participant);
+
+      ctx.publicAddresses.withdraw(participant);
+      await publish(t, "hello");
+
+      expect(record.held()).toEqual({});
+      expect(t.hooks.hasInTransaction("posts")).toBe(false);
+    });
+  }
+);

@@ -1,0 +1,167 @@
+/**
+ * What a participant reads to bring its record up to date at start: every
+ * document's held addresses, a page at a time, oldest first, and a
+ * fingerprint of everything those addresses are made from.
+ *
+ * Read on the pool, outside any save: a participant catching up runs from its
+ * plugin's start, never inside a write.
+ *
+ * @module domains/public-addresses/held-listing
+ */
+import { createHash } from "node:crypto";
+
+import { getCachedNextly } from "../../init";
+
+import {
+  addressLanguages,
+  heldIn,
+  type LanguageVersion,
+} from "./held-addresses";
+import type { HeldAddressUpdate } from "./participants";
+import {
+  declaredFor,
+  siteTypes,
+  typeRecordOn,
+  type PublicAddressType,
+} from "./public-address";
+
+/** The largest page {@link heldPage} hands back. */
+const MAX_PAGE = 500;
+const DEFAULT_PAGE = 100;
+
+/** The position after a page, as an opaque cursor. */
+function cursorAt(offset: number): string {
+  return Buffer.from(String(offset)).toString("base64url");
+}
+
+/** The position a cursor names; a cursor it never made reads as the start. */
+function offsetOf(cursor: string | undefined): number {
+  if (cursor === undefined) return 0;
+  const offset = Number(Buffer.from(cursor, "base64url").toString());
+  return Number.isInteger(offset) && offset > 0 ? offset : 0;
+}
+
+function labelOf(document: Readonly<Record<string, unknown>>) {
+  const title = document.title;
+  return typeof title === "string" && title !== "" ? { label: title } : {};
+}
+
+/** A Single's one update: its fixed address, in every language while published. */
+async function singleHeld(
+  type: PublicAddressType
+): Promise<HeldAddressUpdate[]> {
+  const nextly = await getCachedNextly();
+  const single = (await nextly.findSingle({
+    slug: type.slug,
+  } as never)) as Record<string, unknown> | null;
+  if (single === null) return [];
+  const lifecycle = (await typeRecordOn(type))?.status === true;
+  const version: LanguageVersion = {
+    published: !lifecycle || single.status === "published",
+    document: single,
+  };
+  const perLanguage = new Map(
+    addressLanguages().map(language => [language, version])
+  );
+  return [
+    {
+      holder: {
+        collection: `single:${type.slug}`,
+        id: String(single.id),
+        ...labelOf(single),
+      },
+      holds: await heldIn(type, perLanguage),
+    },
+  ];
+}
+
+/**
+ * One page of `type`'s documents, oldest first (by creation, then id), each
+ * with every address it holds now, and the cursor of the next page where
+ * there is one. One read for the page, and one per language for the versions
+ * published in it.
+ */
+export async function heldPage(args: {
+  type: PublicAddressType;
+  after?: string;
+  limit?: number;
+}): Promise<{ items: HeldAddressUpdate[]; next?: string }> {
+  const { type } = args;
+  const offset = offsetOf(args.after);
+  if (type.kind === "single") {
+    return { items: offset === 0 ? await singleHeld(type) : [] };
+  }
+  const limit = Math.min(Math.max(args.limit ?? DEFAULT_PAGE, 1), MAX_PAGE);
+  const nextly = await getCachedNextly();
+  // One more than asked, to know whether another page follows.
+  const page = await nextly.find({
+    collection: type.slug,
+    sort: ["createdAt", "id"],
+    offset,
+    limit: limit + 1,
+    status: "all",
+  } as never);
+  const documents = (page.items as Record<string, unknown>[]).slice(0, limit);
+  if (documents.length === 0) return { items: [] };
+  const ids = documents.map(document => String(document.id));
+
+  // Each language's published versions of this page's documents.
+  const publishedIn = new Map<string, Map<string, Record<string, unknown>>>();
+  for (const language of addressLanguages()) {
+    const published = await nextly.find({
+      collection: type.slug,
+      where: { id: { in: ids } },
+      locale: language,
+      status: "published",
+      limit,
+    } as never);
+    publishedIn.set(
+      language,
+      new Map(
+        (published.items as Record<string, unknown>[]).map(document => [
+          String(document.id),
+          document,
+        ])
+      )
+    );
+  }
+
+  const items: HeldAddressUpdate[] = [];
+  for (const document of documents) {
+    const id = String(document.id);
+    const perLanguage = new Map<string, LanguageVersion>();
+    for (const [language, byId] of publishedIn) {
+      const version = byId.get(id);
+      perLanguage.set(language, {
+        published: version !== undefined,
+        document: version ?? document,
+      });
+    }
+    items.push({
+      holder: { collection: type.slug, id, ...labelOf(document) },
+      holds: await heldIn(type, perLanguage),
+    });
+  }
+  const more = page.items.length > limit;
+  return more ? { items, next: cursorAt(offset + limit) } : { items };
+}
+
+/**
+ * A digest of what every held address is made from: each site type's address
+ * template in each language, and the languages. It changes when a
+ * declaration, a template a plugin supplies, or the language list changes,
+ * and not otherwise.
+ */
+export async function addressFingerprint(): Promise<string> {
+  const languages = addressLanguages();
+  const parts: string[] = [`languages:${languages.join(",")}`];
+  for (const { type, row } of await siteTypes()) {
+    for (const language of languages) {
+      const declared = await declaredFor(type, language, row);
+      parts.push(
+        `${type.kind}:${type.slug}|${language}|${declared?.template ?? ""}|${declared?.pathFields.join(",") ?? ""}`
+      );
+    }
+  }
+  return createHash("sha256").update(parts.sort().join("\n")).digest("hex");
+}

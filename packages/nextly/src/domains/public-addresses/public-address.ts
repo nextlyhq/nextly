@@ -215,6 +215,23 @@ export function addressFrom(
  * listed, since they are not pages of the site.
  */
 export async function typesWithoutAddress(): Promise<PublicAddressType[]> {
+  const without: PublicAddressType[] = [];
+  for (const { type, row } of await siteTypes()) {
+    if ((await declaredFor(type, undefined, row)) === undefined) {
+      without.push(type);
+    }
+  }
+  return without;
+}
+
+/**
+ * The site's own content types with their registry rows: those declared in
+ * code and those made in the Schema Builder, never a plugin's own or the
+ * system's. One list for every reader that walks the site's types.
+ */
+export async function siteTypes(): Promise<
+  { type: PublicAddressType; row: TypeRecord }[]
+> {
   await getCachedNextly();
   const collections = container.get<CollectionRegistryService>(
     "collectionRegistryService"
@@ -230,12 +247,5 @@ export async function typesWithoutAddress(): Promise<PublicAddressType[]> {
       row: row as TypeRecord,
     })),
   ];
-  const without: PublicAddressType[] = [];
-  for (const { type, row } of rows) {
-    if (row.source !== "code" && row.source !== "ui") continue;
-    if ((await declaredFor(type, undefined, row)) === undefined) {
-      without.push(type);
-    }
-  }
-  return without;
+  return rows.filter(({ row }) => row.source === "code" || row.source === "ui");
 }
