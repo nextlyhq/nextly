@@ -70,18 +70,19 @@ export async function keepDeniedAtStoredOnUpdate(params: {
 }): Promise<void> {
   if (params.access.overrideAccess) return;
   if (anyFieldGroupHasAccessRule("update")) {
+    const fieldGroupFields = await resolveFieldGroupFields(
+      params.fields,
+      params.source,
+      params.executor
+    );
     await keepProtectedStoredInstances({
       data: params.data,
       stored: params.stored,
       fields: params.fields,
-      fieldGroupFields: await resolveFieldGroupFields(
-        params.fields,
-        params.source,
-        params.executor
-      ),
+      fieldGroupFields,
       access: withGrants(params.access, params.executor),
       translations: params.storedIn
-        ? translationsOf(params.storedIn, params.fields)
+        ? translationsOf(params.storedIn, params.fields, fieldGroupFields)
         : undefined,
     });
   }
@@ -345,7 +346,11 @@ export async function keepDeniedFieldGroupsInDraft(params: {
       fieldGroupFields: params.fieldGroupFields,
       access: params.access,
       translations: params.storedIn
-        ? translationsOf(params.storedIn, params.fields)
+        ? translationsOf(
+            params.storedIn,
+            params.fields,
+            params.fieldGroupFields
+          )
         : undefined,
     });
   }
@@ -460,7 +465,61 @@ async function keepProtectedStoredInstances(params: {
         )
       : await keptInstanceList(name, sent, storedRows, slugOf, params);
     if (kept !== undefined) params.data[name] = kept;
+    // A stored instance the write keeps can still remove a field group placed directly in it,
+    // which its save then deletes with every row below: judged in turn, against its stored self.
+    const pairs = keptPairs(params.data[name], storedRows, {
+      holdsOne,
+      zone: many !== undefined,
+      slugOf,
+    });
+    for (const [sentRow, storedRow] of pairs) {
+      const slug = slugOf(storedRow);
+      const inner =
+        slug === undefined ? undefined : params.fieldGroupFields.get(slug);
+      if (inner) {
+        await keepProtectedStoredInstances({
+          ...params,
+          data: sentRow,
+          stored: storedRow,
+          fields: inner,
+        });
+      }
+    }
   }
+}
+
+/**
+ * Each instance a write sends paired with the stored instance it updates in place: in a list by
+ * id; the one value of a field holding one, which a single field group updates whatever id it is
+ * sent with, and a single zone only when it names the stored block.
+ */
+function keptPairs(
+  value: unknown,
+  storedRows: Record<string, unknown>[],
+  shape: {
+    holdsOne: boolean;
+    zone: boolean;
+    slugOf: (row: Record<string, unknown>) => string | undefined;
+  }
+): Array<[Record<string, unknown>, Record<string, unknown>]> {
+  if (shape.holdsOne) {
+    const [sent] = rowsOf(value);
+    const row = storedRows[0];
+    if (sent === undefined || row === undefined) return [];
+    if (shape.zone && !isStoredBlock(sent, row, shape.slugOf)) return [];
+    return [[sent, row]];
+  }
+  const byId = new Map(
+    storedRows.flatMap(row =>
+      typeof row.id === "string" ? [[row.id, row] as const] : []
+    )
+  );
+  return rowsOf(value).flatMap(sent => {
+    const row = typeof sent.id === "string" ? byId.get(sent.id) : undefined;
+    return row === undefined
+      ? []
+      : [[sent, row] as [Record<string, unknown>, Record<string, unknown>]];
+  });
 }
 
 /**
@@ -562,21 +621,19 @@ export interface StoredFieldGroupsInLanguages {
  */
 function translationsOf(
   storedIn: StoredFieldGroupsInLanguages,
-  fields: readonly FieldConfig[]
+  fields: readonly FieldConfig[],
+  fieldGroupFields: FieldGroupFieldsBySlug
 ): (id: string) => Promise<Record<string, unknown>[]> {
   let byId: Promise<Map<string, Record<string, unknown>[]>> | undefined;
   const index = async () => {
     const found = new Map<string, Record<string, unknown>[]>();
     for (const locale of storedIn.locales) {
-      const view = await storedIn.read(locale);
-      for (const field of directFieldGroupFields(fields)) {
-        const name = nameOf(field);
-        if (name === undefined) continue;
-        for (const row of rowsOf(view[name])) {
-          if (typeof row.id !== "string") continue;
-          found.set(row.id, [...(found.get(row.id) ?? []), row]);
-        }
-      }
+      indexStoredInstances(
+        await storedIn.read(locale),
+        fields,
+        fieldGroupFields,
+        found
+      );
     }
     return found;
   };
@@ -587,8 +644,59 @@ function translationsOf(
 }
 
 /**
+ * Each stored instance `level` holds in its field-group fields, by id, and each one placed directly
+ * in those, at any depth: a row read back holds what is below it, so the walk ends with the data.
+ */
+function indexStoredInstances(
+  level: Record<string, unknown>,
+  fields: readonly FieldConfig[],
+  fieldGroupFields: FieldGroupFieldsBySlug,
+  found: Map<string, Record<string, unknown>[]>
+): void {
+  for (const field of directFieldGroupFields(fields)) {
+    const name = nameOf(field);
+    if (name === undefined) continue;
+    const { single, many } = extractFieldGroupReferences(field);
+    for (const row of rowsOf(level[name])) {
+      if (typeof row.id !== "string") continue;
+      found.set(row.id, [...(found.get(row.id) ?? []), row]);
+      const slug = many !== undefined ? readFieldGroupType(row) : single;
+      const inner = slug === undefined ? undefined : fieldGroupFields.get(slug);
+      if (inner) indexStoredInstances(row, inner, fieldGroupFields, found);
+    }
+  }
+}
+
+/**
+ * Whether a field group, or one placed directly in it at any depth, declares a password whose
+ * update a rule judges: removing an instance removes what is placed directly in it too, and each
+ * such password is read stripped, so the instance is protected instead. `seen` ends a definition
+ * that places a field group inside itself.
+ */
+function fieldGroupJudgesAnUnreadPassword(
+  slug: string,
+  fieldGroupFields: FieldGroupFieldsBySlug,
+  seen: Set<string> = new Set()
+): boolean {
+  if (seen.has(slug)) return false;
+  seen.add(slug);
+  const inner = fieldGroupFields.get(slug);
+  if (!inner) return false;
+  if (judgesAnUnreadPassword(inner, getFieldFunctions("fieldGroup", slug))) {
+    return true;
+  }
+  return directFieldGroupFields(inner).some(field => {
+    const { single, many } = extractFieldGroupReferences(field);
+    return [...(single === undefined ? [] : [single]), ...(many ?? [])].some(
+      next => fieldGroupJudgesAnUnreadPassword(next, fieldGroupFields, seen)
+    );
+  });
+}
+
+/**
  * Whether a stored instance holds a value the writer may not change, by its
- * field group's update rules and those of the field groups it holds inline.
+ * field group's update rules and those of the field groups it holds, inline or
+ * placed directly in it, which a removal takes with it.
  */
 async function holdsProtectedValue(
   row: Record<string, unknown>,
@@ -646,10 +754,7 @@ async function holdsProtectedValueHere(
     )
   );
   const inner = params.fieldGroupFields.get(slug);
-  if (
-    inner &&
-    judgesAnUnreadPassword(inner, getFieldFunctions("fieldGroup", slug))
-  ) {
+  if (fieldGroupJudgesAnUnreadPassword(slug, params.fieldGroupFields)) {
     return true;
   }
   const probe = detachData(held);

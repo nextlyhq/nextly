@@ -148,7 +148,9 @@ export async function sharedComparison(args: {
   const perLanguage = await perLanguageFieldNames(
     args.fields,
     args.translated,
-    isLocalized
+    isLocalized,
+    // The components placed directly in each, whose values are rows of their own.
+    slug => Promise.resolve(args.componentFields.get(slug) ?? null)
   );
   const views = new Map<string, (value: unknown) => unknown>();
   const byHand = new Set<string>();

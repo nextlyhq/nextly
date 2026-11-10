@@ -32,10 +32,6 @@
  * ```
  */
 
-import {
-  directComponentFields,
-  type DirectField,
-} from "../../domains/field-groups/direct-component-fields";
 import { assertNoFieldGroupCycleInCode } from "../../domains/field-groups/field-group-cycles";
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
@@ -47,7 +43,6 @@ import type {
 } from "../../plugins/declared-widgets";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
-import { consoleLogger } from "../../shared/types";
 import {
   sanitizeConfig,
   type NextlyConfig,
@@ -76,29 +71,6 @@ export type {
 
 // Re-export sanitizeConfig for callers that want to sanitize without validating.
 export { sanitizeConfig } from "../../shared/types/config";
-
-// ============================================================
-// Component Nesting Validation
-// ============================================================
-
-/**
- * Names each component field placed directly in a component's fields. Its value is not stored
- * there and a write carrying one is refused, so the config says so when it is defined. A warning
- * rather than a refusal, so a config already shipped with the placement still boots.
- */
-function warnComponentsPlacedInComponents(
-  components: { slug: string; fields: unknown[] }[]
-): void {
-  for (const comp of components) {
-    for (const field of directComponentFields(comp.fields as DirectField[])) {
-      consoleLogger.warn(
-        `Component "${comp.slug}" places component field "${field.name}" directly in its ` +
-          `fields. Its value is not stored there, and a write that carries one is refused: ` +
-          `put it in a group or repeater.`
-      );
-    }
-  }
-}
 
 // ============================================================
 // defineConfig Function
@@ -218,7 +190,6 @@ function validateNextlyConfig(config: NextlyConfig): void {
 
   if (components.length > 0) {
     assertNoFieldGroupCycleInCode(components);
-    warnComponentsPlacedInComponents(components);
   }
 
   if (config.users) {

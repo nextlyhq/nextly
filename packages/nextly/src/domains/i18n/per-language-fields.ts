@@ -15,27 +15,58 @@ type FieldShape = { readonly type: string; readonly name?: string };
 
 /**
  * The fields judged per language when every language is published: the
- * translated fields, and each field whose component is translated. A dynamic
- * zone counts when any type it permits is translated. References are read
- * through `fieldGroupSlugList`, so a definition stored under the migrated
- * `fieldGroup` / `fieldGroups` keys counts as the field-group saver sees it.
+ * translated fields, and each field whose component is translated, or holds,
+ * placed directly in it at any depth, a component that is: such a component's
+ * values are rows of its own, stored per language. A dynamic zone counts when
+ * any type it permits does. References are read through `fieldGroupSlugList`,
+ * so a definition stored under the migrated `fieldGroup` / `fieldGroups` keys
+ * counts as the field-group saver sees it. Without `fieldsOf`, only the
+ * components a field names are asked.
  */
 export async function perLanguageFieldNames(
   fieldConfigs: readonly FieldShape[],
   localizedFieldNames: ReadonlySet<string>,
-  isComponentLocalized: (slug: string) => Promise<boolean>
+  isComponentLocalized: (slug: string) => Promise<boolean>,
+  fieldsOf?: (slug: string) => Promise<readonly FieldShape[] | null>
 ): Promise<Set<string>> {
   const names = new Set(localizedFieldNames);
   for (const field of fieldConfigs) {
     if (!isFieldGroupField(field)) continue;
-    for (const slug of fieldGroupSlugList(field)) {
-      if (await isComponentLocalized(slug)) {
-        names.add(field.name);
-        break;
-      }
+    if (
+      await holdsPerLanguageComponent(
+        fieldGroupSlugList(field),
+        isComponentLocalized,
+        fieldsOf
+      )
+    ) {
+      names.add(field.name);
     }
   }
   return names;
+}
+
+/**
+ * Whether any of `slugs`, or a component placed directly in one of them at any depth, stores its
+ * values per language. Each component is asked once, so one that holds itself ends the walk.
+ */
+async function holdsPerLanguageComponent(
+  slugs: readonly string[],
+  isComponentLocalized: (slug: string) => Promise<boolean>,
+  fieldsOf:
+    | ((slug: string) => Promise<readonly FieldShape[] | null>)
+    | undefined
+): Promise<boolean> {
+  const reached = [...slugs];
+  const asked = new Set<string>();
+  for (const slug of reached) {
+    if (asked.has(slug)) continue;
+    asked.add(slug);
+    if (await isComponentLocalized(slug)) return true;
+    for (const field of (fieldsOf ? await fieldsOf(slug) : null) ?? []) {
+      if (isFieldGroupField(field)) reached.push(...fieldGroupSlugList(field));
+    }
+  }
+  return false;
 }
 
 /** A field group's definition, as {@link reachesLocalizedFieldGroupIn} reads it. */
