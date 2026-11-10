@@ -410,14 +410,18 @@ async function dropPlanned(
   // The kept columns first, so a column that cannot be dropped stops the prune
   // before any table goes. A type's own table stays, with only the column the
   // site no longer keeps taken from it. SQLite drops neither a column an index
-  // covers nor the index with it, so those indexes go first there; PostgreSQL
-  // and MySQL take them with the column.
+  // covers nor the index with it, and MySQL no column a functional index names,
+  // so those indexes go first there; PostgreSQL takes them with the column.
   const droppedColumns: string[] = [];
   for (const kept of plan.keptColumns) {
-    if (dialect === "sqlite") {
-      for (const index of kept.indexes ?? []) {
+    for (const index of kept.indexes ?? []) {
+      if (dialect === "sqlite") {
         await args.adapter.executeQuery(
           `DROP INDEX IF EXISTS ${q}${index}${q}`
+        );
+      } else if (dialect === "mysql") {
+        await args.adapter.executeQuery(
+          `DROP INDEX ${q}${index}${q} ON ${q}${kept.table}${q}`
         );
       }
     }

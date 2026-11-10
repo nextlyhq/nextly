@@ -41,8 +41,8 @@ export interface KeptColumn {
   column: string;
   /**
    * The indexes on its table that cover it, read from the live tables. SQLite
-   * drops neither a column an index covers nor the index with it, so the
-   * prune drops these first there.
+   * drops neither a column an index covers nor the index with it, and MySQL
+   * no column a functional index names, so the prune drops these first there.
    */
   indexes?: string[];
 }
@@ -92,9 +92,26 @@ export async function liveKeptColumns(
     indexes: (
       live.tables.find(table => table.name === kept.table)?.indexes ?? []
     )
-      .filter(index => index.columns.includes(kept.column))
+      .filter(index => coversColumn(index, kept.column))
       .map(index => index.name),
   }));
+}
+
+/**
+ * Whether `index` covers `column`: by its column list, or, for an expression
+ * index, which reports none, by naming the column in its expression, as the
+ * functional index keying a translated unique field does on MySQL.
+ */
+function coversColumn(
+  index: { columns: readonly string[]; expression?: string },
+  column: string
+): boolean {
+  if (index.columns.includes(column)) return true;
+  if (index.expression === undefined) return false;
+  const named = new RegExp(
+    `(^|[^A-Za-z0-9_])${column.replace(/[^A-Za-z0-9_]/g, "")}($|[^A-Za-z0-9_])`
+  );
+  return named.test(index.expression);
 }
 
 /** A registry row, as the registries list them. */

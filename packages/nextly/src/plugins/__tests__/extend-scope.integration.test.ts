@@ -615,7 +615,8 @@ describe.each(getConfiguredTestDialects())(
       const adapter = database.adapter;
       vi.stubEnv("NODE_ENV", "development");
       // Unique, so its column has an index: SQLite drops neither a column an
-      // index covers nor the index with it.
+      // index covers nor the index with it, and on a translated type MySQL
+      // keys it by a functional index, which must go before its column.
       const uniqueSeo = (except?: string[]): PluginDefinition => ({
         ...seoPlugin,
         contributes: {
@@ -625,23 +626,40 @@ describe.each(getConfiguredTestDialects())(
                 every: ["collection", "single"],
                 ...(except === undefined ? {} : { except }),
               },
-              fields: [{ ...text({ name: "seo_title" }), unique: true }],
+              fields: [
+                {
+                  ...text({ name: "seo_title" }),
+                  unique: true,
+                  localized: true,
+                },
+              ],
             },
           ],
         },
       });
+      const localization = { locales: ["en", "es"], defaultLocale: "en" };
+      const notes = defineCollection({
+        slug: "es_notes",
+        localized: true,
+        fields: [text({ name: "body", localized: true })],
+      });
+      const site = { collections: [posts, pages, notes], localization };
       current = await createTestNextly({
         adapter: adapter as never,
-        collections: [posts, pages],
+        ...site,
         plugins: [uniqueSeo()],
       });
-      configWith({ collections: [posts, pages] }, [uniqueSeo()]);
+      configWith(site, [uniqueSeo()]);
       await reloadNextlyConfig();
       await current.nextly.create({
         collection: "es_pages" as never,
         data: { title: "Saved", seo_title: "Kept" } as never,
       });
-      configWith({ collections: [posts, pages] }, [uniqueSeo(["es_pages"])]);
+      await current.nextly.create({
+        collection: "es_notes" as never,
+        data: { body: "B", seo_title: "Kept in English" } as never,
+      });
+      configWith(site, [uniqueSeo(["es_pages", "es_notes"])]);
       await reloadNextlyConfig();
 
       // A site that applies its schema directly: the prune lists the kept
@@ -654,14 +672,16 @@ describe.each(getConfiguredTestDialects())(
           ) as CollectionRegistryService,
           adapter: t.adapter as never,
           lock: pruneUnderSchemaLock(t.adapter as never),
-          currentSlugs: ["es_posts", "es_pages"],
+          currentSlugs: ["es_posts", "es_pages", "es_notes"],
           approve: async () => approve,
           keptColumns: async () =>
             liveKeptColumns(
               t.adapter.getDrizzle(),
               t.adapter.dialect as Parameters<typeof liveKeptColumns>[1],
               await currentTypes({
-                configured: configuredTypes({ collections: [posts, pages] }),
+                configured: configuredTypes({
+                  collections: [posts, pages, notes],
+                }),
                 deferredExtends: [],
                 registries: {
                   collections: t.getService(
@@ -676,12 +696,21 @@ describe.each(getConfiguredTestDialects())(
         });
 
       const refused = await prune(false);
-      expect(refused.keptColumns).toEqual(["dc_es_pages.seo_title"]);
+      expect(refused.keptColumns).toEqual([
+        "dc_es_pages.seo_title",
+        "dc_es_notes_locales.seo_title",
+      ]);
       expect(refused.droppedColumns).toEqual([]);
       expect(await columnsOf(current, "dc_es_pages")).toContain("seo_title");
 
       const agreed = await prune(true);
-      expect(agreed.droppedColumns).toEqual(["dc_es_pages.seo_title"]);
+      expect(agreed.droppedColumns).toEqual([
+        "dc_es_pages.seo_title",
+        "dc_es_notes_locales.seo_title",
+      ]);
+      expect(await columnsOf(current, "dc_es_notes_locales")).not.toContain(
+        "seo_title"
+      );
       expect(await columnsOf(current, "dc_es_pages")).not.toContain(
         "seo_title"
       );
