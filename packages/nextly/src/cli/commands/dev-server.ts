@@ -53,6 +53,11 @@ import { ClackTerminalPromptDispatcher } from "../../domains/schema/pipeline/pro
 import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
 import { noopPreRenameExecutor } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
 import {
+  recordFieldsOnto,
+  registryRows,
+  type RegistryFieldsRow,
+} from "../../domains/schema/pipeline/recorded-fields";
+import {
   mergeRegisteredCollectionsSafely,
   mergeRegisteredSafely,
 } from "../../domains/schema/pipeline/registered-collections";
@@ -475,12 +480,19 @@ export async function desiredSchemaForSync(
   logger: CommandContext["logger"],
   {
     registriesPresent = true,
+    recordedCollections = [],
   }: {
     /**
      * False for a database whose core tables a sync has yet to create: its registries will hold
      * nothing, so nothing registered is merged in.
      */
     registriesPresent?: boolean;
+    /**
+     * The collections' registry rows as they were before the collection sync replaced them: what
+     * each field was, which on SQLite is all that tells a relationship switched between one
+     * related entry and many. Absent, nothing is switched there, as before.
+     */
+    recordedCollections?: readonly RegistryFieldsRow[];
   } = {}
 ): Promise<{
   desired: DesiredSchema;
@@ -648,6 +660,16 @@ export async function desiredSchemaForSync(
       logger
     ),
   };
+  // What each field was before this sync. The Singles' rows are read now: their sync runs after
+  // this apply.
+  recordFieldsOnto(desired.collections, recordedCollections);
+  recordFieldsOnto(
+    desired.singles,
+    await registryRows(() => singleRegistry.getAllSingles(), {
+      kind: "singles",
+      tableExists: name => drizzleAdapter.tableExists(name),
+    })
+  );
 
   return { desired, desiredCollections, schemaRegistry };
 }
@@ -669,7 +691,12 @@ export async function performAutoSync(
   adapter: CLIDatabaseAdapter,
   syncResult: CollectionSyncResultWithValidation,
   options: ResolvedDevOptions,
-  context: CommandContext
+  context: CommandContext,
+  /**
+   * The collections' registry rows as they were before the collection sync replaced them, for
+   * the push to read what each field was (see `desiredSchemaForSync`).
+   */
+  recordedCollections: readonly RegistryFieldsRow[] = []
 ): Promise<void> {
   const { logger } = context;
 
@@ -701,7 +728,9 @@ export async function performAutoSync(
   const dialect = drizzleAdapter.getCapabilities().dialect;
 
   const { desired, desiredCollections, schemaRegistry } =
-    await desiredSchemaForSync(config, drizzleAdapter, logger);
+    await desiredSchemaForSync(config, drizzleAdapter, logger, {
+      recordedCollections,
+    });
 
   // Per-call factory so MySQL `databaseName` flows into PushSchemaPipeline.
   // Mirrors the pattern in init/reload-config.ts. The DI-bound entry point

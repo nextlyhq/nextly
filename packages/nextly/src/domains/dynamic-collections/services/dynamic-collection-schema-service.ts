@@ -59,6 +59,8 @@ import {
   usesJunctionTable,
   getColumnDescriptor,
   getSystemColumnDescriptors,
+  relationshipStoresJson,
+  relationStorageShape,
   renderSystemColumnSql,
   toSnakeCase,
 } from "../../schema/services/field-column-descriptor";
@@ -341,10 +343,17 @@ export class DynamicCollectionSchemaService {
     // type created here, which `columnTypeIsIndexable` refuses for MySQL's JSON. Held as text, a
     // Builder table disagreed with the schema every diff compares it against, so `db:sync` offered
     // to convert each one it met.
+    //
+    // A relationship stored as a list (`hasMany`, or several target collections) is converged too,
+    // with its consumers moved in the same place: it gets no foreign key
+    // (`relationshipForeignKey`), no JOIN index (`columnIsIndexed`), no CHECK, and an empty list
+    // as its required backfill (`getDefaultValueForType`). Held scalar with a key, it refused every
+    // list the runtime wrote into it.
     if (
       described.kind === "json" &&
       legacy !== described.dialectType &&
-      !STRUCTURED_JSON_TYPES.has(field.type)
+      !STRUCTURED_JSON_TYPES.has(field.type) &&
+      !relationshipStoresJson(field)
     ) {
       return legacy;
     }
@@ -702,7 +711,8 @@ export class DynamicCollectionSchemaService {
    */
   private columnIsIndexed(field: FieldDefinition): boolean {
     if (!fieldProducesColumn(field)) return false;
-    if (field.type === "relationship") return true;
+    // A relationship holding a list is a JSON column, which a JOIN index cannot serve.
+    if (field.type === "relationship") return !relationshipStoresJson(field);
     return field.index === true;
   }
 
@@ -770,6 +780,9 @@ export class DynamicCollectionSchemaService {
     targetTables?: CollectionTables
   ): ForeignKeySpec | null {
     if (field.type !== "relationship" || !field.options?.target) return null;
+    // A relationship holding a list keeps its ids in a JSON column: no single column can reference
+    // one row, so it gets no foreign key.
+    if (relationshipStoresJson(field)) return null;
     // Many-to-one when unstated, as the Builder creates it.
     const relationType = field.options.relationType || "manyToOne";
     if (
@@ -1088,7 +1101,9 @@ export class DynamicCollectionSchemaService {
         type: field.type,
         field,
         dialect: this.dialect,
-        jsonArrayTypes: COLLECTION_JSON_ARRAY_TYPES,
+        // The same list decision as the SQL literal `requiredColumnBackfill` writes, so a
+        // required hasMany the preflight accepts is filled with `[]` here too.
+        jsonArrayTypes: this.backfillJsonArrayTypes(field.type, field),
       },
       now
     );
@@ -1103,6 +1118,56 @@ export class DynamicCollectionSchemaService {
     // default it is a contradiction with the required flag; derived from the type it is the
     // relationship case. Neither satisfies NOT NULL, so both are reported the same way.
     return literal === "NULL" ? null : literal;
+  }
+
+  /**
+   * The CHECK clauses a field's validation puts on its column: a name kept in camelCase is
+   * stored in its snake_case column. A relationship holding a list is a JSON column, which no
+   * scalar bound applies to, so it gets none.
+   */
+  private validationChecks(f: FieldDefinition): string[] {
+    if (!f.validation || relationshipStoresJson(f)) return [];
+    const checks: string[] = [];
+    if (f.validation.min !== undefined) {
+      checks.push(
+        `${this.quoteIdentifier(toSnakeCase(f.name))} >= ${f.validation.min}`
+      );
+    }
+    if (f.validation.max !== undefined) {
+      checks.push(
+        `${this.quoteIdentifier(toSnakeCase(f.name))} <= ${f.validation.max}`
+      );
+    }
+    if (
+      f.validation.minLength !== undefined &&
+      (f.type === "text" ||
+        f.type === "textarea" ||
+        f.type === "email" ||
+        f.type === "password" ||
+        f.type === "code")
+    ) {
+      checks.push(
+        `LENGTH(${this.quoteIdentifier(toSnakeCase(f.name))}) >= ${f.validation.minLength}`
+      );
+    }
+    if (f.validation.regex && this.dialect !== "sqlite") {
+      // Validate regex pattern first
+      // Note: SQLite doesn't have built-in regex support, so we skip this for SQLite
+      this.validationService.validateRegexPattern(f.name, f.validation.regex);
+      // Escape single quotes to prevent SQL injection
+      const escapedRegex = f.validation.regex.replace(/'/g, "''");
+
+      if (this.dialect === "mysql") {
+        checks.push(
+          `${this.quoteIdentifier(toSnakeCase(f.name))} REGEXP '${escapedRegex}'`
+        );
+      } else {
+        checks.push(
+          `${this.quoteIdentifier(toSnakeCase(f.name))} ~ '${escapedRegex}'`
+        );
+      }
+    }
+    return checks;
   }
 
   /**
@@ -1192,52 +1257,7 @@ export class DynamicCollectionSchemaService {
             ? `DEFAULT ${this.formatDefaultValue(f.default, f.type)}`
             : "";
 
-        // Add CHECK constraints for validation, on the field's column: a name
-        // kept in camelCase is stored in its snake_case column.
-        if (f.validation) {
-          if (f.validation.min !== undefined) {
-            checks.push(
-              `${this.quoteIdentifier(toSnakeCase(f.name))} >= ${f.validation.min}`
-            );
-          }
-          if (f.validation.max !== undefined) {
-            checks.push(
-              `${this.quoteIdentifier(toSnakeCase(f.name))} <= ${f.validation.max}`
-            );
-          }
-          if (
-            f.validation.minLength !== undefined &&
-            (f.type === "text" ||
-              f.type === "textarea" ||
-              f.type === "email" ||
-              f.type === "password" ||
-              f.type === "code")
-          ) {
-            checks.push(
-              `LENGTH(${this.quoteIdentifier(toSnakeCase(f.name))}) >= ${f.validation.minLength}`
-            );
-          }
-          if (f.validation.regex && this.dialect !== "sqlite") {
-            // Validate regex pattern first
-            // Note: SQLite doesn't have built-in regex support, so we skip this for SQLite
-            this.validationService.validateRegexPattern(
-              f.name,
-              f.validation.regex
-            );
-            // Escape single quotes to prevent SQL injection
-            const escapedRegex = f.validation.regex.replace(/'/g, "''");
-
-            if (this.dialect === "mysql") {
-              checks.push(
-                `${this.quoteIdentifier(toSnakeCase(f.name))} REGEXP '${escapedRegex}'`
-              );
-            } else {
-              checks.push(
-                `${this.quoteIdentifier(toSnakeCase(f.name))} ~ '${escapedRegex}'`
-              );
-            }
-          }
-        }
+        checks.push(...this.validationChecks(f));
 
         // A relationship's foreign key, as `relationshipForeignKey` describes
         // it: the same description the push pipeline's desired schema reads,
@@ -1812,16 +1832,18 @@ ${allColumnDefs.join(",\n")}
         // Foreign keys and unique constraints must be defined at table creation
         // For PostgreSQL/MySQL, we can add them
         if (this.dialect !== "sqlite") {
-          // Add foreign key for non-manyToMany relations
-          if (field.type === "relationship" && field.options?.target) {
-            const targetTable = this.targetTableOf(
-              field.options.target,
-              options?.targetTables
-            );
-            const onDelete = this.relationOnDelete(field);
-            const onUpdate = this.relationOnUpdate(field);
+          // The relationship's key as `relationshipForeignKey` describes it, the one answer the
+          // CREATE also takes: none for a many-to-many, or for a relationship holding a list,
+          // whose JSON column no key to one row can hold; to the table a renamed target kept.
+          const fk = this.relationshipForeignKey(
+            tableName,
+            field,
+            true,
+            options?.targetTables
+          );
+          if (fk !== null) {
             statements.push(
-              `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD CONSTRAINT ${this.quoteIdentifier(this.relationshipKeyName(tableName, addColName))} FOREIGN KEY (${this.quoteIdentifier(addColName)}) REFERENCES ${this.quoteIdentifier(targetTable)}(${this.quoteIdentifier("id")}) ON DELETE ${this.mapOnDeleteAction(onDelete)} ON UPDATE ${this.mapOnUpdateAction(onUpdate)};`
+              `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD CONSTRAINT ${this.quoteIdentifier(fk.name)} FOREIGN KEY (${this.quoteIdentifier(addColName)}) REFERENCES ${this.quoteIdentifier(fk.referencesTable)}(${this.quoteIdentifier("id")}) ON DELETE ${this.mapOnDeleteAction(fk.onDelete)} ON UPDATE ${this.mapOnUpdateAction(fk.onUpdate)};`
             );
           }
 
@@ -2823,10 +2845,11 @@ ${allColumnDefs.join(",\n")}
         indexColumns.set(uniqueName, [column]);
         uniqueColumns.set(column, uniqueName);
       }
-      if (field.type === "relationship" && field.options?.target) {
-        foreignKeysByColumn.set(column, [
-          this.relationshipKeyName(tableName, column),
-        ]);
+      // Predicted from the description the create emits the key from, so a relationship holding a
+      // list, which the create gives no key, is not predicted one a later edit would drop.
+      const fk = this.relationshipForeignKey(tableName, field, false);
+      if (fk !== null) {
+        foreignKeysByColumn.set(column, [fk.name]);
       }
     }
     return { indexNames, indexColumns, uniqueColumns, foreignKeysByColumn };
@@ -3824,15 +3847,39 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
     type: string,
     field?: Partial<FieldDefinition>
   ): string {
-    // The shared backfill decision; this path stores `chips` as a JSON array.
     return backfillDefaultForType({
       type,
       field,
       dialect: this.dialect,
       formatDefaultValue: (value, storageToken) =>
         this.formatDefaultValue(value, storageToken),
-      jsonArrayTypes: COLLECTION_JSON_ARRAY_TYPES,
+      jsonArrayTypes: this.backfillJsonArrayTypes(type, field),
     });
+  }
+
+  /**
+   * The types this path backfills with an empty JSON list: `chips`, and a relationship holding a
+   * list of ids, whose empty is an empty list rather than no reference. Only such a list, and only
+   * one with no minimum: a relation to several collections holds one `{ relationTo, value }`
+   * reference, and a list that must hold entries holds none in `[]`, so each keeps the refusal a
+   * required relation without a backfill gets.
+   *
+   * The one answer behind both renderings of an added column's fill: the SQL literal
+   * (`getDefaultValueForType`) the preflight accepts, and the value the apply binds
+   * (`addedColumnFillValue`). Decided apart, the preflight would accept a column the apply then
+   * cannot fill.
+   */
+  private backfillJsonArrayTypes(
+    type: string,
+    field?: Partial<FieldDefinition>
+  ): ReadonlySet<string> {
+    const storesList =
+      field !== undefined &&
+      relationStorageShape(field) === "list" &&
+      !((field.minRows ?? 0) > 0);
+    return storesList
+      ? new Set([...COLLECTION_JSON_ARRAY_TYPES, type])
+      : COLLECTION_JSON_ARRAY_TYPES;
   }
 
   /**
