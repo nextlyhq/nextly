@@ -977,6 +977,13 @@ exports[`each code, as a command ends with it > NEXTLY_MIGRATION_FOREIGN_KEY_VIO
   Docs: https://nextlyhq.com/docs/cli/errors/nextly-migration-foreign-key-violation  (NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION)"
 `;
 
+exports[`each code, as a command ends with it > NEXTLY_MIGRATION_HISTORY_REFUSED 1`] = `
+"✗ Applied migration 20261106_120000_000_posts_create.sql was changed after it ran. Restore it as it was applied, or record the change with \`nextly migrate:resolve --applied 20261106_120000_000_posts_create.sql\`.
+  Why:  A save writes a migration into the folder, and the folder or its ledger is in a state \`nextly migrate\` refuses: an applied file was edited or removed, or an attempt is unfinished.
+  Next: Settle what the message names, with \`nextly migrate:resolve\` or by restoring the file, then save again.
+  Docs: https://nextlyhq.com/docs/cli/errors/nextly-migration-history-refused  (NEXTLY_MIGRATION_HISTORY_REFUSED)"
+`;
+
 exports[`each code, as a command ends with it > NEXTLY_MIGRATION_PARTIALLY_APPLIED 1`] = `
 "✗ 20261020_120000_add_posts.sql ran outside a transaction, and its statement 3 of 4 failed.
   Why:  column "summary" of relation "dc_posts" already exists
@@ -1018,6 +1025,13 @@ exports[`each code, as a command ends with it > NEXTLY_ROUTE_INVALID_PATH 1`] = 
   Why:  A route's path is mounted under \`/plugins/<plugin>\`, so it must be absolute within that namespace.
   Next: Start the route's path with "/", as in "/summary".
   Docs: https://nextlyhq.com/docs/cli/errors/nextly-route-invalid-path  (NEXTLY_ROUTE_INVALID_PATH)"
+`;
+
+exports[`each code, as a command ends with it > NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED 1`] = `
+"✗ This save also converts body from text to varchar(255), from an earlier Nextly version. Review the save and confirm the conversion to write it.
+  Why:  The column's type differs from what its field makes now, and a save converts only the columns its review showed.
+  Next: Review the save in the Schema Builder and confirm the conversion, or pass the column in \`acknowledgedConversions\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/nextly-schema-conversion-unconfirmed  (NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED)"
 `;
 
 exports[`each code, as a command ends with it > NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION 1`] = `
