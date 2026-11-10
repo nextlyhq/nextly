@@ -152,6 +152,25 @@ export function isWideningChange(
 }
 
 /**
+ * Whether a type change keeps every stored value of a string column without a check of the data:
+ * `varchar(n)` to `text` or to `varchar(m)` with m >= n, and either type restated. A narrower
+ * view of `isWideningChange`, derived from it, for the data-loss consent a migration's statements
+ * are judged by: the integer ranks, `char` and the other text sizes stay changes that ask.
+ */
+export function keepsEveryStringValue(
+  fromType: string,
+  toType: string,
+  dialect: SupportedDialect
+): boolean {
+  const string = (type: string) => type === "text" || VARCHAR_RE.test(type);
+  const from = fromType.toLowerCase().trim();
+  const to = toType.toLowerCase().trim();
+  return (
+    string(from) && string(to) && isWideningChange(fromType, toType, dialect)
+  );
+}
+
+/**
  * The length a stored string may have once this type change has run, when the change can only cut
  * strings short; null for every other change.
  *

@@ -12,7 +12,10 @@
 
 import { isFieldGroupField } from "../../collections/fields/guards";
 import type { FieldConfig } from "../../collections/fields/types";
-import { keepDeniedAtStored } from "../../shared/lib/denied-change";
+import {
+  keepDeniedAtStored,
+  storedProvenance,
+} from "../../shared/lib/denied-change";
 import { detachData } from "../../shared/lib/detach";
 import {
   anyFieldGroupHasAccessRule,
@@ -67,8 +70,13 @@ export async function keepDeniedAtStoredOnUpdate(params: {
    * judged in every language it removes; `stored` is the write's own.
    */
   storedIn?: StoredFieldGroupsInLanguages;
-}): Promise<void> {
-  if (params.access.overrideAccess) return;
+}): Promise<{
+  storedPaths: ReadonlySet<string>;
+  storedValues: ReadonlyMap<string, unknown>;
+}> {
+  if (params.access.overrideAccess) {
+    return { storedPaths: new Set(), storedValues: new Map() };
+  }
   if (anyFieldGroupHasAccessRule("update")) {
     const fieldGroupFields = await resolveFieldGroupFields(
       params.fields,
@@ -86,7 +94,7 @@ export async function keepDeniedAtStoredOnUpdate(params: {
         : undefined,
     });
   }
-  const kept = await keepDeniedAtStored({
+  const { kept, permitted } = await keepDeniedAtStored({
     update: params.data,
     stored: params.stored,
     applyRules: async document => {
@@ -102,9 +110,20 @@ export async function keepDeniedAtStoredOnUpdate(params: {
       });
     },
   });
+  // The paths that now hold the row's own value, for the whole-number rule
+  // to leave to the row: the write is judged after this, and a legacy
+  // stored fraction under a denied path is the row's own content, carried
+  // by this restore, not a value this write produced. Told from what the
+  // rules left of the caller's own update — no rule runs again, so a rule
+  // reading a denied sibling answers as it answered for the restore.
+  const { paths: storedPaths, values: storedValues } = storedProvenance(
+    kept,
+    permitted
+  );
   // In place: the caller holds this object, and so may what it was handed to.
   for (const key of Object.keys(params.data)) delete params.data[key];
   Object.assign(params.data, kept);
+  return { storedPaths, storedValues };
 }
 
 /**
@@ -354,7 +373,7 @@ export async function keepDeniedFieldGroupsInDraft(params: {
         : undefined,
     });
   }
-  const kept = await keepDeniedAtStored({
+  const { kept } = await keepDeniedAtStored({
     update,
     stored,
     applyRules: document =>

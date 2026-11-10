@@ -45,6 +45,8 @@ import type { CollectionRegistryService } from "../services/collection-registry-
 const HOST = "cdh_posts";
 const KEPT = "cdh_pages";
 const DESIGNS = "cdh_designs";
+/** A collection the Builder makes in the test that deletes it. */
+const BUILT = "cdh_built";
 const DESIGNER = "@test/designer";
 
 /** Whether the second plugin refuses the delete. */
@@ -302,15 +304,25 @@ describeEachDialect("a plugin's collection-delete hook", dialect => {
     const plugin = designerContext;
     if (!plugin) throw new Error("not booted");
     const collections = plugin.services.collections;
+    // A collection the Builder made, as the Builder's delete finds one: its
+    // delete's migration drops the table, where a code-first collection the
+    // config still declares has none to drop.
+    vi.stubEnv("NODE_ENV", "development");
+    await t
+      .getService("collectionService")
+      .createCollection(
+        { name: BUILT, label: "Built", fields: [text({ name: "title" })] },
+        {}
+      );
     // Each transaction's statements, with the delete held just after it
-    // drops HOST's table: on MySQL that drop has committed the transaction
-    // so far, row locks included, while the registry row is still there.
+    // drops BUILT's table: on MySQL that drop has committed the transaction
+    // so far, row locks included, while the registry row may still be there.
     let release!: () => void;
     const gate = new Promise<void>(resolve => (release = resolve));
     let reached!: () => void;
     const dropped = new Promise<void>(resolve => (reached = resolve));
-    const dropOfHost = new RegExp(
-      `DROP TABLE IF EXISTS [\`"]dc_${HOST}[\`"](\\s+CASCADE)?;?\\s*$`
+    const dropOfBuilt = new RegExp(
+      `DROP TABLE (IF EXISTS )?[\`"]dc_${BUILT}[\`"](\\s+CASCADE)?;?\\s*$`
     );
     const transaction = t.adapter.transaction.bind(t.adapter);
     vi.spyOn(t.adapter, "transaction").mockImplementation((work, options) =>
@@ -325,7 +337,7 @@ describeEachDialect("a plugin's collection-delete hook", dialect => {
                     params?: Parameters<TransactionContext["execute"]>[1]
                   ) => {
                     const rows = await target.execute(statement, params);
-                    if (dropOfHost.test(statement)) {
+                    if (dropOfBuilt.test(statement)) {
                       reached();
                       await gate;
                     }
@@ -343,19 +355,18 @@ describeEachDialect("a plugin's collection-delete hook", dialect => {
       )
     );
 
-    vi.stubEnv("NODE_ENV", "development");
-    const deleting = builderDelete(HOST);
+    const deleting = builderDelete(BUILT);
     await dropped;
-    // Asked once the table is gone and the registry row is not: a hold the
-    // drop's commit had released would answer that the collection exists.
+    // Asked once the table is gone: a hold the drop's commit had released, or
+    // a registry row still there, would answer that the collection exists.
     const held = collections.withTransaction(tx =>
-      collections.holdCollectionInTransaction(tx, HOST)
+      collections.holdCollectionInTransaction(tx, BUILT)
     );
     await new Promise(resolve => setTimeout(resolve, 200));
     release();
     await deleting;
 
     expect(await held).toBe(false);
-    expect(await registered(t, HOST)).toBe(false);
+    expect(await registered(t, BUILT)).toBe(false);
   });
 });

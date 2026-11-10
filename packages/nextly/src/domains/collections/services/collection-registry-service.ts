@@ -65,6 +65,62 @@ export interface UpdateCollectionOptions {
 }
 
 /** Input for registering a code-first collection during sync. */
+/** The validation entry a refused `dbName` move carries, which the sync reports and never recovers from. */
+const TABLE_RENAME_REFUSED = "TABLE_RENAME_REFUSED";
+
+/**
+ * The refusal of a code-first collection's move from table `from` to table `to`, naming both and
+ * why. It is the collection's configuration that asks for the move, so the message is the
+ * operator's to read in full.
+ */
+function tableRenameRefused(
+  move: { slug: string; from: string; to: string },
+  reason: string,
+  cause?: unknown
+): NextlyError {
+  const message = `Collection '${move.slug}' cannot move from table '${move.from}' to '${move.to}': ${reason}. It keeps table '${move.from}'.`;
+  return new NextlyError({
+    code: "VALIDATION_ERROR",
+    publicMessage: message,
+    publicData: {
+      errors: [{ path: "dbName", code: TABLE_RENAME_REFUSED, message }],
+    },
+    logContext: { reason: "table-rename-refused", ...move },
+    cause: cause instanceof Error ? cause : undefined,
+  });
+}
+
+/**
+ * Whether a code-first sync's failure is a registration an earlier sync already made, which the
+ * sync recovers from by reading the row back. Classified on the thrown error's own message: a
+ * description concatenates the cause chain, so a genuine failure that merely wraps something
+ * saying "already exists" would enter duplicate recovery and mask the real error. The structured
+ * `DUPLICATE` code is preferred, with the message read for an error that bubbles up from a deeper
+ * layer without one. A refused `dbName` move is never one: it is reported as it is.
+ */
+function isDuplicateRegistration(error: unknown): boolean {
+  if (isTableRenameRefusal(error)) return false;
+  if (NextlyError.is(error) && error.code === "DUPLICATE") return true;
+  const immediate = immediateMessage(error).toLowerCase();
+  return (
+    immediate.includes("already exists") ||
+    immediate.includes("duplicate") ||
+    immediate.includes("unique constraint")
+  );
+}
+
+/** Whether `error` is a refused `dbName` move (`tableRenameRefused`). */
+function isTableRenameRefusal(error: unknown): boolean {
+  if (!NextlyError.is(error)) return false;
+  const errors = (
+    error.publicData as { errors?: { code?: unknown }[] } | undefined
+  )?.errors;
+  return (
+    Array.isArray(errors) &&
+    errors.some(entry => entry?.code === TABLE_RENAME_REFUSED)
+  );
+}
+
 export interface CodeFirstCollectionConfig {
   slug: string;
   labels: { singular: string; plural: string };
@@ -960,19 +1016,8 @@ export class CollectionRegistryService extends BaseRegistryService<
         // with a debugger. Fall back to plain `error.message` for
         // non-NextlyError throws.
         const message = describeError(error);
-        // Classify on the thrown error's own message: a description
-        // concatenates the cause chain, so a genuine failure that merely
-        // wraps something saying "already exists" would enter duplicate
-        // recovery and mask the real error.
-        const immediate = immediateMessage(error).toLowerCase();
-        // Prefer the structured NextlyError code over message string matching.
-        // Falls back to legacy substring sniffing for any non-NextlyError that
-        // bubbles up from deeper layers during the migration window.
-        const isDuplicate =
-          (NextlyError.is(error) && error.code === "DUPLICATE") ||
-          immediate.includes("already exists") ||
-          immediate.includes("duplicate") ||
-          immediate.includes("unique constraint");
+        // Whether the row is one an earlier sync made (`isDuplicateRegistration`).
+        const isDuplicate = isDuplicateRegistration(error);
         if (isDuplicate) {
           const refetched = await this.getCollectionBySlug(config.slug).catch(
             () => null
@@ -1105,9 +1150,16 @@ export class CollectionRegistryService extends BaseRegistryService<
   }
 
   /**
-   * Rename the physical table when a code-first collection's `dbName` changes.
-   * Renames only when old exists and new doesn't; warns when both exist; no-op
-   * otherwise (boot auto-create handles the missing-table case).
+   * Rename the physical table when a code-first collection's `dbName` changes, before the registry
+   * names the new one. Renames when the old table is there and the new one is not; does nothing
+   * when the old one is not there (boot creates the missing table).
+   *
+   * Refused, so the registry keeps naming the old table, when a table of the new name is there too
+   * (renaming onto it would lose one of the two), when the database refuses the rename, and when
+   * the tables cannot be read to decide: in each case the old table still holds the entries, and
+   * recording the new name would serve the collection from a table that does not.
+   *
+   * @throws NextlyError `VALIDATION_ERROR` with a `TABLE_RENAME_REFUSED` entry naming both tables
    */
   private async renamePhysicalTable(
     oldTableName: string,
@@ -1120,27 +1172,31 @@ export class CollectionRegistryService extends BaseRegistryService<
       oldExists = await this.adapter.tableExists(oldTableName);
       newExists = await this.adapter.tableExists(newTableName);
     } catch (error) {
-      this.logger.warn(
-        `Skipping rename for collection "${slug}": table introspection failed (${error instanceof Error ? error.message : String(error)}). Boot pipeline will reconcile.`
+      throw tableRenameRefused(
+        { slug, from: oldTableName, to: newTableName },
+        "its tables could not be read to decide",
+        error
       );
-      return;
     }
 
-    if (oldExists && !newExists) {
-      try {
-        const { dialect } = this.adapter.getCapabilities();
-        const q = dialect === "mysql" ? "`" : '"';
-        await this.adapter.executeQuery(
-          `ALTER TABLE ${q}${oldTableName}${q} RENAME TO ${q}${newTableName}${q}`
-        );
-      } catch (error) {
-        this.logger.warn(
-          `Failed to rename physical table for collection "${slug}" (${oldTableName} → ${newTableName}): ${error instanceof Error ? error.message : String(error)}`
-        );
-      }
-    } else if (oldExists && newExists) {
-      this.logger.warn(
-        `Cannot rename physical table for collection "${slug}": both "${oldTableName}" and "${newTableName}" exist. Resolve manually (drop one or copy rows).`
+    if (!oldExists) return;
+    if (newExists) {
+      throw tableRenameRefused(
+        { slug, from: oldTableName, to: newTableName },
+        `a table named '${newTableName}' is there too. Remove one of the two, or copy its rows across, then start again`
+      );
+    }
+    try {
+      const { dialect } = this.adapter.getCapabilities();
+      const q = dialect === "mysql" ? "`" : '"';
+      await this.adapter.executeQuery(
+        `ALTER TABLE ${q}${oldTableName}${q} RENAME TO ${q}${newTableName}${q}`
+      );
+    } catch (error) {
+      throw tableRenameRefused(
+        { slug, from: oldTableName, to: newTableName },
+        "the database refused the rename",
+        error
       );
     }
   }

@@ -13,6 +13,7 @@ import { toDbError } from "../../../database/errors";
 import type { PermissionSeedService } from "../../../domains/auth/services/permission-seed-service";
 import { NextlyError, isProgrammerError } from "../../../errors";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
+import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { StoredHookConfig } from "../../../schemas/dynamic-collections/types";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
@@ -25,18 +26,36 @@ import type { DynamicCollectionService } from "../../dynamic-collections";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { collectionTablesBySlug } from "../../dynamic-collections/services/collection-tables";
 import type { UnregisteredCollectionRow } from "../../dynamic-collections/services/dynamic-collection-registry-service";
+import type { CollectionArtifacts } from "../../dynamic-collections/services/dynamic-collection-service";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import {
+  checkSaveHistory,
+  prepareCollectionSave,
+  undoThenThrow,
+  writeCollectionSave,
+  type PreparedCollectionSave,
+  type BuilderSaveSetup,
+  type CollectionSaveDeps,
+} from "../../schema/builder-save/collection-save";
+import { renamedFieldsOf } from "../../schema/builder-save/schema-change-save";
+import {
+  entityAfterUpdate,
+  updateFills,
+  type UpdateSettings,
+} from "../../schema/builder-save/update-save";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
+import type { BrowserRenameResolution } from "../../schema/pipeline/prompt-dispatcher/browser";
 import {
   applyCollectionSchemaChange,
   refuseNewCollectionIndexNamesTaken,
 } from "../../schema/services/collection-schema-apply";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
+import { loadUiSchema } from "../../schema/ui-schema/loader";
 import { withSystemTextFields } from "../system-text-fields";
 
 import { collectionSaveIssuesDdl } from "./collection-save-issues-ddl";
@@ -48,6 +67,7 @@ interface DeletedCollectionRow {
   /** The registry row's id: a slug deleted and created again names a new one. */
   id?: unknown;
   tableName: string;
+  labels?: { singular: string; plural: string };
   fields?: FieldDefinition[];
   /** Set on a code-first collection's row: its definition is the code's. */
   locked?: boolean | number | null;
@@ -199,6 +219,13 @@ function parseLabels(
  */
 export class CollectionMetadataService extends BaseService {
   private permissionSeedService?: PermissionSeedService;
+  /**
+   * Where a Schema Builder save writes its definition and migration, and with
+   * which config (`writeCollectionSave`). Set by the service registration;
+   * absent, a create runs the collection's own DDL as it did before the
+   * writer existed.
+   */
+  private builderSave?: BuilderSaveSetup;
 
   constructor(
     adapter: DrizzleAdapter,
@@ -207,6 +234,14 @@ export class CollectionMetadataService extends BaseService {
     private readonly collectionService: DynamicCollectionService
   ) {
     super(adapter, logger);
+  }
+
+  /**
+   * Set where a Schema Builder save writes its definition and migration.
+   * Called from the service registration, which knows the app's config.
+   */
+  setBuilderSave(setup: BuilderSaveSetup): void {
+    this.builderSave = setup;
   }
 
   /**
@@ -413,6 +448,150 @@ export class CollectionMetadataService extends BaseService {
     );
   }
 
+  /**
+   * Write a create's definition and migration and, in development, run it,
+   * through the Builder save writer; without one set up, run the create's own
+   * DDL in development and keep its file, as before the writer. A refusal or
+   * failure comes back as the result the caller returns.
+   */
+  private async writeCreate(artifacts: CollectionArtifacts): Promise<{
+    refused?: MetadataServiceResult;
+    /** Whether the migration that ran wrote the registry row already. */
+    rowWritten: boolean;
+  }> {
+    const deps = this.saveDeps();
+    if (deps !== undefined && artifacts.manifestEntity !== undefined) {
+      try {
+        // Keys and junctions to the tables their targets are stored in.
+        const relations = await this.collectionService.writerRelations(
+          artifacts.tableName,
+          [],
+          artifacts.metadata.fields
+        );
+        await writeCollectionSave(deps, {
+          slug: artifacts.metadata.slug,
+          previous: null,
+          entity: artifacts.manifestEntity,
+          change: "create",
+          junctions: relations.junctions,
+          keys: relations.keys,
+        });
+        return { rowWritten: this.isDevelopment() };
+      } catch (error: unknown) {
+        const refused = errorToMetadataResult(
+          error,
+          {
+            statusCode: 500,
+            defaultMessage: "The collection's migration could not be written",
+          },
+          this.dialect
+        );
+        return { refused, rowWritten: false };
+      }
+    }
+    if (this.isDevelopment()) {
+      try {
+        // The artefact carries the registry-row upsert so the committed file
+        // recreates it where the Builder has never run. This database gets
+        // that row from `registerCollection` below, and it refuses a slug
+        // that already exists -- so what runs HERE is the DDL alone.
+        await this.fileManager.runMigration(
+          artifacts.localMigrationSQL ?? artifacts.migrationSQL
+        );
+      } catch (migrationError: unknown) {
+        const refused = errorToMetadataResult(
+          migrationError,
+          {
+            statusCode: 500,
+            defaultMessage: "The collection's table could not be created",
+          },
+          this.dialect
+        );
+        return { refused, rowWritten: false };
+      }
+    }
+    // The Drizzle `.ts` schema is no longer written — the runtime builds it
+    // from dynamic_collections metadata (see CollectionFileManager.saveMigration).
+    await this.fileManager.saveMigration(
+      artifacts.migrationSQL,
+      artifacts.migrationFileName
+    );
+    return { rowWritten: false };
+  }
+
+  /**
+   * Write an update's definition and migration through the Builder save
+   * writer, recorded applied once `push` (the update's own push, in
+   * development) has run; a settings-only update writes the settings-only
+   * migration, recorded the same way. A refusal or failure comes back as the
+   * result the caller returns.
+   */
+  private async writeUpdate(
+    deps: CollectionSaveDeps,
+    slug: string,
+    before: DeletedCollectionRow,
+    artifacts: {
+      metadataUpdates: { fields?: FieldDefinition[] };
+      /** What the update's push is answered with: its renames and fills go into the file too. */
+      pushAnswers: {
+        renameResolutions: readonly BrowserRenameResolution[];
+        fills: ReadonlyArray<{
+          field: string;
+          value: unknown;
+          required: boolean;
+        }>;
+      };
+    },
+    update: UpdateSettings,
+    push: (() => Promise<void>) | undefined
+  ): Promise<MetadataServiceResult | undefined> {
+    try {
+      const definition = await loadUiSchema({
+        projectRoot: deps.projectRoot,
+        uiSchemaFile: deps.config.db.uiSchemaFile,
+      });
+      const previous =
+        definition.collections.find(c => c.slug === slug) ??
+        definitionOfRow(slug, before);
+      const beforeFields = before.fields ?? [];
+      const fields = artifacts.metadataUpdates.fields ?? beforeFields;
+      // Keys and junctions to the tables their targets are stored in.
+      const relations = await this.collectionService.writerRelations(
+        before.tableName,
+        beforeFields,
+        fields
+      );
+      await writeCollectionSave(
+        deps,
+        {
+          slug,
+          previous,
+          entity: entityAfterUpdate(previous, update, fields),
+          change: "update",
+          // What the update's push does, written as the schema dialog's save
+          // writes it, so a deploy replaying the file ends as this database.
+          renamedFields: renamedFieldsOf(
+            artifacts.pushAnswers.renameResolutions
+          ),
+          resolutions: updateFills(artifacts.pushAnswers.fills, fields),
+          junctions: relations.junctions,
+          keys: relations.keys,
+        },
+        { appliedBy: push ?? (() => Promise.resolve()) }
+      );
+      return undefined;
+    } catch (error: unknown) {
+      return errorToMetadataResult(
+        error,
+        {
+          statusCode: 500,
+          defaultMessage: "The schema change could not be applied",
+        },
+        this.dialect
+      );
+    }
+  }
+
   private async createCollectionExcluded(
     data: Parameters<CollectionMetadataService["createCollection"]>[0]
   ): Promise<MetadataServiceResult> {
@@ -447,33 +626,13 @@ export class CollectionMetadataService extends BaseService {
             this.dialect
           );
         }
-        try {
-          // The artefact carries the registry-row upsert so the committed file
-          // recreates it where the Builder has never run. This database gets
-          // that row from `registerCollection` below, and it refuses a slug
-          // that already exists -- so what runs HERE is the DDL alone.
-          await this.fileManager.runMigration(
-            artifacts.localMigrationSQL ?? artifacts.migrationSQL
-          );
-        } catch (migrationError: unknown) {
-          return errorToMetadataResult(
-            migrationError,
-            {
-              statusCode: 500,
-              defaultMessage: "The collection's table could not be created",
-            },
-            this.dialect
-          );
-        }
       }
 
-      // Persist the SQL migration. The Drizzle `.ts` schema is no longer
-      // written — the runtime builds it from dynamic_collections metadata,
-      // matching singles/components (see CollectionFileManager.saveMigration).
-      await this.fileManager.saveMigration(
-        artifacts.migrationSQL,
-        artifacts.migrationFileName
-      );
+      // The definition, then the migration `migrate:create` would write for
+      // this collection and, in development, that file run as `nextly migrate`
+      // runs it (`writeCollectionSave`).
+      const write = await this.writeCreate(artifacts);
+      if (write.refused !== undefined) return write.refused;
 
       if (this.isDevelopment()) {
         try {
@@ -520,9 +679,15 @@ export class CollectionMetadataService extends BaseService {
       // through fromDatabaseError's `cause` chain.
       let collection;
       try {
-        collection = await this.collectionService.registerCollection(
-          artifacts.metadata
-        );
+        // A migration the writer ran carries the registry row's upsert, as
+        // every deploy needs it, so the row stands already: it takes the rest
+        // of the metadata. Otherwise the row is written here.
+        collection = write.rowWritten
+          ? await this.collectionService.updateCollectionMetadata(
+              artifacts.metadata.slug,
+              artifacts.metadata
+            )
+          : await this.collectionService.registerCollection(artifacts.metadata);
       } catch (dbError: unknown) {
         return errorToMetadataResult(
           dbError,
@@ -848,75 +1013,96 @@ export class CollectionMetadataService extends BaseService {
           body
         );
 
+      // In development the update takes its change through one push of the
+      // schema pipeline, with the archive it needs and what the push leaves
+      // out of its diff (a renamed field group's association, the junction
+      // tables), as it always has.
+      const pushUpdate = async (): Promise<void> => {
+        // The file is what a database built from migrations replays; this database takes the
+        // change through one apply of the schema pipeline, as the schema dialog's does, which
+        // diffs the table as it is, so a save the database refused part-way is finished by the
+        // next. The file creates the archive when it is missing but cannot add the kind column
+        // to an archive from before rows recorded it, which the apply's writes name.
+        if (updateArtifacts.needsArchive) {
+          const { ensureI18nArchive } = await import(
+            "../../i18n/migration/ensure-archive"
+          );
+          await ensureI18nArchive(
+            this.adapter,
+            this.adapter.getCapabilities().dialect
+          );
+        }
+        const wasLocalized =
+          (before as { localized?: boolean }).localized === true;
+        const wasStatus = (before as { status?: boolean }).status === true;
+        const beforeFields = (before.fields ?? []) as FieldDefinition[];
+        await applyCollectionSchemaChange({
+          slug: params.collectionName,
+          collection: { tableName: before.tableName, fields: beforeFields },
+          fields: updateArtifacts.metadataUpdates.fields ?? beforeFields,
+          wasLocalized,
+          isLocalized:
+            body.localized !== undefined
+              ? body.localized === true
+              : wasLocalized,
+          status: body.status !== undefined ? body.status === true : wasStatus,
+          wasStatus,
+          renameResolutions: updateArtifacts.pushAnswers.renameResolutions,
+          eventResolutions: [],
+          legacyResolutions: updateArtifacts.pushAnswers.legacyResolutions,
+          fills: updateArtifacts.pushAnswers.fills,
+          // The save detects its own renames; every other pair is a drop and an add.
+          dropAndAddUnansweredRenames: true,
+        });
+        // What the push leaves out of its diff, once it has run: a renamed field group's
+        // association and the junction tables, as the file carries them.
+        if (updateArtifacts.besideStatements) {
+          await this.fileManager.runMigration(updateArtifacts.besideStatements);
+        }
+      };
+      // With the Builder save writer set up, the update's migration is
+      // `migrate:create`'s, recorded applied once the push has run, and a
+      // settings-only update writes the settings-only migration.
+      const writerDeps = this.saveDeps();
+      if (writerDeps !== undefined) {
+        const refused = await this.writeUpdate(
+          writerDeps,
+          params.collectionName,
+          before,
+          updateArtifacts,
+          body,
+          updateArtifacts.migrationSQL ? pushUpdate : undefined
+        );
+        if (refused !== undefined) return refused;
+      }
+
       // If the data table changed, persist the SQL migration. No Drizzle
       // `.ts` schema is written — the runtime regenerates it from the
       // dynamic_collections metadata, matching singles/components.
       if (updateArtifacts.migrationSQL) {
-        // A save applies whole or fails whole: in development the migration runs before anything is
-        // recorded, so a change the database refuses leaves no file, an unchanged registry and
-        // nothing reported as applied.
-        if (this.isDevelopment()) {
-          try {
-            // The file is what a database built from migrations replays; this database takes the
-            // change through one apply of the schema pipeline, as the schema dialog's does, which
-            // diffs the table as it is, so a save the database refused part-way is finished by the
-            // next. The file creates the archive when it is missing but cannot add the kind column
-            // to an archive from before rows recorded it, which the apply's writes name.
-            if (updateArtifacts.needsArchive) {
-              const { ensureI18nArchive } = await import(
-                "../../i18n/migration/ensure-archive"
-              );
-              await ensureI18nArchive(
-                this.adapter,
-                this.adapter.getCapabilities().dialect
+        if (writerDeps === undefined) {
+          // A save applies whole or fails whole: in development the migration runs before anything is
+          // recorded, so a change the database refuses leaves no file, an unchanged registry and
+          // nothing reported as applied.
+          if (this.isDevelopment()) {
+            try {
+              await pushUpdate();
+            } catch (migrationError: unknown) {
+              return errorToMetadataResult(
+                migrationError,
+                {
+                  statusCode: 500,
+                  defaultMessage: "The schema change could not be applied",
+                },
+                this.dialect
               );
             }
-            const wasLocalized =
-              (before as { localized?: boolean }).localized === true;
-            const wasStatus = (before as { status?: boolean }).status === true;
-            const beforeFields = (before.fields ?? []) as FieldDefinition[];
-            await applyCollectionSchemaChange({
-              slug: params.collectionName,
-              collection: { tableName: before.tableName, fields: beforeFields },
-              fields: updateArtifacts.metadataUpdates.fields ?? beforeFields,
-              wasLocalized,
-              isLocalized:
-                body.localized !== undefined
-                  ? body.localized === true
-                  : wasLocalized,
-              status:
-                body.status !== undefined ? body.status === true : wasStatus,
-              wasStatus,
-              renameResolutions: updateArtifacts.pushAnswers.renameResolutions,
-              eventResolutions: [],
-              legacyResolutions: updateArtifacts.pushAnswers.legacyResolutions,
-              fills: updateArtifacts.pushAnswers.fills,
-              // The save detects its own renames; every other pair is a drop and an add.
-              dropAndAddUnansweredRenames: true,
-            });
-            // What the push leaves out of its diff, once it has run: a renamed field group's
-            // association and the junction tables, as the file carries them.
-            if (updateArtifacts.besideStatements) {
-              await this.fileManager.runMigration(
-                updateArtifacts.besideStatements
-              );
-            }
-          } catch (migrationError: unknown) {
-            return errorToMetadataResult(
-              migrationError,
-              {
-                statusCode: 500,
-                defaultMessage: "The schema change could not be applied",
-              },
-              this.dialect
-            );
           }
+          await this.fileManager.saveMigration(
+            updateArtifacts.migrationSQL,
+            updateArtifacts.migrationFileName!
+          );
         }
-
-        await this.fileManager.saveMigration(
-          updateArtifacts.migrationSQL,
-          updateArtifacts.migrationFileName!
-        );
 
         if (this.isDevelopment()) {
           try {
@@ -1340,24 +1526,65 @@ export class CollectionMetadataService extends BaseService {
   private async removeTogether(
     ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>
   ): Promise<void> {
-    const [
-      { teardownAdapterIn },
-      { splitStatements },
-      { runCollectionDeleteHandlers },
-      { getActiveHookRegistry },
-      { collectionDeleteFailure },
-    ] = await Promise.all([
-      import("./teardown-adapter-in-transaction"),
-      import("../../schema/pipeline/sql-statement-utils"),
-      import("./collection-delete-plugins"),
-      import("../../../hooks/hook-registry"),
-      import("./collection-delete-failure"),
-    ]);
+    const deps = this.saveDeps();
+    if (deps !== undefined) {
+      await this.removeThroughWriter(ordered, deps);
+      return;
+    }
+    const { splitStatements } = await import(
+      "../../schema/pipeline/sql-statement-utils"
+    );
     const drop = this.dropMigrationFor(ordered);
     await this.fileManager.saveDropMigration(
       drop.migrationSQL,
       drop.migrationFileName
     );
+    let unregistered: Map<string, UnregisteredCollectionRow>;
+    try {
+      // Development drops the tables now, in the delete's transaction;
+      // elsewhere `nextly migrate` applies the file.
+      unregistered = await this.removeRegistered(
+        ordered,
+        this.isDevelopment() ? splitStatements([drop.migrationSQL]) : []
+      );
+    } catch (error) {
+      await this.withdrawDropMigration(drop.migrationFileName);
+      throw error;
+    }
+    for (const { slug, collection } of ordered) {
+      await this.forgetDeleted(
+        slug,
+        collection,
+        unregistered.get(slug) ?? { removed: 0, stored: undefined }
+      );
+    }
+  }
+
+  /**
+   * One transaction removing what the collections deleted together hold, and
+   * their registry rows; what each row's removal found is returned. The rows
+   * are held for update to the end, and must be the rows loaded; the plugins'
+   * collection-delete handlers run before any DDL; then each collection's
+   * field-group values and translations go, then `drops` (the delete's own
+   * table drops, where it runs them here), then the registry rows. A failure
+   * is refused as `collectionDeleteFailure` words it, with whether MySQL may
+   * have committed part of it.
+   */
+  private async removeRegistered(
+    ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>,
+    drops: readonly string[]
+  ): Promise<Map<string, UnregisteredCollectionRow>> {
+    const [
+      { teardownAdapterIn },
+      { runCollectionDeleteHandlers },
+      { getActiveHookRegistry },
+      { collectionDeleteFailure },
+    ] = await Promise.all([
+      import("./teardown-adapter-in-transaction"),
+      import("./collection-delete-plugins"),
+      import("../../../hooks/hook-registry"),
+      import("./collection-delete-failure"),
+    ]);
     // What each registry row's removal found, read after the commit.
     const unregistered = new Map<string, UnregisteredCollectionRow>();
     const slugs = ordered.map(({ slug }) => slug);
@@ -1403,13 +1630,9 @@ export class CollectionMetadataService extends BaseService {
           for (const { slug, collection } of ordered) {
             await this.tearDownStoredWithIt(slug, collection, teardownAdapter);
           }
-          // Development drops the tables now, in this transaction; elsewhere
-          // `nextly migrate` applies the file.
-          if (this.isDevelopment()) {
-            for (const statement of splitStatements([drop.migrationSQL])) {
-              ddlStarted = true;
-              await tx.execute(statement);
-            }
+          for (const statement of drops) {
+            ddlStarted = true;
+            await tx.execute(statement);
           }
           for (const { slug } of ordered) {
             unregistered.set(
@@ -1427,12 +1650,94 @@ export class CollectionMetadataService extends BaseService {
       // On MySQL a registry row can have gone before the failure, so the
       // cached rows are not trusted either way.
       clearRegistryRowCache();
-      await this.withdrawDropMigration(drop.migrationFileName);
       throw collectionDeleteFailure(error, slugs, {
         dialect: this.dialect,
         ddlStarted,
       });
     }
+    return unregistered;
+  }
+
+  /**
+   * Remove the collections deleted together through the Builder save writer.
+   * The history checks `nextly migrate` runs first refuse the delete before
+   * anything is written. Then, in drop order, each collection's definition
+   * goes and its drop migration is written, with its junction tables' drops,
+   * and nothing runs: a failure writing one withdraws every file and puts the
+   * definition back, with nothing torn down. One transaction then removes every
+   * collection's field-group values, translations and registry row, as without
+   * the writer, and a failure there withdraws the files too: the collections
+   * still stand. Last, in development, each file runs as `nextly migrate` runs
+   * it; a failure there keeps the files, which `nextly migrate` finishes from,
+   * since the registry rows are gone already.
+   */
+  private async removeThroughWriter(
+    ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>,
+    deps: CollectionSaveDeps
+  ): Promise<void> {
+    await checkSaveHistory(deps);
+    // Every junction of the collections deleted together goes in the first
+    // file, before any of their tables: a junction links two of them, and
+    // dropping either table first would leave its rows pointing at nothing.
+    const junctions = await Promise.all(
+      ordered.map(
+        async ({ collection }) =>
+          (
+            await this.collectionService.writerRelations(
+              collection.tableName,
+              collection.fields ?? [],
+              []
+            )
+          ).junctions
+      )
+    );
+    const allJunctions = {
+      up: junctions.flatMap(j => j.up),
+      down: junctions.flatMap(j => j.down),
+    };
+    const prepared: PreparedCollectionSave[] = [];
+    // Withdrawn newest first, so the definition ends as it was before the first.
+    // Withdrawn newest first, so the definition ends as it was before the
+    // first; a withdrawal that fails names the files it may have left.
+    const withdrawAllThenThrow = (error: unknown) =>
+      undoThenThrow(
+        error,
+        [...prepared].reverse().map(save => ({
+          files: save.files,
+          undo: () => save.withdraw(),
+        }))
+      );
+    try {
+      for (const [index, { slug, collection }] of ordered.entries()) {
+        prepared.push(
+          await prepareCollectionSave(
+            deps,
+            {
+              slug,
+              previous: definitionOfRow(slug, collection),
+              entity: null,
+              change: "delete",
+              removedTogether: ordered
+                .map(other => other.slug)
+                .filter(other => other !== slug),
+              junctions: index === 0 ? allJunctions : { up: [], down: [] },
+            },
+            { historyChecked: true }
+          )
+        );
+      }
+    } catch (error) {
+      return withdrawAllThenThrow(error);
+    }
+    // The registry rows and what the collections hold go next, as without
+    // the writer; the tables are dropped by the files written above.
+    let unregistered: Map<string, UnregisteredCollectionRow>;
+    try {
+      unregistered = await this.removeRegistered(ordered, []);
+    } catch (error) {
+      return withdrawAllThenThrow(error);
+    }
+    for (const save of prepared) await save.run();
     for (const { slug, collection } of ordered) {
       await this.forgetDeleted(
         slug,
@@ -1440,6 +1745,18 @@ export class CollectionMetadataService extends BaseService {
         unregistered.get(slug) ?? { removed: 0, stored: undefined }
       );
     }
+  }
+
+  /** The writer's dependencies for a save here, when a writer is set up. */
+  private saveDeps(): CollectionSaveDeps | undefined {
+    return this.builderSave === undefined
+      ? undefined
+      : {
+          ...this.builderSave,
+          adapter: this.adapter,
+          logger: this.logger,
+          applies: this.isDevelopment(),
+        };
   }
 
   /**
@@ -1515,6 +1832,22 @@ export class CollectionMetadataService extends BaseService {
       logger: this.logger,
     });
   }
+}
+
+/**
+ * A deleted collection as the definition records it, read from its registry
+ * row, whose fields the definition holds as stored: what the delete's
+ * migration is generated from.
+ */
+function definitionOfRow(
+  slug: string,
+  row: DeletedCollectionRow
+): UiSchemaEntity {
+  return {
+    slug,
+    labels: row.labels ?? { singular: slug, plural: slug },
+    fields: row.fields ?? [],
+  };
 }
 
 /** A statement that changes the schema: on MySQL it commits what ran before it. */
