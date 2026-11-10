@@ -213,6 +213,24 @@ function expectCountersBeforeContent(
   expect(counters[0].at).toBeLessThan(content!.at);
 }
 
+/**
+ * One read of `table`, taking each translation's counter in the same
+ * statement as its translated content. One statement sees one snapshot, so
+ * no counter it returns can be newer than the content beside it. A counter
+ * read of its own, or a content read without the counter, fails this.
+ */
+function expectCountersWithContent(statements: string[], table: string): void {
+  const reads = statements.filter(
+    statement =>
+      statement.includes(table) &&
+      /^\s*select/i.test(statement) &&
+      !/select\s+1\s+from/i.test(statement)
+  );
+  expect(reads.filter(statement => COUNTER_READ.test(statement))).toEqual([]);
+  expect(reads).toHaveLength(1);
+  expect(reads[0]).toContain("_revision");
+}
+
 /** A stored time as milliseconds, whatever the driver hands back. */
 function timeOf(value: unknown): number {
   if (value instanceof Date) return value.getTime();
@@ -495,11 +513,12 @@ describe.each(getConfiguredTestDialects())(
       expect(await readRev(t, UNTRANSLATED, id, "*")).toBe("2");
     });
 
-    it("a list read takes the translation counters before the translated content", async () => {
-      // Read after the content, a counter could be newer than what the read
-      // shows, and a client saving from it would overwrite a translation it
-      // never saw. Before it, a save landing between the two can only make
-      // the version look older than the content.
+    it("a one-language list read takes the translation counters with the translated content", async () => {
+      // Read after the content in a statement of its own, a counter could be
+      // newer than what the read shows, and a client saving from it would
+      // overwrite a translation it never saw. A one-language read's chain
+      // holds every language its version names, so the counters come in the
+      // content's own statement, where nothing can land between the two.
       const t = await boot(dialect);
       const id = idOf(
         await handlerOf(t).createEntry(
@@ -515,8 +534,29 @@ describe.each(getConfiguredTestDialects())(
           status: "all",
         } as never)
       );
-      expectCountersBeforeContent(statements, `dc_${DOCS}_locales`);
+      expectCountersWithContent(statements, `dc_${DOCS}_locales`);
       expect(await readRev(t, DOCS, id, "en")).toBe("1.en:1");
+    });
+
+    it("a list read of every language takes the translation counters before the translated content", async () => {
+      // Its version names every language, which one fallback chain does not
+      // hold, so the counters are read apart from the content, and first:
+      // a save landing between the two can only make the version look older
+      // than the content.
+      const t = await boot(dialect);
+      await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello", note: "n" }
+      );
+      const statements = await statementsOf(dialect, () =>
+        t.nextly.find({
+          collection: DOCS as never,
+          locale: "*",
+          overrideAccess: true,
+          status: "all",
+        } as never)
+      );
+      expectCountersBeforeContent(statements, `dc_${DOCS}_locales`);
     });
 
     it("a read of every language takes the translation counters before the translated content", async () => {
