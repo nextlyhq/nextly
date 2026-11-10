@@ -33,11 +33,12 @@
  */
 
 import {
-  PILL_LABEL,
   pillStateFromForm,
   useDocumentStatus,
 } from "@nextlyhq/plugin-sdk/admin";
 import type { JSX } from "react";
+
+import { StatusPill } from "./status-pill";
 
 export interface DocumentStatusPillProps {
   /**
@@ -67,26 +68,7 @@ export function DocumentStatusPill({
     isDirty,
     status.hasWorkingDraft
   );
-  const live = state === "published";
-
-  return (
-    // A plain reading rather than a control: nothing here is pressable, and a
-    // pill that looks like a button in a bar full of buttons invites a click
-    // that does nothing.
-    <span
-      className={[
-        "border-[color:var(--nx-builder-border)] inline-flex items-center rounded-full border px-2 py-0.5 text-xs",
-        // Weight rather than a second hue carries "live", so the distinction
-        // survives without colour and in both modes.
-        live
-          ? "text-[color:var(--nx-builder-text)] font-semibold"
-          : "text-[color:var(--nx-builder-text-muted)] font-normal",
-      ].join(" ")}
-    >
-      {/* Named for a reader, because "Draft" alone in a toolbar does not say
-          what it describes. */}
-      <span className="sr-only">Page status: </span>
-      {PILL_LABEL[state]}
-    </span>
-  );
+  // Named for a reader, because "Draft" alone in a toolbar does not say
+  // what it describes.
+  return <StatusPill state={state} subject="Page status" />;
 }

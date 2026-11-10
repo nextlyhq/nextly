@@ -10,6 +10,14 @@
  * panel. A finder names its group's props by name and type; the block
  * schemas stay as they are.
  *
+ * A group draws the bind button for the props an author binds on their own
+ * (an image's source, its alt text, a link's address) through the
+ * inspector's `bindable` wrapper, so the chip, its menu and its notes are the
+ * one implementation every row uses. The rest of a group's props qualify
+ * those (how a link opens, whether an image is decorative, which entry a
+ * button points at, a list's query) and are set through the group's own
+ * control, so the group names exactly which it offers as `bindable`.
+ *
  * @module prop-groups
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
@@ -22,6 +30,40 @@ import type { EditableProp } from "./inspector";
 import { LinkGroupField } from "./link-control";
 import { linkGroupOf } from "./link-group";
 import { LIST_QUERY_PROPS, ListQueryField } from "./list-query-controls";
+
+/** What a group may say about one prop's binding beyond its name. */
+export interface BindableOptions {
+  /**
+   * The group's other props a bind empties in the same edit: those the block
+   * would follow before the bound prop, such as a button's entry reference
+   * before its address.
+   */
+  readonly clearsOnBind?: readonly string[];
+  /**
+   * A link's address and the two halves of the entry reference it follows
+   * first, where the bound prop is a link's destination: the picker also
+   * offers the entries a relation names, whose pick binds the entry's id,
+   * and a bound entry id is drawn in the address's place.
+   */
+  readonly entryLink?: {
+    readonly link: string;
+    readonly collection: string;
+    readonly id: string;
+    /** Whether both halves of the reference may be written where it sits. */
+    readonly writable: boolean;
+  };
+}
+
+/**
+ * Wrap one prop's field with its binding controls: the field and a bind
+ * button while unbound, the bound chip, Fallback and menu in its place once
+ * bound. Hands the field back as it is for a prop no field can fill.
+ */
+export type BindableWrapper = (
+  propName: string,
+  field: React.ReactNode,
+  options?: BindableOptions
+) => React.ReactNode;
 
 /** What a group is drawn with. */
 export interface PropGroupContext {
@@ -51,6 +93,14 @@ export interface PropGroupContext {
    * list's sort: each new count takes the author to its first sort row.
    */
   readonly sortFieldAsked?: number | undefined;
+  /** Tag a list on the canvas while a new source waits for an input. */
+  readonly onStillShowing?: ((words: string | undefined) => void) | undefined;
+  /**
+   * The inspector's binding controls for one of the group's props, for the
+   * props the group names as `bindable`. Absent, as in a component's
+   * placement panel, the group draws its fields alone.
+   */
+  readonly bindable?: BindableWrapper | undefined;
 }
 
 /** One group of a block's props. */
@@ -59,6 +109,12 @@ export interface PropGroup {
   readonly lead: string;
   /** Every prop the group draws, its lead included. */
   readonly drawn: ReadonlySet<string>;
+  /**
+   * The props the group offers a bind button for, each through
+   * `PropGroupContext.bindable`; the others it draws are set through its own
+   * control only.
+   */
+  readonly bindable: ReadonlySet<string>;
   /** The group's control. */
   readonly render: (context: PropGroupContext) => React.JSX.Element;
 }
@@ -73,6 +129,11 @@ const linkGroups: PropGroupFinder = props => {
     {
       lead: group.link,
       drawn: group.drawn,
+      // Where it goes. Its target and rel qualify that address. The entry
+      // reference is bound only from the address's own picker, to a related
+      // entry's id, which writes both halves at once (its id bound and its
+      // collection set), so it has no bind button of its own.
+      bindable: new Set([group.link]),
       render: context => <LinkGroupField group={group} {...context} />,
     },
   ];
@@ -90,6 +151,8 @@ const imageGroups: PropGroupFinder = props => {
           {
             lead: source.media,
             drawn: source.drawn,
+            // The picture, by its library id or, in URL mode, its address.
+            bindable: new Set([source.media, source.address]),
             render: (context: PropGroupContext) => (
               <ImageSourceField
                 group={source}
@@ -107,6 +170,9 @@ const imageGroups: PropGroupFinder = props => {
           {
             lead: alt.alt,
             drawn: alt.drawn,
+            // The words; whether the image is decorative is a mode of the
+            // same menu, not a value of its own to fill.
+            bindable: new Set([alt.alt]),
             render: (context: PropGroupContext) => (
               <ImageAltField group={alt} {...context} />
             ),
@@ -133,6 +199,8 @@ const listQueryGroups: PropGroupFinder = props => {
     {
       lead: "collection",
       drawn,
+      // A list's query is chosen, not filled from a field.
+      bindable: new Set<string>(),
       render: context => <ListQueryField {...context} />,
     },
   ];

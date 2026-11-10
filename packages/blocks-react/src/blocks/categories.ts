@@ -35,6 +35,13 @@ export const LAYOUT = "layout";
  */
 export const CONTENT = "content";
 
+/**
+ * What a collection's template draws of the entry itself: its own blocks
+ * content. A heading of its own, offered only while a template is open, so
+ * an author meets it where it means something and nowhere else.
+ */
+export const ENTRY = "entry";
+
 /** Pictures, video and embedded external content. */
 export const MEDIA = "media";
 
@@ -58,9 +65,10 @@ export const INTERACTIVE = "interactive";
 export const CORE_CATEGORIES: readonly [
   typeof LAYOUT,
   typeof CONTENT,
+  typeof ENTRY,
   typeof MEDIA,
   typeof INTERACTIVE,
-] = [LAYOUT, CONTENT, MEDIA, INTERACTIVE] as const;
+] = [LAYOUT, CONTENT, ENTRY, MEDIA, INTERACTIVE] as const;
 
 export type CoreCategory = (typeof CORE_CATEGORIES)[number];
 
@@ -87,7 +95,10 @@ export const CORE_PALETTE_ORDER: readonly string[] = [
   "core/list",
   "core/quote",
   "core/rich-text",
+  "core/table-of-contents",
   "core/collection-loop",
+  // Entry
+  "core/entry-content",
   // Media
   "core/image",
   "core/gallery",

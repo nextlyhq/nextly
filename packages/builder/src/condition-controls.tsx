@@ -16,11 +16,11 @@
 import {
   CONDITION_MAX,
   conditionIssues,
-  isPlainRecord,
   conditionOp,
   findNode,
   outerListOf,
   readListQuery,
+  type BindingFieldShape,
   type BlockNode,
   type Condition,
 } from "@nextlyhq/blocks-engine";
@@ -36,13 +36,17 @@ import { AlertCircle, FileText, Plus, Repeat } from "lucide-react";
 import * as React from "react";
 
 import { LoopPicker, useLoopCollections } from "./collection-loop-controls";
+import { storedGroups } from "./condition-checks";
+import { gatedAsStored } from "./condition-gate";
 import {
   asListField,
   booleanValueOf,
   choiceKey,
   completedCondition,
   conditionChoices,
+  conditionDraftOf,
   conditionFieldsOf,
+  conditionFieldsOfShapes,
   conditionLine,
   conditionSentence,
   valueOpFor,
@@ -63,8 +67,10 @@ import {
   LimitNote,
   listLimit,
   PUBLIC_ONLY,
+  useCustomSources,
   useEntryTitles,
 } from "./list-query-controls";
+import { customSourceLookup, type CustomSource } from "./named-query-model";
 import {
   SentenceRow,
   useSentenceRows,
@@ -91,6 +97,11 @@ interface ConditionSource {
   /** What the conditions must match: "this post", "each post in the list". */
   readonly match: string;
   readonly item: boolean;
+  /**
+   * The fields an item has where the list's source is a named query whose
+   * rows are a schema of their own, which no collection holds.
+   */
+  readonly rowFields?: readonly BindingFieldShape[];
 }
 
 /** One entry's name in a sentence: "post", "page". */
@@ -103,17 +114,35 @@ function sourceOf(
   node: BlockNode,
   nodes: BlockNode[],
   entryCollection: string | null | undefined,
-  collections: readonly LoopCollection[]
+  collections: readonly LoopCollection[],
+  customs: readonly CustomSource[] | undefined
 ): ConditionSource {
   const outer = outerListOf(nodes, node.id);
   if (outer !== undefined) {
-    const collection = readListQuery(outer.props).query.collection;
+    const { query } = readListQuery(outer.props);
+    // A custom source's items are its query's rows: entries of the
+    // collection they name, or rows of the query's own fields.
+    const rows =
+      query.namedQuery === undefined
+        ? undefined
+        : customs?.find(
+            each => each.declaration.name === query.namedQuery?.name
+          )?.declaration.rows;
+    const collection =
+      rows === undefined
+        ? query.collection
+        : "collection" in rows
+          ? rows.collection
+          : undefined;
     const found = collections.find(each => each.slug === collection);
     return {
       collection,
       words: `Each ${oneOf(found)} in the list`,
       match: `each ${oneOf(found)} in the list`,
       item: true,
+      ...(rows !== undefined && "fields" in rows
+        ? { rowFields: rows.fields }
+        : {}),
     };
   }
   if (entryCollection === null) {
@@ -133,56 +162,23 @@ function sourceOf(
   };
 }
 
-/** Whether a stored value is a condition a row can show: a field and an operator. */
-function isConditionRecord(value: unknown): value is Condition {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
-  }
-  const { field, op } = value as { field?: unknown; op?: unknown };
-  return typeof field === "string" && typeof op === "string";
-}
-
-/**
- * The stored groups, an OR of AND groups of conditions; none when nothing is
- * stored, and `undefined` for a shape no row can show, such as a flat list of
- * conditions or a group holding something else. The engine hides a block
- * whose conditions it can't read, and says why.
- */
-function storedGroups(
-  node: BlockNode
-): readonly (readonly Condition[])[] | undefined {
-  const envelope: unknown = node.visibility;
-  if (envelope === undefined || envelope === null) return [];
-  // A visibility that is not a record, a string or a list, is one the engine
-  // reads as a restriction it can't check.
-  if (!isPlainRecord(envelope)) return undefined;
-  const groups: unknown = envelope.conditions;
-  if (groups === undefined || groups === null) return [];
-  if (!Array.isArray(groups)) return undefined;
-  const read: Condition[][] = [];
-  for (const group of groups as unknown[]) {
-    // Every position read, holes included: `every` skips a hole, which would
-    // reach the rows as a condition that isn't there.
-    if (!Array.isArray(group) || !Array.from(group).every(isConditionRecord)) {
-      return undefined;
-    }
-    read.push(group);
-  }
-  return read;
-}
-
 /** What the engine finds wrong with the block's conditions, as a save would. */
 function problemsOf(
   editor: EditorState,
   nodeId: string,
   collections: readonly LoopCollection[] | undefined,
-  entryCollection: string | null | undefined
+  entryCollection: string | null | undefined,
+  customs: readonly CustomSource[] | undefined
 ): { rows: ReadonlyMap<number, string>; whole: readonly string[] } {
   const found = conditionIssues(editor.document.nodes, {
     ...(collections === undefined
       ? {}
       : { fields: fieldSourceOf(collections) }),
     ...(entryCollection === undefined ? {} : { entryCollection }),
+    // A custom source's items judged by its query's rows, as the save does.
+    ...(customs === undefined
+      ? {}
+      : { namedQueries: customSourceLookup(customs) }),
   }).filter(issue => issue.nodeId === nodeId && issue.severity === "error");
   const rows = new Map<number, string>();
   const whole: string[] = [];
@@ -193,28 +189,6 @@ function problemsOf(
     else rows.set(Number(index), issue.message);
   }
   return { rows, whole };
-}
-
-/**
- * A stored condition as a row reads it, its operator in its canonical
- * spelling; an operator conditions do not have reads as not chosen, and the
- * engine's finding says why.
- */
-function toDraft(condition: Condition): DraftCondition {
-  const op = conditionOp(condition.op);
-  // `equals` Yes and `not_equals` Yes hold exactly where "is Yes" and "is No"
-  // do, so they read and edit as those; written only once the row changes.
-  if (condition.value === true && (op === "equals" || op === "not_equals")) {
-    return {
-      field: condition.field,
-      op: op === "equals" ? "is_true" : "is_false",
-    };
-  }
-  return {
-    field: condition.field,
-    ...(op === undefined ? {} : { op }),
-    ...(condition.value === undefined ? {} : { value: condition.value }),
-  };
 }
 
 /** A condition row as it stands: what is stored, or the draft over it. */
@@ -467,7 +441,7 @@ function StoredGroups({
                 // Related entries by their titles, as an open row names them,
                 // so two groups on different entries read apart.
                 const sentence = conditionSentence(
-                  toDraft(condition),
+                  conditionDraftOf(condition),
                   fields.find(each => each.name === condition.field),
                   entryTitle
                 );
@@ -697,16 +671,20 @@ function OneGroup({
  */
 function UnreadableConditions({
   disabled,
+  shown,
   onRemove,
 }: {
   disabled: boolean;
+  /** Whether the page shows the block anyway, as it does for `null`. */
+  shown: boolean;
   onRemove: () => void;
 }): React.JSX.Element {
   return (
     <>
       <p className="nx-inspector__note nx-list-query__hint">
-        These conditions aren’t stored as groups of conditions, so they can’t be
-        shown here. Remove them to set new ones.
+        {shown
+          ? "Visitors see this block, but its conditions are stored in a shape the page can’t save. Remove them to save the page, or to set new ones."
+          : "These conditions aren’t stored as groups of conditions, so they can’t be shown here. Remove them to set new ones."}
       </p>
       <Button
         type="button"
@@ -726,15 +704,19 @@ function UnreadableConditions({
 function GroupBody({
   groups,
   stored,
+  gated,
   ...one
 }: OneGroupProps & {
   groups: readonly (readonly Condition[])[] | undefined;
   stored: readonly Condition[];
+  /** Whether the page judges the block by its conditions at all. */
+  gated: boolean;
 }): React.JSX.Element {
   if (groups === undefined) {
     return (
       <UnreadableConditions
         disabled={one.disabled}
+        shown={!gated}
         onRemove={() => one.writes.write([])}
       />
     );
@@ -764,12 +746,14 @@ function useConditionSource(
 ): {
   listing: ConditionListing;
   collections: readonly LoopCollection[] | undefined;
+  customs: readonly CustomSource[] | undefined;
   source: ConditionSource | undefined;
   fields: readonly ConditionField[];
   listFields: readonly LoopListField[];
 } {
   const listed = useLoopCollections(services?.listLoopCollections);
   const collections = listed?.kind === "ready" ? listed.collections : undefined;
+  const customs = useCustomSources(services?.listCustomSources);
   const source =
     node === undefined
       ? undefined
@@ -777,16 +761,23 @@ function useConditionSource(
           node,
           editor.document.nodes,
           services?.entryCollection,
-          collections ?? []
+          collections ?? [],
+          customs
         );
   const collection = collections?.find(
     each => each.slug === source?.collection
   );
   // Every field the public may read, not only those a list filters by: a
   // condition can ask whether any of them has a value.
+  const rowFields = source?.rowFields;
   const fields = React.useMemo(
-    () => (collection === undefined ? [] : conditionFieldsOf(collection)),
-    [collection]
+    () =>
+      rowFields !== undefined
+        ? conditionFieldsOfShapes(rowFields)
+        : collection === undefined
+          ? []
+          : conditionFieldsOf(collection),
+    [collection, rowFields]
   );
   const listing: ConditionListing =
     listed === undefined || listed.kind === "failed"
@@ -795,6 +786,7 @@ function useConditionSource(
   return {
     listing,
     collections,
+    customs,
     source,
     fields,
     listFields: collection?.fields ?? [],
@@ -811,11 +803,15 @@ export function ShowWhen({
 }: ShowWhenProps): React.JSX.Element | null {
   const id = React.useId();
   const node = findNode(editor.document.nodes, nodeId);
-  const { listing, collections, source, fields, listFields } =
+  const { listing, collections, customs, source, fields, listFields } =
     useConditionSource(editor, node, services);
   const groups = node === undefined ? [] : storedGroups(node);
   const stored = groups?.[0] ?? [];
-  const state = useSentenceRows<Condition, DraftCondition>(stored, toDraft, {});
+  const state = useSentenceRows<Condition, DraftCondition>(
+    stored,
+    conditionDraftOf,
+    {}
+  );
   // Every condition shown: the rows being edited, or each API group's.
   const shownConditions =
     groups !== undefined && groups.length > 1
@@ -832,11 +828,13 @@ export function ShowWhen({
   if (source === undefined) return null;
 
   const disabled = heldBy !== undefined;
+  const gated = node !== undefined && gatedAsStored(node);
   const problems = problemsOf(
     editor,
     nodeId,
     collections,
-    services?.entryCollection
+    services?.entryCollection,
+    customs
   );
   const writes = conditionWrites(editor, nodeId, stored, state, fields);
   const titleId = `${id}-title`;
@@ -858,11 +856,17 @@ export function ShowWhen({
           {source.words}
         </span>
       </div>
-      <ShowWhenNotice problems={problems} unreadable={groups === undefined} />
+      {/* Red only where the page leaves the block out: a shape it reads as
+          no restriction, such as `null`, is shown to everyone. */}
+      <ShowWhenNotice
+        problems={problems}
+        unreadable={groups === undefined && gated}
+      />
       <FieldsUnavailable listing={listing} />
       <GroupBody
         groups={groups}
         stored={stored}
+        gated={gated}
         id={id}
         state={state}
         writes={writes}

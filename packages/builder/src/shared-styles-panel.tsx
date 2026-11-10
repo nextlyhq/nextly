@@ -87,6 +87,7 @@ import {
   SHARED_STYLE_COUNTING_NOTE,
   SHARED_STYLE_UNCOUNTABLE_NOTE,
   SHARED_STYLE_UNCOUNTABLE_REMOVAL,
+  SHARED_STYLE_UNCOUNTED_USES,
   SHARED_STYLE_UNUSED_UNCERTAIN,
   SHARED_STYLES_WORD,
   type BlocksOnThisPage,
@@ -1613,7 +1614,8 @@ function ConfirmUnused({
       role="group"
       aria-label={`Remove ${unusedCount(count)}`}
     >
-      <p>{`Remove ${unusedCount(count)}? No page uses them.`}</p>
+      <p>{`Remove ${unusedCount(count)}? No page uses them in the editor.`}</p>
+      <p className="nx-shared-styles__meta">{SHARED_STYLE_UNCOUNTED_USES}</p>
       {/* Stacked, so a long name and its class both read in full. */}
       <ul className="nx-shared-styles__uses nx-shared-styles__uses--stacked">
         {left.map(row => (

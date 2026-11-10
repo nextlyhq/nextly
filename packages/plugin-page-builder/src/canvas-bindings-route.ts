@@ -30,18 +30,20 @@
  *
  * @module canvas-bindings-route
  */
+import type { PageReadReport } from "@nextlyhq/blocks-react";
 import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { respondDoc } from "nextly";
 import { z } from "nextly/zod";
 
 import {
   CANVAS_BINDINGS_ROUTE_PATH,
+  conditionsFromWire,
   demandFromWire,
   type CanvasBindingsRequest,
   type CanvasBindingsResponse,
 } from "./canvas-bindings-contract";
 import { readBodyWith } from "./composition-route-kit";
-import { readingAsUser } from "./library-route";
+import { editorReaderAsCaller, mediaReaderAsCaller } from "./entry-reads";
 
 /** A field name a binding may read: no paths, operators or quoting. */
 const NAME = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
@@ -55,6 +57,9 @@ const SLUG = z
 
 /** At most this many fields, follows or Singles in one ask: a page's worth. */
 const MOST = 200;
+
+/** The most reads an ask may be allowed: far past any page's allowance. */
+const MOST_READS = 100_000;
 
 /** What one source is read for, as the canvas sends it. */
 /*
@@ -126,23 +131,44 @@ const CanvasBindingsBody = z
       .strict(),
     lists: z.array(SLUG).max(MOST),
     locale: z.string().min(1).max(35).optional(),
+    conditions: z
+      .object({
+        any: z.boolean(),
+        entryFields: z.array(NAME).max(MOST),
+        ordersValues: z.boolean(),
+      })
+      .strict()
+      .optional(),
+    // At most a published page's allowance: an ask is one page's reads.
+    allowance: z.number().int().min(0).max(MOST_READS).optional(),
   })
   .strict()
   .refine(body => shapeLookupsOf(body) <= MOST, {
     message: `At most ${String(MOST)} sources, relations and lists in all.`,
   });
 
+/**
+ * What the route answers: the sources read, and what reading them cost the
+ * page's allowance, so the editor's read meter counts the binding reads as
+ * they were made rather than working them out again.
+ *
+ * @experimental Settles with the editor's read meter.
+ */
+export type CanvasBindingsAnswer = CanvasBindingsResponse & {
+  readonly reads?: PageReadReport;
+};
+
 /** What the route reads with, injected so the read is tested without a server. */
 export interface CanvasBindingsReads {
   /** The sources the request names, read as the caller. */
-  read(request: CanvasBindingsRequest): Promise<CanvasBindingsResponse>;
+  read(request: CanvasBindingsRequest): Promise<CanvasBindingsAnswer>;
 }
 
 /** Answer one ask: the sources it names, as the caller reads them. */
 export function readCanvasBindings(
   request: CanvasBindingsRequest,
   reads: CanvasBindingsReads
-): Promise<CanvasBindingsResponse> {
+): Promise<CanvasBindingsAnswer> {
   return reads.read(request);
 }
 
@@ -154,27 +180,25 @@ function directCanvasBindingsReads(
     // Imported at call time, so loading this module costs none of the
     // runtime, as the route's other reads are.
     read: async request => {
-      const [runtime, next, blocks] = await Promise.all([
-        import("nextly/runtime"),
+      const [next, blocks] = await Promise.all([
         import("@nextlyhq/blocks-react/next"),
         import("@nextlyhq/blocks-react"),
       ]);
-      const nextly = runtime.requireNextly();
-      // The caller as core judges their own reads: their user, and an API
-      // key's own scope when the request carried one.
-      const { user, actor } = await readingAsUser(ctx);
       const locale = request.locale;
-      const reader = runtime.createEditorReader(
-        {
-          find: async args => await nextly.find(args),
-          findSingle: async args => await nextly.findSingle(args),
-          // The page's own entry and each entry a binding follows to, by id,
-          // so a pending working draft is what the canvas shows.
-          findByID: async args => await nextly.findByID(args),
-        },
-        { user, ...(actor === undefined ? {} : { actor }) },
-        locale === undefined ? {} : { locale }
-      );
+      // The editor reader as the caller: their user, and an API key's own
+      // scope when the request carried one. The page's own entry and each
+      // entry a binding follows to are read by id, so a pending working
+      // draft is what the canvas shows.
+      const reader = await editorReaderAsCaller(ctx, locale);
+      // The media library as the caller reads it, so a binding into a media
+      // item (its alt text) shows on the canvas as it does on the page.
+      const media = await mediaReaderAsCaller(ctx);
+      // A published page's own allowance, for one ask, counting what it
+      // spends, so the editor's read meter adds what these reads cost as
+      // they were made, as a named query's run reports its reads.
+      // Under the reads the page has left at that point, when the meter
+      // says, so a read past them is refused here as it is there.
+      const budget = blocks.createQueryBudget(request.allowance);
       const bindings = await next.readBindingSources({
         documents: [],
         demand: demandFromWire(request.demand),
@@ -190,12 +214,18 @@ function directCanvasBindingsReads(
         page: request.source.slug,
         ...(locale === undefined ? {} : { locale }),
         reader,
-        // A published page's own allowance, for one ask.
-        budget: blocks.createQueryBudget(),
+        media,
+        budget,
+        // The entry fields the page's conditions check, read with the
+        // bindings', as the published page reads them.
+        ...(request.conditions === undefined
+          ? {}
+          : { conditions: conditionsFromWire(request.conditions) }),
       });
+      const reads = budget.report();
       return bindings === undefined
-        ? { singles: [], shapes: [] }
-        : blocks.bindingsToWire(bindings);
+        ? { singles: [], shapes: [], reads }
+        : { ...blocks.bindingsToWire(bindings), reads };
     },
   };
 }

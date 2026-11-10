@@ -26,6 +26,7 @@ import type {
   MediaFile,
   MediaFolder,
 } from "../../services/media/media-service";
+import { z } from "../../zod";
 import type {
   BulkDeleteMediaArgs,
   BulkOperationResult,
@@ -33,12 +34,14 @@ import type {
   DeleteMediaArgs,
   FindMediaArgs,
   FindMediaByIDArgs,
+  FindMediaByIDsArgs,
   ListFoldersArgs,
   ListResult,
   MutationResult,
   UpdateMediaArgs,
   UploadMediaArgs,
 } from "../types/index";
+import { MEDIA_IDS_PER_READ } from "../types/media";
 
 import type { NextlyContext } from "./context";
 import {
@@ -52,6 +55,13 @@ import {
   mergeConfig,
   toListResult,
 } from "./helpers";
+
+/**
+ * What `media.findByIDs` takes as `ids`: a list of strings, at most a read's
+ * worth. Every element is checked, so a hole in a sparse array is refused
+ * rather than reaching the query as `undefined`.
+ */
+const MEDIA_IDS = z.array(z.string()).max(MEDIA_IDS_PER_READ);
 
 /**
  * Media MIME type enum accepted by `MediaService.listMedia()`.
@@ -77,6 +87,14 @@ export interface MediaNamespace {
   upload(args: UploadMediaArgs): Promise<MediaFile>;
   find(args?: FindMediaArgs): Promise<ListResult<MediaFile>>;
   findByID(args: FindMediaByIDArgs): Promise<MediaFile | null>;
+  /**
+   * Several media files by id, in one read, judged exactly as `findByID`
+   * judges one: the files found, each once, in the order their ids were first
+   * asked for; an id with no file has none.
+   *
+   * @experimental
+   */
+  findByIDs(args: FindMediaByIDsArgs): Promise<MediaFile[]>;
   update(args: UpdateMediaArgs): Promise<MutationResult<MediaFile>>;
   delete(args: DeleteMediaArgs): Promise<MutationResult<{ id: string }>>;
   bulkDelete(args: BulkDeleteMediaArgs): Promise<BulkOperationResult>;
@@ -234,6 +252,26 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
           }
           throw error;
         }
+      });
+    },
+
+    async findByIDs(args: FindMediaByIDsArgs): Promise<MediaFile[]> {
+      return asChecked(args, async () => {
+        // Refused before the lookup, as `findByID` refuses one: the same
+        // check, so a caller who may not read one file reads none of many.
+        await checkMediaRead(ctx.defaultConfig, args);
+        // Parsed at the boundary, every element visited (a sparse array's
+        // holes too), and refused before any lookup.
+        const parsed = MEDIA_IDS.safeParse(args.ids);
+        if (!parsed.success) {
+          throw NextlyError.invalidInput({
+            message: `'ids' must be a list of at most ${String(MEDIA_IDS_PER_READ)} media ids for media.findByIDs()`,
+          });
+        }
+        return await ctx.mediaService.findByIds(
+          parsed.data,
+          createRequestContext(args)
+        );
       });
     },
 

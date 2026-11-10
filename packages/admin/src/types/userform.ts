@@ -2,8 +2,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import type { FieldError, Resolver } from "react-hook-form";
 import { z } from "zod";
 
+import { passwordSchema } from "@admin/lib/password-schema";
 import { filterStringArray } from "@admin/lib/type-guards";
-import { passwordSchema } from "@admin/lib/validation";
 
 export type RoleKey = string;
 

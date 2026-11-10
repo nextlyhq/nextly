@@ -64,6 +64,13 @@ import {
 } from "./geometry-dom";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
+/**
+ * The class on a Layout region's frame. Its blocks are a document of their
+ * own, drawn inside the canvas around the page's, so a mark that belongs to
+ * the page's blocks is kept off anything inside it.
+ */
+export const CANVAS_REGION_CLASS = "nx-canvas-region";
+
 /** One region of the page's Layout, as the host hands it to the canvas. */
 export interface CanvasRegion {
   /** Which area: drawn before the page for a header, after it for a footer. */
@@ -144,7 +151,7 @@ export function CanvasRegionFrame({
   return (
     <div
       ref={frame}
-      className="nx-canvas-region"
+      className={CANVAS_REGION_CLASS}
       {...{ [CHROME_ATTRIBUTE]: "", [REGION_ATTRIBUTE]: region.area }}
       role="group"
       aria-label={region.label}

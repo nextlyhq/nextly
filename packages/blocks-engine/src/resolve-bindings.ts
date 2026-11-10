@@ -28,16 +28,21 @@ import {
 } from "./binding-format";
 import type { BindingIssue, BindingIssueCode } from "./binding-issues";
 import {
+  bindablePropKind,
   checkBinding,
+  imageValueOf,
   isBindPath,
   isEmptyBoundValue,
   isValidPropValue,
+  type BindablePropKind,
   type BindingFieldShape,
   type BindingRefs,
   type BindingSchemaRef,
   type BindingSchemaSource,
   type CheckedBinding,
+  type ImageValue,
 } from "./binding-rules";
+import { bindingKindOf } from "./binding-vocabulary";
 import type { PropSchema } from "./block";
 import {
   DEFAULT_BINDING_SOURCE,
@@ -49,6 +54,7 @@ import { walkForest } from "./forest-walk";
 import type { DocumentLimits } from "./limits";
 import { isPlainRecord } from "./plain-record";
 import { defineEntry, ownEntry, ownKeys } from "./safe-record";
+import { isImageAddress } from "./url-policy";
 
 /**
  * The values a page's bindings read, already read.
@@ -100,6 +106,12 @@ export interface BindingRunInput {
   readonly locale?: string;
   /** The site's time zone, for date-times; UTC when absent or invalid. */
   readonly timeZone?: string;
+  /**
+   * The collection whose ids the host's media lookup reads, so an image is
+   * filled only from an upload field pointing there; `media`, Nextly's media
+   * library, when absent.
+   */
+  readonly mediaCollection?: string;
   readonly props: BlockPropsLookup;
 }
 
@@ -120,6 +132,8 @@ export interface BindingRun {
   /** False when a time zone was given and refused, so UTC is used instead. */
   readonly timeZoneValid: boolean;
   readonly formatter: BindingFormatter;
+  /** The collection an image's media id is read from; `media` when absent. */
+  readonly mediaCollection?: string;
 }
 
 /**
@@ -130,24 +144,47 @@ export interface BindingRun {
 export const DEFAULT_BINDING_LOCALE = "en";
 
 /**
+ * The language and time zone a render formats bound values in, from the
+ * page's language and the site's time zone as given: English for a language
+ * absent or unknown to the runtime, UTC for a zone absent or refused.
+ * `timeZoneValid` is false only for a zone given and refused.
+ *
+ * The one answer a render's pass and the editor's previews share, so a
+ * value previewed in the inspector reads as the published page shows it.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function bindingFormatEnv(
+  input: Pick<BindingRunInput, "locale" | "timeZone">
+): { readonly env: FormatEnv; readonly timeZoneValid: boolean } {
+  const zone = safeTimeZone(input.timeZone);
+  return {
+    env: {
+      locale: supportedLocale(input.locale) ?? DEFAULT_BINDING_LOCALE,
+      timeZone: zone.zone,
+    },
+    timeZoneValid: zone.valid,
+  };
+}
+
+/**
  * Start a render's binding pass.
  *
  * @experimental Settles with the editor's binding controls.
  */
 export function createBindingRun(input: BindingRunInput): BindingRun {
-  const zone = safeTimeZone(input.timeZone);
-  const env: FormatEnv = {
-    locale: supportedLocale(input.locale) ?? DEFAULT_BINDING_LOCALE,
-    timeZone: zone.zone,
-  };
+  const { env, timeZoneValid } = bindingFormatEnv(input);
   return {
     sources: input.sources,
     ...(input.entryRef === undefined ? {} : { entryRef: input.entryRef }),
     ...(input.schema === undefined ? {} : { schema: input.schema }),
     props: input.props,
     env,
-    timeZoneValid: zone.valid,
+    timeZoneValid,
     formatter: createBindingFormatter(env),
+    ...(input.mediaCollection === undefined
+      ? {}
+      : { mediaCollection: input.mediaCollection }),
   };
 }
 
@@ -159,6 +196,13 @@ export function createBindingRun(input: BindingRunInput): BindingRun {
  * - `value`: the source's value, used as it is.
  * - `fallback`: the binding's fallback, because the value was empty or the
  *   binding could not be used.
+ * - `image`: an image prop's value, which `holds` a media id the host
+ *   resolves or an image address drawn as it is. `from` says whether it is
+ *   the source's value, the binding's fallback, or the prop's own value,
+ *   shown when the binding gave nothing to draw. A source's value carries the
+ *   fallback beside it, an image address or a media id, for a host that
+ *   can't draw the value: a record it can't find, or a host outside the
+ *   site's list.
  *
  * A prop showing its own value has no entry.
  *
@@ -171,7 +215,13 @@ export type BoundValue =
       readonly dateOnly: boolean;
     }
   | { readonly kind: "value" }
-  | { readonly kind: "fallback" };
+  | { readonly kind: "fallback" }
+  | {
+      readonly kind: "image";
+      readonly holds: ImageValue["holds"];
+      readonly from: "value" | "fallback" | "own";
+      readonly fallback?: ImageValue;
+    };
 
 /**
  * Each bound prop of one node, by prop name.
@@ -367,6 +417,172 @@ function fallbackFill(fallback: { readonly value: unknown } | undefined): Fill {
     : { value: fallback.value, bound: FALLBACK };
 }
 
+/**
+ * A binding's fallback as its fill. An image's says whether it holds an image
+ * address or a media id, so the renderer draws it as either.
+ */
+function fallbackFillOf(
+  kind: BindablePropKind | undefined,
+  fallback: { readonly value: unknown } | undefined
+): Fill {
+  if (kind !== "image") return fallbackFill(fallback);
+  const image = imageFallbackOf(fallback);
+  return image === undefined
+    ? undefined
+    : {
+        value: image.value,
+        bound: { kind: "image", holds: image.holds, from: "fallback" },
+      };
+}
+
+/**
+ * An image binding's fallback, read as the image prop's own value is: an
+ * image address drawn as it is, or a media library id the host resolves
+ * exactly as it resolves a picked one. The save check accepts the same two
+ * (`isValidPropValue`), by the same reading.
+ */
+function imageFallbackOf(
+  fallback: { readonly value: unknown } | undefined
+): ImageValue | undefined {
+  return fallback === undefined ? undefined : imageValueOf(fallback.value);
+}
+
+/**
+ * An image binding that gave nothing to draw, nor a fallback: the prop keeps
+ * its own value, as any prop does, and is still marked bound, so the block
+ * draws that value alone and never another prop's in its place.
+ */
+function ownImageFill(node: BlockNode, prop: string): Fill {
+  const own = isPlainRecord(node.props)
+    ? ownEntry(node.props, prop)
+    : undefined;
+  return {
+    value: own,
+    bound: { kind: "image", holds: "media", from: "own" },
+  };
+}
+
+/**
+ * A source's value shaped for an image prop.
+ *
+ * A media field's value, a populated record or its id, fills the prop with
+ * the record's id: the host resolves it exactly as it resolves an id the
+ * author picked, so a bound image draws with the same address, alternative
+ * text and size. A URL field's value fills it only when it is an image
+ * address. A field the schema did not describe is read by the value's shape.
+ */
+function shapeImage(
+  binding: CheckedBinding,
+  value: unknown,
+  mediaCollection: string
+): Shaped {
+  const image = boundImageOf(value, binding.field, mediaCollection);
+  if (image === undefined) return misfitValue("image");
+  const fallback = imageFallbackOf(binding.fallback);
+  return {
+    ok: true,
+    value: image.value,
+    bound: {
+      kind: "image",
+      holds: image.holds,
+      from: "value",
+      ...(fallback === undefined ? {} : { fallback }),
+    },
+  };
+}
+
+/** What a bound image field's value names, or nothing usable. */
+function boundImageOf(
+  value: unknown,
+  field: BindingFieldShape | undefined,
+  mediaCollection: string
+): ImageValue | undefined {
+  const kind = field === undefined ? undefined : bindingKindOf(field);
+  // A URL field holds an address, whatever else it looks like.
+  if (kind === "url") {
+    return isImageAddress(value)
+      ? { holds: "address", value: value.trim() }
+      : undefined;
+  }
+  // An upload field to another collection names records the host's media
+  // lookup does not read, so an id of one would draw an unrelated picture.
+  if (!mayHoldMedia(field, mediaCollection)) return undefined;
+  if (isPlainRecord(value)) return recordImageOf(value, mediaCollection);
+  return kind === "media" ? mediaIdImage(value) : imageValueOf(value);
+}
+
+/**
+ * The collection a host's media lookup reads when a route names none:
+ * Nextly's media library. An image is resolved through `resolveMedia(id)`
+ * alone, so an id from any other collection is not one it can draw.
+ */
+const MEDIA_COLLECTION = "media";
+
+/**
+ * Whether `run` draws an image field's records: the field names no
+ * collection, or names the one the run resolves media ids against. A caller
+ * judging a bound image outside a render asks this, so the rule is the one
+ * the image is filled by.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function runDrawsImageField(
+  run: BindingRun,
+  field: BindingFieldShape | undefined
+): boolean {
+  return mayHoldMedia(field, run.mediaCollection ?? MEDIA_COLLECTION);
+}
+
+/** Whether a field may hold media: it names no collection, or names this one. */
+function mayHoldMedia(
+  field: BindingFieldShape | undefined,
+  mediaCollection: string
+): boolean {
+  const targets = field?.relationTo;
+  if (targets === undefined) return true;
+  return typeof targets === "string"
+    ? targets === mediaCollection
+    : targets.includes(mediaCollection);
+}
+
+/**
+ * A populated media record by its id, which the host resolves as it does a
+ * picked one; one read without an id by its address, when that is an image
+ * address.
+ */
+function recordImageOf(
+  record: Readonly<Record<string, unknown>>,
+  mediaCollection: string
+): ImageValue | undefined {
+  // An upload field that may point at several collections stores, and
+  // populates, `{ relationTo, value }`: the media is its value, and only in
+  // the arm that points at the collection media is read from.
+  const arm = ownEntry(record, "relationTo");
+  if (typeof arm === "string" && Object.hasOwn(record, "value")) {
+    if (arm !== mediaCollection) return undefined;
+    const value = ownEntry(record, "value");
+    return isPlainRecord(value)
+      ? recordImageOf(value, mediaCollection)
+      : mediaIdImage(value);
+  }
+  const id = mediaIdImage(ownEntry(record, "id"));
+  if (id !== undefined) return id;
+  const url = ownEntry(record, "url");
+  return isImageAddress(url)
+    ? { holds: "address", value: url.trim() }
+    : undefined;
+}
+
+/** A media id as stored: a non-empty string, or a number written as one. */
+function mediaIdImage(value: unknown): ImageValue | undefined {
+  if (typeof value === "string" && value.trim() !== "") {
+    return { holds: "media", value: value.trim() };
+  }
+  return typeof value === "number" && Number.isFinite(value)
+    ? { holds: "media", value: String(value) }
+    : undefined;
+}
+
 /** Resolve one checked binding to its fill, reporting what went wrong. */
 function fillOf(
   binding: CheckedBinding,
@@ -374,10 +590,7 @@ function fillOf(
   scope: BindingScope,
   nodeId: string,
   issues: BindingIssue[]
-): Fill | "none" {
-  // An image is checked like any prop, and is filled once a bound image
-  // carries its whole media object; until then it keeps its own value.
-  if (binding.kind === "image") return "none";
+): Fill {
   const source = sourceOf(binding, run, scope);
   if (source === undefined) {
     issues.push({
@@ -390,11 +603,15 @@ function fillOf(
           : `This binding's ${binding.source} source was not read for this page.`,
       path: binding.path,
     });
-    return fallbackFill(binding.fallback);
+    return fallbackFillOf(binding.kind, binding.fallback);
   }
   const value = readPath(source, binding.segments);
-  if (isEmptyBoundValue(value)) return fallbackFill(binding.fallback);
-  const shaped = shapeValue(binding, value, run);
+  if (isEmptyBoundValue(value))
+    return fallbackFillOf(binding.kind, binding.fallback);
+  const shaped =
+    binding.kind === "image"
+      ? shapeImage(binding, value, run.mediaCollection ?? MEDIA_COLLECTION)
+      : shapeValue(binding, value, run);
   if (!shaped.ok) {
     issues.push({
       nodeId,
@@ -403,13 +620,22 @@ function fillOf(
       message: shaped.message,
       path: binding.path,
     });
-    return fallbackFill(binding.fallback);
+    return fallbackFillOf(binding.kind, binding.fallback);
   }
   return { value: shaped.value, bound: shaped.bound };
 }
 
-/** The schema refs of the entry, and of the item when one is being drawn. */
-function refsFor(run: BindingRun, scope: BindingScope): BindingRefs {
+/**
+ * The schema refs of the entry, and of the item when one is being drawn: what
+ * a binding in `scope` is checked against, for a caller that checks one as
+ * this pass does.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function bindingRefsFor(
+  run: BindingRun,
+  scope: BindingScope
+): BindingRefs {
   const item =
     scope.phase === "item" && scope.itemRef !== undefined
       ? { item: scope.itemRef }
@@ -440,9 +666,18 @@ function fillBinding(
   });
   issues.push(...check.issues);
   if (check.outcome === "ignore") return undefined;
-  if (check.outcome === "fallback") return fallbackFill(check.fallback);
-  const fill = fillOf(check.binding, run, scope, at.node.id, issues);
-  return fill === "none" ? undefined : fill;
+  const kind = bindablePropKind(
+    Object.hasOwn(at.props, at.prop) ? at.props[at.prop] : undefined
+  );
+  // A binding that cannot be read still shows its fallback, judged by the
+  // prop it fills, so an image's says whether it is an address or a media id.
+  const fill =
+    check.outcome === "fallback"
+      ? fallbackFillOf(kind, check.fallback)
+      : fillOf(check.binding, run, scope, at.node.id, issues);
+  return fill === undefined && kind === "image"
+    ? ownImageFill(at.node, at.prop)
+    : fill;
 }
 
 /** The props a node's definition declares, or nothing when it cannot be read. */
@@ -480,7 +715,7 @@ export function resolveNodeBindings(
     // A node no definition answers for draws a placeholder, so nothing of it
     // is read.
     if (props === undefined) return unchanged;
-    const refs = refsFor(run, scope);
+    const refs = bindingRefsFor(run, scope);
     const issues: BindingIssue[] = [];
     const filled: Record<string, unknown> = {};
     const bound: Record<string, BoundValue> = {};

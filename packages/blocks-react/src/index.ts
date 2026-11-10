@@ -29,11 +29,25 @@ export type {
   BlocksQuery,
   BlocksResult,
   DefaultDataProviderOptions,
+  EntryContentCanvas,
+  EntryContentNote,
+  ListBaseReader,
+  NamedQueryFailure,
+  NamedQueryFailureCode,
+  NamedQueryHost,
+  NamedQueryLookup,
+  NamedQueryRunData,
   ListPageContext,
   PageBindings,
   PageContext,
   PageIssue,
+  PageReadReport,
   QueryBudget,
+  QueryBudgetOptions,
+  ReadClaim,
+  ReadKind,
+  UnreadBlock,
+  ListBatchReads,
   ReactBlockDefinition,
   ResolvedIcon,
   ResolvedMedia,
@@ -45,6 +59,7 @@ export {
   createStandaloneContext,
   DEFAULT_MAX_QUERIES,
   defineBlock,
+  READ_KINDS,
   emptyDataProvider,
 } from "./context";
 
@@ -54,6 +69,7 @@ export { PageRenderer } from "./page-renderer";
 export {
   bindingsFromWire,
   bindingsToWire,
+  noPublicFields,
   type WireBindings,
 } from "./binding-wire";
 export type { PageRendererProps } from "./page-renderer";
@@ -125,6 +141,12 @@ export {
   TYPOGRAPHY_DEFAULTS,
   withTypographyDefaults,
 } from "./blocks/typography-defaults";
+/**
+ * Whether an image or embed address may be requested, by the renderer's one
+ * filter: exported so a caller judging what a page draws, such as an unbind
+ * keeping what visitors see, asks the same question the image block does.
+ */
+export { fetchableUrl } from "./blocks/props";
 
 export { BlockBoundary, BlockList } from "./block-boundary";
 // `NODE_ID_ATTRIBUTE` is published deliberately: an editor hit-testing on the
@@ -134,11 +156,17 @@ export { BlockBoundary, BlockList } from "./block-boundary";
 // `SLOTS_ATTRIBUTE` is public for the same reason: an editor looking for a
 // container to draw an affordance on asks this attribute rather than keeping
 // its own copy of the string the renderer emits. `LIST_ACTION_ATTRIBUTE` too:
-// the editor's canvas acts on the action a list's note offers by it.
+// the editor's canvas acts on the action a list's note offers by it, and
+// `LIST_REF_ATTRIBUTE` is the reference its copy action copies. The two Entry
+// content attributes are what the canvas's sheet draws that block's content
+// and notes by.
 export {
   EDITOR_NAMESPACE,
+  ENTRY_CONTENT_DRAWN_ATTRIBUTE,
+  ENTRY_CONTENT_NOTE_ATTRIBUTE,
   INSTANCE_ATTRIBUTE,
   LIST_ACTION_ATTRIBUTE,
+  LIST_REF_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PROP_ATTRIBUTE,
   SLOTS_ATTRIBUTE,
@@ -150,13 +178,52 @@ export type {
   BlockBoundaryProps,
   BlockListProps,
   BoundaryBindings,
+  HidingItem,
+  ItemHiddenAs,
 } from "./block-boundary";
 // The binding pass's own types, which the props above and a block's `bound`
 // argument name. A consumer passing bindings or reading a bound value has no
 // other path to them: the engine is this package's dependency, not theirs.
+// Named by this package's published declarations, so a consumer can write
+// the type of what it passes or receives without a dependency on the engine.
+export type {
+  BindingDemand,
+  BlockSeoRead,
+  ComponentLookup,
+  ConditionDayStart,
+  ConditionDemand,
+  ConditionSubject,
+  DocumentSeo,
+  EntryContentIssueCode,
+  ImageValue,
+  ListFields,
+  SeoBinding,
+  SeoTextSegment,
+  SourceDemand,
+} from "@nextlyhq/blocks-engine";
 export type {
   BindablePropKind,
   BindingFieldShape,
+  BooleanParam,
+  ChoiceParam,
+  DayParam,
+  EntryParam,
+  ListNamedQuery,
+  NamedQueryChoice,
+  NamedQueryDeclaration,
+  NamedQueryDefinition,
+  NamedQueryParam,
+  NamedQueryParamValue,
+  NamedQueryParamValues,
+  NamedQueryParams,
+  NamedQueryReader,
+  NamedQueryResult,
+  NamedQueryRows,
+  NamedQueryRunArgs,
+  NamedReadFilter,
+  NamedReadQuery,
+  NumberParam,
+  TextParam,
   BindingFormatter,
   BindingIssue,
   BindingIssueCode,
@@ -243,6 +310,12 @@ export type {
  * from the evidence, which is why it exists rather than a documented instruction to pass a flag.
  */
 export { pruneHiddenNodes } from "./visibility";
+/**
+ * @experimental How an editor judges a page's conditions for an entry, the
+ * route's way, drawing its own node in place of a block they hide, and one
+ * block with its conditions lifted, as an editor draws one that holds.
+ */
+export { liftedNode, type EntryJudgement } from "./visibility";
 export {
   pageBindingRun,
   prepareDocumentForRead,
@@ -253,6 +326,24 @@ export {
  * surface listing a page's parts beside a picture of it.
  */
 export { prepareDocumentAsDrawn } from "./prepare-document";
+/**
+ * @experimental The component definitions as the renderer reads them,
+ * repaired on demand, for an editor surface that composes a page beside the
+ * renderer and must compose the same tree.
+ */
+export { repairingLookup } from "./prepare-document";
+/**
+ * @experimental When a day starts for a visibility condition on a date field,
+ * in the site's zone, for an editor surface judging conditions as the
+ * published page judges them.
+ */
+export { conditionDayStart } from "./blocks/list-read";
+/**
+ * @experimental A stored document made sound to walk, as the renderer makes
+ * it before drawing: for an editor surface that reads the tree the renderer
+ * draws, so a node the renderer drops is one it drops too.
+ */
+export { sanitizeDocument } from "./sanitize";
 /**
  * @experimental The collections a page's lists draw, whose field shapes judge
  * their items' bindings: one walk for the published route and the editor.
@@ -429,6 +520,22 @@ export {
 // page builder's Layout choices read a region's components, nested ones
 // included, at the posture the published route reads them.
 export { definitionsFor } from "./component-source";
+// What a page reads when published, counted where it is edited: the
+// published route's own read stages, run with the editor's reads.
+// `@experimental` with the read budget.
+export {
+  countPageReads,
+  type CountedBindings,
+  type CountedDrawing,
+  type CountedRegion,
+  type PageReadCountArgs,
+} from "./page-read-count";
+export type {
+  BindingsAsk,
+  EntrySource,
+  PageWhere,
+  RouteMedia,
+} from "./page-read-stages";
 
 // How a page and the regions of its Layout share one site sheet and keep
 // their own styles apart: one answer for the published route and the editor's

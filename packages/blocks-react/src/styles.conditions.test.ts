@@ -44,9 +44,26 @@ describe("the sheet of a page decided by its entry", () => {
       doc(coloured("held", "#c01234", vip)),
       undefined,
       context,
-      resolver
+      resolver,
+      false,
+      { drawn: true }
     );
     expect(styles.css).toContain("#c01234");
+  });
+
+  it("holds a conditioned block's rules apart in a sheet compiled for saving", () => {
+    // Nothing has decided the block's conditions at save, so its rules must
+    // stay out of the sheet every visitor gets; `gated` carries them to the
+    // readers whose page keeps it.
+    const styles = resolvePageStyles(
+      doc(coloured("kept", "#c01234", vip), coloured("plain", "#c09abc")),
+      undefined,
+      context,
+      resolver
+    );
+    expect(styles.css).toContain("#c09abc");
+    expect(styles.css).not.toContain("#c01234");
+    expect(styles.gated?.kept).toContain("#c01234");
   });
 
   it("keeps a block a list's item decides out of the page's sheet, and names its rules for the list", () => {

@@ -20,6 +20,7 @@ import {
   BlockList,
   type BoundaryBindings,
   type BoundaryConditions,
+  type ItemHiddenAs,
 } from "./block-boundary";
 import {
   createStandaloneContext,
@@ -52,7 +53,7 @@ import {
   styleTextForInjection,
   type PageStyles,
 } from "./styles";
-import { pruneNodes } from "./visibility";
+import { pruneNodes, type EntryJudgement } from "./visibility";
 
 export interface PageRendererProps {
   /** The stored document to render. */
@@ -190,6 +191,26 @@ export interface PageRendererProps {
    * @experimental
    */
   prepared?: PreparedDocument;
+  /**
+   * What to draw in place of a block a list's item hides, for an editor
+   * showing where such blocks sit: the node it returns is drawn in the
+   * block's place, and nothing is drawn when it returns nothing.
+   *
+   * Absent, a block an item hides is not drawn, as on every published page.
+   * It is never called for a block the item shows, nor outside a list.
+   *
+   * @experimental
+   */
+  itemHiddenAs?: ItemHiddenAs;
+  /**
+   * Judge the page's conditions for an entry as an editor shows the page to a
+   * visitor reading it: every block, a placed component's own among them,
+   * judged as the page's route judges it, one they hide drawn as the node the
+   * judgement gives. Absent, as on every published page, nothing changes.
+   *
+   * @experimental
+   */
+  entryJudged?: EntryJudgement;
 }
 
 /**
@@ -643,6 +664,8 @@ export function PageRenderer({
   bindings,
   onBindingIssues,
   prepared,
+  itemHiddenAs,
+  entryJudged,
 }: PageRendererProps): ReactElement {
   const resolver = blocks ?? registeredBlocks();
   // Passed through untouched. The policy travels beside the context rather than
@@ -703,7 +726,12 @@ export function PageRenderer({
   const bindingRun =
     bindings === undefined
       ? undefined
-      : pageBindingRun(bindings, pageContext.locale, resolver);
+      : pageBindingRun(
+          bindings,
+          pageContext.locale,
+          resolver,
+          pageContext.namedQueries
+        );
   const stages = readStagesFor(
     document,
     {
@@ -712,6 +740,13 @@ export function PageRenderer({
       styleContext,
       definitions,
       ...(bindingRun === undefined ? {} : { bindings: bindingRun }),
+      // An editor drawing a list item's hidden block keeps such blocks for
+      // the list to judge; a published page's route decides them itself.
+      ...(itemHiddenAs === undefined ? {} : { itemsDecided: true }),
+      // An editor showing the page as a visitor reading an entry judges
+      // every block for it, the route's way, drawing its own node in place of
+      // one hidden.
+      ...(entryJudged === undefined ? {} : { entryJudged }),
     },
     prepared
   );
@@ -921,6 +956,9 @@ export function PageRenderer({
     {
       fetchPolicyId,
       ...(mayFetchUrl === undefined ? {} : { mayFetchUrl }),
+      // This tree is the one drawn: a conditioned block still in it was kept
+      // because its conditions held, so a compile serves its rules.
+      drawn: true,
       // The tree the stored artifact describes. This render prunes before it
       // resolves — a gated drop and a drawless drop are both covered by the
       // artifact and licensed to keep it — and both can remove the last node of
@@ -941,6 +979,7 @@ export function PageRenderer({
     // entry, drawn where any other conditioned block is not.
     held: heldConditionsOf(prepared),
     report,
+    ...(itemHiddenAs === undefined ? {} : { hiddenAs: itemHiddenAs }),
     ...(itemRules.size === 0
       ? {}
       : { itemRules, itemRulesServed: new Set<string>() }),

@@ -20,7 +20,6 @@ import { parseFragment, type DefaultTreeAdapterMap } from "parse5";
 import {
   SITE_CODE_LIMITS,
   siteCodeEntryProblem,
-  type SiteCodeAttrs,
   type SiteCodeEntry,
   type SiteCodeSlot,
 } from "./rules";
@@ -93,7 +92,7 @@ function fallbackOf(text: string): SiteCodeEntry | string {
     tag: "noscript",
     child: {
       tag: only.tagName === "iframe" ? "iframe" : "img",
-      attrs: attrsOf(only) as SiteCodeAttrs,
+      attrs: attrsOf(only),
     },
   };
 }
@@ -111,7 +110,7 @@ function isBlank(node: ChildNode): boolean {
 /** One parsed element as an entry, or why it can't be one. */
 function entryOf(element: Element): SiteCodeEntry | string {
   const tag = element.tagName;
-  const attrs = attrsOf(element) as SiteCodeAttrs;
+  const attrs = attrsOf(element);
   const { text, nested } = textOf(element);
   if (tag === "noscript") {
     if (nested) return "a <noscript> may hold only one <img> or <iframe>";

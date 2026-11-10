@@ -87,8 +87,17 @@ export {
   type ExposureTargetInput,
   type ListQueryChange,
   type PageAction,
+  type UnbindAnswer,
+  type UnbindKeep,
 } from "./composition-actions";
 
+export { bindOp, unbindOp, type KeptProps } from "./binding-ops";
+export type {
+  BindingFieldChoice,
+  BindingFieldSource,
+  UnbindAsk,
+  UnbindPlanAnswer,
+} from "./binding-services";
 export { conditionsOp } from "./condition-ops";
 
 export {

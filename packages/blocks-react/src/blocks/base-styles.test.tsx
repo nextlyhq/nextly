@@ -365,6 +365,10 @@ describe("every default the core library declares", () => {
       DECLARING_PARTS.map(([block, part]) => `${block}#${part}`).sort()
     ).toEqual([
       "core/accordion-item#title",
+      "core/collection-loop#current-page",
+      "core/collection-loop#page-gap",
+      "core/collection-loop#page-link",
+      "core/collection-loop#pages",
       "core/form#control",
       "core/form#submit",
       "core/image#caption",
@@ -374,6 +378,12 @@ describe("every default the core library declares", () => {
       "core/image#picture",
       "core/quote#attribution",
       "core/quote#quotation",
+      "core/table-of-contents#item",
+      "core/table-of-contents#link",
+      "core/table-of-contents#list",
+      "core/table-of-contents#note",
+      "core/table-of-contents#sublist",
+      "core/table-of-contents#title",
     ]);
   });
 

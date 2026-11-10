@@ -29,6 +29,7 @@ import {
   filterSingleItems,
 } from "@admin/lib/permissions/authorization";
 import { resolveCollectionPlacement } from "@admin/lib/plugins/collection-placement";
+import { resolveVisibleMenuItems } from "@admin/lib/plugins/menu";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
 import { cn } from "@admin/lib/utils";
@@ -221,18 +222,6 @@ export function DualSidebar({
       isSinglesError ||
       permittedSingles.some(single => !single.admin?.hidden));
 
-  const pluginsSectionVisible = hasPluginsSection(capabilities, {
-    // Loading only. A FAILED collections query is not pending: it will never
-    // resolve into visible collections, and for a user without
-    // `canManageSettings` the panel then has no destination at all, so keeping
-    // the rail item would open an empty panel rather than defer a decision.
-    isPending: contentAnswerPending || isCollectionsLoading,
-    hasVisiblePluginCollection: hasVisiblePluginCollection(
-      permittedCollections,
-      getCollectionPlacement
-    ),
-  });
-
   // Shown while the grants are still resolving, like the rest of the rail. The
   // alternative flashes: an entry appearing a moment after the page settles
   // reads as the UI changing its mind, and the media route refuses on its own.
@@ -246,6 +235,54 @@ export function DualSidebar({
     hasPermission,
   });
   const hasBuildersSection = showBuilder;
+
+  /**
+   * Whether a section other than Plugins draws a panel this reader can open:
+   * it has one at all, and its rail entry shows to them. A plugin menu item
+   * whose own section fails this is listed under Plugins instead, so every
+   * item the reader may open is reachable.
+   */
+  const sectionReachable = (section: string): boolean => {
+    if (!isSubSidebarCategory(section, isFolderTreeVisible)) return false;
+    if (section.startsWith("standalone-")) {
+      return visibleStandaloneIds.has(section);
+    }
+    switch (section) {
+      case "collections":
+        return hasCollectionsSection;
+      case "singles":
+        return hasSinglesSection;
+      case "media":
+        return hasMediaSection;
+      case "settings":
+        return hasSettingsSection;
+      case "builders":
+        return hasBuildersSection;
+      default:
+        return false;
+    }
+  };
+
+  const pluginsSectionVisible = hasPluginsSection(capabilities, {
+    // Loading only. A FAILED collections query is not pending: it will never
+    // resolve into visible collections, and for a user without
+    // `canManageSettings` the panel then has no destination at all, so keeping
+    // the rail item would open an empty panel rather than defer a decision.
+    isPending: contentAnswerPending || isCollectionsLoading,
+    hasVisiblePluginCollection: hasVisiblePluginCollection(
+      permittedCollections,
+      getCollectionPlacement
+    ),
+    // A plugin's own menu item the reader may open is a destination of the
+    // panel too, a page with no collection beside it included.
+    hasVisibleMenuItem:
+      resolveVisibleMenuItems(
+        branding?.plugins,
+        hasPermission,
+        "plugins",
+        sectionReachable
+      ).length > 0,
+  });
 
   // Whether an entry shows, with an answer still loading read as "shown" for
   // the entries that say so below. The panel and the routes read this; what the
@@ -599,6 +636,7 @@ export function DualSidebar({
           canAccessWebhooks: webhooksReachable,
           pluginCollectionsForSection,
           showBuilder,
+          hasPanel: sectionReachable,
         }}
       />
     </div>

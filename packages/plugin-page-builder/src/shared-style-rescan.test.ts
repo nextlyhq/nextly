@@ -14,10 +14,14 @@ import type { ClassUsageDirectApi } from "./class-usage-runtime";
 import {
   referencesAny,
   stillUsedMessage,
+  stoppedBy,
   storedUsesOf,
   type StoredDocuments,
 } from "./shared-style-rescan";
-import { storedDocumentsOf } from "./shared-styles-routes";
+import {
+  storedDocumentsOf,
+  storedSharedStyleUses,
+} from "./shared-styles-routes";
 import type { BuilderDocumentType } from "./site-style-route";
 import { tokenUsageOf } from "./token-usage";
 
@@ -43,6 +47,7 @@ const pages: BuilderDocumentType = {
   slug: "pages",
   label: "Pages",
   paths: ["content"],
+  fixedPaths: ["content"],
 };
 
 describe("whether a stored row references a style", () => {
@@ -61,6 +66,50 @@ describe("whether a stored row references a style", () => {
       referencesAny(
         { hero: JSON.stringify({ body: blocks("c-card") }) },
         ["hero.body"],
+        ids,
+        classes
+      )
+    ).toBe(true);
+  });
+
+  it("reads a blocks field in every row of a repeater, rows stored as text too", () => {
+    // Only the second row uses the style: a reader of one row, or of none,
+    // would take it for unused.
+    const rows = [
+      { id: "r1", body: blocks("c-hero") },
+      { id: "r2", body: blocks("c-card") },
+    ];
+    expect(
+      referencesAny({ sections: rows }, ["sections.body"], ids, classes)
+    ).toBe(true);
+    expect(
+      referencesAny(
+        { sections: JSON.stringify(rows) },
+        ["sections.body"],
+        ids,
+        classes
+      )
+    ).toBe(true);
+    expect(
+      referencesAny(
+        { sections: [{ id: "r1", body: blocks("c-hero") }] },
+        ["sections.body"],
+        ids,
+        classes
+      )
+    ).toBe(false);
+  });
+
+  it("reads a blocks field in a repeater inside a row of another", () => {
+    expect(
+      referencesAny(
+        {
+          sections: [
+            { id: "s1", columns: [{ id: "c1", body: blocks() }] },
+            { id: "s2", columns: [{ id: "c2", body: blocks("c-card") }] },
+          ],
+        },
+        ["sections.columns.body"],
         ids,
         classes
       )
@@ -110,6 +159,32 @@ function storedOf(
 }
 
 describe("every stored document still using a style", () => {
+  it("stops the walk at its next read once its signal is aborted", async () => {
+    const { documents, cursors } = storedOf([
+      { id: "a", content: blocks() },
+      { id: "b", content: blocks() },
+      { id: "c", content: blocks("c-card") },
+    ]);
+    const stop = new AbortController();
+    // Aborted while the first page is read: no later page is asked for.
+    const stopping: StoredDocuments = {
+      ...documents,
+      rowsAfter: async (type, after) => {
+        const page = await documents.rowsAfter(type, after);
+        stop.abort();
+        return page;
+      },
+    };
+    await expect(
+      storedUsesOf(["c-card"], stoppedBy(stopping, stop.signal), classes)
+    ).rejects.toMatchObject({
+      // Stopped at the first row's other forms, the next read after the abort;
+      // a form that cannot be read is refused, with the stop as its cause.
+      cause: { logContext: { reason: "stored-document-walk-stopped" } },
+    });
+    expect(cursors).toEqual([undefined]);
+  });
+
   it("walks every page of a collection by id, and names each row using one", async () => {
     const { documents, cursors } = storedOf([
       { id: "a", content: blocks() },
@@ -131,6 +206,7 @@ describe("every stored document still using a style", () => {
       slug: "home",
       label: "Home",
       paths: ["body"],
+      fixedPaths: ["body"],
     };
     const { documents } = storedOf(
       [],
@@ -279,6 +355,68 @@ describe("the stored documents, as the rescan reads them on a real site", () => 
     };
   }
 
+  it("finds a style used only inside a repeater's row, on a collection whose only blocks field is there", async () => {
+    // The collection declares no blocks field outside its repeater, so it is
+    // a document the builder edits only through a row; a removal must still
+    // see the row's use and be refused.
+    const site = {
+      self: { collections: {}, singles: {} },
+      config: {},
+      services: {
+        collections: {
+          listCollections: async () => ({
+            data: [
+              {
+                slug: "landing",
+                label: "Landing",
+                fields: [
+                  {
+                    name: "sections",
+                    type: "repeater",
+                    fields: [
+                      { name: "heading", type: "text" },
+                      { name: "body", type: "blocks" },
+                    ],
+                  },
+                ],
+              },
+            ],
+            pagination: { hasMore: false },
+          }),
+        },
+        singles: { list: async () => ({ data: [], total: 0 }) },
+      },
+    };
+    const sections = [
+      { id: "r1", heading: "One", body: blocks() },
+      { id: "r2", heading: "Two", body: blocks("c-card") },
+    ];
+    const selects: unknown[] = [];
+    const nextly = {
+      find: async (args: { select?: unknown }) => {
+        selects.push(args.select);
+        return {
+          items: [{ id: "l1", sections }],
+          meta: { hasNext: false },
+        };
+      },
+      findByID: (async args => ({
+        id: args.id,
+        sections,
+      })) as ClassUsageDirectApi["findByID"],
+      findSingle: async () => null,
+    };
+    expect(
+      await storedUsesOf(
+        ["c-card"],
+        storedDocumentsOf(site as never, nextly as never),
+        classes
+      )
+    ).toEqual([{ kind: "collection", slug: "landing", id: "l1" }]);
+    // The repeater's column is the one read for its rows' blocks.
+    expect(selects).toEqual([{ id: true, sections: true }]);
+  });
+
   it("finds a use only a non-default language stores, reading each language with its fallback off", async () => {
     const { nextly, reads } = directApiOf([{ id: "p1", content: blocks() }], {
       "p1|fr|published": blocks("c-card"),
@@ -337,6 +475,43 @@ describe("the stored documents, as the rescan reads them on a real site", () => 
         classes
       )
     ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+  });
+});
+
+describe("the shared styles' walk under the site's document limits", () => {
+  // One flat page one node past the default node limit, whose only use of
+  // the style is that last node: read under the defaults it is past the
+  // walk, read under the site's raised limits it is the page's own node.
+  const past = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: Array.from({ length: DEFAULT_LIMITS.maxNodes + 1 }, (_, at) => ({
+      id: `n${at}`,
+      type: "core/heading",
+      version: 1,
+      props: { text: "n", level: 2 },
+      classes: at === DEFAULT_LIMITS.maxNodes ? ["c-card"] : [],
+    })),
+  };
+  const raised = {
+    ...DEFAULT_LIMITS,
+    maxNodes: DEFAULT_LIMITS.maxNodes * 2,
+  };
+
+  it("finds a use held past the default node limit when the site raised it", async () => {
+    const { documents } = storedOf([{ id: "a", content: past }]);
+    expect(await storedSharedStyleUses(documents, raised)(["c-card"])).toEqual([
+      { kind: "collection", slug: "pages", id: "a" },
+    ]);
+  });
+
+  it("reads under the limits it is handed: the defaults stop short of that use", async () => {
+    // The control: the same page under the defaults finds nothing, so the
+    // use above is found by the limits passed and by nothing else.
+    const { documents } = storedOf([{ id: "a", content: past }]);
+    expect(
+      await storedSharedStyleUses(documents, DEFAULT_LIMITS)(["c-card"])
+    ).toEqual([]);
   });
 });
 

@@ -651,7 +651,8 @@ describe("ZodGenerator — Nested Recursion Depth", () => {
     ]);
     const { code } = gen.generateSchema(col);
     expect(code).toContain(
-      "configGroup: z.object({ items: z.array(z.object({ key: z.string(), value: z.number().nullish() })).min(1).max(3) }),"
+      // Each row carries its saved id, optional as a create may leave it out.
+      "configGroup: z.object({ items: z.array(z.object({ id: z.string().optional(), key: z.string(), value: z.number().nullish() })).min(1).max(3) }),"
     );
   });
 
@@ -679,8 +680,24 @@ describe("ZodGenerator — Nested Recursion Depth", () => {
     ]);
     const { code } = gen.generateSchema(col);
     expect(code).toContain(
-      "sections: z.array(z.object({ header: z.object({ title: z.string() }) })),"
+      "sections: z.array(z.object({ id: z.string().optional(), header: z.object({ title: z.string() }) })),"
     );
+  });
+});
+
+describe("ZodGenerator — repeater row ids", () => {
+  it("leaves a row's own id field to the author, adding no saved id beside it", () => {
+    const gen = new ZodGenerator({ includeComments: false });
+    const col = createCollection([
+      {
+        name: "codes",
+        type: "repeater",
+        required: true,
+        fields: [{ name: "id", type: "number", required: true } as FieldConfig],
+      } as FieldConfig,
+    ]);
+    const { code } = gen.generateSchema(col);
+    expect(code).toContain("codes: z.array(z.object({ id: z.number() })),");
   });
 });
 
