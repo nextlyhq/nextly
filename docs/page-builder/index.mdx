@@ -14,10 +14,18 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 
 ## What you get
 
-- **20 blocks out of the box.** Layout (section, box, columns, column, card, accordion,
+- **21 blocks out of the box.** Layout (section, box, columns, column, card, accordion,
   accordion item, spacer, divider), content (heading, paragraph, rich text, list, quote,
-  image, gallery, button, embed, form), and one that reads from your content
+  image, gallery, icon, button, embed, form), and one that reads from your content
   ([Collection list](#reading-content-into-a-page)).
+- **Icons.** The Icon block draws one icon from the built-in [Lucide](https://lucide.dev)
+  set as inline SVG, rendered on the server, so a published page ships no script for it.
+  Its **Icon** control (Content tab) opens a search-first picker that offers the icons you
+  used last first. It is sized by its font size and drawn in its text colour (Style tab).
+  Leave **Screen reader label** empty for a decorative icon, which screen readers skip;
+  fill it in for an icon that says something on its own. A linked icon is named by its
+  label, or by the icon's name when there is none. The page stores the icon's id
+  (`lucide:star`); an id the set no longer draws renders nothing, and the editor says so.
 - **Accordion titles and icons.** An accordion's **Titles as** (Content tab) draws each
   section's title as text or as a heading from level 2 to 6, and its **Icon** and
   **Position** (Style tab) choose a chevron, a plus, no icon or the browser's own triangle,
@@ -354,6 +362,24 @@ export const Homepage = defineSingle({
 });
 ```
 
+## A page's address
+
+A page's address is its slug, and it may sit beneath another page's: type
+`docs/getting-started/install` in the slug and the page is served at
+`/docs/getting-started/install`. Each part is normalised as a one-part address
+is (`Getting Started` becomes `getting-started`), and one leading or trailing `/`
+is dropped. An address with an empty part (`docs//install`), a `.` or `..` part, a
+part with no letters or numbers left, a reserved path (`admin`, `api/...`,
+`_next/...`, one part or several) or more than 255 characters is refused when the page is saved, with
+the reason under the slug, rather than rewritten into an address nobody chose. A
+copy of a nested page stays beside it (`docs/copy-of-install`).
+
+The Pages collection opts into this with `db: { slugPaths: true }`, which any
+collection may set. It is a rule about the stored value only: no schema change
+or migration follows, no stored address is rewritten, and a collection
+without it keeps stripping `/` from its slugs. Two pages at one address are kept
+apart by the slug's uniqueness, as before.
+
 ## Reading content into a page
 
 The **Collection list** block (stored as `core/collection-loop`) queries one of your
@@ -373,11 +399,15 @@ In the editor, the list's Content tab edits its query:
   last.
 - **How many**: Number of items (1 to 100) and Skip the first. Under Number of items the
   selected list says how many entries match and how many show, for example "4 entries
-  match, so 3 show.", counted as a visitor reads them.
+  match, so 3 show.", counted as you read them on the canvas.
 - **When nothing matches**: Canvas shows Entries or When empty, to design the list's empty
   state, which visitors see when no entry matches.
 
-The canvas draws each list with the entries a visitor would see. When a stored sort falls
+The canvas draws each list with the entries you could see in the admin: your drafts
+included, and only the entries and fields your own access lets you read. The published
+page reads the same list as a visitor: published entries and public fields only, so a
+draft you see on the canvas never appears there. A filter or sort the published page
+would refuse is refused on the canvas too. When a stored sort falls
 back to id order or the read fails, the canvas says so in a note only the author sees; a
 fallen-back sort's note has a **Choose a field** button that takes the author to the sort.
 Near midnight the canvas may differ from the published page for a day filter: the canvas

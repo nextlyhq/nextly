@@ -133,9 +133,8 @@ async function discover(
   // every instance it can reach reports `missing` and names itself. Seeding
   // this from a walk of the stored nodes left one parallel traversal in place
   // — the one this function exists to delete — and it disagreed in the usual
-  // direction: a condition-gated instance, or one in slot content the chosen
-  // definition discards, is an id the walk reports and the resolver never
-  // asks for.
+  // direction: an instance in slot content the chosen definition discards is
+  // an id the walk reports and the resolver never asks for.
   let wanted = stillMissing(sanitized, lookup, limits);
   // Until a FIXED POINT, not for a fixed number of rounds. Nesting depth is
   // not the bound: fetching a definition changes the resolver's node-budget
@@ -228,7 +227,13 @@ function stillMissing(
   lookup: ComponentLookup,
   limits: DocumentLimits
 ): string[] {
-  const composed = resolveComponentInstances(document, lookup, { limits });
+  // Composed as a route that decides conditions composes, expanding a
+  // conditioned instance too: it shows wherever its conditions hold, so its
+  // definition is read as any other placed one is.
+  const composed = resolveComponentInstances(document, lookup, {
+    limits,
+    conditioned: "carry",
+  });
   return composed.unresolved
     .filter(entry => entry.reason === "missing")
     .map(entry => entry.componentId);

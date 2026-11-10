@@ -1142,6 +1142,20 @@ exports[`each code, as a command ends with it > PLUGIN_DISABLED 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-disabled  (PLUGIN_DISABLED)"
 `;
 
+exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_SURFACE_COLLISION 1`] = `
+"✗ Plugin "archive" overrides the "delete" action on "pages", which "layouts" already overrides.
+  Why:  One action can be drawn one way.
+  Next: Drop one of the two overrides.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-surface-collision  (PLUGIN_DOCUMENT_SURFACE_COLLISION)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_SURFACE_INVALID 1`] = `
+"✗ Plugin "layouts" replaces the "delete" action on "pages" with no component to open.
+  Why:  A plugin may hide or replace only the delete and unpublish actions; a replacement needs a component to open and a label of text if it has one, and a panel section needs a title and a component.
+  Next: Correct the override or section the message names in the plugin's \`contributes.admin.views\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-surface-invalid  (PLUGIN_DOCUMENT_SURFACE_INVALID)"
+`;
+
 exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_VIEW_COLLISION 1`] = `
 "✗ Plugin "analytics" contributes a document view that on "posts" at "insights", where "seo" already declares a view on "posts".
   Why:  One address can draw one screen.

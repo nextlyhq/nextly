@@ -15,7 +15,8 @@ import { NextlyError } from "../errors/nextly-error";
 export type PluginTransactionMethod =
   | "ctx.db.transaction"
   | "ctx.db.raw.transaction"
-  | "ctx.services.collections.withTransaction";
+  | "ctx.services.collections.withTransaction"
+  | "ctx.hooks.onInTransaction";
 
 /**
  * The refusal for the handle a transaction passed its work, used once that

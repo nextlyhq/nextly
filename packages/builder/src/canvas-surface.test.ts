@@ -500,15 +500,12 @@ describe("a canvas mounted outside the editor shell", () => {
 
 describe("a Layout region drawn in the canvas frame", () => {
   it("is styled by the frame's own sheet, in the admin's tokens, at the admin's size", () => {
-    const badge = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__badge");
-    expect(declared(badge, "background")).toBe(
+    const lock = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__lock");
+    expect(declared(lock, "background")).toBe(
       "var(--nx-builder-surface-raised)"
     );
-    expect(declared(badge, "color")).toBe("var(--nx-builder-text-muted)");
-    const words = ruleIn(
-      CANVAS_FRAME_SHEET,
-      ".nx-canvas-region__badge,\n.nx-canvas-region__tag"
-    );
+    expect(declared(lock, "color")).toBe("var(--nx-builder-text-muted)");
+    const words = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__mark-body");
     expect(declared(words, "zoom")).toBe("calc(1 / var(--nx-canvas-zoom, 1))");
     expect(declared(words, "font-family")).toBe(
       "var(--font-sans, system-ui), sans-serif"

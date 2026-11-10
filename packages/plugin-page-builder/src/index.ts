@@ -245,6 +245,16 @@ export type {
   PageActionRequest,
   PageActionResult,
 } from "./composition-actions-contract";
+// The collection template actions: give a collection its template, and
+// publish it, each with a dry run.
+export { TEMPLATE_ACTIONS_ROUTE_PATH } from "./templates/template-actions-contract";
+export type {
+  TemplateAction,
+  TemplateActionRequest,
+  TemplateActionResult,
+  TemplateSummary,
+} from "./templates/template-actions-contract";
+export { TEMPLATES_SLUG } from "./collections/templates";
 export type { ActionBy } from "./component-actions-contract";
 export type { ActionAnswer } from "./composition-route-kit";
 // What a client reads before composing: the site's patterns, components and

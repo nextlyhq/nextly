@@ -12,6 +12,7 @@
 import {
   DEFINITION_ACTION_KINDS,
   PAGE_ACTION_KINDS,
+  TEMPLATE_ACTION_KINDS,
 } from "@nextlyhq/builder/ops";
 import { describe, expect, it } from "vitest";
 
@@ -125,9 +126,19 @@ describe("the manifest schema", () => {
 
 describe("the manifest's actions", () => {
   it("lists every kind each action takes, with a request schema naming its fields", () => {
-    const [page, definition] = manifestActions();
+    const [page, definition, template] = manifestActions();
     expect(page?.kinds).toEqual(PAGE_ACTION_KINDS);
     expect(definition?.kinds).toEqual(DEFINITION_ACTION_KINDS);
+    expect(template?.kinds).toEqual(TEMPLATE_ACTION_KINDS);
+    expect(template?.path).toBe("/templates/actions");
+    const templateRequest = template?.request as {
+      properties: Record<string, { oneOf?: unknown[] }>;
+      required: string[];
+    };
+    expect(templateRequest.required).toEqual(["action"]);
+    expect(templateRequest.properties.action?.oneOf).toHaveLength(
+      TEMPLATE_ACTION_KINDS.length
+    );
 
     const pageRequest = page?.request as {
       properties: Record<string, { oneOf?: unknown[] }>;

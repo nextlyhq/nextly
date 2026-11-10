@@ -3,6 +3,7 @@ import type {
   BindingIssue,
   BlockRenderArgs as EngineBlockRenderArgs,
   BlockDefinition as EngineBlockDefinition,
+  ConditionIssue,
   RemotePatternInput,
   SpacingMode,
 } from "@nextlyhq/blocks-engine";
@@ -619,7 +620,25 @@ export interface PageBindings {
  *
  * @experimental
  */
-export type BindingIssuesHandler = (issues: readonly BindingIssue[]) => void;
+export type BindingIssuesHandler = (issues: readonly PageIssue[]) => void;
+
+/**
+ * Something a render could not use as stored: a binding, or a block's
+ * visibility conditions (`kind: "condition"`), which travel one channel so a
+ * route logs, and an editor shows, both alike.
+ *
+ * @experimental
+ */
+export type PageIssue = BindingIssue | ConditionIssue;
+
+/**
+ * Whether a page issue is a binding's, for a handler that reads only those.
+ *
+ * @experimental
+ */
+export function isBindingIssue(issue: PageIssue): issue is BindingIssue {
+  return !("kind" in issue && issue.kind === "condition");
+}
 
 /**
  * Reads one page render may perform when the route was given no number.

@@ -44,6 +44,7 @@ import {
   showsUnpublished,
   STORED_FORMS,
   storesJson,
+  wholeWriteOf,
   type StoredFieldsRead,
   type FieldScope,
 } from "../domains/collections/services/stored-field-read";
@@ -98,6 +99,35 @@ export interface PluginSystemIdentity {
 export type PluginStoredIdentity =
   | (PluginRouteIdentity & { readonly overrideAccess?: never })
   | PluginSystemIdentity;
+
+/**
+ * @experimental A conditional write made as a route's caller, whose
+ * expectation the system read: a plugin's own job that reads as the system
+ * and writes as the person who started it. The update is the caller's, judged
+ * by every rule their own update meets, so they are refused where they may
+ * not update the document (or publish it, where the data publishes). The
+ * expectation is judged as the system's, as it was read: no read gate is
+ * asked of the caller for it, since the hash came from the system's read and
+ * not from them.
+ *
+ * Name it only for an expectation the system itself read. One built from a
+ * value the caller supplied would tell them whether it matches a field they
+ * may not read; made as the caller alone, the write refuses such a field.
+ */
+export interface PluginSystemCheckedWrite {
+  /** Who the update is made as, as `ctx.caller.identity()` resolved them. */
+  readonly caller: PluginRouteIdentity;
+  /** Who read the expectation and judges it: the system, and nothing else. */
+  readonly checkedBy: PluginSystemIdentity;
+}
+
+/**
+ * @experimental Who a conditional write is made as: a route's caller or the
+ * system, as a stored read is, or a caller whose expectation the system read.
+ */
+export type PluginConditionalWriteIdentity =
+  | PluginStoredIdentity
+  | PluginSystemCheckedWrite;
 
 /** @experimental A read of the stored form of some of a document's fields. */
 export type PluginStoredFieldsRequest = PluginStoredDocument & {
@@ -397,7 +427,11 @@ function publicStateOf(liveState: string | null | undefined): string | null {
  *
  * The update is the ordinary one, made as the person `identity` names under
  * access rules: refused where they may not update the document (or publish
- * it, where `data` publishes). Made as the system, it is an
+ * it, where `data` publishes), and refused with `FORBIDDEN` where what it
+ * would persist, after every hook, does not hold each field it writes exactly
+ * as sent, or the field-access pass took one out: an ordinary update lets a
+ * rule drop such a field, or a hook change it, silently and writes the rest.
+ * Made as the system, it is an
  * `overrideAccess: true` update, judged by no access rule. The expectation is
  * judged inside the update's own transaction, once it holds the entry's row
  * lock, against the value as committed then; where it no longer hashes to
@@ -406,17 +440,20 @@ function publicStateOf(liveState: string | null | undefined): string | null {
  * document again and decide again.
  *
  * The expectation reads a stored value, so it is first judged as
- * {@link readStoredFields} is: a field that read could not return cannot be
- * the subject of one, and nothing is written. It names a top-level field; a
- * field inside a named group is refused with `INVALID_INPUT`, because an
- * update writes the group's whole value and would replace siblings the
- * expectation never compared.
+ * {@link readStoredFields} is, as whoever read it: a field that read could
+ * not return cannot be the subject of one, and nothing is written. Made as a
+ * person, that read is theirs, so a field they may not read is refused rather
+ * than compared. Made as a caller whose expectation the system read
+ * ({@link PluginSystemCheckedWrite}), it is the system's, and the update
+ * alone is the caller's. It names a top-level field; a field inside a named
+ * group is refused with `INVALID_INPUT`, because an update writes the group's
+ * whole value and would replace siblings the expectation never compared.
  */
 export async function updateIfUnchanged(
-  identity: PluginStoredIdentity,
+  identity: PluginConditionalWriteIdentity,
   update: PluginConditionalUpdate
 ): Promise<void> {
-  const person = personOf(identity);
+  const { person, checker } = partiesOf(identity);
   const named = parsedRequest(CONDITIONAL_UPDATE, update, WRITE_REFUSAL);
   const expected = expectationOf(named.expect);
   const language = oneLanguage(named.locale);
@@ -430,8 +467,10 @@ export async function updateIfUnchanged(
   // judged in the very language its expectation was read in.
   const inLocale =
     language.locale === undefined ? {} : { locale: language.locale };
-  // The read half first: a precondition, so before anything is written.
-  await readStoredFields(identity, {
+  // The read half first: a precondition, so before anything is written. Made
+  // as whoever read the expectation, which is the caller unless the system
+  // read it for them.
+  await readStoredFields(checker, {
     ...targetOf(document),
     fields: [expected.field],
     form: expected.form,
@@ -442,7 +481,17 @@ export async function updateIfUnchanged(
   // context object no other call is handed, which the write path receives
   // as its own and its hooks only as a copy.
   const context: Record<string, unknown> = {};
-  const pin = { document, expect: expected, checked: false };
+  // A person's write is judged by field rules and run through the site's
+  // hooks, either of which an ordinary update lets drop or change a field
+  // silently: theirs is made whole or refused, by its final payload against
+  // what it sent, recorded here before the write path touches it. The
+  // system's is judged by no field rule.
+  const pin = {
+    document,
+    expect: expected,
+    checked: false,
+    ...(person === undefined ? {} : { whole: await wholeWriteOf(named.data) }),
+  };
   expectStoredValue(context, pin);
   // As the person under access rules, or as the system, which the Direct
   // API's own `overrideAccess: true` call is.
@@ -521,8 +570,38 @@ function personOf(
   return identity.overrideAccess === true ? undefined : identity;
 }
 
+/**
+ * Who a conditional write's parts are made as: the update as `person` (the
+ * system where `undefined`), and the expectation's read as `checker`. For a
+ * stored identity both are that identity. For a caller whose expectation the
+ * system read, the update is the caller's and the read the system's. Parsed
+ * at the boundary like any identity: the whole shape is exactly a caller and
+ * the system, so anything else carrying `checkedBy` is refused, never read as
+ * a caller or as the system.
+ */
+function partiesOf(identity: PluginConditionalWriteIdentity): {
+  readonly person: PluginRouteIdentity | undefined;
+  readonly checker: PluginStoredIdentity;
+} {
+  // Anything that is not an object is no identity, and `personOf` refuses it.
+  if (
+    typeof identity !== "object" ||
+    identity === null ||
+    !("checkedBy" in identity)
+  ) {
+    return { person: personOf(identity), checker: identity };
+  }
+  if (!SYSTEM_CHECKED_WRITE.safeParse(identity).success) {
+    throw NextlyError.invalidInput({ message: IDENTITY_REFUSAL });
+  }
+  return { person: identity.caller, checker: THE_SYSTEM };
+}
+
+/** The system, as the expectation of a write it read for a caller is read. */
+const THE_SYSTEM: PluginSystemIdentity = { overrideAccess: true };
+
 const IDENTITY_REFUSAL =
-  "A stored read or a conditional write is made as a route's caller, as `ctx.caller.identity()` resolved them, or as the system, `{ overrideAccess: true }`.";
+  "A stored read or a conditional write is made as a route's caller, as `ctx.caller.identity()` resolved them, or as the system, `{ overrideAccess: true }`; a conditional write also as a caller whose expectation the system read, `{ caller, checkedBy: { overrideAccess: true } }`.";
 
 const READ_REFUSAL =
   "A stored read names one document (a collection and an entry id, or a Single, and not both), at least one field, and the form `published` or `draft`.";
@@ -612,13 +691,21 @@ const UPDATE_PARTS = {
  * Who a stored read or a conditional write is made as: the system exactly, or
  * a caller with a user and no `overrideAccess` of its own.
  */
-const STORED_IDENTITY = z.union([
-  z.strictObject({ overrideAccess: z.literal(true) }),
-  z.looseObject({
-    user: z.looseObject({ id: z.string().min(1) }),
-    overrideAccess: z.undefined().optional(),
-  }),
-]);
+const SYSTEM = z.strictObject({ overrideAccess: z.literal(true) });
+const CALLER = z.looseObject({
+  user: z.looseObject({ id: z.string().min(1) }),
+  overrideAccess: z.undefined().optional(),
+});
+const STORED_IDENTITY = z.union([SYSTEM, CALLER]);
+
+/**
+ * A caller whose expectation the system read: exactly a caller, as the stored
+ * identity parses one, and the system, with nothing beside them.
+ */
+const SYSTEM_CHECKED_WRITE = z.strictObject({
+  caller: CALLER,
+  checkedBy: SYSTEM,
+});
 
 /** A whole conditional write, parsed as one before anything is asked or read. */
 const CONDITIONAL_UPDATE = z.union([

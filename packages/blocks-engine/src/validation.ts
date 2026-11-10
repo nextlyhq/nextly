@@ -23,6 +23,8 @@ import {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
   EXPOSED_PROPERTY_TYPES,
+  MAX_SEO_SEGMENTS,
+  MAX_SEO_TEXT_LENGTH,
   MAX_CLASSES_PER_NODE,
   STYLE_STATES,
   isBindingSource,
@@ -55,6 +57,7 @@ import {
 import { blockLabelFrom, placementRefusalMessage } from "./placement-wording";
 import { definitelyNotARecord, isPlainRecord } from "./plain-record";
 import { boundedOwnKeys } from "./safe-record";
+import { checkSeoBinding, type SeoBindingPlace } from "./seo-binding-check";
 import { slotLockBreaks, slotLockOf, typeOfChild } from "./slot-lock";
 import type { ActiveSlotLock } from "./slot-lock";
 import { startingChildrenSource } from "./starting-children";
@@ -324,6 +327,7 @@ const DOCUMENT_ISSUE_CODES = {
     "A breakpoint id is defined on more than one axis.",
   "invalid-visibility": "A node visibility structure is malformed.",
   "invalid-binding": "A binding is malformed.",
+  "invalid-seo": "A document's own metadata is malformed.",
   "missing-source-key":
     "A single-sourced binding does not name which single it reads.",
   "invalid-component-instance":
@@ -645,6 +649,12 @@ export function validateDocument(
   const settings = envelope.doc.settings;
   if (isPlainRecord(settings) && settings.styles !== undefined) {
     validateStyleEnvelope(settings.styles, "/settings/styles", state);
+  }
+  // Skipped past the document's limits, as the other per-value checks are:
+  // the survey stopped reading, and a value of any width would otherwise be
+  // walked whole.
+  if (!overLimits && isPlainRecord(settings) && settings.seo !== undefined) {
+    validateDocumentSeo(settings.seo, "/settings/seo", issues, ctx);
   }
 
   validateNodeForest(envelope.nodes, state, survey.limits.maxNodes);
@@ -2313,6 +2323,17 @@ function validateVisibility(
     });
     return;
   }
+  // Placement gates exist only while a page is drawn; a document saved with
+  // one would ask the renderer for a gate no author set.
+  if (Object.hasOwn(vis, "within")) {
+    state.issues.push({
+      path: pointer(visPath, "within"),
+      code: "invalid-visibility",
+      severity: "error",
+      message:
+        "visibility.within is set only while a page is drawn and can't be stored.",
+    });
+  }
   if (vis.conditions !== undefined) {
     // Each condition needs a string `field` AND a string `op`; the optional
     // `value` may be anything. Index-based loops (not `.every`, which skips
@@ -3198,70 +3219,211 @@ function validateBindings(
   const bindingsPath = pointer(path, "bindings");
   for (const [prop, binding] of Object.entries(node.bindings)) {
     const bPath = pointer(bindingsPath, prop);
-    // Check the shape BEFORE reading any field: a null/primitive binding value
-    // must produce an issue, not a thrown property access.
-    if (!isPlainRecord(binding)) {
-      issues.push({
-        path: bPath,
-        code: "invalid-binding",
-        severity: "error",
-        message: "A binding must be an object with a string $bind path.",
-      });
-      continue;
-    }
-    const bindPath = binding.$bind;
-    if (typeof bindPath !== "string") {
-      issues.push({
-        path: bPath,
-        code: "invalid-binding",
-        severity: "error",
-        message: "A binding must be an object with a string $bind path.",
-      });
-      continue;
-    }
-    if (!isBindPath(bindPath)) {
-      issues.push({
-        path: pointer(bPath, "$bind"),
-        code: "invalid-binding",
-        severity: "error",
-        message: `Binding path "${describeValue(bindPath)}" must be a dot-joined field path (never an expression).`,
-      });
-    }
-    const source: unknown = binding.source;
-    if (
-      source !== undefined &&
-      (typeof source !== "string" || !isBindingSource(source))
-    ) {
-      issues.push({
-        path: pointer(bPath, "source"),
-        code: "invalid-binding",
-        severity: "error",
-        message: `Binding source "${describeValue(source)}" is not one of: ${BINDING_SOURCES.join(", ")}.`,
-      });
-    }
-    const sourceKey = binding.sourceKey;
-    if (source === "single") {
-      if (typeof sourceKey !== "string" || sourceKey.length === 0) {
-        issues.push({
-          path: pointer(bPath, "sourceKey"),
-          code: "missing-source-key",
-          severity: "error",
-          message:
-            'A binding with source "single" must name the single via sourceKey.',
-          suggestion: "Set sourceKey to the single's slug.",
-        });
-      }
-    } else if (sourceKey !== undefined) {
-      // sourceKey is reserved for single-sourced bindings; on any other source
-      // it is an ambiguous, unresolvable field.
+    if (!validBindingShape(binding, bPath, issues)) continue;
+    validateBindingAgainstSchema(node, prop, binding, bPath, issues, ctx);
+  }
+}
+
+/**
+ * One binding's shape, wherever it is stored: an object with a `$bind` path
+ * of field identifiers (`isBindPath`, so nothing evaluable is stored), a
+ * known source, and the key a Single needs. Answers whether it was readable
+ * enough for the checks that follow it.
+ */
+function validBindingShape(
+  binding: unknown,
+  bPath: string,
+  issues: ValidationIssue[]
+): binding is Record<string, unknown> {
+  // Check the shape BEFORE reading any field: a null/primitive binding value
+  // must produce an issue, not a thrown property access.
+  if (!isPlainRecord(binding)) {
+    issues.push({
+      path: bPath,
+      code: "invalid-binding",
+      severity: "error",
+      message: "A binding must be an object with a string $bind path.",
+    });
+    return false;
+  }
+  const bindPath = binding.$bind;
+  if (typeof bindPath !== "string") {
+    issues.push({
+      path: bPath,
+      code: "invalid-binding",
+      severity: "error",
+      message: "A binding must be an object with a string $bind path.",
+    });
+    return false;
+  }
+  if (!isBindPath(bindPath)) {
+    issues.push({
+      path: pointer(bPath, "$bind"),
+      code: "invalid-binding",
+      severity: "error",
+      message: `Binding path "${describeValue(bindPath)}" must be a dot-joined field path (never an expression).`,
+    });
+  }
+  const source: unknown = binding.source;
+  if (
+    source !== undefined &&
+    (typeof source !== "string" || !isBindingSource(source))
+  ) {
+    issues.push({
+      path: pointer(bPath, "source"),
+      code: "invalid-binding",
+      severity: "error",
+      message: `Binding source "${describeValue(source)}" is not one of: ${BINDING_SOURCES.join(", ")}.`,
+    });
+  }
+  const sourceKey = binding.sourceKey;
+  if (source === "single") {
+    if (typeof sourceKey !== "string" || sourceKey.length === 0) {
       issues.push({
         path: pointer(bPath, "sourceKey"),
-        code: "invalid-binding",
+        code: "missing-source-key",
         severity: "error",
-        message: 'sourceKey is only allowed when source is "single".',
+        message:
+          'A binding with source "single" must name the single via sourceKey.',
+        suggestion: "Set sourceKey to the single's slug.",
       });
     }
-    validateBindingAgainstSchema(node, prop, binding, bPath, issues, ctx);
+  } else if (sourceKey !== undefined) {
+    // sourceKey is reserved for single-sourced bindings; on any other source
+    // it is an ambiguous, unresolvable field.
+    issues.push({
+      path: pointer(bPath, "sourceKey"),
+      code: "invalid-binding",
+      severity: "error",
+      message: 'sourceKey is only allowed when source is "single".',
+    });
+  }
+  return true;
+}
+
+/**
+ * A document's own metadata: `title` and `description`, each a list of
+ * literal text and bindings, and `image`, one binding. Each binding is held
+ * to the shape a prop's is. A list item is no source here: the metadata is
+ * read once for the page, outside any list.
+ */
+function validateDocumentSeo(
+  seo: unknown,
+  path: string,
+  issues: ValidationIssue[],
+  ctx: ValidationContext
+): void {
+  if (!isPlainRecord(seo)) {
+    issues.push({
+      path,
+      code: "invalid-seo",
+      severity: "error",
+      message: "A document's seo setting must be an object.",
+    });
+    return;
+  }
+  for (const [field, value] of Object.entries(seo)) {
+    const at = pointer(path, field);
+    if (field === "title" || field === "description") {
+      validateSeoText(value, at, issues, ctx);
+    } else if (field === "image") {
+      validateSeoBinding(value, at, "image", issues, ctx);
+    } else {
+      issues.push({
+        path: at,
+        code: "invalid-seo",
+        severity: "error",
+        message: `"${describeValue(field)}" is not a metadata field: a document's seo holds title, description and image.`,
+      });
+    }
+  }
+}
+
+/** One metadata text value: a bounded list of literal text and bindings. */
+function validateSeoText(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+  ctx: ValidationContext
+): void {
+  if (!Array.isArray(value)) {
+    issues.push({
+      path,
+      code: "invalid-seo",
+      severity: "error",
+      message:
+        "A metadata text value must be a list of text and bindings, joined in order.",
+    });
+    return;
+  }
+  if (value.length > MAX_SEO_SEGMENTS) {
+    issues.push({
+      path,
+      code: "invalid-seo",
+      severity: "error",
+      message: `A metadata text value holds at most ${String(MAX_SEO_SEGMENTS)} pieces.`,
+    });
+    return;
+  }
+  value.forEach((segment: unknown, index) => {
+    const at = pointer(path, String(index));
+    if (typeof segment === "string") {
+      if (segment.length > MAX_SEO_TEXT_LENGTH) {
+        issues.push({
+          path: at,
+          code: "invalid-seo",
+          severity: "error",
+          message: `A piece of metadata text is at most ${String(MAX_SEO_TEXT_LENGTH)} characters.`,
+        });
+      }
+      return;
+    }
+    validateSeoBinding(segment, at, "text", issues, ctx);
+  });
+}
+
+/**
+ * One metadata binding: a binding's shape, read for the page, and, when the
+ * context carries the sources' schema, the check the routed page applies
+ * before using it (`seo-binding-check`), so a save accepts only what the page
+ * can show.
+ */
+function validateSeoBinding(
+  value: unknown,
+  path: string,
+  place: SeoBindingPlace,
+  issues: ValidationIssue[],
+  ctx: ValidationContext
+): void {
+  if (!validBindingShape(value, path, issues)) return;
+  if (ctx.bindingSchema !== undefined) {
+    const check = checkSeoBinding({
+      binding: value,
+      place,
+      id: path,
+      schema: ctx.bindingSchema,
+      ...(ctx.bindingEntry === undefined
+        ? {}
+        : { refs: { entry: ctx.bindingEntry } }),
+    });
+    for (const issue of check.issues) {
+      if (issue.code === "binding-malformed") continue;
+      issues.push({
+        path,
+        code: issue.code,
+        severity: "error",
+        message: issue.message,
+      });
+    }
+  }
+  if (value.source === "item") {
+    issues.push({
+      path: pointer(path, "source"),
+      code: "invalid-binding",
+      severity: "error",
+      message:
+        "A document's metadata is read once for the page, outside any list, so it cannot bind a list item.",
+    });
   }
 }
 

@@ -47,6 +47,10 @@ import type {
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getService } from "../../../di";
 import { NextlyError } from "../../../errors";
+import {
+  DOCUMENT_OVERWRITE_KEY,
+  DOCUMENT_VERSION_KEY,
+} from "../../../lib/system-columns";
 import type {
   PluginStoredValue,
   PluginStoredValueTarget,
@@ -1155,6 +1159,49 @@ export interface PinnedExpectation {
   readonly expect: StoredExpectation;
   /** Set once the expectation held under the row lock of the write's own transaction. */
   checked: boolean;
+  /**
+   * The write is made whole or not at all (see {@link refuseUnlessWhole}).
+   * Set for a write made under field rules.
+   */
+  readonly whole?: WholeWrite;
+}
+
+/**
+ * What a write made whole sent, and what its write path has done to it so far.
+ */
+export interface WholeWrite {
+  /** Each field the write sent, by name, with {@link storedValueHash} of its value as sent. */
+  readonly sent: ReadonlyMap<string, string>;
+  /** The fields the write path's field-access pass took out or changed. */
+  readonly cut: string[];
+  /** Set once {@link refuseUnlessWhole} judged the final payload whole. */
+  judged: boolean;
+}
+
+/**
+ * The whole-write record of `data`, as a conditional write sends it: each
+ * field's hash taken now, before the write path (whose passes change nested
+ * values in place) has touched it.
+ */
+export async function wholeWriteOf(
+  data: Record<string, unknown>
+): Promise<WholeWrite> {
+  const sent = new Map<string, string>();
+  for (const [name, value] of Object.entries(data)) {
+    sent.set(name, await storedValueHash(payloadValueOf(data, name, value)));
+  }
+  return { sent, cut: [], judged: false };
+}
+
+/** A payload's value for `name` as the stored hash compares it. */
+function payloadValueOf(
+  data: Record<string, unknown>,
+  name: string,
+  value: unknown = data[name]
+): PluginStoredValue {
+  return name in data && value !== undefined
+    ? { kind: "value", value }
+    : { kind: "absent" };
 }
 
 /**
@@ -1178,6 +1225,116 @@ export function expectStoredValue(
 }
 
 /**
+ * Run `pass`, a write path's one field-access pass over `data` (the data as
+ * its hooks so far left it), for the write called with `context`.
+ *
+ * Field access takes out of an ordinary update, silently, a field the writer
+ * may not update, and keeps a denied value inside a container as stored, then
+ * writes the rest. For a write made whole, what the pass took out or changed
+ * is recorded, and {@link refuseUnlessWhole} refuses the write for it once
+ * every hook has run, even where a later hook put the value back. Every other
+ * write runs the pass alone, exactly as before.
+ */
+export async function fieldAccessPass(
+  context: Record<string, unknown> | undefined,
+  document: ExpectedDocument,
+  data: Record<string, unknown>,
+  pass: () => Promise<void>
+): Promise<void> {
+  const whole = wholeWriteFor(context, document);
+  if (whole === undefined) {
+    await pass();
+    return;
+  }
+  const before = new Map(
+    Object.entries(data).map(([name, value]) => [name, JSON.stringify(value)])
+  );
+  await pass();
+  for (const [name, value] of before) {
+    if (!(name in data) || JSON.stringify(data[name]) !== value) {
+      whole.cut.push(name);
+    }
+  }
+}
+
+/**
+ * Refuse with `FORBIDDEN`, before anything is written, a write made whole
+ * whose final payload does not hold what it sent; nothing happens for any
+ * other write.
+ *
+ * Called by a write path once with the payload it is about to persist, after
+ * every hook has run (the collection's and the field's `beforeChange` last),
+ * and before its own shaping, which only serializes. Each field the write
+ * sent must be there exactly as sent, compared by {@link storedValueHash},
+ * and the field-access pass must have taken nothing out of it: a hook may not
+ * change, drop or put back a value the write sent, and a field rule may not
+ * strip one. Either way the write would be reported as made while what it
+ * sent was not, so it is refused rather than written in part. Refused as
+ * forbidden, not as a conflict: reading again changes nothing, since a hook
+ * or rule of the site decides it. Only then is the write judged whole, which
+ * {@link holdStoredExpectation} requires under the row lock.
+ *
+ * Every key the write sent is judged, the lifecycle `status` among them, but
+ * the {@link WRITE_TRANSPORT_KEYS}, which say how to write and are never
+ * stored. So a hook that turns a publish into a draft, or takes the status
+ * out, refuses it; and since a write is held as a working draft only when it
+ * names no status (`resolveDraftHold`), one that keeps the status it sent is
+ * never held as a draft in place of the state it named.
+ */
+export async function refuseUnlessWhole(
+  context: Record<string, unknown> | undefined,
+  document: ExpectedDocument,
+  data: Record<string, unknown>
+): Promise<void> {
+  const whole = wholeWriteFor(context, document);
+  if (whole === undefined) return;
+  const changed: string[] = [];
+  for (const [name, hash] of whole.sent) {
+    if (WRITE_TRANSPORT_KEYS.has(name)) continue;
+    if ((await storedValueHash(payloadValueOf(data, name))) !== hash) {
+      changed.push(name);
+    }
+  }
+  const cut = whole.cut.filter(name => whole.sent.has(name));
+  if (changed.length > 0 || cut.length > 0) {
+    throw NextlyError.forbidden({
+      logContext: {
+        reason: "conditional-write-not-whole",
+        kind: document.kind,
+        slug: document.slug,
+        ...(document.id === undefined ? {} : { id: document.id }),
+        changed,
+        cut,
+      },
+    });
+  }
+  whole.judged = true;
+}
+
+/**
+ * The keys a write sends that say how to write, not what: the version it was
+ * read at (`_rev`) and the overwrite of a save made since (`_overwrite`). The
+ * write path reads them at its boundary and stores neither, so a whole write
+ * is judged on every other key it sends.
+ */
+const WRITE_TRANSPORT_KEYS: ReadonlySet<string> = new Set([
+  DOCUMENT_VERSION_KEY,
+  DOCUMENT_OVERWRITE_KEY,
+]);
+
+/** The whole-write record of the write called with `context`, for this document. */
+function wholeWriteFor(
+  context: Record<string, unknown> | undefined,
+  document: ExpectedDocument
+): WholeWrite | undefined {
+  const pin = context === undefined ? undefined : expectations.get(context);
+  if (pin?.whole === undefined || !sameDocument(pin.document, document)) {
+    return undefined;
+  }
+  return pin.whole;
+}
+
+/**
  * Refuse, by throwing, a write whose caller registered an expectation for
  * `context` that no longer holds; nothing happens for any other write. Called
  * by a write path inside its transaction, once it holds the entry's row lock
@@ -1197,6 +1354,19 @@ export async function holdStoredExpectation(
 ): Promise<void> {
   const pin = context === undefined ? undefined : expectations.get(context);
   if (pin === undefined || !sameDocument(pin.document, document)) return;
+  // A write that must be made whole, whose path never judged its final
+  // payload through `refuseUnlessWhole`, was never judged whole: refused
+  // under the lock, so it rolls back rather than landing unjudged.
+  if (pin.whole !== undefined && !pin.whole.judged) {
+    refused.refusal = NextlyError.internal({
+      logContext: {
+        reason: "conditional-write-fields-not-judged",
+        kind: document.kind,
+        slug: document.slug,
+      },
+    });
+    throw refused.refusal;
+  }
   refused.refusal = await storedExpectationRefusal(
     pin,
     {

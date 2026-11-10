@@ -98,6 +98,8 @@ function makeCtx(
     unregister: vi.fn(),
     registerBeforeOperation: vi.fn(),
     unregisterBeforeOperation: vi.fn(),
+    registerInTransaction: vi.fn(),
+    unregisterInTransaction: vi.fn(),
   };
   const ctx = createPluginContext(
     getServiceFn,
@@ -431,6 +433,8 @@ describe("ctx.db.raw.transaction", () => {
         unregister: vi.fn(),
         registerBeforeOperation: vi.fn(),
         unregisterBeforeOperation: vi.fn(),
+        registerInTransaction: vi.fn(),
+        unregisterInTransaction: vi.fn(),
       },
       {
         name: "@test/tx",

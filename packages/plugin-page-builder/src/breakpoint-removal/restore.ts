@@ -64,11 +64,42 @@ export interface Restored<T> {
   readonly deleted: number;
 }
 
-/** Counts while putting values back. */
+/**
+ * Counts while putting values back. Each value is decided once, by the newest
+ * fragment that holds it (`decided`, by where it sits): a value a removal
+ * stripped twice is one value, put back or kept out once.
+ */
 interface Tally {
   restored: number;
   skipped: number;
   deleted: number;
+  readonly decided: Set<string>;
+}
+
+/** A fresh tally. */
+function tallyOf(): Tally {
+  return { restored: 0, skipped: 0, deleted: 0, decided: new Set() };
+}
+
+/** What a tally counted, as a restore answers it. */
+function countsOf(tally: Tally): Omit<Restored<unknown>, "value"> {
+  return {
+    restored: tally.restored,
+    skipped: tally.skipped,
+    deleted: tally.deleted,
+  };
+}
+
+/** Where a value sits: a block's or class's (`scope`), by state and breakpoint. */
+function keyOf(scope: string, ...at: readonly string[]): string {
+  return JSON.stringify([scope, ...at]);
+}
+
+/** Decide `key` now, unless a newer fragment already did. */
+function decide(tally: Tally, key: string): boolean {
+  if (tally.decided.has(key)) return false;
+  tally.decided.add(key);
+  return true;
 }
 
 /**
@@ -78,7 +109,9 @@ interface Tally {
 function restoreEnvelope(
   styles: unknown,
   removed: RemovedStyles,
-  tally: Tally
+  tally: Tally,
+  /** Where the envelope sits, for each value's place in `tally`. */
+  scope: string
 ): unknown {
   const base: Record<string, unknown> = isPlainRecord(styles)
     ? { ...styles }
@@ -89,13 +122,8 @@ function restoreEnvelope(
     const held: Record<string, unknown> = isPlainRecord(now) ? { ...now } : {};
     let stateChanged = false;
     for (const [id, value] of Object.entries(byBreakpoint)) {
-      if (!Object.hasOwn(held, id)) {
-        held[id] = value;
-        tally.restored += 1;
-        stateChanged = true;
-      } else if (!sameStoredValue(held[id], value)) {
-        tally.skipped += 1;
-      }
+      if (!decide(tally, keyOf(scope, state, id))) continue;
+      if (putBack(held, id, value, tally)) stateChanged = true;
     }
     if (stateChanged) {
       base[state] = held;
@@ -103,6 +131,26 @@ function restoreEnvelope(
     }
   }
   return changed ? base : styles;
+}
+
+/**
+ * One value back into `held` where it holds none under that breakpoint,
+ * counting it restored; one set there since is counted skipped. Whether
+ * `held` changed.
+ */
+function putBack(
+  held: Record<string, unknown>,
+  id: string,
+  value: unknown,
+  tally: Tally
+): boolean {
+  if (!Object.hasOwn(held, id)) {
+    held[id] = value;
+    tally.restored += 1;
+    return true;
+  }
+  if (!sameStoredValue(held[id], value)) tally.skipped += 1;
+  return false;
 }
 
 /** The device entries a strip took out of a visibility: in before, not after. */
@@ -126,28 +174,36 @@ function removedDevices(
 function restoreVisibility(
   now: unknown,
   stripped: NonNullable<NodeFragment["visibility"]>,
-  tally: Tally
+  tally: Tally,
+  scope: string
 ): unknown {
-  // Still exactly what the strip left: the whole visibility goes back.
-  if (sameStoredValue(now, stripped.after)) {
+  const removed = removedDevices(stripped);
+  // Still exactly what the strip left, and no newer fragment decided it: the
+  // whole visibility goes back, deciding each device it took out.
+  if (
+    !tally.decided.has(keyOf(scope, VISIBILITY)) &&
+    sameStoredValue(now, stripped.after)
+  ) {
+    tally.decided.add(keyOf(scope, VISIBILITY));
+    for (const id of Object.keys(removed)) {
+      tally.decided.add(keyOf(scope, VISIBILITY, id));
+    }
     if (sameStoredValue(now, stripped.before)) return now;
     tally.restored += 1;
     return stripped.before;
   }
-  // Changed since: only the removed breakpoints' own entries, where absent.
+  // Changed since, or put back by a newer fragment: each removed device's
+  // entry, where absent, decided device by device, so an older fragment's
+  // device a newer one did not hold still goes back.
+  tally.decided.add(keyOf(scope, VISIBILITY));
   const record: Record<string, unknown> = isPlainRecord(now) ? { ...now } : {};
   const devices: Record<string, unknown> = isPlainRecord(record.devices)
     ? { ...record.devices }
     : {};
   let changed = false;
-  for (const [id, value] of Object.entries(removedDevices(stripped))) {
-    if (!Object.hasOwn(devices, id)) {
-      devices[id] = value;
-      tally.restored += 1;
-      changed = true;
-    } else if (!sameStoredValue(devices[id], value)) {
-      tally.skipped += 1;
-    }
+  for (const [id, value] of Object.entries(removed)) {
+    if (!decide(tally, keyOf(scope, VISIBILITY, id))) continue;
+    if (putBack(devices, id, value, tally)) changed = true;
   }
   return changed ? { ...record, devices } : now;
 }
@@ -160,14 +216,20 @@ function restoreNode(
 ): BlockNode {
   let next: Record<string, unknown> | undefined;
   if (fragment.styles !== undefined) {
-    const styles = restoreEnvelope(node.styles, fragment.styles, tally);
+    const styles = restoreEnvelope(
+      node.styles,
+      fragment.styles,
+      tally,
+      nodeScope(node.id)
+    );
     if (styles !== node.styles) next = { ...node, styles };
   }
   if (fragment.visibility !== undefined) {
     const visibility = restoreVisibility(
       node.visibility,
       fragment.visibility,
-      tally
+      tally,
+      nodeScope(node.id)
     );
     if (visibility !== node.visibility) {
       next = { ...(next ?? node), visibility };
@@ -176,12 +238,34 @@ function restoreNode(
   return (next as BlockNode | undefined) ?? node;
 }
 
-/** How many values a fragment holds for one block, for a block gone since. */
-function valuesIn(fragment: NodeFragment): number {
-  return (
-    valuesInStyles(fragment.styles) +
-    (fragment.visibility === undefined ? 0 : 1)
+/** Where a visibility sits within its block's scope. */
+const VISIBILITY = "visibility";
+
+/** A block's scope in a tally. */
+function nodeScope(id: string): string {
+  return keyOf("node", id);
+}
+
+/** A document's own settings' scope in a tally. */
+const SETTINGS_SCOPE = keyOf("settings");
+
+/** Where each of an envelope's values sits, in `scope`. */
+function envelopeKeys(
+  removed: RemovedStyles | undefined,
+  scope: string
+): string[] {
+  return Object.entries(removed ?? {}).flatMap(([state, byBreakpoint]) =>
+    Object.keys(byBreakpoint).map(id => keyOf(scope, state, id))
   );
+}
+
+/** Where each value a fragment holds for one block sits. */
+function nodeKeys(id: string, fragment: NodeFragment): string[] {
+  const scope = nodeScope(id);
+  return [
+    ...envelopeKeys(fragment.styles, scope),
+    ...(fragment.visibility === undefined ? [] : [keyOf(scope, VISIBILITY)]),
+  ];
 }
 
 /** How many values a style envelope's fragment holds. */
@@ -201,7 +285,7 @@ function restoreSettings(
   const record: Record<string, unknown> = isPlainRecord(settings)
     ? settings
     : {};
-  const styles = restoreEnvelope(record.styles, removed, tally);
+  const styles = restoreEnvelope(record.styles, removed, tally, SETTINGS_SCOPE);
   return styles === record.styles ? settings : { ...record, styles };
 }
 
@@ -220,7 +304,10 @@ function applyFragment(
     return node;
   });
   for (const [id, nodeFragment] of Object.entries(fragment.nodes)) {
-    if (!present.has(id)) tally.deleted += valuesIn(nodeFragment);
+    if (present.has(id)) continue;
+    for (const key of nodeKeys(id, nodeFragment)) {
+      if (decide(tally, key)) tally.deleted += 1;
+    }
   }
   let changed = false;
   const nodes = mapForest(current.nodes, node => {
@@ -253,12 +340,12 @@ export function restoreDocument(
   document: BlockDocument,
   fragments: readonly DocumentFragment[]
 ): Restored<BlockDocument> {
-  const tally: Tally = { restored: 0, skipped: 0, deleted: 0 };
+  const tally = tallyOf();
   let current = document;
   for (const fragment of fragments) {
     current = applyFragment(current, fragment, tally);
   }
-  return { value: current, ...tally };
+  return { value: current, ...countsOf(tally) };
 }
 
 /** A stored shared style's id, or `undefined` for an entry that names none. */
@@ -285,14 +372,24 @@ function restoredClass(
     /** The override recorded, when the row records one. */
     readonly generated: { readonly entry: unknown } | undefined;
     readonly ids: ReadonlySet<string>;
+    /** The class's id. */
+    readonly id: string;
   }
 ): unknown {
   if (strip.overridden && untouchedOverride(entry, strip)) {
-    tally.restored += valuesInStyles(removed);
+    // Taken out, so the code's class applies again with its values; where
+    // the code supplies the class no longer, those values are gone with it.
+    if (strip.coded === undefined) tally.deleted += valuesInStyles(removed);
+    else tally.restored += valuesInStyles(removed);
     return undefined;
   }
   const record = isPlainRecord(entry) ? entry : {};
-  const styles = restoreEnvelope(record.styles, removed, tally);
+  const styles = restoreEnvelope(
+    record.styles,
+    removed,
+    tally,
+    keyOf("class", strip.id)
+  );
   return styles === record.styles ? entry : { ...record, styles };
 }
 
@@ -337,7 +434,7 @@ export function restoreClasses(
   fragment: ClassesFragment,
   ids: ReadonlySet<string>
 ): Restored<readonly unknown[]> {
-  const tally: Tally = { restored: 0, skipped: 0, deleted: 0 };
+  const tally = tallyOf();
   const code = new Map(supplied.map(entry => [entry.id, entry]));
   const overridden = new Set(fragment.overridden);
   const next: unknown[] = [];
@@ -355,20 +452,21 @@ export function restoreClasses(
       overridden: overridden.has(id),
       generated: generatedOf(fragment, id),
       ids,
+      id,
     });
     if (restored !== undefined) next.push(restored);
   }
   for (const id of Object.keys(fragment.classes)) {
     // Gone since, and not an override taken out: one the strip recorded, or
     // one of a class the code still supplies.
-    const takenOut =
-      overridden.has(id) &&
-      (generatedOf(fragment, id) !== undefined || code.has(id));
+    // Its override taken out while the code supplies the class: back as
+    // the code's. With the code's class gone too, its values are lost.
+    const takenOut = overridden.has(id) && code.has(id);
     if (!seen.has(id) && !takenOut) {
       tally.deleted += valuesInStyles(fragment.classes[id]);
     }
   }
-  return { value: next, ...tally };
+  return { value: next, ...countsOf(tally) };
 }
 
 /** A stored value's fragment rows: every row but the shared styles'. */
@@ -559,14 +657,21 @@ export function keptForValue(
   );
 }
 
-/** How many values a document's fragments hold: what is lost with it. */
+/**
+ * How many values a document's fragments hold: what is lost with it. A value
+ * stripped twice is counted once, by where it sits.
+ */
 function valuesInDocument(fragments: readonly DocumentFragment[]): number {
-  let count = 0;
+  const keys = new Set<string>();
   for (const fragment of fragments) {
-    for (const node of Object.values(fragment.nodes)) count += valuesIn(node);
-    count += valuesInStyles(fragment.settingsStyles);
+    for (const [id, node] of Object.entries(fragment.nodes)) {
+      for (const key of nodeKeys(id, node)) keys.add(key);
+    }
+    for (const key of envelopeKeys(fragment.settingsStyles, SETTINGS_SCOPE)) {
+      keys.add(key);
+    }
   }
-  return count;
+  return keys.size;
 }
 
 /**

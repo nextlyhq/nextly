@@ -216,7 +216,11 @@ const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 100;
 
-function refuse(reason: string, message: string, detail: object = {}): never {
+export function refuse(
+  reason: string,
+  message: string,
+  detail: object = {}
+): never {
   throw NextlyError.invalidInput({
     message,
     logContext: { reason: `public-read-${reason}`, ...detail },
@@ -285,7 +289,9 @@ function assertShape(
  * commas, as core splits one, so `""`, `" "` and `","` come to no keys and
  * the read keeps its id order instead of reaching core with no order at all.
  */
-function sortKeys(sort: string | readonly string[] | undefined): string[] {
+export function sortKeys(
+  sort: string | readonly string[] | undefined
+): string[] {
   // Every element split on commas, as core splits each one, so the keys
   // judged here are the keys core would order by.
   const parts = (typeof sort === "string" ? [sort] : [...(sort ?? [])]).flatMap(
@@ -331,7 +337,7 @@ function assertKnownKeys(
   }
 }
 
-function assertCountKeys(query: object): void {
+export function assertCountKeys(query: object): void {
   if (query === null || typeof query !== "object") {
     refuse("query-invalid", "A count query must be an object.");
   }
@@ -596,7 +602,7 @@ function selectedFrom(
  * instance on its first read, and asked earlier the registry would not be
  * there to answer for that read.
  */
-async function hiddenOf(
+export async function hiddenOf(
   binding: PublicReaderBinding,
   source: PublicSource
 ): Promise<ReadonlySet<string>> {
@@ -622,7 +628,7 @@ async function hiddenOf(
  * returned: the rows a filter keeps, and the order a sort puts them in, would
  * reveal the value every row is stripped of.
  */
-function assertNotHidden(
+export function assertNotHidden(
   query: Pick<PublicReadQuery, "filters" | "sort">,
   hidden: ReadonlySet<string>
 ): void {

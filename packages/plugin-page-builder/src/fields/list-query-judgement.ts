@@ -124,18 +124,36 @@ export interface ListSetting {
  * of, for a list of the entry's related entries; `null` for a Single's, whose
  * page has no entry to read a relation of, so such a list is refused rather
  * than judged by its shape.
+ *
+ * A component is no page, though it is stored as an entry of the component
+ * store: it is drawn on the pages placing it, whose entries its lists relate
+ * to and its visibility conditions read, and each such page is judged as its
+ * own entry (`composedListQueryIssues`, `composedConditionIssues`). So the
+ * entry is left unknown: such a list is judged by its shape, and such a
+ * condition by its operator, as a component placing the one being saved is.
+ * A list's item inside the definition is still known, and still judged.
  */
-export function listSettingOf(write: PluginFieldWrite): ListSetting {
+export function listSettingOf(
+  write: PluginFieldWrite,
+  document: unknown
+): ListSetting {
+  const locale = write.locale === undefined ? {} : { locale: write.locale };
+  if (isPlainRecord(document) && document.kind === "component") return locale;
   return {
-    ...(write.locale === undefined ? {} : { locale: write.locale }),
+    ...locale,
     entryCollection: write.kind === "collection" ? write.slug : null,
   };
 }
 
-/** The collections a judgement over `nodes` asks about, and nothing read. */
+/**
+ * The collections a judgement over `nodes` asks about, and nothing read.
+ * Walked as far as the judgement walks (`maxNodes`), so a forest past the
+ * bound reads no schema for lists the judgement never reaches.
+ */
 function collectionsAsked(
   nodes: readonly unknown[],
-  entryCollection: string | null | undefined
+  entryCollection: string | null | undefined,
+  maxNodes: number | undefined
 ): Set<string> {
   const asked = new Set<string>();
   const judgement = {
@@ -146,6 +164,7 @@ function collectionsAsked(
       },
     },
     ...(entryCollection === undefined ? {} : { entryCollection }),
+    ...(maxNodes === undefined ? {} : { maxNodes }),
   };
   // Both judgements read the schema through one source, so the fields read
   // are those any list or any condition on the page names.
@@ -159,10 +178,12 @@ async function sourceFor(
   forests: readonly (readonly unknown[])[],
   setting: ListSetting,
   read: ListFieldsReader,
-  known: Map<string, ListFields | undefined>
+  known: Map<string, ListFields | undefined>,
+  maxNodes: number | undefined
 ): Promise<ListFieldSource> {
   for (const nodes of forests) {
-    for (const collection of collectionsAsked(nodes, setting.entryCollection)) {
+    const asked = collectionsAsked(nodes, setting.entryCollection, maxNodes);
+    for (const collection of asked) {
       if (!known.has(collection)) {
         known.set(collection, await read(collection, setting.locale));
       }
@@ -188,9 +209,18 @@ export interface ListJudging {
    * their shape alone.
    */
   readonly fieldsOf?: ListFieldsReader;
-  /** The forms the forest is stored as, read only once a problem is found. */
+  /**
+   * The forms the forest is stored as, read only once a problem is found.
+   * Unreadable, they may already hold every problem found, so none is
+   * refused: a write is never blamed for a problem nothing shows it made.
+   */
   readonly storedForms?: () => Promise<StoredForms>;
   readonly maxNodes?: number;
+  /**
+   * Told how many problems were kept unjudged because the stored forms could
+   * not be read, for a caller whose server log says so.
+   */
+  readonly onUnjudged?: (kept: number) => void;
 }
 
 /** One finding of a forest judgement, as the engine names it. */
@@ -214,7 +244,9 @@ interface ForestJudgement {
  * The errors about `nodes` that `counts` keeps, as `judge` finds them in
  * `setting`: the lists' judgement or the conditions'. A problem a stored form
  * already held on the same block is kept rather than refused, so the stored
- * forms are read only once a problem is found.
+ * forms are read only once a problem is found; where they cannot be read,
+ * every problem is kept, as the other checks against the stored page keep
+ * theirs.
  */
 async function errorsIn<Issue extends ForestIssue>(
   nodes: readonly unknown[],
@@ -243,7 +275,8 @@ async function errorsIn<Issue extends ForestIssue>(
               ],
               setting,
               fieldsOf,
-              known
+              known,
+              site.maxNodes
             ),
           }),
       ...(setting.entryCollection === undefined
@@ -255,10 +288,15 @@ async function errorsIn<Issue extends ForestIssue>(
   const found = await judge([]);
   if (found.length === 0 || site.storedForms === undefined) return found;
   const snapshot = await site.storedForms();
-  // A stored page this cannot read (a language whose store is not ready) may
-  // already hold every problem found, so none is refused: nothing can tell a
-  // new one from one the page held.
-  if (!snapshot.readable) return [];
+  // A stored page this cannot read (a language whose store is not ready), or
+  // one composed only in part, may already hold every problem found, so none
+  // is refused: nothing can tell a new one from one the page held. A caller
+  // whose server log says so is told how many were kept.
+  if (!snapshot.readable) {
+    site.onUnjudged?.(found.length);
+    return [];
+  }
+  // Nothing stored (a create) holds no problem, so every one is the write's.
   return snapshot.forms.length > 0 ? judge(snapshot.forms) : found;
 }
 
@@ -306,7 +344,7 @@ export async function newListQueryIssues(
   // already reported the shape of each of the page's own lists on this write.
   const found = await listErrorsIn(
     nodes,
-    listSettingOf(args.write),
+    listSettingOf(args.write, value),
     site,
     issue => LIST_FIELD_CODES.has(issue.code)
   );
@@ -333,28 +371,12 @@ export async function newConditionIssues(
   // only what the schema or the host decides is left.
   const found = await errorsIn(
     nodes,
-    conditionSettingOf(value, args.write),
+    listSettingOf(args.write, value),
     site,
     conditionIssues,
     issue => CONDITION_FIELD_CODES.has(issue.code)
   );
   return asFieldIssues(found, args, label);
-}
-
-/**
- * Where a write's conditions read. A component's definition is no page: a
- * condition in it reads the entry of whichever page places it, which its own
- * save cannot know, so there it is judged by its operator alone and judged
- * again on each page that places it ({@link composedConditionIssues}). A
- * list's item inside the definition is still known, and still judged.
- */
-function conditionSettingOf(
-  value: unknown,
-  write: PluginFieldWrite
-): ListSetting {
-  const setting = listSettingOf(write);
-  if (!isPlainRecord(value) || value.kind !== "component") return setting;
-  return setting.locale === undefined ? {} : { locale: setting.locale };
 }
 
 /** One composed list's issue, with the placement that put the list there. */

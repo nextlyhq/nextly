@@ -83,6 +83,11 @@ const ALLOWED_RUNTIME_IMPORTS = [
   // code reads through `useBlockEnvironment`. A client entry of its own, and
   // React alone: it reaches neither `next/*` nor the CMS.
   "@nextlyhq/blocks-react/environment",
+  // The icon set, for the Icon control's picker and the canvas's icons. Plain
+  // data and search, reaching neither `next/*` nor the CMS, and imported only
+  // through a dynamic `import()` (`lucide-icon-source.ts`), so the set is a
+  // lazy chunk rather than part of the editor's bundle.
+  "@nextlyhq/blocks-react/icons/lucide",
   "@nextlyhq/ui",
   // The `cn` helper only. A separate subpath because the root barrel carries a
   // `"use client"` banner and this one is plain string joining.
