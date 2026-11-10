@@ -60,6 +60,8 @@ export interface BulkActionBarProps {
     id: string;
     label: string;
     disabled: boolean;
+    /** Why it is held back, shown beside the bar's actions. */
+    note?: string;
     onSelect: () => void;
   }[];
 }
@@ -174,6 +176,18 @@ export function BulkActionBar({
               </Button>
             )}
           </>
+        )}
+
+        {/* Why a declared action is held back, said once per action. */}
+        {declaredActions.map(action =>
+          action.note ? (
+            <span
+              key={`${action.id}:note`}
+              className="text-xs text-muted-foreground"
+            >
+              {action.note}
+            </span>
+          ) : null
         )}
 
         {/* Plugins' declared bulk actions, run on the selected rows. */}
