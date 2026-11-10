@@ -161,6 +161,8 @@ describe("content routes read the shared measure", () => {
     // case every assertion above is passing on nothing.
     const containers = containersIn(SETTINGS_ROUTE);
     expect(containers.length).toBeGreaterThan(0);
-    expect(containers.some(a => a.includes('width="form"'))).toBe(true);
+    // Settings pages declare their page type, the literal that replaced a
+    // width there; the scan must still see it.
+    expect(containers.some(a => a.includes('type="form"'))).toBe(true);
   });
 });

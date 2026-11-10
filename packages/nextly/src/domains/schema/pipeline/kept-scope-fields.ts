@@ -95,14 +95,28 @@ export function keptScopeFields(
   type: TypeShape,
   existing: ExistingColumns
 ): NamedField[] {
-  const withheld = withheldScopeFieldsOf(kind, type.slug);
-  if (withheld.length === 0) return [];
   const held = new Set([
     ...(existing.names.get(type.tableName) ?? []),
     ...(existing.names.get(companionTableOf(type.tableName)) ?? []),
   ]);
-  // A type that declares a field of the name itself keeps its own, as does
-  // one whose own field, spelled otherwise, is stored in the same column.
+  const candidates = unclaimedHeldBack(kind, type).filter(field =>
+    [...columnsDeclaredBy([field])].some(column => held.has(column))
+  );
+  return onePerName(candidates, type.tableName, existing).map(asOptional);
+}
+
+/**
+ * The fields held back from `type` that are not its own: a type that
+ * declares a field of the name itself keeps its own, as does one whose own
+ * field, spelled otherwise, is stored in the same column. Every declaration
+ * of a name, in the order the fold prefers them.
+ */
+function unclaimedHeldBack(
+  kind: ScopedKind,
+  type: Pick<TypeShape, "slug" | "fields">
+): NamedField[] {
+  const withheld = withheldScopeFieldsOf(kind, type.slug);
+  if (withheld.length === 0) return [];
   const declared = new Set(
     type.fields.flatMap(field => {
       const name = (field as { name?: unknown }).name;
@@ -112,16 +126,35 @@ export function keptScopeFields(
   const claimed = columnsDeclaredBy(
     type.fields as Parameters<typeof columnsDeclaredBy>[0]
   );
-  const candidates = withheld.filter((field): field is NamedField => {
+  return withheld.filter((field): field is NamedField => {
     if (typeof field.name !== "string") return false;
     if (declared.has(field.name.toLowerCase())) return false;
-    const columns = [...columnsDeclaredBy([field])];
-    return (
-      !columns.some(column => claimed.has(column)) &&
-      columns.some(column => held.has(column))
-    );
+    return ![...columnsDeclaredBy([field])].some(column => claimed.has(column));
   });
-  return onePerName(candidates, type.tableName, existing).map(asOptional);
+}
+
+/**
+ * The fields a plugin's scope holds back from `entity`, as the localization
+ * restore reads them: not the entity's own by name or by column
+ * (`unclaimedHeldBack`), every declaration of a name, the fold's preferred
+ * first. The restore copies their values back from the translations table
+ * too, where only a translated declaration's can be (`fieldsToRestore`):
+ * their values would otherwise stay behind there, and switching the field on
+ * again would find an empty column.
+ */
+export function heldBackForRestore(
+  kind: ScopedKind | "fieldGroup",
+  entity: { slug?: string; fields?: { name: string; type: string }[] }
+): { name: string; type: string; localized?: boolean }[] {
+  if (kind === "fieldGroup" || entity.slug === undefined) return [];
+  return unclaimedHeldBack(kind, {
+    slug: entity.slug,
+    fields: entity.fields ?? [],
+  }).map(field => ({
+    name: field.name,
+    type: field.type,
+    localized: (field as { localized?: boolean }).localized,
+  }));
 }
 
 /**
@@ -144,7 +177,28 @@ function onePerName(
   return [...byName.values()].map(
     fields =>
       fields.find(field => storedAsDeclared(field, tableName, existing)) ??
+      fields.find(field => mayHaveMade(field, tableName, existing)) ??
       fields[0]
+  );
+}
+
+/**
+ * Whether `field` could have made the column there: a column only in the
+ * type's translations table was made by a translated declaration, never by one
+ * declared shared. Asked where nothing states the column's type, as a
+ * migration snapshot's record of a translations table does not.
+ */
+function mayHaveMade(
+  field: NamedField,
+  tableName: string,
+  existing: ExistingColumns
+): boolean {
+  const main = existing.names.get(tableName) ?? new Set<string>();
+  const onlyTranslated = [...columnsDeclaredBy([field])].every(
+    column => !main.has(column)
+  );
+  return !(
+    onlyTranslated && (field as { localized?: unknown }).localized === false
   );
 }
 
@@ -158,15 +212,19 @@ function storedAsDeclared(
   existing: ExistingColumns
 ): boolean {
   const { dialect } = existing;
-  const there = existing.specs.get(tableName);
-  if (dialect === undefined || there === undefined) return false;
+  if (dialect === undefined) return false;
+  // On the type's own table, or on its translations table, where a held-back
+  // translated field keeps its column.
+  const there = (column: string) =>
+    existing.specs.get(tableName)?.get(column) ??
+    existing.specs.get(companionTableOf(tableName))?.get(column);
   const columns = columnsDeclaredBy([field]);
   const origins: ColumnOrigin[] = ["codeFirst", "collection"];
   return origins.some(builtBy =>
     buildDesiredTableFromFields(tableName, [field], dialect, { builtBy })
       .columns.filter(column => columns.has(column.name))
       .every(column => {
-        const current = there.get(column.name);
+        const current = there(column.name);
         return current !== undefined && !typesDiffer(current, column);
       })
   );
@@ -182,6 +240,22 @@ export function withKeptScopeFields<T extends TypeShape>(
   return kept.length === 0
     ? type
     : { ...type, fields: [...type.fields, ...kept] };
+}
+
+/**
+ * The translations tables of the types in `desired` that something is held
+ * back from: where a held-back translated field keeps its column, which a
+ * read of the types' own tables does not see. None when nothing is held back.
+ */
+export function companionsHoldingBack(desired: DesiredSchema): string[] {
+  const of = (kind: ScopedKind, types: Record<string, TypeShape>) =>
+    Object.values(types)
+      .filter(type => withheldScopeFieldsOf(kind, type.slug).length > 0)
+      .map(type => companionTableOf(type.tableName));
+  return [
+    ...of("collection", desired.collections),
+    ...of("single", desired.singles),
+  ];
 }
 
 /** `desired` with every type's kept fields, judged against `live`. */
