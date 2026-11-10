@@ -385,8 +385,9 @@ const homepageDocument = {
 } as unknown as SingleDocumentData;
 
 /**
- * The host of every core place. The account page joins this map, and the
- * `Exclude` goes, when the change that adds it is on main.
+ * The host of every core place. The account page is not on this branch: it
+ * joins this map, and the `Exclude` goes, when this branch takes the change
+ * that adds it.
  */
 const PLACE_HOSTS: {
   [P in Exclude<CoreAdminPlaceId, "account">]: PlaceHost;
