@@ -25,6 +25,8 @@ on:
       - "e2e/support/server-database.mjs"
       - "pnpm-lock.yaml"
       - ".github/workflows/admin-speed.yml"
+      # The Node version every step runs on.
+      - ".nvmrc"
   pull_request:
     branches: [main, dev]
     paths:
@@ -36,6 +38,8 @@ on:
       - "e2e/support/server-database.mjs"
       - "pnpm-lock.yaml"
       - ".github/workflows/admin-speed.yml"
+      # The Node version every step runs on.
+      - ".nvmrc"
   workflow_dispatch:
 
 permissions:
@@ -123,6 +127,15 @@ jobs:
         env:
           E2E_DB_SERVER_URL_POSTGRESQL: postgres://postgres:postgres@127.0.0.1:5432
           E2E_DB_SERVER_URL_MYSQL: mysql://root:nextly@127.0.0.1:3306
+
+      # Saved under the key restored above, so the next run of this job builds
+      # only what changed. Saved even when a count failed: the build is good.
+      - name: Save Turbo cache
+        if: ${{ !cancelled() }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-admin-speed-${{ github.sha }}
 
       - name: Upload the counts
         if: ${{ !cancelled() }}

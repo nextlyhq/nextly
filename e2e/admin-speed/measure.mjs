@@ -67,10 +67,14 @@ const STATEMENT_SLACK = 0.05;
  * held to this until those duplicates are gone, then to `STATEMENT_SLACK`.
  */
 const SCREEN_STATEMENT_SLACK = 0.15;
+/** The least a growth pin allows either way, as two starts differ by a few. */
+const GROWTH_SLACK_MIN = 5;
 const ROUND_SLACK = 1;
 const DELAY_MS = 100;
 const EXTRA_COLLECTIONS = 45;
 const QUIET_MS = 1500;
+/** How long an open request is waited for once nothing else happens. */
+const OPEN_WAIT_MS = 10_000;
 /** How many times each screen is loaded; see `steady`. */
 const SAMPLES = 5;
 /** How long the database must be quiet before a start counts as finished. */
@@ -162,6 +166,12 @@ function readLog(file) {
     .split("\n")
     .filter(Boolean)
     .map(line => JSON.parse(line));
+}
+
+/** Seeds a run's database and installs the playground's plugins into it. */
+function prepare(env) {
+  run("pnpm --filter playground exec tsx scripts/seed.ts", env);
+  run("pnpm --filter playground exec nextly plugins install --all", env);
 }
 
 /** Starts the production server cold, with the preload loaded into it. */
@@ -270,6 +280,12 @@ function watch(page) {
   const requests = [];
   let lastStart = Date.now();
   page.on("request", request => {
+    // A new document in the tab (a redirect to the sign-in page, say) ends
+    // the old one's requests, which then never report an answer.
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+      const now = Date.now();
+      for (const r of requests) if (r.end === undefined) r.end = now;
+    }
     const { pathname } = new URL(request.url());
     if (!pathname.startsWith("/admin/api/") || pathname.endsWith("/dev-reload"))
       return;
@@ -282,33 +298,59 @@ function watch(page) {
     requests.push(entry);
     lastStart = entry.start;
   });
+  let lastEnd = Date.now();
   const end = request => {
-    if (request.__speed) request.__speed.end = Date.now();
+    if (!request.__speed) return;
+    request.__speed.end = Date.now();
+    lastEnd = request.__speed.end;
   };
   page.on("requestfinished", end);
   page.on("requestfailed", end);
+  // A response whose body the admin never reads (a superseded query) fires
+  // neither event above, so its arrival counts as the answer too.
+  page.on("response", response => end(response.request()));
+  const open = () => requests.some(r => r.end === undefined);
   return {
     requests,
+    // Done once every admin request has answered and none has started or
+    // answered for `QUIET_MS`. A slow request is waited for, up to
+    // `OPEN_WAIT_MS` with nothing else happening; one still open then is
+    // marked as never answered (a request of a page the tab has since
+    // replaced reports no end at all) and judged by `compare`. A load that
+    // keeps starting requests for a minute fails outright.
     async quiet() {
       const until = Date.now() + 60_000;
-      while (Date.now() - lastStart < QUIET_MS && Date.now() < until)
+      for (;;) {
+        const idle = Date.now() - Math.max(lastStart, lastEnd);
+        if (!open() && idle >= QUIET_MS) break;
+        if (open() && idle >= OPEN_WAIT_MS) {
+          for (const r of requests)
+            if (r.end === undefined)
+              Object.assign(r, { end: Date.now(), unanswered: true });
+          break;
+        }
+        if (Date.now() > until)
+          throw new Error(
+            `a load of ${page.url()} kept sending requests for a minute`
+          );
         await sleep(100);
+      }
       return Date.now();
     },
   };
 }
 
 /**
- * One load: runs `load` on a new page, after `prepare` where given, until no
+ * One load: runs `load` on a new page, after `before` where given, until no
  * request has started for `QUIET_MS`, and counts what it cost.
  */
-async function sample(context, log, load, prepare) {
+async function sample(context, log, load, before) {
   const page = await context.newPage();
   const watcher = watch(page);
-  if (prepare) {
+  if (before) {
     // What comes before the counted moment (opening the form, typing) is
     // left out: its requests are dropped once it has fallen quiet.
-    await prepare(page);
+    await before(page);
     await watcher.quiet();
     watcher.requests.length = 0;
   }
@@ -322,6 +364,9 @@ async function sample(context, log, load, prepare) {
     rounds: roundsOf(watcher.requests),
     statements: readLog(log).filter(s => s.t >= from && s.t <= to).length,
     kinds: watcher.requests.map(r => `${r.method} ${kindOf(r.path)}`),
+    unanswered: watcher.requests
+      .filter(r => r.unanswered)
+      .map(r => `${r.method} ${kindOf(r.path)}`),
   };
 }
 
@@ -360,11 +405,11 @@ function tally(kinds) {
  * took: a slow answer can add a round to one load, and an extra copy of a
  * request sends its own statements, but a real new step is in every load.
  */
-async function steady(context, log, load, { fresh, prepare } = {}) {
+async function steady(context, log, load, { fresh, before } = {}) {
   const samples = [];
   for (let i = 0; i < SAMPLES; i++) {
     const own = fresh ? await fresh() : context;
-    samples.push(await sample(own, log, load, prepare));
+    samples.push(await sample(own, log, load, before));
     if (fresh) await own.close();
   }
   const tallies = samples.map(x => tally(x.kinds));
@@ -384,6 +429,7 @@ async function steady(context, log, load, { fresh, prepare } = {}) {
       statements: fewestStatements,
       kinds,
       occasional: occasional.sort(),
+      unanswered: [...new Set(samples.flatMap(x => x.unanswered))].sort(),
     },
   };
 }
@@ -393,19 +439,19 @@ async function measureDialect(dialect, dir) {
   const { database, url } = await freshDatabase(dialect);
   const log = path.join(dir, `${dialect}.statements.jsonl`);
   fs.rmSync(log, { force: true });
-  const prepareEnv = serverEnv(dialect, url);
-  run("pnpm --filter playground exec tsx scripts/seed.ts", prepareEnv);
-  run("pnpm --filter playground exec nextly plugins install --all", prepareEnv);
-
-  const browser = await chromium.launch();
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 900 },
-  });
-  const server = await startServer(
-    serverEnv(dialect, url, { log, production: true })
-  );
+  // Everything acquired is released in `finally`, whichever step failed.
+  let browser;
+  let server;
   const out = { start: {}, screens: {} };
   try {
+    prepare(serverEnv(dialect, url));
+    browser = await chromium.launch();
+    const context = await browser.newContext({
+      viewport: { width: 1440, height: 900 },
+    });
+    server = await startServer(
+      serverEnv(dialect, url, { log, production: true })
+    );
     // The start, alone: the admin page is asked for the moment the server
     // listens, which begins a start that only a request begins, and the start
     // is every statement until the database has been quiet for a while, the
@@ -439,7 +485,7 @@ async function measureDialect(dialect, dir) {
     out.screens.signin = (
       await steady(context, log, signIn, {
         fresh,
-        prepare: openForm,
+        before: openForm,
       })
     ).result;
 
@@ -488,8 +534,8 @@ async function measureDialect(dialect, dir) {
       )
     ).result;
   } finally {
-    await browser.close();
-    await server.stop();
+    await browser?.close();
+    await server?.stop();
     if (database) await dropServerDatabase(database).catch(() => {});
   }
   return out;
@@ -500,16 +546,15 @@ async function measureStart(dialect, dir, { delay = 0, extra = 0, label }) {
   const { database, url } = await freshDatabase(dialect);
   const log = path.join(dir, `${dialect}.${label}.statements.jsonl`);
   fs.rmSync(log, { force: true });
-  const prepareEnv = serverEnv(dialect, url, { extra });
-  run("pnpm --filter playground exec tsx scripts/seed.ts", prepareEnv);
-  run("pnpm --filter playground exec nextly plugins install --all", prepareEnv);
-  const server = await startServer(
-    serverEnv(dialect, url, { delay, extra, log, production: true })
-  );
+  let server;
   try {
+    prepare(serverEnv(dialect, url, { extra }));
+    server = await startServer(
+      serverEnv(dialect, url, { delay, extra, log, production: true })
+    );
     return await startOf(server, log);
   } finally {
-    await server.stop();
+    await server?.stop();
     if (database) await dropServerDatabase(database).catch(() => {});
   }
 }
@@ -537,17 +582,19 @@ function slackOf(pin, share = STATEMENT_SLACK) {
 }
 
 /**
- * A screen's requests, kind by kind. `racy` kinds are sent a varying number
- * of times (two parts of a screen racing to ask for the same thing): their
- * number may move, whether they are sent at all may not.
+ * A screen's requests, kind by kind. `racy` holds the kinds this screen is
+ * known to send a varying number of times (two parts of it racing to ask for
+ * the same thing, or a timer near the end of a load): their number may move,
+ * and they may come and go between every load and only some.
  */
 function kindProblems(label, values, pin, racy) {
   const problems = [];
-  const occasional = new Set(pin.occasional ?? []);
   for (const [kind, count] of Object.entries(values.kinds)) {
     const pinned = pin.kinds?.[kind];
     if (pinned === undefined) {
-      if (!occasional.has(kind))
+      // A kind once sent only by some loads that every load now sends is a
+      // new steady request, unless it is one this screen races on.
+      if (!racy.has(kind))
         problems.push(
           `${label}: a new request, ${kind}, sent ${count} time(s) in every load`
         );
@@ -560,6 +607,14 @@ function kindProblems(label, values, pin, racy) {
         `${label}: ${kind} sent ${count} time(s), below its pin of ${pinned}; lower the pin (--update-pins)`
       );
     }
+  }
+  // A request that never answered is a hang, unless it is one this screen
+  // races on and the tab replaced the page that sent it.
+  for (const kind of values.unanswered ?? []) {
+    if (!racy.has(kind))
+      problems.push(
+        `${label}: ${kind} never answered within ${OPEN_WAIT_MS / 1000} s`
+      );
   }
   // Still sent in some loads is not gone; only a kind no load sent is.
   for (const kind of Object.keys(pin.kinds ?? {})) {
@@ -593,19 +648,28 @@ function screenProblems(label, values, pin, racy) {
 
 /**
  * How much a delay or more collections add to the start. Growth may only
- * fall, and a start that does a fixed amount of work has none. It is the
- * difference of two starts, so it gets the allowance a start's own count has.
+ * fall, and a start that does a fixed amount of work has none.
  */
 function growthProblems(growth, pins) {
-  const slack = slackOf(pins.postgresql?.start?.statements);
-  return Object.entries(growth ?? {}).flatMap(([name, value]) =>
-    checkCount(`growth ${name} (statements)`, value, pins.growth?.[name], slack)
-  );
+  return Object.entries(growth ?? {}).flatMap(([name, value]) => {
+    const pin = pins.growth?.[name];
+    // A few statements either way, or 5% of a large growth: bound by the
+    // growth itself, so a small one cannot hide a new loop behind the size
+    // of the whole start.
+    const slack = Math.max(
+      GROWTH_SLACK_MIN,
+      Math.ceil(Math.abs(pin ?? 0) * STATEMENT_SLACK)
+    );
+    return checkCount(`growth ${name} (statements)`, value, pin, {
+      above: slack,
+      below: slack,
+    });
+  });
 }
 
 /** Every difference from the pins, as lines naming the number. */
 function compare(measured, pins) {
-  const racy = new Set(pins.racy ?? []);
+  const racyOf = name => new Set(pins.racy?.[name] ?? []);
   const problems = [];
   for (const dialect of DIALECTS) {
     const m = measured[dialect];
@@ -620,7 +684,12 @@ function compare(measured, pins) {
     );
     for (const [name, values] of Object.entries(m.screens))
       problems.push(
-        ...screenProblems(`${dialect} ${name}`, values, p.screens?.[name], racy)
+        ...screenProblems(
+          `${dialect} ${name}`,
+          values,
+          p.screens?.[name],
+          racyOf(name)
+        )
       );
   }
   return [...problems, ...growthProblems(measured.growth, pins)];
@@ -638,11 +707,7 @@ async function main() {
     const { database, url } = await freshDatabase(buildDialect);
     const buildEnv = serverEnv(buildDialect, url);
     try {
-      run("pnpm --filter playground exec tsx scripts/seed.ts", buildEnv);
-      run(
-        "pnpm --filter playground exec nextly plugins install --all",
-        buildEnv
-      );
+      prepare(buildEnv);
       run("pnpm --filter playground exec next build", buildEnv);
     } finally {
       if (database) await dropServerDatabase(database).catch(() => {});

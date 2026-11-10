@@ -62,7 +62,7 @@ function wrapSync(proto, name, sqlOf) {
   if (typeof original !== "function") return;
   const cell = new Int32Array(new SharedArrayBuffer(4));
   proto[name] = function (...args) {
-    record(sqlOf(this));
+    record(sqlOf(this, args));
     if (DELAY > 0) Atomics.wait(cell, 0, 0, DELAY);
     return original.apply(this, args);
   };
@@ -107,4 +107,9 @@ tryWrap("better-sqlite3", () => {
   for (const name of ["all", "get", "run", "iterate"]) {
     wrapSync(proto, name, self => self.source);
   }
+  // The adapter also sends statements straight through the database: its
+  // transaction boundaries and savepoints through `exec`, its settings
+  // through `pragma`.
+  wrapSync(Database.prototype, "exec", (_self, args) => args[0]);
+  wrapSync(Database.prototype, "pragma", (_self, args) => `PRAGMA ${args[0]}`);
 });

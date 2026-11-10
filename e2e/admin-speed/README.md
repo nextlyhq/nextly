@@ -8,7 +8,8 @@ pull request that touches the packages, the playground or the templates.
 ```sh
 pnpm build                                        # the packages, first
 pnpm --filter @nextlyhq/e2e test:admin-speed      # build the playground, count, compare
-node e2e/admin-speed/measure.mjs --dialects sqlite --no-growth   # one dialect, quicker
+node e2e/admin-speed/measure.mjs --build --dialects sqlite --no-growth   # one dialect, quicker
+node e2e/admin-speed/measure.mjs --dialects sqlite --no-growth   # again, on the same build
 ```
 
 What it counts, for each dialect:
@@ -29,11 +30,13 @@ with 45 more collections, and pins how many statements each adds to the start
 it wraps the database drivers the adapters load, logs each statement, and holds
 it for `NEXTLY_SPEED_DB_DELAY_MS` when asked.
 
-`racy` in the pins names the requests the admin is known to send a varying
-number of times, two parts of a screen racing to ask for the same thing. Their
-number may move; whether they are sent at all may not. While any are listed, a
-screen's statements may move by 15% rather than 5%. Remove each one as its
-duplicate is fixed.
+`racy` in the pins names, screen by screen, the requests that screen is known
+to send a varying number of times: two parts of it racing to ask for the same
+thing, or a timer firing near the end of a load. On that screen their number
+may move, and they may come and go between every load and only some; on every
+other screen they are held like any request. While any are listed, a screen's
+statements may move by 15% rather than 5%. Remove each one as its duplicate is
+fixed.
 
 ## When it fails
 
@@ -48,8 +51,8 @@ and path, with ids made generic), each kind counting the fewest times any of
 the five loads sent it. Some requests are sent more often in some loads than
 others, such as one sent twice when two parts of a screen race to ask for it;
 the fewest drops those extra copies. A kind that some loads did not send at
-all (one a timer fires near the end of a load) is listed as `occasional` and
-not counted. A request the admin always sends is in every load, so a new one
+all is listed as `occasional` and not counted; if every load starts sending
+it, that is a new request, unless the screen lists it as `racy`. A request the admin always sends is in every load, so a new one
 fails by its name and one more of a kind fails by its number. Statements and rounds
 are likewise the fewest any load took, since an extra copy of a request sends
 its own statements and one slow answer can add a round; statements may move by
