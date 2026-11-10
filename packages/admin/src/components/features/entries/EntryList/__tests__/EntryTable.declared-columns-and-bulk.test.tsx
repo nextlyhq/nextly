@@ -10,6 +10,7 @@
  */
 import userEvent from "@testing-library/user-event";
 import type { DeliveredAdminEntry } from "nextly/config";
+import { createPortal } from "react-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fireEvent, render, screen, within } from "@admin/__tests__/utils";
@@ -65,6 +66,16 @@ registerComponent(CONTROL_CELL, ((props: { row: { id: string } }) => (
     </button>
   </span>
 )) as never);
+
+const PORTAL_CELL = "@acme/a/admin#PortalCell";
+registerComponent(PORTAL_CELL, ((props: { row: { id: string } }) =>
+  // What a menu or popover does: drawn elsewhere in the page.
+  createPortal(
+    <button type="button" onClick={() => pressed(props.row.id)}>
+      Menu item for {props.row.id}
+    </button>,
+    document.body
+  )) as never);
 
 function column(id: string, label: string, extra: object): DeliveredAdminEntry {
   return {
@@ -172,6 +183,22 @@ describe("the entry table's declared columns, beside the row", () => {
     // The cell's plain text is the row's: a click there opens the entry.
     await user.click(table().getByText("text of p2", { exact: false }));
     expect(window.location.pathname).toBe("/admin/collections/posts/p2");
+  });
+
+  it("a control the cell draws elsewhere through a portal runs without opening the row's entry", async () => {
+    const user = userEvent.setup();
+    window.history.pushState(null, "", "/admin/collections/posts");
+    renderTable({
+      declaredColumns: declaredColumns(
+        [column("acme-a.menu", "Fixture: menu", { component: PORTAL_CELL })],
+        posts,
+        CONTEXT
+      ),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Menu item for p2" }));
+    expect(pressed).toHaveBeenCalledWith("p2");
+    expect(window.location.pathname).toBe("/admin/collections/posts");
   });
 
   it("a declared column is drawn but not offered in the column chooser", async () => {
