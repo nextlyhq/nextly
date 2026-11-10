@@ -108,6 +108,37 @@ describe("what renders blank", () => {
     ).toEqual(["x"]);
   });
 
+  it("judges a variable fallback with the use: blank only when both have no value", () => {
+    const source = "Notes: {{ order.notes | default: customer.support }}";
+    // Neither the use nor its fallback has a value: the output renders
+    // blank, and the use says so.
+    expect(missingValues(source, {}).map(u => u.path)).toEqual(["order.notes"]);
+    // The fallback answers, so the output is not blank.
+    expect(
+      missingValues(source, { customer: { support: "help@northwind.io" } }).map(
+        u => u.path
+      )
+    ).toEqual([]);
+    // The use's own value answers, whatever the fallback holds.
+    expect(
+      missingValues(source, { order: { notes: "Left at the door" } }).map(
+        u => u.path
+      )
+    ).toEqual([]);
+  });
+
+  it("never judges a default argument on its own", () => {
+    // A fallback variable is written to serve another use, never to render
+    // alone: with no value of its own it is not reported blank.
+    const source = "Hi {{ customer.name | default: user.nickname }}";
+    expect(missingValues(source, {}).map(u => u.path)).toEqual([
+      "customer.name",
+    ]);
+    expect(
+      missingValues(source, { customer: { name: "Priya" } }).map(u => u.path)
+    ).toEqual([]);
+  });
+
   it("reads list properties as Liquid does", () => {
     const data = { order: { lines: [{ title: "Tea" }, { title: "Cake" }] } };
     expect(valueAt(data, ["order", "lines", "size"])).toBe(2);
