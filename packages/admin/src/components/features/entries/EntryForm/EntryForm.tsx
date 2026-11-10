@@ -76,6 +76,7 @@ import { TranslationPanes } from "../TranslationMode/TranslationPanes";
 import { useTranslationSource } from "../TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "../useEntryLocaleContext";
 
+import { pluginDocumentLock } from "./document-lock-affordances";
 import { useDocumentPanelParts, useDocumentPlace } from "./document-place";
 import type { ContributedAction } from "./DocumentActionBar";
 import {
@@ -882,13 +883,16 @@ export function EntryForm({
   // A refused publish's recovery changes the content, so it is held exactly
   // as the content's own saves are.
   writesHeldNow.current = editsHeld;
-  // What a plugin's own write is held by at this instant: a colleague's claim,
-  // a past version on screen or a recovery, as the built-in Delete is, and a
-  // collection removed from code, where the server refuses every write and
-  // the editor offers none. A reader's page is not among them: like Delete, a
-  // plugin's action follows its own permission, which its route judges.
-  const pluginWritesHeld = writesHeld || recovering || removedFromCode;
-  pluginWritesHeldNow.current = pluginWritesHeld;
+  // What holds the document for what a plugin draws here, a section, a
+  // replaced action or a tab, at this instant (`pluginDocumentLock`): its
+  // own writes as the built-in Delete is, never for a reader's page alone.
+  const pluginLock = pluginDocumentLock({
+    contentHeld,
+    writesHeld,
+    recovering,
+    removedFromCode,
+  });
+  pluginWritesHeldNow.current = pluginLock.actionsDisabled;
 
   /*
    * The one gate every write passes through.
@@ -1132,11 +1136,8 @@ export function EntryForm({
   const pluginSurfaces = usePluginDocumentSurfaces({
     collectionSlug: collection.name,
     entryId: savedEntryId,
-    documentLock: {
-      readOnly: contentHeld,
-      // The same hold `mayWrite` reads, so the two cannot disagree.
-      actionsDisabled: pluginWritesHeld,
-    },
+    // The same hold `mayWrite` reads, so the two cannot disagree.
+    documentLock: pluginLock,
     mayWrite: () => !pluginWritesHeldNow.current,
     onDeleted: onDelete,
     onOwnChange: expectOwnChange,
@@ -1579,7 +1580,14 @@ export function EntryForm({
                                 // once the rail has taken its share.
                                 style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
                               >
-                                <DocumentPlaceTabs place={documentPlace}>
+                                <DocumentPlaceTabs
+                                  place={documentPlace}
+                                  // A plugin's tab writes through the same
+                                  // form, so the bar's Save stores it, and is
+                                  // held as a panel section is.
+                                  control={form.control}
+                                  documentLock={pluginLock}
+                                >
                                   {/* The title first and largest, then the slug
                                   on the line under it. The slug is a write,
                                   and the same claim withholds it. */}

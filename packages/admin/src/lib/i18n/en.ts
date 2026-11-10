@@ -67,4 +67,9 @@ export const en = {
   "nextly.places.settings.content": "General",
   "nextly.places.document.content": "Content",
   "nextly.places.unavailable": "This part of the page couldn't be loaded.",
+  // A contributed tab's name as a screen reader hears it while the tab shows
+  // a count: its label, then what the count means in words.
+  "nextly.places.tabWithBadge": "{tab} ({badge})",
+  // A tab's count past what is drawn in full.
+  "nextly.places.tabBadgeOverflow": "{count}+",
 } as const;

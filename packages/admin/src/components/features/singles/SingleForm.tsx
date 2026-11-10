@@ -30,6 +30,7 @@ import { z } from "zod";
 
 import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFromLanguageScope";
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
+import { pluginDocumentLock } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
 import {
   useDocumentPanelParts,
   useDocumentPlace,
@@ -1512,6 +1513,14 @@ export function SingleForm({
   // collection entry's page.
   const { panelOrder, sectionsAboveForm, placedSectionProps } =
     useDocumentPanelParts(documentPlace, panel.mode === "sheet");
+  // What holds the Single for a plugin's tab, as the entry editor tells a
+  // plugin's tab and panel section (`pluginDocumentLock`).
+  const pluginLock = pluginDocumentLock({
+    contentHeld,
+    writesHeld,
+    recovering,
+    removedFromCode,
+  });
 
   const localeCtx = useEntryLocaleContext({
     locale,
@@ -1880,7 +1889,13 @@ export function SingleForm({
                             >
                               {/* Main column */}
                               <div className="flex-1 min-w-0 flex flex-col">
-                                <DocumentPlaceTabs place={documentPlace}>
+                                <DocumentPlaceTabs
+                                  place={documentPlace}
+                                  // A plugin's tab writes through the same
+                                  // form, so the bar's Save stores it.
+                                  control={form.control}
+                                  documentLock={pluginLock}
+                                >
                                   {/* The title, fixed by the Single's config and
                                   so read-only. No slug line: a Single's slug
                                   is fixed by its config too, and is not part
