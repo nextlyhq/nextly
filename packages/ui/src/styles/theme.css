@@ -804,6 +804,11 @@
    * from the library's green, which read at 4.26:1 on it, to about 5.2:1. */
   --nx-toast-success-bg: oklch(0.9788 0.0221 160.24);
   --nx-toast-success-text: oklch(0.5048 0.1506 146.87);
+  /* A warning toast's surface and text, the same way: the library's own pale
+   * amber surface, and its amber text, which read at 3.07:1 on it, darkened
+   * to about 5.1:1. */
+  --nx-toast-warning-bg: oklch(0.9904 0.0167 96.37);
+  --nx-toast-warning-text: oklch(0.54 0.13 60);
 
   /* Darkened from amber-500 so it reads as text on white at WCAG 4.5:1 (was
    * 2.15:1); its light shades still tint badge/alert surfaces. */
@@ -1099,6 +1104,9 @@
   /* The toast library's own dark success surface and text, kept: about 12.3:1. */
   --nx-toast-success-bg: oklch(0.2107 0.0498 157.43);
   --nx-toast-success-text: oklch(0.8635 0.1699 157.75);
+  /* The toast library's own dark warning surface and text, kept: about 11.2:1. */
+  --nx-toast-warning-bg: oklch(0.2277 0.0509 113.29);
+  --nx-toast-warning-text: oklch(0.8642 0.1416 92.19);
   --nx-warning: oklch(0.7686 0.1646 70.11);
   /* amber-500 */
   --nx-warning-foreground: oklch(0.2079 0.0399 265.73);

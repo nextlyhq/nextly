@@ -237,6 +237,18 @@ export interface HookContext<T = any> {
   originalData?: T;
 
   /**
+   * The status an update is classified against, where core reads it apart
+   * from `originalData`: on a collection that keeps its status per language,
+   * the status stored in the language the write names (its companion row's,
+   * or the main row's where that language has none), and for a write to every
+   * language, `"published"` when any language is. Absent where the write's
+   * status is the main row's, so `originalData.status` is the one to read.
+   *
+   * @experimental
+   */
+  storedStatus?: string | null;
+
+  /**
    * User performing the operation (if authenticated)
    *
    * Contains user ID and any additional user data passed from the request.
@@ -752,3 +764,26 @@ export type InTransactionRunner = (
   tx: TransactionContext,
   write: InTransactionWrite
 ) => Promise<void>;
+
+/**
+ * @experimental One thing deleting a collection takes with it besides its own
+ * entries, as a plugin names it for the delete dialog: what it is called
+ * (`label`) and what sort of thing it is (`kind`, such as `"template"`).
+ */
+export interface CollectionDeleteImpactItem {
+  readonly label: string;
+  readonly kind: string;
+}
+
+/**
+ * How the registry holds one plugin's collection-delete handlers: what
+ * deleting a collection takes with it, and the work that removes it inside
+ * the delete's transaction. A plugin's handlers are wrapped into one with a
+ * transaction token of their own (`ctx.hooks.onCollectionDelete`).
+ *
+ * @internal
+ */
+export interface CollectionDeleteRunner {
+  impact?: (slug: string) => Promise<readonly CollectionDeleteImpactItem[]>;
+  inTransaction?: (slug: string, tx: TransactionContext) => Promise<void>;
+}

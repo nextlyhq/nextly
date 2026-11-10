@@ -244,7 +244,8 @@ describe("EditUserPage's place", () => {
     const { container } = render(<EditUserPage />);
 
     const block = screen.getByTestId("user-block");
-    expect(card(container).nextElementSibling).toBe(block);
+    // The block stands in the wrapper that keeps its own form's submit its own.
+    expect(card(container).nextElementSibling).toBe(block.parentElement);
     expect(JSON.parse(block.textContent ?? "")).toEqual({
       userId: SIGNED_IN,
       shownUserId: OTHER,

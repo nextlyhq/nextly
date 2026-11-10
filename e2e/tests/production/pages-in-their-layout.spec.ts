@@ -5,6 +5,7 @@ import {
 } from "@playwright/test";
 
 import { test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 /**
  * A published page is served inside its Layout, from a PRODUCTION build.
@@ -26,8 +27,6 @@ import { test } from "../support/visible";
  *
  * @module tests/production/pages-in-their-layout
  */
-
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 
 const API = "/admin/api";
 const PLUGIN = `${API}/plugins/@nextlyhq/plugin-page-builder`;
@@ -82,14 +81,8 @@ test.describe("a page served inside its Layout", () => {
     page,
     request,
   }, testInfo) => {
-    // 1. Sign in through the real form; dev auto-login is blocked here.
-    await page.goto("/admin");
-    await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-    await page
-      .getByRole("textbox", { name: /password/i })
-      .fill(DEV_USER.password);
-    await page.getByRole("button", { name: /sign in|log in/i }).click();
-    await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+    // 1. Signed in as the file's one sign-in; dev auto-login is blocked here.
+    await signIn(page);
     const api = page.request;
 
     // 2. A header and a footer component, a Layout naming them, and that
@@ -192,7 +185,7 @@ test.describe("a page served inside its Layout", () => {
     // 4. "No header or footer" switched on: neither is served.
     const switchedOff = await api.patch(
       `${API}/collections/pages/entries/${created.id}`,
-      { data: { noHeaderFooter: true, status: "published" } }
+      { data: { noHeaderFooter: true, status: "published", _overwrite: true } }
     );
     expect(
       switchedOff.ok(),
@@ -209,7 +202,7 @@ test.describe("a page served inside its Layout", () => {
     //    revalidated.
     const switchedOn = await api.patch(
       `${API}/collections/pages/entries/${created.id}`,
-      { data: { noHeaderFooter: false, status: "published" } }
+      { data: { noHeaderFooter: false, status: "published", _overwrite: true } }
     );
     expect(switchedOn.ok()).toBe(true);
     expect(await served(request)).toContain(HEADER_ONE);
@@ -220,6 +213,7 @@ test.describe("a page served inside its Layout", () => {
         data: {
           content: headingDocument("component", "hdr", HEADER_TWO),
           status: "published",
+          _overwrite: true,
         },
       }
     );

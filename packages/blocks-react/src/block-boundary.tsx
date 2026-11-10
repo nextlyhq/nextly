@@ -2,7 +2,7 @@ import {
   blockPartClassName,
   blockTypeClassName,
   renderedDomId,
-  resolveNodeBindings,
+  type BindingFieldShape,
   type BindingRun,
   type BlockNode,
   type BoundValues,
@@ -19,6 +19,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { fillItemBindings } from "./blocks/list-batch";
 import type { BlockHostPolicy, PageContext, PageIssue } from "./context";
 import {
   editorMarkers,
@@ -39,7 +40,7 @@ import {
 } from "./renderable";
 import type { BlockResolver } from "./resolver";
 import { styleTextForInjection } from "./styles";
-import { conditionAllows } from "./visibility";
+import { conditionAllows, itemFields } from "./visibility";
 // Imported as well as re-exported below: this module both PUBLISHES the names,
 // which consumers outside the package address elements by, and uses them.
 
@@ -123,6 +124,75 @@ export interface BoundaryConditions {
   readonly itemRules?: ReadonlyMap<string, string>;
   /** The decided blocks whose rules this render already served, by id. */
   readonly itemRulesServed?: Set<string>;
+  /** What an editor draws in place of a block a list's item hides. */
+  readonly hiddenAs?: ItemHiddenAs;
+}
+
+/**
+ * What an editor draws in place of a block a list's item hides: the node to
+ * draw there, or nothing to draw nothing. Told the item, so what it draws can
+ * say why that item hides the block.
+ *
+ * @experimental
+ */
+export type ItemHiddenAs = (
+  node: BlockNode,
+  item: HidingItem
+) => BlockNode | undefined;
+
+/**
+ * The list item that hides a block: its values, the collection its entries
+ * come from (absent for a named query's row), and the fields its conditions
+ * were judged by, as the public reads them (absent where none are known, so
+ * they failed closed).
+ *
+ * @experimental
+ */
+export interface HidingItem {
+  readonly values: Readonly<Record<string, unknown>>;
+  readonly collection: string | undefined;
+  readonly fields: readonly BindingFieldShape[] | undefined;
+}
+
+interface DrawnNode {
+  readonly node: BlockNode;
+  /** False for what an editor draws in place of a hidden block. */
+  readonly shown: boolean;
+}
+
+/**
+ * The nodes a list draws, each as its conditions allow: shown, or, where an
+ * item hides it and the render was told what to draw instead, that in its
+ * place. Without that, a hidden block is simply left out.
+ */
+function drawnNodes(
+  nodes: readonly BlockNode[],
+  context: PageContext,
+  conditions: BoundaryConditions | undefined
+): DrawnNode[] {
+  const decided = {
+    ...(conditions?.held === undefined ? {} : { held: conditions.held }),
+    ...(conditions?.report === undefined ? {} : { report: conditions.report }),
+  };
+  const { item } = context;
+  const hiddenAs = item === undefined ? undefined : conditions?.hiddenAs;
+  const hiding: HidingItem | undefined =
+    item === undefined
+      ? undefined
+      : {
+          values: item,
+          collection:
+            context.itemSource === "" ? undefined : context.itemSource,
+          // The very fields the item's conditions were just judged by, a
+          // named query's own row schema among them, so what is drawn in
+          // the block's place says what that judgement found.
+          fields: itemFields(context),
+        };
+  return nodes.flatMap((node): DrawnNode[] => {
+    if (conditionAllows(node, context, decided)) return [{ node, shown: true }];
+    const instead = hiding === undefined ? undefined : hiddenAs?.(node, hiding);
+    return instead === undefined ? [] : [{ node: instead, shown: false }];
+  });
 }
 
 /**
@@ -163,19 +233,14 @@ function withItemBindings(
 ): { node: ResolvedBlockNode; bound: BoundValues | undefined } {
   if (bindings === undefined) return { node, bound: undefined };
   const fromPage = bindings.bound.get(node.id);
-  const itemSource = context.itemSource;
-  const result = resolveNodeBindings(node, bindings.run, {
-    phase: "item",
-    ...(context.item === undefined ? {} : { item: context.item }),
-    ...(typeof itemSource === "string" && itemSource !== ""
-      ? { itemRef: { collection: itemSource } }
-      : {}),
-  });
-  if (result.issues.length > 0) bindings.report(result.issues);
-  if (result.bound === undefined) return { node, bound: fromPage };
+  // The one fill a list's read-ahead also asks, so it reads ahead for the
+  // props each entry draws with.
+  const filled = fillItemBindings(node, context, bindings.run);
+  if (filled.issues.length > 0) bindings.report(filled.issues);
+  if (filled.bound === undefined) return { node, bound: fromPage };
   return {
-    node: { ...node, props: result.props },
-    bound: { ...fromPage, ...result.bound },
+    node: { ...node, props: filled.props },
+    bound: { ...fromPage, ...filled.bound },
   };
 }
 
@@ -368,8 +433,11 @@ export function isAllowedAttribute(name: string): boolean {
  */
 export {
   EDITOR_NAMESPACE,
+  ENTRY_CONTENT_DRAWN_ATTRIBUTE,
+  ENTRY_CONTENT_NOTE_ATTRIBUTE,
   INSTANCE_ATTRIBUTE,
   LIST_ACTION_ATTRIBUTE,
+  LIST_REF_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PROP_ATTRIBUTE,
   SLOTS_ATTRIBUTE,
@@ -1714,34 +1782,23 @@ export function BlockList({
   bindings,
   conditions,
 }: BlockListProps): ReactNode {
-  return (
-    nodes
-      // A conditioned block is drawn where its conditions allow it: held for
-      // the page's entry, or holding for the list item being drawn.
-      .filter(node =>
-        conditionAllows(node, context, {
-          ...(conditions?.held === undefined ? {} : { held: conditions.held }),
-          ...(conditions?.report === undefined
-            ? {}
-            : { report: conditions.report }),
-        })
-      )
-      .map(node => (
-        <Fragment key={node.id}>
-          {itemRulesFor(node.id, conditions)}
-          <BlockBoundary
-            node={node}
-            context={context}
-            blocks={blocks}
-            classes={classes}
-            fallback={fallback}
-            {...(hostPolicy === undefined ? {} : { hostPolicy })}
-            {...(spacingMode === undefined ? {} : { spacingMode })}
-            {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
-            {...(bindings === undefined ? {} : { bindings })}
-            {...(conditions === undefined ? {} : { conditions })}
-          />
-        </Fragment>
-      ))
-  );
+  // A conditioned block is drawn where its conditions allow it: held for the
+  // page's entry, or holding for the list item being drawn.
+  return drawnNodes(nodes, context, conditions).map(({ node, shown }) => (
+    <Fragment key={node.id}>
+      {shown ? itemRulesFor(node.id, conditions) : null}
+      <BlockBoundary
+        node={node}
+        context={context}
+        blocks={blocks}
+        classes={classes}
+        fallback={fallback}
+        {...(hostPolicy === undefined ? {} : { hostPolicy })}
+        {...(spacingMode === undefined ? {} : { spacingMode })}
+        {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
+        {...(bindings === undefined ? {} : { bindings })}
+        {...(conditions === undefined ? {} : { conditions })}
+      />
+    </Fragment>
+  ));
 }

@@ -11,9 +11,9 @@
  *
  * The loop's template is static text, so entries are counted by its drawn
  * copies.
- * The expected count is read from the signed-in list endpoint with the
- * published filter, in the same test, because other specs in a run add pages
- * of their own.
+ * The loops list this file's own pages by their slug, because other specs
+ * publish pages of their own while it runs, and the expected count is read
+ * from the signed-in list endpoint with the same filter, in the same test.
  */
 import { expect, type APIRequestContext } from "@playwright/test";
 
@@ -39,7 +39,13 @@ function loop(nodeId: string, textId: string, sort: string, text: string) {
     id: id(nodeId),
     type: "core/collection-loop",
     version: 1,
-    props: { collection: "block-pages", limit: 100, sort },
+    // Only this file's own pages: other specs publish block pages meanwhile.
+    props: {
+      collection: "block-pages",
+      limit: 100,
+      sort,
+      filters: [{ field: "slug", op: "contains", value: LIST_SLUG }],
+    },
     slots: {
       children: [
         {
@@ -96,9 +102,11 @@ async function seed(api: APIRequestContext): Promise<void> {
   }
 }
 
-/** How many block pages the list endpoint holds under `status`. */
+/** How many of this file's block pages the list endpoint holds under `status`. */
 async function total(api: APIRequestContext, status: string): Promise<number> {
-  const response = await api.get(`${ENTRIES}?limit=1&status=${status}`);
+  const response = await api.get(
+    `${ENTRIES}?limit=1&status=${status}&where[slug][contains]=${LIST_SLUG}`
+  );
   if (!response.ok()) {
     throw new Error(
       `counting failed: ${response.status()} ${await response.text()}`

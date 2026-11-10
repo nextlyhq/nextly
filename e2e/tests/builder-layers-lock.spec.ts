@@ -180,7 +180,10 @@ async function saveDraft(page: Page): Promise<number> {
 
 /** The inspector's Text field for the selected heading. */
 function textField(page: Page) {
-  return page.getByRole("tabpanel", { name: "Content" }).getByLabel("Text");
+  // Exact: the Bind button beside the field is labelled "Bind Text to a field".
+  return page
+    .getByRole("tabpanel", { name: "Content" })
+    .getByLabel("Text", { exact: true });
 }
 
 test.describe("a block locked in Layers", () => {

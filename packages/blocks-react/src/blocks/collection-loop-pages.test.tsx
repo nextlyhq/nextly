@@ -13,9 +13,17 @@
  *   shows its first page and draws no links;
  * - the links name the route's addresses, mark the current page, and leave
  *   out what leads nowhere (previous on page 1, next on the last);
- * - a list with one page, or a read that failed, draws no links.
+ * - a list with one page, or a read that failed, draws no links;
+ * - a list whose source is a named query is paged the same way: its run is
+ *   asked for the page's window, its links are counted from the run's total,
+ *   and a run that returns no total fails visibly rather than guess a count.
  */
-import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  defineNamedQuery,
+  type BlockDocument,
+  type BlockNode,
+  type NamedQueryRunArgs,
+} from "@nextlyhq/blocks-engine";
 import { renderToReadableStream } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -23,6 +31,8 @@ import type {
   BlocksDataProvider,
   BlocksQuery,
   ListPageContext,
+  NamedQueryFailure,
+  NamedQueryHost,
   PageContext,
 } from "../context";
 import { PageRenderer } from "../page-renderer";
@@ -58,7 +68,7 @@ const itemTitle = (id: string): BlockNode =>
 function list(id: string, props: Record<string, unknown>): BlockNode {
   return node(id, "core/collection-loop", props, {
     children: [itemTitle(`${id}-title`)],
-    empty: [node(`${id}-empty`, "core/paragraph", { text: "Nothing yet" })],
+    empty: [node(`${id}-empty`, "core/text", { text: "Nothing yet" })],
   });
 }
 
@@ -271,6 +281,138 @@ describe("a list split into pages, rendered", () => {
     );
     expect(titles(host)[0]).toBe("Post 1");
     expect(host.querySelector("nav")).toBeNull();
+  });
+});
+
+/**
+ * A named query over `count` rows titled `Post 1` onward, cutting them to
+ * the window it is asked for, with their total unless `counts` is false.
+ * Records each window and each failure the host is told of.
+ */
+function countedQuery(count: number, counts = true, declares = true) {
+  const rows = Array.from({ length: count }, (_, index) => ({
+    id: `p${String(index + 1)}`,
+    title: `Post ${String(index + 1)}`,
+  }));
+  const windows: NamedQueryRunArgs["window"][] = [];
+  const failures: NamedQueryFailure[] = [];
+  const definition = defineNamedQuery({
+    name: "posts.counted",
+    label: "Counted posts",
+    reads: { collections: ["posts"] },
+    rows: {
+      key: "id",
+      fields: [
+        { name: "id", type: "text" },
+        { name: "title", type: "text" },
+      ],
+    },
+    total: declares,
+    run: ({ window }) => {
+      windows.push(window);
+      const shown = rows.slice(window.offset, window.offset + window.limit);
+      return Promise.resolve(
+        counts ? { rows: shown, total: rows.length } : { rows: shown }
+      );
+    },
+  });
+  const host: NamedQueryHost = {
+    definitionOf: name => (name === definition.name ? definition : undefined),
+    reader: {
+      find: () => Promise.reject(new Error("not read")),
+      count: () => Promise.reject(new Error("not read")),
+    },
+    today: () => Promise.resolve("2026-11-06"),
+    report: failure => failures.push(failure),
+  };
+  return { host, windows, failures };
+}
+
+const NAMED_NEWS = {
+  namedQuery: { name: "posts.counted", params: {} },
+  limit: 10,
+  paginate: true,
+};
+
+describe("a named query's list split into pages, rendered", () => {
+  it("asks the run for the page's window, the stored offset applied once before paging", async () => {
+    const { host: namedQueries, windows } = countedQuery(25);
+    const drawnPage = await drawn(
+      page(list("news", { ...NAMED_NEWS, offset: 5 })),
+      { namedQueries, listPage: listPage("news", 2) }
+    );
+    // Offset 5, page 2 of 10: rows 16 to 25.
+    expect(windows).toEqual([{ limit: 10, offset: 15 }]);
+    expect(titles(drawnPage)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `Post ${String(index + 16)}`)
+    );
+  });
+
+  it("counts its links from the run's total, less the offset", async () => {
+    const { host: namedQueries } = countedQuery(25);
+    const drawnPage = await drawn(
+      page(list("news", { ...NAMED_NEWS, offset: 5 })),
+      { namedQueries, listPage: listPage("news", 1) }
+    );
+    // 25 rows less 5 skipped is two pages; a count that ignored the offset
+    // would link a third.
+    expect(links(drawnPage)).toEqual([
+      { text: "1", href: "/news", current: true },
+      { text: "2", href: "/news/page/2", current: false },
+      { text: "Next ›", href: "/news/page/2", current: false },
+    ]);
+  });
+
+  it("fails visibly, with no links, when its run returns no total", async () => {
+    const { host: namedQueries, failures } = countedQuery(25, false);
+    const authored = await drawn(page(list("news", NAMED_NEWS)), {
+      namedQueries,
+      listPage: listPage("news", 1),
+      diagnostics: true,
+    });
+    expect(titles(authored)).toEqual([]);
+    expect(authored.querySelector("nav")).toBeNull();
+    const note =
+      authored.querySelector("[data-nx-list-diagnostic]")?.textContent ?? "";
+    expect(note).toContain(
+      "Counted posts doesn't count its entries, so this list can't be split into pages."
+    );
+    // A refused setting, not a failed read: the note doesn't say otherwise.
+    expect(note).not.toContain("couldn't load");
+    expect(failures.map(failure => failure.code)).toEqual(["uncounted"]);
+    // A visitor sees the empty state alone.
+    const visited = await drawn(page(list("news", NAMED_NEWS)), {
+      namedQueries,
+      listPage: listPage("news", 1),
+    });
+    expect(visited.textContent).toContain("Nothing yet");
+    expect(visited.querySelector("[data-nx-list-diagnostic]")).toBeNull();
+    expect(visited.querySelector("nav")).toBeNull();
+  });
+
+  it("fails visibly when its query returns a total it no longer declares", async () => {
+    // A declaration changed to uncounted after the page was saved, whose
+    // run still returns a number: the declaration, not the number, decides.
+    const { host: namedQueries, failures } = countedQuery(25, true, false);
+    const authored = await drawn(page(list("news", NAMED_NEWS)), {
+      namedQueries,
+      listPage: listPage("news", 1),
+      diagnostics: true,
+    });
+    expect(titles(authored)).toEqual([]);
+    expect(authored.querySelector("nav")).toBeNull();
+    expect(failures.map(failure => failure.code)).toEqual(["uncounted"]);
+  });
+
+  it("draws the same run's rows where no route pages the list", async () => {
+    // The control for the failure above: the run itself is fine, and only
+    // a list the route pages needs its total.
+    const { host: namedQueries } = countedQuery(25, false);
+    const drawnPage = await drawn(page(list("news", NAMED_NEWS)), {
+      namedQueries,
+    });
+    expect(titles(drawnPage)).toHaveLength(10);
+    expect(drawnPage.querySelector("nav")).toBeNull();
   });
 });
 

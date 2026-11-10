@@ -70,6 +70,7 @@ import {
   type SkeletonHint,
 } from "./frame/card-state";
 import { COLLAPSED_PADDING_CLASS, useFrameCollapsed } from "./frame/collapse";
+import { useLoadingFitsOneItem } from "./frame/fit";
 import {
   CardFooterClaimProvider,
   CardFooterSlotProvider,
@@ -542,7 +543,10 @@ function StateBody({
 }: {
   state: CardState;
   title: string;
-  props: Pick<WidgetCardProps, "skeleton" | "skeletonItems" | "skeletonFields">;
+  props: Pick<
+    WidgetCardProps,
+    "skeleton" | "skeletonItems" | "skeletonFields" | "widgetId"
+  >;
 }) {
   switch (state.kind) {
     case "loading":
@@ -613,14 +617,23 @@ function CentredState({ children }: { children: ReactNode }) {
  * The loading skeleton: shaped as the body reported, or else as the card's own declaration says,
  * holding the place of the rows the card will draw at its tier, by the rule the list and table
  * bodies draw by. Medium until the card has measured itself, as those bodies are.
+ *
+ * A card whose body reports its content's height asks its cell, while loading, for the height a
+ * one-item answer takes (`useLoadingFitsOneItem`), so the row it shares stands at the height the
+ * common answer draws rather than at the stored rows the answer would then shrink it from.
  */
 function LoadingBody({
   hint,
   props,
 }: {
   hint: SkeletonHint | undefined;
-  props: Pick<WidgetCardProps, "skeleton" | "skeletonItems" | "skeletonFields">;
+  props: Pick<
+    WidgetCardProps,
+    "skeleton" | "skeletonItems" | "skeletonFields" | "widgetId"
+  >;
 }) {
+  // Drawn one row high when it asks for a one-item answer's height, so its skeleton is one row.
+  const oneItem = useLoadingFitsOneItem(props.widgetId);
   const tier = useCardTier() ?? "medium";
   // The card's height and density, as the rows that will arrive are counted at.
   const h = useContext(CardHeightContext);
@@ -628,7 +641,11 @@ function LoadingBody({
   return (
     <CardSkeleton
       shape={hint?.shape ?? props.skeleton}
-      rows={hint?.rows ?? heldRows({ tier, h }, props.skeletonItems, density)}
+      rows={
+        oneItem
+          ? 1
+          : (hint?.rows ?? heldRows({ tier, h }, props.skeletonItems, density))
+      }
       layout={hint?.layout ?? heldLayout(tier, props.skeletonFields)}
     />
   );

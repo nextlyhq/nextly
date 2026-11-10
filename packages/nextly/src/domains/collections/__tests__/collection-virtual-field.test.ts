@@ -158,7 +158,12 @@ describe("a virtual field in a collection write", () => {
 
     const result = await service.updateEntry(
       { collectionName: "posts", entryId: "entry-1", overrideAccess: true },
-      { title: "Ada", fullName: "Ada Lovelace", summary: { note: "x" } }
+      {
+        title: "Ada",
+        fullName: "Ada Lovelace",
+        summary: { note: "x" },
+        _overwrite: true,
+      }
     );
 
     expect(result.success).toBe(true);

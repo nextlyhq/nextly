@@ -6,7 +6,9 @@
  * Every reference the export reads (`transfer-references`) is one this
  * rewrites, in the same places: a placement's `componentId` and its image
  * values, a node's classes, styles and hide settings, a document's own styles
- * and asset list, a media prop, and a component's variants. A breakpoint the
+ * and asset list (completed with every media id the document shows), a media
+ * prop and the media id its binding falls back to, and a component's
+ * variants. A breakpoint the
  * import drops takes its styles and hide settings with it, and so does one the
  * file does not define, since the source drew nothing under it either; what is
  * kept is only ever written under a breakpoint the destination defines.
@@ -29,7 +31,13 @@ import {
   type NodeStyles,
 } from "@nextlyhq/blocks-engine";
 
-import { imageExposureIds, mediaIdOf } from "./transfer-references";
+import {
+  collectDocumentReferences,
+  emptyReferences,
+  fallbackMediaIdOf,
+  imageExposureIds,
+  mediaIdOf,
+} from "./transfer-references";
 
 /** The destination's id for each source reference, one map per kind. */
 export interface ReferenceMaps {
@@ -69,7 +77,7 @@ export function rewriteDocument<T extends BlockDocument>(
   if (document.assets?.mediaIds !== undefined) {
     rewritten.assets = {
       ...document.assets,
-      mediaIds: document.assets.mediaIds.map(id => mapped(maps.media, id)),
+      mediaIds: rewrittenMediaIndex(document, maps, lookups),
     };
   }
   if (document.kind === "component") {
@@ -88,6 +96,23 @@ export function rewriteDocument<T extends BlockDocument>(
     }
   }
   return rewritten as T;
+}
+
+/**
+ * A document's media index under the destination's ids, derived from the
+ * export's own reference walk (`collectDocumentReferences`): every id the
+ * stored index lists, and every media id the document shows, a binding's
+ * fallback included. The media usage record reads only the index of a
+ * document that has one, so an id left out of it would read as unused here.
+ */
+function rewrittenMediaIndex(
+  document: BlockDocument,
+  maps: ReferenceMaps,
+  lookups: RewriteLookups
+): string[] {
+  const references = emptyReferences();
+  collectDocumentReferences(document, references, lookups);
+  return [...new Set([...references.media].map(id => mapped(maps.media, id)))];
 }
 
 /** A shared style with its variables and breakpoints mapped. */
@@ -127,7 +152,30 @@ function rewriteNode(
     if (media !== undefined) props[prop] = mapped(maps.media, media);
   }
   next.props = props;
+  const bindings = rewriteFallbacks(node, mediaProps, maps);
+  if (bindings !== undefined) next.bindings = bindings;
   return next;
+}
+
+/**
+ * A node's bindings with each media prop's media-id fallback mapped, as the
+ * prop's own id is; `undefined` when none holds one, so the node keeps its
+ * bindings as stored. An address fallback is no reference and stays.
+ */
+function rewriteFallbacks(
+  node: BlockNode,
+  mediaProps: readonly string[],
+  maps: ReferenceMaps
+): BlockNode["bindings"] {
+  let bindings: BlockNode["bindings"];
+  for (const prop of mediaProps) {
+    const media = fallbackMediaIdOf(node, prop);
+    const binding = node.bindings?.[prop];
+    if (media === undefined || binding === undefined) continue;
+    bindings ??= { ...node.bindings };
+    bindings[prop] = { ...binding, fallback: mapped(maps.media, media) };
+  }
+  return bindings;
 }
 
 /** A node with its styles, classes and hide settings mapped. */

@@ -339,6 +339,23 @@ export async function openEditorWith(
 }
 
 /**
+ * Take every block off the homepage.
+ *
+ * A shared style or a variable a stored document still uses cannot be removed,
+ * so a spec that dressed the homepage in its own and restores the site style
+ * after takes them off the homepage first.
+ */
+export async function emptyHomepage(page: Page): Promise<void> {
+  const stored = await page.request.patch(HOMEPAGE, {
+    data: {
+      layout: { formatVersion: 1, kind: "page", nodes: [] },
+      _overwrite: true,
+    },
+  });
+  expect(stored.ok(), `emptying the homepage: ${stored.status()}`).toBe(true);
+}
+
+/**
  * Save from the top bar without publishing, as an author does: "Save draft"
  * on a page never published, "Save" on one that is.
  *

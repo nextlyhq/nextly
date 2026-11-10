@@ -18,6 +18,8 @@ import { Fragment, type ReactNode } from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 
+import { IsolatedContribution } from "./IsolatedContribution";
+import { PlaceContributionFallback } from "./PlaceContributionFallback";
 import { usePlaceContributions } from "./usePlaceContributions";
 
 /** What every component contributed to a place receives. */
@@ -62,11 +64,13 @@ export function TargetSlot<P extends AdminPlaceId>({
         {builtIns[item.builtIn] ?? null}
       </Fragment>
     ) : context !== null && item.kind === "block" ? (
-      <PluginSlot<PlaceContributionProps<P>>
-        key={item.id}
-        path={item.component}
-        props={{ context, ...(entry === undefined ? {} : { entry }) }}
-      />
+      <IsolatedContribution key={item.id}>
+        <PluginSlot<PlaceContributionProps<P>>
+          path={item.component}
+          fallback={<PlaceContributionFallback />}
+          props={{ context, ...(entry === undefined ? {} : { entry }) }}
+        />
+      </IsolatedContribution>
     ) : null
   );
 }

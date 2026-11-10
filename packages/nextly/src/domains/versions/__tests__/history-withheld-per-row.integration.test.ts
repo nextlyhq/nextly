@@ -164,9 +164,24 @@ async function documentWithMixedRows(
   );
   const id = (created.data as { id: string }).id;
   const second = reordered ? rows(2).reverse() : rows(2);
+  // Every write gives a repeater row a saved id, and a row sent without one
+  // whose values changed is stored as a new row. Each repeater row is sent
+  // back under its first version's id, by tier, so the comparison reads it
+  // as the same row changed in place, wherever it now sits.
+  const firstItems = (created.data as { items?: unknown }).items;
+  const idByTier = new Map(
+    (Array.isArray(firstItems) ? firstItems : []).map(row => {
+      const { tier, id: rowId } = row as { tier?: unknown; id?: unknown };
+      return [tier, rowId] as const;
+    })
+  );
+  const items = second.map(row => {
+    const rowId = idByTier.get(row.tier);
+    return typeof rowId === "string" ? { id: rowId, ...row } : row;
+  });
   await handler.updateEntry(
     { collectionName: "notes", entryId: id, overrideAccess: true },
-    { title: "v2", items: second, cards: second, _overwrite: true }
+    { title: "v2", items, cards: second, _overwrite: true }
   );
   return id;
 }

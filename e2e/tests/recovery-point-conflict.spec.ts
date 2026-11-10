@@ -3,8 +3,7 @@
  * editor was displaced, are saved as edits of the version they began from.
  *
  * Restoring a point takes back the version its edits began from, and taking a
- * document back after a takeover keeps the edits with the version they began
- * from. A save of either, after someone else saved in between, is refused as
+ * document back after a takeover keeps the edits as such a point. A save of either, after someone else saved in between, is refused as
  * a conflict rather than replacing that work.
  *
  * @module tests/recovery-point-conflict
@@ -84,7 +83,7 @@ test.describe(
       const other = await request.newContext({ baseURL, storageState });
       try {
         const written = await other.patch(`${POSTS}/${id}`, {
-          data: { excerpt: "Theirs" },
+          data: { excerpt: "Theirs", _overwrite: true },
         });
         expect(written.ok(), await written.text()).toBe(true);
 
@@ -148,12 +147,24 @@ test.describe(
         await save(second.page);
         expect((await stored).ok()).toBe(true);
 
-        // The first takes it back, the edits kept on screen.
+        // The first takes it back: the current version on screen, the edits
+        // kept as a recovery point.
         await page
           .getByRole("button", { name: "Take it back" })
           .click({ timeout: 60_000 });
-        await expect(excerpt(page)).toHaveValue(mine, { timeout: 45_000 });
+        await expect(
+          page
+            .getByTestId("document-lock-banner")
+            .filter({ hasText: `${SECOND_EDITOR} changed this document at` })
+        ).toContainText("while you were away", { timeout: 45_000 });
+        await expect(excerpt(page)).toHaveValue("Saved by the second editor", {
+          timeout: 45_000,
+        });
         await expect(excerpt(page)).toBeEditable({ timeout: 45_000 });
+        await page
+          .getByRole("button", { name: "Restore" })
+          .click({ timeout: 30_000 });
+        await expect(excerpt(page)).toHaveValue(mine, { timeout: 30_000 });
 
         // Saved as edits of the version they began from: refused, naming the
         // second editor.

@@ -4,24 +4,68 @@
  * returns: the refusal comes before any call, the call runs as the system with
  * the grant attached, and nothing a caller passes at runtime widens it.
  */
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { describe, expect, it, vi } from "vitest";
 
 import { currentPrincipal, runAsPrincipal } from "../auth/principal-scope";
-import type { CollectionService } from "../services/collections/collection-service";
+import type { FieldConfig } from "../collections/fields/types";
+import type { GetSingleOptions } from "../domains/singles/types";
+import type {
+  Collection,
+  CollectionService,
+} from "../services/collections/collection-service";
 import type { RequestContext } from "../services/shared";
 import { readHooksWaived } from "../services/collections/trust-grant";
+import {
+  lockedForRead,
+  type ReadingAdapter,
+} from "../shared/lib/read-transaction-scope";
 
-import { ownCollectionReads, type OwnCollectionReadOpts } from "./service-opts";
+import type { PluginSingleRecord } from "./plugin-singles";
+import {
+  HOST_TYPES_PAGE_SIZE,
+  type HostSchemaSource,
+  ownCollectionReads,
+  type OwnCollectionReadOpts,
+  type PluginCollectionTransaction,
+  withWriteTransactionToken,
+} from "./service-opts";
 import type { Principal } from "./principals/types";
+
+/** A PostgreSQL adapter inside an open transaction, for {@link lockInScope}. */
+const lockingAdapter = {
+  getCapabilities: () => ({ dialect: "postgresql" }),
+  transactionOpenInFlow: () => true,
+} as unknown as ReadingAdapter;
+
+/**
+ * The row lock a read made here would take, as a content read builds it
+ * (`lockedForRead`): the strength its locking clause is given, or `none`
+ * when the query is left without one.
+ */
+function lockInScope(): string {
+  const taken: unknown[] = [];
+  const query = {
+    for: (strength: unknown) => {
+      taken.push(strength);
+      return query;
+    },
+  };
+  lockedForRead(query, lockingAdapter, {});
+  return taken.length === 0 ? "none" : String(taken[0]);
+}
 
 function standIn() {
   const seen: { method: string; context: RequestContext }[] = [];
   const principals: (Principal | null)[] = [];
+  /** The lock each call to the service would have read its rows with. */
+  const locks: string[] = [];
   const record =
     (method: string, result: unknown) =>
     (...args: unknown[]): Promise<unknown> => {
       seen.push({ method, context: args[args.length - 1] as RequestContext });
       principals.push(currentPrincipal());
+      locks.push(lockInScope());
       return Promise.resolve(result);
     };
   const service = {
@@ -34,6 +78,7 @@ function standIn() {
     service,
     seen,
     principals,
+    locks,
     facade: service as unknown as CollectionService,
   };
 }
@@ -111,6 +156,687 @@ describe("ctx.services.ownCollections", () => {
     const { facade } = standIn();
     const reads = ownCollectionReads(facade, ["ledger"]);
     expect(Object.isFrozen(reads)).toBe(true);
+  });
+
+  it("refuses an in-transaction read of a collection it did not declare, or on a token no transaction handed out, before calling the service", async () => {
+    const { service, facade } = standIn();
+    const reads = ownCollectionReads(facade, ["ledger"]);
+    const forged = Object.freeze({}) as PluginCollectionTransaction;
+
+    await expect(
+      reads.listEntriesInTransaction(forged, "ledger")
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "plugin-transaction-token-unknown" },
+    });
+    await withWriteTransactionToken({} as TransactionContext, async token => {
+      await expect(
+        reads.listEntriesInTransaction(token, "posts")
+      ).rejects.toThrow(/not a collection this plugin declared/);
+      await expect(
+        reads.findEntryByIdInTransaction(token, "posts", "1")
+      ).rejects.toThrow(/not a collection this plugin declared/);
+    });
+
+    expect(service.listEntries).not.toHaveBeenCalled();
+    expect(service.findEntryById).not.toHaveBeenCalled();
+  });
+
+  it("refuses a token once its transaction has settled", async () => {
+    const { service, facade } = standIn();
+    const reads = ownCollectionReads(facade, ["ledger"]);
+    let kept: PluginCollectionTransaction | undefined;
+    await withWriteTransactionToken({} as TransactionContext, async token => {
+      // The control: the same token reads while its transaction is open.
+      await reads.findEntryByIdInTransaction(token, "ledger", "1");
+      kept = token;
+    });
+    if (!kept) throw new Error("the transaction's work never ran");
+    const settled = kept;
+
+    await expect(
+      reads.listEntriesInTransaction(settled, "ledger")
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "plugin-transaction-finished" },
+    });
+    expect(service.findEntryById).toHaveBeenCalledTimes(1);
+    expect(service.listEntries).not.toHaveBeenCalled();
+  });
+
+  it("reads only its own Single, as the system with the Single grant, writing nothing", async () => {
+    const { facade } = standIn();
+    const asked: { slug: string; options: GetSingleOptions | undefined }[] = [];
+    const reads = ownCollectionReads(facade, ["ledger"], {
+      owned: ["settings"],
+      service: () => ({
+        get: (slug: string, options?: GetSingleOptions) => {
+          asked.push({ slug, options });
+          return Promise.resolve({
+            success: true,
+            statusCode: 200,
+            data: { id: "s1", updatedAt: "2026-01-01T00:00:00.000Z" },
+          });
+        },
+      }),
+    });
+
+    await withWriteTransactionToken({} as TransactionContext, async token => {
+      // A collection's grant does not reach a Single of the same slug.
+      await expect(
+        reads.getSingleInTransaction(token, "ledger")
+      ).rejects.toThrow(/not a Single this plugin declared/);
+      expect(asked).toEqual([]);
+
+      const doc = await reads.getSingleInTransaction(token, "settings");
+      expect(doc.id).toBe("s1");
+    });
+
+    expect(asked.map(call => call.slug)).toEqual(["settings"]);
+    const options = asked[0]?.options;
+    expect(options?.overrideAccess).toBe(true);
+    expect(options?.createIfMissing).toBe(false);
+    expect(options?.whenAbsent).toBe("default");
+    expect(readHooksWaived(options?.hookExemptRead, "settings")).toBe(true);
+    expect(readHooksWaived(options?.hookExemptRead, "ledger")).toBe(false);
+  });
+
+  describe("host reads", () => {
+    /** What a host schema was asked, beside the schema. */
+    interface Asked {
+      /** Each one-slug schema asked for, as `kind:slug`. */
+      asked: string[];
+      /** Each component whose fields were asked for one at a time. */
+      components: string[];
+      /** Each listing and whole-registry read, in the order asked. */
+      reads: string[];
+      /** The most questions ever outstanding at once. */
+      mostAtOnce: number;
+    }
+
+    /** A listed collection, as the collection listing answers one. */
+    function listedCollection(slug: string): Collection {
+      return {
+        id: `id-${slug}`,
+        name: slug,
+        label: slug,
+        tableName: `dc_${slug}`,
+        schemaDefinition: { fields: [] },
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
+      };
+    }
+
+    /** A listed Single, as the Singles listing answers one. */
+    function listedSingle(slug: string): PluginSingleRecord {
+      return {
+        id: `id-${slug}`,
+        slug,
+        label: slug,
+        fields: [],
+        source: "code",
+      };
+    }
+
+    /** The entries of `fields` whose key starts `kind:`, by slug. */
+    function schemasOf(
+      fields: Record<string, readonly unknown[]>,
+      kind: "collection" | "Single"
+    ): Map<string, readonly unknown[]> {
+      return new Map(
+        Object.entries(fields)
+          .filter(([key]) => key.startsWith(`${kind}:`))
+          .map(([key, schema]) => [key.slice(kind.length + 1), schema])
+      );
+    }
+
+    /**
+     * A host schema: `pages` holds the plugin's `doc` type inside a repeater's
+     * group, `promo` and `banner` hold it inside the component `hero`,
+     * `addons` names `cta` (holding none) and `hero` side by side, `posts`
+     * and the Single `footer` hold none, `home` is a Single holding it at the
+     * top level, and `ledger` is listed with no schema at all.
+     *
+     * Every question answers after a timer, so two asked together are
+     * outstanding together, and `mostAtOnce` says whether any were.
+     * `failComponents` makes the whole-registry component read fail.
+     */
+    function hostSchema(
+      options: { failComponents?: boolean } = {}
+    ): HostSchemaSource & Asked {
+      const state: Asked = {
+        asked: [],
+        components: [],
+        reads: [],
+        mostAtOnce: 0,
+      };
+      let outstanding = 0;
+      const later = async <T>(value: T): Promise<T> => {
+        outstanding++;
+        state.mostAtOnce = Math.max(state.mostAtOnce, outstanding);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        outstanding--;
+        return value;
+      };
+      const fields: Record<string, readonly unknown[]> = {
+        "collection:pages": [
+          {
+            name: "rows",
+            type: "repeater",
+            fields: [
+              {
+                name: "panel",
+                type: "group",
+                fields: [{ name: "body", type: "doc" }],
+              },
+            ],
+          },
+        ],
+        "collection:promo": [
+          { name: "hero", type: "component", component: "hero" },
+        ],
+        "collection:banner": [
+          { name: "lead", type: "component", component: "hero" },
+        ],
+        "collection:addons": [
+          { name: "action", type: "component", component: "cta" },
+          { name: "hero", type: "component", component: "hero" },
+        ],
+        "collection:posts": [{ name: "title", type: "text" }],
+        "Single:home": [{ name: "body", type: "doc" }],
+        "Single:footer": [{ name: "note", type: "text" }],
+      };
+      // A contributed type is not in the built-in field union.
+      const components: Record<string, FieldConfig[]> = {
+        hero: [{ name: "intro", type: "doc" }] as unknown as FieldConfig[],
+        cta: [{ name: "label", type: "text" }] as FieldConfig[],
+      };
+      const collectionSlugs = [
+        ...schemasOf(fields, "collection").keys(),
+        "ledger",
+      ].sort();
+      return Object.assign(state, {
+        fieldTypes: ["doc"],
+        fieldsOf: (kind: "collection" | "Single", slug: string) => {
+          state.asked.push(`${kind}:${slug}`);
+          return later(fields[`${kind}:${slug}`] ?? null);
+        },
+        componentFields: (slug: string) => {
+          state.components.push(slug);
+          return later(components[slug] ?? null);
+        },
+        // Each entry carries the fields read with it; `ledger` is listed
+        // with none.
+        listCollections: (limit: number) => {
+          state.reads.push(`listCollections:${limit}`);
+          return later(
+            collectionSlugs.slice(0, limit).map(slug => ({
+              record: listedCollection(slug),
+              fields: fields[`collection:${slug}`] ?? [],
+            }))
+          );
+        },
+        listSingles: () => {
+          state.reads.push("listSingles");
+          return later(
+            [...schemasOf(fields, "Single")].map(([slug, schema]) => ({
+              record: listedSingle(slug),
+              fields: schema,
+            }))
+          );
+        },
+        allComponentFields: async () => {
+          state.reads.push("allComponentFields");
+          const answer = await later(new Map(Object.entries(components)));
+          if (options.failComponents) {
+            throw new Error("the component registry read failed");
+          }
+          return answer;
+        },
+      });
+    }
+
+    it("reads a host collection holding the plugin's field type at any depth, under a grant for that slug alone", async () => {
+      const { seen, facade } = standIn();
+      const reads = ownCollectionReads(
+        facade,
+        ["ledger"],
+        undefined,
+        hostSchema()
+      );
+
+      await withWriteTransactionToken({} as TransactionContext, async tx => {
+        await reads.listHostEntriesInTransaction(tx, "pages");
+        await reads.findHostEntryByIdInTransaction(tx, "promo", "1", {
+          lock: "update",
+        });
+      });
+
+      expect(seen.map(call => call.method)).toEqual([
+        "listEntries",
+        "findEntryById",
+      ]);
+      const [pages, promo] = seen.map(call => call.context.hookExemptRead);
+      expect(readHooksWaived(pages, "pages")).toBe(true);
+      expect(readHooksWaived(promo, "promo")).toBe(true);
+      // Each call's grant reaches its own slug and no other, the plugin's
+      // own collections included.
+      expect(readHooksWaived(pages, "promo")).toBe(false);
+      expect(readHooksWaived(pages, "ledger")).toBe(false);
+      expect(seen[0]?.context.overrideAccess).toBe(true);
+    });
+
+    it("reads each in-transaction read with the lock it names, shared when it names none", async () => {
+      const { locks, facade } = standIn();
+      const singleLocks: string[] = [];
+      const reads = ownCollectionReads(
+        facade,
+        ["ledger"],
+        {
+          owned: ["settings"],
+          service: () => ({
+            get: () => {
+              singleLocks.push(lockInScope());
+              return Promise.resolve({
+                success: true,
+                statusCode: 200,
+                data: { id: "s1", updatedAt: "2026-01-01T00:00:00.000Z" },
+              });
+            },
+          }),
+        },
+        hostSchema()
+      );
+
+      await withWriteTransactionToken({} as TransactionContext, async tx => {
+        for (const lock of [undefined, "share", "update", "none"] as const) {
+          const opts = lock === undefined ? undefined : { lock };
+          await reads.listEntriesInTransaction(tx, "ledger", {}, opts);
+          await reads.findEntryByIdInTransaction(tx, "ledger", "1", opts);
+          await reads.listHostEntriesInTransaction(tx, "pages", {}, opts);
+          await reads.findHostEntryByIdInTransaction(tx, "promo", "1", opts);
+        }
+        for (const lock of [undefined, "share", "none"] as const) {
+          const opts = lock === undefined ? undefined : { lock };
+          await reads.getSingleInTransaction(tx, "settings", opts);
+          await reads.getHostSingleInTransaction(tx, "home", opts);
+        }
+      });
+
+      // Four collection reads per lock, own and host, list and find: the
+      // default is the shared lock, and `none` leaves the query unlocked.
+      expect(locks).toEqual([
+        ...Array<string>(8).fill("share"),
+        ...Array<string>(4).fill("update"),
+        ...Array<string>(4).fill("none"),
+      ]);
+      // The two Single reads per lock, own and host.
+      expect(singleLocks).toEqual([
+        ...Array<string>(4).fill("share"),
+        ...Array<string>(2).fill("none"),
+      ]);
+    });
+
+    it("refuses a host collection holding none of the plugin's types, or none at all, before calling the service", async () => {
+      const { service, facade } = standIn();
+      const schema = hostSchema();
+      const reads = ownCollectionReads(facade, ["ledger"], undefined, schema);
+
+      await withWriteTransactionToken({} as TransactionContext, async tx => {
+        for (const slug of ["posts", "missing"]) {
+          await expect(
+            reads.listHostEntriesInTransaction(tx, slug)
+          ).rejects.toMatchObject({
+            code: "INVALID_INPUT",
+            logContext: { reason: "host-collection-read-not-eligible" },
+          });
+        }
+        // The plugin's own collection is not a host one unless it holds the
+        // type: declaring it grants an own read, not a host read.
+        await expect(
+          reads.findHostEntryByIdInTransaction(tx, "ledger", "1")
+        ).rejects.toMatchObject({
+          logContext: { reason: "host-collection-read-not-eligible" },
+        });
+      });
+
+      expect(schema.asked).toEqual([
+        "collection:posts",
+        "collection:missing",
+        "collection:ledger",
+      ]);
+      expect(service.listEntries).not.toHaveBeenCalled();
+      expect(service.findEntryById).not.toHaveBeenCalled();
+    });
+
+    it("refuses every host read of a plugin that registered no field type, asking no schema", async () => {
+      const { service, facade } = standIn();
+      const schema = { ...hostSchema(), fieldTypes: [] };
+      const reads = ownCollectionReads(facade, [], undefined, schema);
+
+      await withWriteTransactionToken({} as TransactionContext, async tx => {
+        await expect(
+          reads.listHostEntriesInTransaction(tx, "pages")
+        ).rejects.toMatchObject({
+          logContext: { reason: "host-collection-read-not-eligible" },
+        });
+      });
+
+      expect(schema.asked).toEqual([]);
+      expect(service.listEntries).not.toHaveBeenCalled();
+    });
+
+    it("refuses a settled token before asking the schema", async () => {
+      const { facade } = standIn();
+      const schema = hostSchema();
+      const reads = ownCollectionReads(facade, [], undefined, schema);
+      let kept: PluginCollectionTransaction | undefined;
+      await withWriteTransactionToken({} as TransactionContext, async tx => {
+        kept = tx;
+      });
+      if (!kept) throw new Error("the transaction's work never ran");
+      const settled = kept;
+
+      await expect(
+        reads.listHostEntriesInTransaction(settled, "pages")
+      ).rejects.toMatchObject({
+        logContext: { reason: "plugin-transaction-finished" },
+      });
+      expect(schema.asked).toEqual([]);
+    });
+
+    it("reads a host Single holding the plugin's type and refuses one holding none", async () => {
+      const { facade } = standIn();
+      const asked: { slug: string; options: GetSingleOptions | undefined }[] =
+        [];
+      const reads = ownCollectionReads(
+        facade,
+        [],
+        {
+          owned: [],
+          service: () => ({
+            get: (slug: string, options?: GetSingleOptions) => {
+              asked.push({ slug, options });
+              return Promise.resolve({
+                success: true,
+                statusCode: 200,
+                data: { id: "s1", updatedAt: "2026-01-01T00:00:00.000Z" },
+              });
+            },
+          }),
+        },
+        hostSchema()
+      );
+
+      await withWriteTransactionToken({} as TransactionContext, async tx => {
+        await expect(
+          reads.getHostSingleInTransaction(tx, "footer")
+        ).rejects.toMatchObject({
+          logContext: { reason: "host-single-read-not-eligible" },
+        });
+        // A collection's eligibility does not make a Single of its slug one.
+        await expect(
+          reads.getHostSingleInTransaction(tx, "pages")
+        ).rejects.toMatchObject({
+          logContext: { reason: "host-single-read-not-eligible" },
+        });
+        expect((await reads.getHostSingleInTransaction(tx, "home")).id).toBe(
+          "s1"
+        );
+      });
+
+      expect(asked.map(call => call.slug)).toEqual(["home"]);
+      const grant = asked[0]?.options?.hookExemptRead;
+      expect(readHooksWaived(grant, "home")).toBe(true);
+      expect(readHooksWaived(grant, "footer")).toBe(false);
+      expect(asked[0]?.options?.createIfMissing).toBe(false);
+    });
+
+    describe("listHostTypesInTransaction", () => {
+      /** The reads one walk of {@link hostSchema} makes, in order. */
+      const ONE_WALK = [
+        `listCollections:${HOST_TYPES_PAGE_SIZE}`,
+        "listSingles",
+        "allComponentFields",
+      ];
+
+      it("lists each collection and Single holding the plugin's type at any depth, the plugin's own judged like the rest", async () => {
+        const { service, facade } = standIn();
+        const schema = hostSchema();
+        // `pages` is the plugin's own and holds the type; `ledger` is its
+        // own and holds nothing.
+        const reads = ownCollectionReads(
+          facade,
+          ["ledger", "pages"],
+          undefined,
+          schema
+        );
+
+        const found = await withWriteTransactionToken(
+          {} as TransactionContext,
+          async tx => {
+            const types = await reads.listHostTypesInTransaction(tx);
+            // Every slug it lists is one a host read on the same
+            // transaction accepts.
+            for (const listed of types.collections) {
+              await reads.listHostEntriesInTransaction(tx, listed.name);
+            }
+            return types;
+          }
+        );
+
+        // In the listing's slug order: inside a component named beside
+        // another, inside a component, inside a repeater's group, and inside
+        // a component again.
+        expect(found.collections.map(listed => listed.name)).toEqual([
+          "addons",
+          "banner",
+          "pages",
+          "promo",
+        ]);
+        // Answered as the listing answered them, not rebuilt.
+        expect(found.collections[0]).toEqual(listedCollection("addons"));
+        expect(found.singles).toEqual([listedSingle("home")]);
+        expect(service.listEntries).toHaveBeenCalledTimes(4);
+        // The host reads ask their own slug's schema, one each; the walk
+        // asked none by slug.
+        expect(schema.asked).toEqual([
+          "collection:addons",
+          "collection:banner",
+          "collection:pages",
+          "collection:promo",
+        ]);
+      });
+
+      it("reads each listing and each registry once, one at a time, whatever the number of entries", async () => {
+        const { facade } = standIn();
+        const schema = hostSchema();
+        const reads = ownCollectionReads(facade, [], undefined, schema);
+
+        await withWriteTransactionToken({} as TransactionContext, tx =>
+          reads.listHostTypesInTransaction(tx)
+        );
+
+        // Six collections and two Singles judged from three reads; `addons`
+        // asks for `cta` and `hero` together, and both wait on the one
+        // component read.
+        expect(schema.reads).toEqual(ONE_WALK);
+        expect(schema.asked).toEqual([]);
+        expect(schema.components).toEqual([]);
+        expect(schema.mostAtOnce).toBe(1);
+      });
+
+      it("reads no component when no schema names one", async () => {
+        const { facade } = standIn();
+        const base = hostSchema();
+        // Only the entries naming no component: `pages` among the
+        // collections, and both Singles.
+        const schema: HostSchemaSource = {
+          ...base,
+          listCollections: limit =>
+            base
+              .listCollections(limit)
+              .then(listed =>
+                listed.filter(({ record }) => record.name === "pages")
+              ),
+        };
+        const reads = ownCollectionReads(facade, [], undefined, schema);
+
+        const found = await withWriteTransactionToken(
+          {} as TransactionContext,
+          tx => reads.listHostTypesInTransaction(tx)
+        );
+
+        expect(found.collections.map(listed => listed.name)).toEqual(["pages"]);
+        expect(base.reads).not.toContain("allComponentFields");
+      });
+
+      it("asks a full listing again for more until one comes back short", async () => {
+        const { facade } = standIn();
+        const limits: number[] = [];
+        // Exactly one more collection than the first ask takes; the first and
+        // the last hold the type, so the last is found only by the second.
+        const slugs = Array.from(
+          { length: HOST_TYPES_PAGE_SIZE + 1 },
+          (_, index) => `c${String(index).padStart(4, "0")}`
+        );
+        const first = slugs[0];
+        const last = slugs[slugs.length - 1];
+        const reads = ownCollectionReads(facade, [], undefined, {
+          fieldTypes: ["doc"],
+          fieldsOf: () => Promise.resolve(null),
+          componentFields: () => Promise.resolve(null),
+          listCollections: limit => {
+            limits.push(limit);
+            return Promise.resolve(
+              slugs.slice(0, limit).map(slug => ({
+                record: listedCollection(slug),
+                fields: [
+                  {
+                    name: "body",
+                    type: slug === first || slug === last ? "doc" : "text",
+                  },
+                ],
+              }))
+            );
+          },
+          listSingles: () => Promise.resolve([]),
+          allComponentFields: () => Promise.resolve(new Map()),
+        });
+
+        const found = await withWriteTransactionToken(
+          {} as TransactionContext,
+          tx => reads.listHostTypesInTransaction(tx)
+        );
+
+        // Each ask starts from the first collection, so a collection added
+        // or removed between them shifts nothing.
+        expect(limits).toEqual([
+          HOST_TYPES_PAGE_SIZE,
+          HOST_TYPES_PAGE_SIZE * 2,
+        ]);
+        expect(found.collections.map(listed => listed.name)).toEqual([
+          first,
+          last,
+        ]);
+      });
+
+      it("judges each entry by the fields read with it, so one renamed after the listing stays listed", async () => {
+        const { facade } = standIn();
+        const asked: string[] = [];
+        const holding = [{ name: "body", type: "doc" }];
+        // The listings read `pages` and `home` with their fields; by the time
+        // anything else is read, both have been renamed, so a read of either
+        // old slug finds no schema.
+        const reads = ownCollectionReads(facade, [], undefined, {
+          fieldTypes: ["doc"],
+          fieldsOf: (kind, slug) => {
+            asked.push(`${kind}:${slug}`);
+            return Promise.resolve(null);
+          },
+          componentFields: () => Promise.resolve(null),
+          listCollections: () =>
+            Promise.resolve([
+              { record: listedCollection("pages"), fields: holding },
+            ]),
+          listSingles: () =>
+            Promise.resolve([
+              { record: listedSingle("home"), fields: holding },
+            ]),
+          allComponentFields: () => Promise.resolve(new Map()),
+        });
+
+        const found = await withWriteTransactionToken(
+          {} as TransactionContext,
+          tx => reads.listHostTypesInTransaction(tx)
+        );
+
+        expect(found.collections.map(listed => listed.name)).toEqual(["pages"]);
+        expect(found.singles.map(listed => listed.slug)).toEqual(["home"]);
+        // Nothing read apart from the listings decided it.
+        expect(asked).toEqual([]);
+      });
+
+      it("starts nothing more once the component read fails", async () => {
+        const { facade } = standIn();
+        const schema = hostSchema({ failComponents: true });
+        const reads = ownCollectionReads(facade, [], undefined, schema);
+
+        await withWriteTransactionToken({} as TransactionContext, async tx => {
+          await expect(reads.listHostTypesInTransaction(tx)).rejects.toThrow(
+            /component registry read failed/
+          );
+        });
+        // Long enough for anything the walk had left queued to start.
+        await new Promise(resolve => setTimeout(resolve, 10));
+
+        expect(schema.reads).toEqual(ONE_WALK);
+        expect(schema.asked).toEqual([]);
+        expect(schema.components).toEqual([]);
+      });
+
+      it("answers empty for a plugin that registered no field type, reading nothing", async () => {
+        const { facade } = standIn();
+        const schema = { ...hostSchema(), fieldTypes: [] };
+        const reads = ownCollectionReads(facade, ["ledger"], undefined, schema);
+        const noSource = ownCollectionReads(facade, ["ledger"]);
+
+        await withWriteTransactionToken({} as TransactionContext, async tx => {
+          expect(await reads.listHostTypesInTransaction(tx)).toEqual({
+            collections: [],
+            singles: [],
+          });
+          expect(await noSource.listHostTypesInTransaction(tx)).toEqual({
+            collections: [],
+            singles: [],
+          });
+        });
+
+        // The spread shares the fixture's arrays, so these see every call.
+        expect(schema.reads).toEqual([]);
+        expect(schema.asked).toEqual([]);
+      });
+
+      it("refuses a settled token before listing anything", async () => {
+        const { facade } = standIn();
+        const schema = hostSchema();
+        const reads = ownCollectionReads(facade, [], undefined, schema);
+        let kept: PluginCollectionTransaction | undefined;
+        await withWriteTransactionToken({} as TransactionContext, async tx => {
+          kept = tx;
+        });
+        if (!kept) throw new Error("the transaction's work never ran");
+        const settled = kept;
+
+        await expect(
+          reads.listHostTypesInTransaction(settled)
+        ).rejects.toMatchObject({
+          code: "VALIDATION_ERROR",
+          logContext: { reason: "plugin-transaction-finished" },
+        });
+        expect(schema.reads).toEqual([]);
+      });
+    });
   });
 
   it("grants nothing when built for no collections", async () => {

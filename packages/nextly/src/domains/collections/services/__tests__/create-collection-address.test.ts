@@ -31,21 +31,18 @@ const generateCollection = vi.fn(async () => {
 
 /** The service's own method over a generator that only records being reached. */
 function service(): CollectionMetadataService {
-  const instance = Object.create(
-    CollectionMetadataService.prototype
-  ) as CollectionMetadataService;
-  Object.assign(instance, {
-    collectionService: { generateCollection },
+  return new CollectionMetadataService(
     // Read by the slug guard: no resource owns the slug, and these addresses are used.
-    adapter: {
+    {
       // Read when a failed create is turned into a result.
       getCapabilities: () => ({ dialect: "sqlite" }),
       selectOne: vi.fn(async () => null),
       select: vi.fn(async (table: string) => usedAddresses[table] ?? []),
-    },
-    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-  });
-  return instance;
+    } as never,
+    { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+    {} as never,
+    { generateCollection } as never
+  );
 }
 
 /** The refusal's message, or `null` when the create went on to generate the collection. */

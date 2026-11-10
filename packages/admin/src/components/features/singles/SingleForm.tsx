@@ -122,7 +122,7 @@ import {
   historyRetentionFrom,
 } from "@admin/components/features/versions/history-enabled";
 import { PREVIOUS_VERSION } from "@admin/components/features/versions/version-search-params";
-import { versionsHref } from "@admin/components/features/versions/VersionComparePage";
+import { versionsHref } from "@admin/components/features/versions/versions-href";
 import {
   mayRecordRecovery,
   useViewedVersion,
@@ -1675,6 +1675,8 @@ export function SingleForm({
           // The same status, and pending-draft fact, the document bar's pill
           // shows: a field covering the bar reports what the bar would have.
           documentStatus={editedStatus}
+          // The fields, so a field inside a repeater's row has an address.
+          fields={schema.fields}
         >
           <EntryLocaleProvider value={localeCtx}>
             {/* Above the header — which mounts the history panel — and above

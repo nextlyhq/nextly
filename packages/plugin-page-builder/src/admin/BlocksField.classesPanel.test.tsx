@@ -164,6 +164,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
     read => () =>
       read
   )(() => Promise.resolve(null)),
+  // The Fallback picker's library search, finding nothing: no case here
+  // opens it. One function for every call, as the admin's own hook keeps it.
+  useMediaSearcher: (
+    search => () =>
+      search
+  )(() => Promise.resolve([])),
   // The shared-style routes, recorded: the usage read answers every page
   // counted and nothing used, and the where-used read an empty list.
   readPluginRoute: async ({ path }: { path: string }) => {
