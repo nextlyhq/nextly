@@ -38,7 +38,7 @@ import { marksNoTransaction } from "../../../../domains/schema/migrate/split-sql
 import { withMigrateLock } from "../../../../domains/schema/pipeline/locks";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { createLogger } from "../../../utils/logger";
-import { migrateCore, refuseUnresolvedAppAttempts } from "../../migrate";
+import { assertAppHistoryHolds, migrateCore } from "../../migrate";
 import { parseSqlSections } from "../../../../domains/schema/migrate/sql-sections";
 import { downDatabaseDeps, migrateDownCore } from "../../migrate-down";
 
@@ -188,14 +188,15 @@ try {
         });
       },
       // As the command supplies it.
-      refuseUnresolvedAttempts: () =>
-        refuseUnresolvedAppAttempts({
+      checkAppHistory: ({ recordChecksums }) =>
+        assertAppHistoryHolds({
           adapter: raw as never,
           db: raw.getDrizzle(),
           dialect,
           migrationsDir,
           logger,
           command: "nextly migrate:down",
+          recordChecksums,
         }),
       withLock: (lockAdapter, d, fn, opts) =>
         withMigrateLock(lockAdapter, d, fn, {

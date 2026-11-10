@@ -172,6 +172,16 @@ export interface MediaResponse {
   data: Media | null;
 }
 
+/** What a read of several media files by id answers. */
+export interface MediaManyResponse {
+  code?: ServiceErrorCode;
+  success: boolean;
+  statusCode: number;
+  message: string;
+  /** The files found, each once; an id with no file has none. */
+  data: Media[] | null;
+}
+
 export interface DeleteMediaResponse {
   code?: ServiceErrorCode;
   success: boolean;

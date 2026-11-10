@@ -31,6 +31,8 @@ import * as React from "react";
 import {
   clearBlocks,
   COLLECTION_LIST_TYPE,
+  LIST_MAX_FILTERS,
+  LIST_MAX_SORT_KEYS,
   registerBlocks,
   type BlockDocument,
   type BlockNode,
@@ -132,19 +134,21 @@ const CATEGORIES: LoopCollection = {
 
 const COLLECTIONS = [POSTS, CATEGORIES];
 
-function editorFor(props: Record<string, unknown>) {
+/** The selected list, as `place` puts it in the page; on its own by default. */
+function editorFor(
+  props: Record<string, unknown>,
+  place: (selected: BlockNode) => BlockNode[] = selected => [selected]
+) {
   const document = {
     formatVersion: 1,
     kind: "page",
-    nodes: [
-      {
-        id: "list",
-        type: COLLECTION_LIST_TYPE,
-        version: 1,
-        props,
-        slots: { children: [], empty: [] },
-      } as BlockNode,
-    ],
+    nodes: place({
+      id: "list",
+      type: COLLECTION_LIST_TYPE,
+      version: 1,
+      props,
+      slots: { children: [], empty: [] },
+    } as BlockNode),
   } as BlockDocument;
   return {
     document,
@@ -169,10 +173,11 @@ function editorFor(props: Record<string, unknown>) {
 
 function mount(
   props: Record<string, unknown>,
-  services: Partial<ContentServices> = {}
+  services: Partial<ContentServices> = {},
+  place?: (selected: BlockNode) => BlockNode[]
 ) {
   register();
-  const editor = editorFor(props);
+  const editor = editorFor(props, place);
   render(
     <InspectorPanel
       editor={editor}
@@ -223,6 +228,93 @@ describe("a list's source", () => {
     expect(listed("Sources")).toEqual(["No collection", "Categories", "Posts"]);
   });
 
+  it("offers each outer entry's relations only to a list drawn per entry", async () => {
+    // A list of posts, holding the selected list in the slot it draws per
+    // entry, or in its empty state, which is drawn with no post at all.
+    const inPosts =
+      (slot: "children" | "empty") =>
+      (selected: BlockNode): BlockNode[] => [
+        {
+          id: "posts",
+          type: COLLECTION_LIST_TYPE,
+          version: 1,
+          props: { collection: "posts" },
+          slots: { children: [], empty: [], [slot]: [selected] },
+        } as BlockNode,
+      ];
+    mount({ collection: "categories" }, {}, inPosts("children"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Source Categories" })
+    );
+    expect(listed("Sources")).toContain("Each post's categories");
+    cleanup();
+    clearBlocks();
+    mount({ collection: "categories" }, {}, inPosts("empty"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Source Categories" })
+    );
+    expect(listed("Sources")).not.toContain("Each post's categories");
+  });
+
+  it("says a list in another list's When empty has no entry to relate to, and elsewhere why none is offered", async () => {
+    const WHEN_EMPTY =
+      "Not available in When empty: it only shows when the list has no entries, so there's no entry to relate to.";
+    const GENERIC =
+      "Not available here. On a collection's entry, or inside another list, a list can show the entry's related entries, such as its categories or tags.";
+    const inEmptyOf = (selected: BlockNode): BlockNode[] => [
+      {
+        id: "posts",
+        type: COLLECTION_LIST_TYPE,
+        version: 1,
+        props: { collection: "posts" },
+        // Inside a box in the empty state: the nearest list still holds it
+        // in its empty state.
+        slots: {
+          children: [],
+          empty: [
+            {
+              id: "box",
+              type: "core/group",
+              version: 1,
+              props: {},
+              slots: { children: [selected] },
+            } as BlockNode,
+          ],
+        },
+      } as BlockNode,
+    ];
+    mount({ collection: "categories" }, {}, inEmptyOf);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Source Categories" })
+    );
+    expect(screen.getByText(WHEN_EMPTY)).toBeDefined();
+    expect(screen.queryByText(GENERIC)).toBeNull();
+    cleanup();
+    clearBlocks();
+    // On its own, with no entry around it: the generic note.
+    mount({ collection: "categories" });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Source Categories" })
+    );
+    expect(screen.getByText(GENERIC)).toBeDefined();
+    expect(screen.queryByText(WHEN_EMPTY)).toBeNull();
+  });
+
+  it("says, as the save does, that a Single's page has no entry to relate to", async () => {
+    mount(
+      {
+        collection: "categories",
+        relation: { of: "entry", field: "categories" },
+      },
+      { entryCollection: null }
+    );
+    expect(
+      await screen.findByText(
+        /This page isn't an entry in a collection, so it has no related entries to show\./
+      )
+    ).toBeDefined();
+  });
+
   it("stores a relation and its collection in one write", async () => {
     const editor = mount(
       {
@@ -260,7 +352,42 @@ describe("a list's source", () => {
   });
 });
 
+/** The text of the notes an element names as describing it. */
+function describedText(element: HTMLElement): string | undefined {
+  const ids = element.getAttribute("aria-describedby");
+  if (ids === null) return undefined;
+  return ids
+    .split(" ")
+    .map(each => document.getElementById(each)?.textContent ?? "")
+    .join(" ");
+}
+
 describe("a list's filters", () => {
+  it("turns Add filter off at the most filters a list holds, and says why", async () => {
+    const filtersOf = (count: number) =>
+      Array.from({ length: count }, () => ({
+        field: "title",
+        op: "contains" as const,
+        value: "a",
+      }));
+    mount({ collection: "posts", filters: filtersOf(LIST_MAX_FILTERS - 1) });
+    const below = (await screen.findByRole("button", {
+      name: "Add filter",
+    })) as HTMLButtonElement;
+    expect(below.disabled).toBe(false);
+    expect(below.getAttribute("aria-describedby")).toBeNull();
+    cleanup();
+    clearBlocks();
+    mount({ collection: "posts", filters: filtersOf(LIST_MAX_FILTERS) });
+    const full = (await screen.findByRole("button", {
+      name: "Add filter",
+    })) as HTMLButtonElement;
+    expect(full.disabled).toBe(true);
+    expect(describedText(full)).toBe(
+      `Up to ${String(LIST_MAX_FILTERS)} filters.`
+    );
+  });
+
   it("offers only the fields visitors can see, none holding several values, and says so", async () => {
     mount({ collection: "posts" });
     fireEvent.click(await screen.findByRole("button", { name: "Add filter" }));
@@ -367,6 +494,51 @@ describe("the judgement the group shows", () => {
   });
 });
 
+describe("the judgement for a host naming no readable fields", () => {
+  it("judges each offered field by its kind, so a choice or a yes/no field filters and sorts as offered", async () => {
+    mount(
+      {
+        collection: "notes",
+        filters: [
+          { field: "kind", op: "in", value: ["news"] },
+          { field: "pinned", op: "equals", value: true },
+          { field: "author", op: "equals", value: "a1" },
+        ],
+        sort: "kind,-pinned,-views,-due,title",
+      },
+      {
+        listLoopCollections: vi.fn(async () => [
+          {
+            slug: "notes",
+            label: "Notes",
+            fields: [
+              { name: "title", label: "Title", kind: "text" as const },
+              {
+                name: "kind",
+                label: "Kind",
+                kind: "choice" as const,
+                options: [{ value: "news", label: "News" }],
+              },
+              { name: "pinned", label: "Pinned", kind: "boolean" as const },
+              { name: "views", label: "Views", kind: "number" as const },
+              { name: "due", label: "Due", kind: "date" as const },
+              {
+                name: "author",
+                label: "Author",
+                kind: "entry" as const,
+                relationTo: "authors",
+              },
+            ],
+          },
+        ]),
+      }
+    );
+    await screen.findByRole("button", { name: "Source Notes" });
+    // Every kind a field is offered with, judged as a field of that kind.
+    expect(screen.queryAllByText(/cannot compare|cannot order by/)).toEqual([]);
+  });
+});
+
 describe("a list's sort", () => {
   it("names the direction in words for the field's kind", async () => {
     mount({ collection: "posts", sort: "-publishedAt,title,-views" });
@@ -441,6 +613,49 @@ describe("a list's sort", () => {
     ]);
   });
 
+  it("offers no key past the most a list sorts by, as the save refuses one", async () => {
+    // More fields than a list may sort by, so one is always left to add.
+    const wide: LoopCollection = {
+      slug: "wide",
+      label: "Wide",
+      singular: "Wide",
+      fields: Array.from({ length: LIST_MAX_SORT_KEYS + 1 }, (_, index) => ({
+        name: `f${String(index)}`,
+        label: `Field ${String(index)}`,
+        kind: "text" as const,
+      })),
+    };
+    const sortBy = (count: number) =>
+      Array.from({ length: count }, (_, index) => `f${String(index)}`).join(
+        ","
+      );
+    const services = { listLoopCollections: vi.fn(async () => [wide]) };
+    // Each read once the collection's fields are in, which name the rows.
+    const addSortWith = async (count: number) => {
+      mount({ collection: "wide", sort: sortBy(count) }, services);
+      await screen.findByRole("button", {
+        name: `Sort ${String(count)} of ${String(count)}, by Field ${String(count - 1)}`,
+      });
+      return screen.getByRole("button", { name: "Add sort" });
+    };
+    const below = (await addSortWith(
+      LIST_MAX_SORT_KEYS - 1
+    )) as HTMLButtonElement;
+    expect(below.disabled).toBe(false);
+    expect(below.getAttribute("aria-describedby")).toBeNull();
+    expect(
+      screen.queryByText(`Up to ${String(LIST_MAX_SORT_KEYS)} sorts.`)
+    ).toBeNull();
+    cleanup();
+    clearBlocks();
+    const full = (await addSortWith(LIST_MAX_SORT_KEYS)) as HTMLButtonElement;
+    expect(full.disabled).toBe(true);
+    // Off, and saying why, as Add filter does at its own limit.
+    expect(describedText(full)).toBe(
+      `Up to ${String(LIST_MAX_SORT_KEYS)} sorts.`
+    );
+  });
+
   it("marks a stored key the collection no longer has, with the engine's reason", async () => {
     mount({ collection: "posts", sort: "-rating" });
     expect(
@@ -481,6 +696,25 @@ describe("a fallen-back sort's Choose a field", () => {
       screen.getByRole("tab", { name: "Content" }).getAttribute("aria-selected")
     ).toBe("true");
     expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("answers an ask made as the list is selected, when React runs its effects twice", async () => {
+    register();
+    const editor = editorFor({ collection: "posts", sort: "-rating" });
+    render(
+      <React.StrictMode>
+        <InspectorPanel
+          editor={{ ...editor, sortFieldAsked: { id: "list", seq: 1 } }}
+          contentServices={{
+            listLoopCollections: vi.fn(async () => COLLECTIONS),
+          }}
+        />
+      </React.StrictMode>
+    );
+    const first = await screen.findByRole("button", {
+      name: /^Sort 1 of 1, by/,
+    });
+    await waitFor(() => expect(document.activeElement).toBe(first));
   });
 
   it("asks nothing of a list it was not pressed for", async () => {

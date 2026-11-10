@@ -29,6 +29,16 @@ describe("checkUserFieldName", () => {
     }
   );
 
+  it("refuses interfaceLanguage, naming it and saying to rename the app's field", () => {
+    // The column each user's own interface language is kept in: a custom
+    // field of that name would answer to the same name on the merged user.
+    const refusal = checkUserFieldName("interfaceLanguage");
+
+    expect(refusal?.code).toBe("USER_FIELD_NAME_RESERVED");
+    expect(refusal?.message).toContain("'interfaceLanguage'");
+    expect(refusal?.message).toMatch(/rename/i);
+  });
+
   it("matches reserved names regardless of case", () => {
     for (const name of ["Email", "EMAIL", "eMaIl", "ID", "PassWordHash"]) {
       expect(checkUserFieldName(name)?.code).toBe("USER_FIELD_NAME_RESERVED");

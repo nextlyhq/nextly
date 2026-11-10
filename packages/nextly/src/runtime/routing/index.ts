@@ -23,7 +23,13 @@ export { isReservedPath } from "./reserved-paths";
 // Taken from the LEAF module rather than through `./content-route`, which also
 // re-exports it. Both spellings compile and one of them hands every consumer of
 // this barrel the route's whole import graph for a pure string function.
-export { slugToStaticParam } from "./slug-param";
+export {
+  slugToStaticParam,
+  LIST_PAGE_SEGMENT,
+  listPageNumber,
+  listPageOf,
+  slugToPath,
+} from "./slug-param";
 
 export { createContentRoute, createPublicContentRoute } from "./content-route";
 export type {

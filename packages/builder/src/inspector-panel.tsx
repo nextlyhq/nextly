@@ -24,6 +24,7 @@
  */
 
 import {
+  authoredText,
   BASE_BREAKPOINT,
   breakpointContexts,
   findNode,
@@ -31,6 +32,7 @@ import {
   type BlockInspectorProps,
   type BreakpointId,
   type BreakpointSet,
+  type BuilderOp,
   type ComponentLookup,
   type ComponentPath,
   type NodeStyles,
@@ -49,7 +51,13 @@ import { ChevronRight } from "lucide-react";
 import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
+import { BindableField } from "./binding-controls";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
+import {
+  blockLookGroups,
+  sameLook,
+  type BlockLookRow,
+} from "./block-look-rows";
 import { CanvasPassageContext, type CanvasPassage } from "./canvas-passage";
 import type { ComponentFieldsHost } from "./component-fields";
 import {
@@ -65,6 +73,7 @@ import {
   ComponentVariantsContext,
   ComponentVariantsSection,
 } from "./component-variants-panel";
+import { ShowWhen } from "./condition-controls";
 import {
   ContentServicesContext,
   contentControlFor,
@@ -98,8 +107,13 @@ import {
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
 import { commitLinkChanges } from "./link-control";
+import { LookInspector, type LookEditing } from "./look-inspector";
 import { useCanvasTokenModeAt } from "./prefers-dark";
-import { propGroupsOf } from "./prop-groups";
+import {
+  propGroupsOf,
+  type BindableOptions,
+  type BindableWrapper,
+} from "./prop-groups";
 import { selectionLock } from "./selection-ops";
 import { StyleStateField } from "./state-switcher";
 import {
@@ -117,6 +131,10 @@ import type { StylePolicy } from "./style-values";
 import { useCanvasReading } from "./use-canvas-reading";
 import { placedDefinition } from "./variant-picker";
 import { VisibleOn, type BreakpointsStatus } from "./visible-on";
+import {
+  useVisitorUnreadable,
+  VisitorUnreadableNote,
+} from "./visitor-unreadable-context";
 
 export interface StyleStateBinding {
   /** The state being edited. `base` when omitted. */
@@ -181,6 +199,13 @@ export interface InspectorPanelProps {
    * @experimental Settles with the shared-styles editor.
    */
   sharedStyles?: SharedStylesHost;
+  /**
+   * A look edited on its own, chosen in the Design panel: while no block is
+   * selected the inspector edits it instead of saying to select a block.
+   *
+   * @experimental Settles with the Design panel's Block looks group.
+   */
+  lookEditing?: LookEditing;
   /**
    * The site's fonts, carried to the Style tab's Font control. See
    * {@link StyleInspectorPanelProps.fonts}.
@@ -552,6 +577,33 @@ function surfaceFor(
 }
 
 /**
+ * The prop whose binding a link group's lead is drawn with: the entry's,
+ * where the link follows its bound entry, else the address's.
+ *
+ * The same precedence the renderer reads a link by (`linkFor` in
+ * blocks-react's `blocks/props.ts`): an entry reference, both its halves
+ * given, before the address. So a block whose entry is bound and whose
+ * collection is set is drawn, and changed, as its entry, whether or not its
+ * address is bound too; with no collection the renderer follows the address,
+ * and so does the panel. A half counts as given stored or bound, as the
+ * render fills a bound one before reading the link.
+ */
+function drawnBinding(
+  lead: string,
+  entry: BindableOptions["entryLink"],
+  bindings: Readonly<Record<string, unknown>> | undefined,
+  props: readonly EditableProp[]
+): string {
+  if (entry === undefined || bindings?.[entry.id] === undefined) return lead;
+  const collection = props.find(prop => prop.name === entry.collection);
+  // Read as the renderer reads it (`text`, which is `authoredText`).
+  const given =
+    bindings[entry.collection] !== undefined ||
+    authoredText(collection?.value) !== "";
+  return given ? entry.id : lead;
+}
+
+/**
  * The inspector, inside the component's own view when the document is a
  * component: the scope holds the removal dialog and hands every control the
  * binding, so the panel below draws the same whichever document it edits.
@@ -562,6 +614,29 @@ export function InspectorPanel({
   canvasPassage = null,
   ...panel
 }: InspectorPanelProps): React.JSX.Element {
+  const look = editedLook(panel);
+  if (look !== undefined && panel.lookEditing !== undefined) {
+    return (
+      <LookInspector
+        editor={panel.editor}
+        look={look}
+        host={panel.sharedStyles}
+        onExit={panel.lookEditing.onExit}
+        library={panel.classLibrary ?? []}
+        canvasRoot={panel.canvasRoot}
+        state={editedStyleState(panel.styleState)}
+        policy={panel.policy}
+        breakpoint={panel.breakpoint}
+        cascade={panel.cascade}
+        breakpoints={panel.breakpoints}
+        previewContainer={panel.previewContainer}
+        liveBreakpoints={panel.liveBreakpoints}
+        onJumpToBreakpoint={panel.onJumpToBreakpoint}
+        tokens={panel.tokens}
+        fonts={panel.fonts}
+      />
+    );
+  }
   return (
     <ComponentFieldsScope editor={panel.editor} host={componentFields}>
       <ComponentVariantsContext.Provider value={componentVariants}>
@@ -571,6 +646,21 @@ export function InspectorPanel({
       </ComponentVariantsContext.Provider>
     </ComponentFieldsScope>
   );
+}
+
+/**
+ * The look the inspector edits on its own: the one the host names, while no
+ * block is selected and the look is still one the site renders or reads.
+ * Selecting a block edits the block, whatever look was chosen.
+ */
+function editedLook(
+  panel: Pick<InspectorPanelProps, "editor" | "classLibrary" | "lookEditing">
+): BlockLookRow | undefined {
+  const key = panel.lookEditing?.look;
+  if (key === undefined || panel.editor.selectedId !== null) return undefined;
+  return blockLookGroups(panel.classLibrary ?? [], new Set())
+    .flatMap(group => group.rows)
+    .find(row => sameLook(row, key));
 }
 
 function SelectionInspector({
@@ -871,6 +961,18 @@ function ContentTab({
         heldBy={designLocked}
         reasonId={reasonId}
       />
+      {/* Whether the block shows at all, by the entry or list item it is drawn
+          with: beside where it shows, as the design draws the Content tab. */}
+      {/* Keyed by the block, so a row added and not yet finished stays with
+          the block it was added to rather than moving to the next one. */}
+      <ShowWhen
+        key={block.nodeId}
+        editor={editor}
+        nodeId={block.nodeId}
+        services={services}
+        heldBy={designLocked}
+        reasonId={reasonId}
+      />
       <details className="nx-inspector__advanced" open={advancedOpen}>
         {/*
         Opened from the summary's own click, which a keyboard's Enter and
@@ -1121,6 +1223,9 @@ function ContentSurface({
   /** The component's own view, when the document is a component. */
   fields: ComponentFieldsBinding | undefined;
 }): React.JSX.Element {
+  // A block's own inspector knows nothing of bindings visitors will not see,
+  // so beside one, every such binding on the block is said above it.
+  const unreadable = useVisitorUnreadable(inspection.nodeId);
   const generated = (
     <ContentFields
       inspection={inspection}
@@ -1139,6 +1244,9 @@ function ContentSurface({
       onCommitMany={changes =>
         commitLinkChanges(editor, inspection.nodeId, changes)
       }
+      // A binding's edits, applied as any other edit of the block.
+      // Whether the editor took it: a refused edit is said, not assumed.
+      onApply={op => editor.apply(op) !== null}
       document={editor.document}
       listView={listViewOf(editor, inspection.nodeId)}
     />
@@ -1166,6 +1274,12 @@ function ContentSurface({
   return (
     <>
       {visibility}
+      <VisitorUnreadableNote
+        bindings={unreadable}
+        props={new Set(unreadable.map(binding => binding.prop))}
+        // A library fallback named by its file, as the image row names it.
+        services={services}
+      />
       <CustomInspectorBoundary fallback={generated}>
         <CustomInspector
           Inspector={Custom}
@@ -1311,6 +1425,8 @@ interface ListView {
   readonly onShowEmpty: (empty: boolean) => void;
   /** The count of the latest ask to fix this list's sort, when it has one. */
   readonly sortFieldAsked: number | undefined;
+  /** Tag the list on the canvas while a new source waits for an input. */
+  readonly onStillShowing: ((words: string | undefined) => void) | undefined;
 }
 
 /** A block's list view, where the editor keeps one. */
@@ -1324,6 +1440,10 @@ function listViewOf(editor: EditorState, nodeId: string): ListView | undefined {
       editor.sortFieldAsked?.id === nodeId
         ? editor.sortFieldAsked.seq
         : undefined,
+    onStillShowing:
+      editor.tagListStillShowing === undefined
+        ? undefined
+        : words => editor.tagListStillShowing?.(nodeId, words),
   };
 }
 
@@ -1332,11 +1452,13 @@ function listGroupView(listView: ListView | undefined): {
   showsEmpty: boolean;
   onShowEmpty: ListView["onShowEmpty"] | undefined;
   sortFieldAsked: number | undefined;
+  onStillShowing: ListView["onStillShowing"];
 } {
   return {
     showsEmpty: listView?.showsEmpty === true,
     onShowEmpty: listView?.onShowEmpty,
     sortFieldAsked: listView?.sortFieldAsked,
+    onStillShowing: listView?.onStillShowing,
   };
 }
 
@@ -1351,8 +1473,11 @@ function ContentFields({
   onCommitMany,
   document,
   listView,
+  onApply,
 }: {
   inspection: BlockInspection;
+  /** Apply one op as an edit: a binding's, which writes props and bindings at once. */
+  onApply: (op: BuilderOp) => boolean;
   /** The document the block is in, for a group that reads around it. */
   document: BlockDocument;
   /** Whether the canvas draws this block's empty state, and the switch. */
@@ -1375,6 +1500,12 @@ function ContentFields({
   /** The component's own view, when the document is a component. */
   fields?: ComponentFieldsBinding | undefined;
 }): React.JSX.Element {
+  // The bindings on this block a visitor will not see filled, each said under
+  // the field that draws its prop.
+  const unreadable = useVisitorUnreadable(inspection.nodeId);
+  // The block's bindings as the document holds them, so a bound prop draws
+  // its chip in place of its own control.
+  const bindings = findNode(document.nodes, inspection.nodeId)?.bindings;
   // A prop the inspector leaves out draws no control, but in a component's
   // view keeps its expose icon: a page may clear what hides it.
   const drawn = inspection.props.filter(
@@ -1400,6 +1531,40 @@ function ContentFields({
   const groups = propGroupsOf(inspection.props.filter(prop => prop.offered));
   const leads = new Map(groups.map(group => [group.lead, group]));
   const grouped = new Set(groups.flatMap(group => [...group.drawn]));
+  // A group's prop wrapped in the same binding controls a prop on its own
+  // row gets, for the props the group offers: one chip, one menu and one
+  // note for every bindable prop, wherever it is drawn.
+  const bindableIn = (offered: ReadonlySet<string>): BindableWrapper =>
+    function wrapBindable(lead, field, options) {
+      const entry = options?.entryLink;
+      const name = drawnBinding(lead, entry, bindings, inspection.props);
+      const prop = inspection.props.find(each => each.name === name);
+      // Offered by the group's lead: a bound entry id is drawn in its place.
+      if (prop === undefined || !prop.offered || !offered.has(lead)) {
+        return field;
+      }
+      const clears = options?.clearsOnBind ?? [];
+      return (
+        <BindableField
+          nodeId={inspection.nodeId}
+          prop={prop}
+          blockLabel={inspection.label}
+          binding={bindings?.[name]}
+          entryLink={entry}
+          document={document}
+          services={services}
+          disabled={!writable(name)}
+          onApply={onApply}
+          clearsOnBind={clears}
+          // The props a bind would empty that may not be written here: a
+          // bind or a change that would empty one is held, while the
+          // fallback and the unbind, which empty nothing, stay offered.
+          clearsLocked={clears.filter(each => !writable(each))}
+        >
+          {field}
+        </BindableField>
+      );
+    };
   return (
     <div className="nx-inspector__fields">
       {drawn.map(prop => {
@@ -1437,9 +1602,20 @@ function ContentFields({
                 document,
                 nodeId: inspection.nodeId,
                 ...listGroupView(listView),
+                bindable: bindableIn(group.bindable),
               })}
             </React.Fragment>
           );
+        // Under the field: the props it draws whose bound value a visitor
+        // will not see, a group's included.
+        const note = (
+          <VisitorUnreadableNote
+            bindings={unreadable}
+            props={group === undefined ? new Set([prop.name]) : group.drawn}
+            // A library fallback named by its file, as the image row names it.
+            services={services}
+          />
+        );
         // Named as the block names it, so its icon is not drawn bare.
         const field = !prop.offered ? (
           <p className="nx-inspector__note">
@@ -1455,17 +1631,37 @@ function ContentFields({
               // A held field points at the reason in the card.
               reasonId={writable(prop.name) ? undefined : reasonId}
             >
-              <PropField
+              <BindableField
+                nodeId={inspection.nodeId}
                 prop={prop}
-                disabled={!writable(prop.name)}
-                onCommit={onCommit}
+                blockLabel={inspection.label}
+                binding={bindings?.[prop.name]}
+                document={document}
                 services={services}
-                values={values}
-              />
+                disabled={!writable(prop.name)}
+                onApply={onApply}
+              >
+                <PropField
+                  prop={prop}
+                  disabled={!writable(prop.name)}
+                  onCommit={onCommit}
+                  services={services}
+                  values={values}
+                />
+              </BindableField>
             </HeldByLock>
           ))
         );
-        if (fields === undefined) return field;
+        if (fields === undefined) {
+          // Always a fragment under one key, so a note appearing or going
+          // never remounts the field above it and its uncommitted text.
+          return (
+            <React.Fragment key={`${inspection.nodeId}:${prop.name}`}>
+              {field}
+              {note}
+            </React.Fragment>
+          );
+        }
         // The switch sits OUTSIDE the lock's fieldset: a prop a lock holds is
         // still one a designer may try to expose, and the refusal that says
         // why is the answer they need, which a disabled switch would withhold.
@@ -1475,6 +1671,7 @@ function ContentFields({
             className="nx-inspector__prop"
           >
             {field}
+            {note}
             <PropExposeControl
               binding={fields}
               nodeId={inspection.nodeId}

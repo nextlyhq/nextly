@@ -16,6 +16,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
+import { changeBetweenAttempts } from "../../../versions/__tests__/helpers/between-attempts";
 import { VersionCaptureService } from "../../../versions/version-capture-service";
 import { VersionConflictError } from "../../../versions/version-conflict";
 import { VersionsRepository } from "../../../versions/versions-repository";
@@ -98,22 +99,16 @@ describe("a publish that retries after a lost race", () => {
         throw new VersionConflictError();
       }
     );
-    const transaction = adapter.transaction.bind(adapter);
-    let attempts = 0;
-    vi.spyOn(adapter, "transaction").mockImplementation((async (
-      ...args: Parameters<typeof transaction>
-    ) => {
-      attempts += 1;
-      if (attempts === 2) await repo.deleteWorkingDraft(ref, "en");
-      return transaction(...args);
-    }) as typeof adapter.transaction);
+    const attempts = changeBetweenAttempts(adapter, () =>
+      repo.deleteWorkingDraft(ref, "en")
+    );
 
     const published = await entries.updateEntry(scope, {
       status: "published",
       _overwrite: true,
     });
     expect(published.success, JSON.stringify(published)).toBe(true);
-    expect(attempts).toBeGreaterThanOrEqual(2);
+    expect(attempts()).toBe(2);
     vi.restoreAllMocks();
 
     expect(await titleOf(entries, id)).toBe("Hello");

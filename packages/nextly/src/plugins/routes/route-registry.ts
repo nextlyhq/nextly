@@ -1,5 +1,6 @@
 import type { PluginContext } from "../plugin-context";
 
+import type { BoundAction } from "./action-route-check";
 import { pluginRouteFullPath } from "./route-path";
 import { selectMostSpecific, splitPath } from "./route-pattern";
 import type { PluginRoute, RouteMethod } from "./route-types";
@@ -18,6 +19,8 @@ export interface RegisteredRoute {
   mount: "plugin" | "root";
   route: PluginRoute;
   baseCtx: PluginContext;
+  /** The declared actions that run this route; none when it is not bound. */
+  boundActions: readonly BoundAction[];
   /** Pre-split path segments (literal, or `:name` capture) for matching. */
   segments: string[];
 }
@@ -28,6 +31,13 @@ export interface RouteMatch {
   route: PluginRoute;
   baseCtx: PluginContext;
   params: Record<string, string>;
+  /**
+   * The declared actions that run this route, as registered with it. A bound
+   * route answers only requests made as one of them. Always set by
+   * {@link PluginRouteRegistry.match}; absent only on a match built by hand,
+   * which no request reaches.
+   */
+  boundActions?: readonly BoundAction[];
 }
 
 /**
@@ -41,7 +51,13 @@ export class PluginRouteRegistry {
   register(
     pluginName: string,
     route: PluginRoute,
-    baseCtx: PluginContext
+    baseCtx: PluginContext,
+    /**
+     * The plugin's declared actions that run this route, from the definition
+     * the route was collected from. Boot passes them for every route; none
+     * leaves the route unbound.
+     */
+    boundActions: readonly BoundAction[] = []
   ): void {
     const mount = route.mount ?? "plugin";
     const fullPath = pluginRouteFullPath(pluginName, route.path, mount);
@@ -52,6 +68,7 @@ export class PluginRouteRegistry {
       mount,
       route,
       baseCtx,
+      boundActions,
       segments: splitPath(fullPath),
     });
   }
@@ -89,6 +106,7 @@ export class PluginRouteRegistry {
       route: candidate.route,
       baseCtx: candidate.baseCtx,
       params,
+      boundActions: candidate.boundActions,
     };
   }
 

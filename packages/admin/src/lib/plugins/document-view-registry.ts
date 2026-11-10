@@ -17,6 +17,19 @@
  */
 import type { PluginMetadata } from "@admin/types/branding";
 
+import {
+  addressesIn,
+  addressOfFormPath,
+  hasRowStep,
+  locationLabel,
+  resolveAddress,
+  rowsCarryIds,
+  type AddressedRow,
+  type AddressStep,
+  type FormPathAddress,
+  type RowAddressRefusal,
+} from "./field-address";
+
 /**
  * One view, in the shape admin-meta delivers it. Derived from the metadata
  * type rather than restated, so a field the server adds to a view reaches the
@@ -92,16 +105,21 @@ export function matchDocumentView(
   return declared ?? byFieldType.get(path);
 }
 
-/** A field a document addresses, with the groups it sits inside. */
+/** A field a document addresses, with the containers it sits inside. */
 interface AddressableField<F extends object> {
   field: F;
   /**
-   * The groups around it, outermost first. The form applies their gates to it
-   * — a read-only or hidden group makes everything inside it read-only or
-   * hidden — so a surface editing the field on its own needs them too.
+   * The groups and repeaters around it, outermost first. The form applies
+   * their gates to it — a read-only or hidden group makes everything inside it
+   * read-only or hidden — so a surface editing the field on its own needs them
+   * too.
    */
   within: F[];
-  /** Its path in the form: its name, after each named group's around it. */
+  /**
+   * Its path in the form: its name, after each named group's around it. A
+   * repeater's row on the way is spelled `*` here, since it is no one row;
+   * `steps` is the path to resolve a row by.
+   */
   path: string;
   /**
    * The path each of `within` and then the field itself sits under, the base a
@@ -109,6 +127,13 @@ interface AddressableField<F extends object> {
    * nothing to it; a named group adds its name for what it holds.
    */
   bases: string[];
+  /** The path as steps, with each repeater's row a step of its own. */
+  steps: AddressStep<F>[];
+  /**
+   * How many of `steps` each base in `bases` is: a base is always the start of
+   * the field's own path, so a row's base is spelled once the row is known.
+   */
+  baseDepths: number[];
 }
 
 /** A field's own name, or `undefined` for none (an unnamed group). */
@@ -118,44 +143,68 @@ function nameOf(field: object): string | undefined {
     : undefined;
 }
 
+/** Steps spelled as a path, a row as `*` where no row is known. */
+function spelled<F extends object>(steps: readonly AddressStep<F>[]): string {
+  return steps.map(step => (step.kind === "name" ? step.name : "*")).join(".");
+}
+
 /**
- * The fields a document addresses, walking into groups: always into an
+ * The fields a document addresses, walking into containers: always into an
  * UNNAMED group, which is presentation only and adds nothing to a path, and
- * into a NAMED group only `throughNamedGroups`, where its name becomes a step
- * of the path. A repeater is never walked: its rows have no address that
- * survives a reorder.
+ * only `throughContainers` into a NAMED group, whose name becomes a step of
+ * the path, and into a repeater, whose name and then the row become steps.
  *
  * Raw config can hold a cycle, a group that lays itself out directly or
- * through another, so a group already open on its own path (`within`) is not
- * walked again: without that, every caller recursed until the stack ran out.
+ * through another, so a container already open on its own path (`within`) is
+ * not walked again: without that, every caller recursed until the stack ran
+ * out.
  */
 function walkFields<F extends object>(
   fields: readonly F[] | undefined,
-  throughNamedGroups: boolean,
+  throughContainers: boolean,
   within: F[] = [],
-  bases: string[] = [],
-  base = ""
+  baseDepths: number[] = [],
+  steps: AddressStep<F>[] = []
 ): AddressableField<F>[] {
   return (fields ?? []).flatMap(field => {
     const name = nameOf(field);
-    const path = name === undefined ? base : base ? `${base}.${name}` : name;
-    const own = { field, within, path, bases: [...bases, base] };
-    const group = "type" in field && field.type === "group";
-    if (!group || (name !== undefined && !throughNamedGroups)) return [own];
+    const ownSteps: AddressStep<F>[] =
+      name === undefined ? steps : [...steps, { kind: "name", name }];
+    const ownDepths = [...baseDepths, steps.length];
+    const own: AddressableField<F> = {
+      field,
+      within,
+      path: spelled(ownSteps),
+      bases: ownDepths.map(depth => spelled(ownSteps.slice(0, depth))),
+      steps: ownSteps,
+      baseDepths: ownDepths,
+    };
+    const type = "type" in field ? field.type : undefined;
+    const group = type === "group";
+    // A repeater's rows are reached through its name, so a nameless one has
+    // no rows to address.
+    const repeater = type === "repeater" && name !== undefined;
+    if (!group && !repeater) return [own];
+    if (name !== undefined && !throughContainers) return [own];
     if (within.includes(field)) return [];
     const children = "fields" in field ? field.fields : undefined;
-    // A group's children are declarations of the same kind as the group, so
+    // A repeater's fields sit inside one of its rows, a step of its own.
+    const inner: AddressStep<F>[] = repeater
+      ? [...ownSteps, { kind: "row", repeater: field }]
+      : ownSteps;
+    // A container's children are declarations of the same kind as it, so
     // they are read as the caller's field type.
     const inside = Array.isArray(children)
       ? walkFields(
           children as F[],
-          throughNamedGroups,
+          throughContainers,
           [...within, field],
-          [...bases, base],
-          path
+          ownDepths,
+          inner
         )
       : [];
-    // A named group is itself a field of the document; an unnamed one is not.
+    // A named container is itself a field of the document; an unnamed one is
+    // not.
     return name === undefined ? inside : [own, ...inside];
   });
 }
@@ -172,8 +221,8 @@ export function addressableFieldsWithin<F extends object>(
 
 /**
  * The fields a document view can edit: the top-level ones and, at any depth,
- * those inside named groups, each with its path. The same walk as above, also
- * stepping into named groups; repeaters stay out of reach.
+ * those inside named groups and inside repeaters' rows. The same walk as
+ * above, also stepping into named containers.
  */
 function viewableFields<F extends object>(
   fields: readonly F[] | undefined
@@ -182,10 +231,22 @@ function viewableFields<F extends object>(
 }
 
 /**
+ * Whether every repeater on a path gives its rows a saved id, so each row can
+ * be addressed: a repeater whose rows declare their own `id` field does not.
+ */
+function rowsAddressable<F extends object>(
+  steps: readonly AddressStep<F>[]
+): boolean {
+  return steps.every(
+    step => step.kind === "name" || rowsCarryIds(step.repeater)
+  );
+}
+
+/**
  * Whether a matched view applies to a document with these top-level fields.
  * A slug-scoped view always does; a field-type view where a field of its type
- * sits at the top level or inside groups. One inside a repeater does not
- * count: a row has no address that survives a reorder.
+ * sits at the top level, inside groups, or inside the rows of a repeater
+ * whose rows have saved ids.
  */
 export function documentViewApplies(
   view: RegisteredDocumentView,
@@ -193,7 +254,8 @@ export function documentViewApplies(
 ): boolean {
   if (!("fieldType" in view)) return true;
   return viewableFields(fields).some(
-    ({ field }) => "type" in field && field.type === view.fieldType
+    ({ field, steps }) =>
+      "type" in field && field.type === view.fieldType && rowsAddressable(steps)
   );
 }
 
@@ -256,50 +318,170 @@ export function drawnDocumentView(
 }
 
 /**
- * A field a view could edit: its path (which the address names, `hero.body`
- * for a field in a `hero` group) and label for the chooser, and its
- * declaration for the view.
+ * A field a view could edit: its address (`hero.body` for a field in a `hero`
+ * group, `sections.<rowId>.body` for one in a repeater's row) and label for the
+ * chooser, and its declaration for the view.
  */
 export interface ViewFieldCandidate<F extends object = object> {
+  /** Its address from the document's root, which `?field=` carries. */
   name: string;
   label?: string;
   declaration: F;
-  /** The groups around it, outermost first, whose gates it inherits. */
+  /** The containers around it, outermost first, whose gates it inherits. */
   within: F[];
   /** The base path each of `within` and then the field reads conditions under. */
   bases: string[];
+  /**
+   * Where it sits in the form now, for a field in a repeater's row: the form
+   * names the row by its position, the address by its id. Absent where the
+   * two are the same, which is everywhere else.
+   */
+  formPath?: string;
+  /**
+   * Where it sits, in words, for a field below the top level: each
+   * container's label and each row's title, then the field's label
+   * (`Sections · Hero banner · Body`).
+   */
+  location?: string;
+}
+
+/**
+ * The document's values a row's address is read in: the form's values now,
+ * and as last loaded or stored, where a row's id is saved. Only the
+ * containers holding rows are read.
+ */
+export interface ViewFieldValues {
+  current: Record<string, unknown> | undefined;
+  saved: Record<string, unknown> | undefined;
 }
 
 /**
  * What a view edits: the whole document, one field, or — where the document
  * has several fields the view could edit and the address names none of them —
- * the author's choice.
+ * the author's choice; or nothing, where the address names a repeater's row it
+ * cannot open, and why.
  */
 export type ViewFieldResolution<F extends object = object> =
   | { kind: "document" }
-  | {
-      kind: "field";
-      name: string;
-      declaration: F;
-      within: F[];
-      bases: string[];
-    }
-  | { kind: "choose"; candidates: ViewFieldCandidate<F>[] };
+  | ({ kind: "field" } & Omit<ViewFieldCandidate<F>, "label">)
+  | { kind: "choose"; candidates: ViewFieldCandidate<F>[] }
+  | { kind: "refused"; reason: RowAddressRefusal };
 
-/** The fields of `fieldType` a view can edit, by path and label. */
+/** Whether a walked field is a named field of `fieldType`. */
+function ofType<F extends object>(
+  entry: AddressableField<F>,
+  fieldType: string
+): boolean {
+  const { field } = entry;
+  return (
+    "type" in field && field.type === fieldType && nameOf(field) !== undefined
+  );
+}
+
+/**
+ * A walked field as a candidate at `address`, which names it at `formPath` in
+ * the values read, through `rows`.
+ */
+function candidateAt<F extends object>(
+  entry: AddressableField<F>,
+  address: string,
+  formPath: string,
+  rows: AddressedRow<F>[]
+): ViewFieldCandidate<F> {
+  const { field, within, steps, baseDepths } = entry;
+  const formParts = formPath.split(".");
+  const label =
+    "label" in field && typeof field.label === "string"
+      ? { label: field.label }
+      : {};
+  // The named declarations along the path, one for each name step: the named
+  // containers around the field, then the field.
+  const named = [
+    ...within.filter(container => nameOf(container) !== undefined),
+    field,
+  ];
+  return {
+    name: address,
+    ...label,
+    declaration: field,
+    within,
+    // Each base is the start of the field's own form path, so a condition
+    // inside a row reads beside that row, as the form reads it.
+    bases: baseDepths.map(depth => formParts.slice(0, depth).join(".")),
+    ...(hasRowStep(steps) ? { formPath } : {}),
+    ...(steps.length > 1
+      ? { location: locationLabel(steps, named, rows) }
+      : {}),
+  };
+}
+
+/**
+ * The fields of `fieldType` a view can edit, by address and label: each one
+ * outside repeaters, and inside a repeater, one for each row whose id is
+ * saved, read in `values`. Without values, no row is offered.
+ */
 export function viewFieldCandidates<F extends object>(
   fieldType: string,
-  fields: readonly F[] | undefined
+  fields: readonly F[] | undefined,
+  values?: ViewFieldValues
 ): ViewFieldCandidate<F>[] {
-  return viewableFields(fields).flatMap(({ field, within, path, bases }) => {
-    if (!("type" in field) || field.type !== fieldType) return [];
-    if (nameOf(field) === undefined) return [];
-    const label =
-      "label" in field && typeof field.label === "string"
-        ? { label: field.label }
-        : {};
-    return [{ name: path, ...label, declaration: field, within, bases }];
+  return viewableFields(fields).flatMap(entry => {
+    if (!ofType(entry, fieldType)) return [];
+    if (!hasRowStep(entry.steps)) {
+      return [candidateAt(entry, entry.path, entry.path, [])];
+    }
+    return addressesIn(entry.steps, values?.current).flatMap(address => {
+      const now = resolveAddress(entry.steps, address, values?.current);
+      // Offered only where the row is saved with that id, as the field's own
+      // way in offers it: a row added since cannot be found after a reload.
+      const stored = resolveAddress(entry.steps, address, values?.saved);
+      return now?.kind === "found" && stored?.kind === "found"
+        ? [candidateAt(entry, address, now.formPath, now.rows)]
+        : [];
+    });
   });
+}
+
+/**
+ * A candidate as the field a view edits. Its chooser label stays behind: the
+ * view reads the declaration's own.
+ */
+function asField<F extends object>(
+  candidate: ViewFieldCandidate<F>
+): ViewFieldResolution<F> {
+  const { name, declaration, within, bases, formPath, location } = candidate;
+  return {
+    kind: "field",
+    name,
+    declaration,
+    within,
+    bases,
+    ...(formPath === undefined ? {} : { formPath }),
+    ...(location === undefined ? {} : { location }),
+  };
+}
+
+/**
+ * The field a row address names, found by the row's id in `values`; or why
+ * it opens none. `undefined` when the address is no path through a row of a
+ * field of `fieldType`.
+ */
+function rowField<F extends object>(
+  fieldType: string,
+  fields: readonly F[] | undefined,
+  requested: string,
+  values: ViewFieldValues | undefined
+): ViewFieldResolution<F> | undefined {
+  for (const entry of viewableFields(fields)) {
+    if (!ofType(entry, fieldType) || !hasRowStep(entry.steps)) continue;
+    const found = resolveAddress(entry.steps, requested, values?.current);
+    if (found === null) continue;
+    if (found.kind === "refused") {
+      return { kind: "refused", reason: found.reason };
+    }
+    return asField(candidateAt(entry, requested, found.formPath, found.rows));
+  }
+  return undefined;
 }
 
 /**
@@ -312,16 +494,28 @@ export function viewFieldCandidates<F extends object>(
  * guessed: opening the wrong one of two looks like the right editor showing the
  * wrong content, which an author cannot tell from a lost page. The question
  * offers only the fields the author may edit, as `admits` says.
+ *
+ * An address through a repeater's row names the row by its saved id, found in
+ * `values` wherever the row now stands. One whose row is gone, or that names a
+ * row by its position, is refused: never corrected to the only field, and
+ * never pointed at whichever row now stands where it stood. Nor is a stale
+ * address ever corrected onto a row.
  */
 export function resolveViewField<F extends object>(
   fieldType: string | undefined,
   fields: readonly F[] | undefined,
   requested: string | undefined,
   /** Whether the author may edit a field; every field, unless said. */
-  admits: (candidate: ViewFieldCandidate<F>) => boolean = () => true
+  admits: (candidate: ViewFieldCandidate<F>) => boolean = () => true,
+  values?: ViewFieldValues
 ): ViewFieldResolution<F> {
   if (fieldType === undefined) return { kind: "document" };
-  const candidates = viewFieldCandidates(fieldType, fields);
+  const throughRow =
+    requested === undefined
+      ? undefined
+      : rowField(fieldType, fields, requested, values);
+  if (throughRow !== undefined) return throughRow;
+  const candidates = viewFieldCandidates(fieldType, fields, values);
   // A field the address names is the one meant, whatever may be done with
   // it: the author who followed that address learns why it will not open,
   // rather than meeting another field in its place.
@@ -330,15 +524,76 @@ export function resolveViewField<F extends object>(
   // may be, all of them are, so the author still meets the reason.
   const offered = candidates.filter(admits);
   const choices = offered.length > 0 ? offered : candidates;
-  const chosen = named ?? (choices.length === 1 ? choices[0] : undefined);
-  if (chosen !== undefined) {
-    return {
-      kind: "field",
-      name: chosen.name,
-      declaration: chosen.declaration,
-      within: chosen.within,
-      bases: chosen.bases,
-    };
-  }
+  // The only field opens without asking, unless it is a row's: a row is
+  // opened only by an address that names it.
+  const only = choices.length === 1 ? choices[0] : undefined;
+  const chosen =
+    named ??
+    (only !== undefined && only.formPath === undefined ? only : undefined);
+  if (chosen !== undefined) return asField(chosen);
   return { kind: "choose", candidates: choices };
+}
+
+/**
+ * The top-level fields holding a repeater row that a field of `fieldType` sits
+ * in: what a view of the document watches, so the row its address names is
+ * found again wherever the row moves, without watching the whole document.
+ */
+export function rowContainerRoots<F extends object>(
+  fieldType: string | undefined,
+  fields: readonly F[] | undefined
+): string[] {
+  if (fieldType === undefined) return [];
+  const roots = viewableFields(fields).flatMap(entry => {
+    const first = entry.steps[0];
+    return ofType(entry, fieldType) &&
+      hasRowStep(entry.steps) &&
+      first?.kind === "name"
+      ? [first.name]
+      : [];
+  });
+  return [...new Set(roots)];
+}
+
+/**
+ * Where `address` names its field in `values` — any copy of the document's
+ * values, the form's now, as stored, or a recovery point — or `undefined`
+ * where it names none there. A row is found by its id, so the answer follows a
+ * row that has moved and is `undefined` for one that is gone. The same
+ * resolution the view's field is chosen by.
+ */
+export function viewFieldPathIn<F extends object>(
+  fieldType: string,
+  fields: readonly F[] | undefined,
+  address: string,
+  values: Record<string, unknown> | undefined
+): string | undefined {
+  const through = rowField(fieldType, fields, address, {
+    current: values,
+    saved: undefined,
+  });
+  if (through === undefined) return address;
+  return through.kind === "field"
+    ? (through.formPath ?? through.name)
+    : undefined;
+}
+
+/**
+ * The address of the field at `formPath` inside a repeater's row: its rows
+ * named by their saved ids, or why it has none yet. `undefined` where the
+ * form path runs through no row of `fields`. The other direction of the
+ * resolution a view reads its address by, from the same walk.
+ */
+export function rowFieldAddress<F extends object>(
+  fields: readonly F[] | undefined,
+  formPath: string,
+  values: Record<string, unknown> | undefined,
+  saved: Record<string, unknown> | undefined
+): FormPathAddress | undefined {
+  for (const entry of viewableFields(fields)) {
+    if (!hasRowStep(entry.steps)) continue;
+    const found = addressOfFormPath(entry.steps, formPath, values, saved);
+    if (found !== null) return found;
+  }
+  return undefined;
 }

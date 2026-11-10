@@ -52,13 +52,18 @@ function canvasElement(): HTMLDivElement {
   return canvas;
 }
 
-function setup(sectionId: string | undefined, canvas: HTMLElement | null) {
+function setup(
+  sectionId: string | undefined,
+  canvas: HTMLElement | null,
+  blockId?: string
+) {
   const select = vi.fn();
   const requestPanel = vi.fn();
   const hook = renderHook(
     ({ canvas: root }: { canvas: HTMLElement | null }) =>
       useOpenAtSection({
         sectionId,
+        blockId,
         editor: { document: DOCUMENT as never, select },
         canvas: root,
         requestPanel,
@@ -96,6 +101,16 @@ describe("useOpenAtSection", () => {
     // section the entry screen offered.
     const { select } = setup("nested", canvasElement());
     expect(select).not.toHaveBeenCalled();
+  });
+
+  it("selects a block at any depth when the address names it as a block", () => {
+    // The bindings report links the block holding a binding, wherever it
+    // sits; the same id as a section opens nothing (the case above).
+    const canvas = canvasElement();
+    drawn(canvas, "nested");
+    const { select, requestPanel } = setup(undefined, canvas, "nested");
+    expect(select).toHaveBeenCalledWith("nested");
+    expect(requestPanel).toHaveBeenCalledWith("layers");
   });
 
   it("does nothing when the address names no section", () => {

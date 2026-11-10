@@ -80,6 +80,20 @@ describe("the site's edits to its block types' own looks", () => {
     });
   });
 
+  it("read each type's own look, even where two types' own looks share an id", () => {
+    // An own look claims no id, so a shared one changes nothing it renders.
+    const image = {
+      ...primary,
+      blockType: "core/image",
+      orderIndex: 3,
+      styles: colour("teal"),
+    };
+    expect(blockDefaultsOf([primary, image])).toEqual({
+      "core/button": colour("purple"),
+      "core/image": colour("teal"),
+    });
+  });
+
   it("skip an own look the engine could not use, and a library that is no list", () => {
     expect(blockDefaultsOf([{ ...primary, styles: [] }])).toEqual({});
     expect(blockDefaultsOf({ classes: [primary] })).toEqual({});

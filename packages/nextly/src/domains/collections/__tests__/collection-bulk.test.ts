@@ -408,7 +408,7 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       const result = await service.bulkUpdateEntries({
         collectionName: "posts",
         ids: [],
-        data: { status: "archived" },
+        data: { status: "archived", _overwrite: true },
       });
 
       // Phase 4.5: shape is `{ successes, failures, total, successCount, failedCount }`.
@@ -425,7 +425,7 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       const result = await service.bulkUpdateEntries({
         collectionName: "posts",
         ids: [],
-        data: { status: "archived" },
+        data: { status: "archived", _overwrite: true },
       });
 
       expect(result.total).toBe(0);
@@ -439,7 +439,7 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       const result = await service.bulkUpdateEntries({
         collectionName: "posts",
         ids: ["entry-1", "entry-2"],
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       });
 
       expect(result.total).toBe(2);
@@ -452,7 +452,7 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       const result = await service.bulkUpdateEntries({
         collectionName: "posts",
         ids: ["missing-1"],
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       });
 
       expect(result.failedCount).toBe(1);
@@ -480,7 +480,7 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       const result = await service.bulkUpdateEntries({
         collectionName: "posts",
         ids: ["entry-1"],
-        data: { slug: "taken" },
+        data: { slug: "taken", _overwrite: true },
       });
 
       expect(result.failures[0]).toMatchObject({
@@ -500,7 +500,7 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       const result = await service.bulkUpdateByQuery({
         collectionName: "posts",
         where: { status: { equals: "draft" } },
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       });
 
       expect(result).toHaveProperty("successes");
@@ -515,7 +515,7 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       const result = await service.bulkUpdateByQuery({
         collectionName: "posts",
         where: { status: { equals: "nonexistent" } },
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       });
 
       expect(result.successCount).toBe(0);
@@ -549,7 +549,7 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
         restrictedService.bulkUpdateByQuery({
           collectionName: "posts",
           where: { status: { equals: "draft" } },
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
           user: { id: "user-1" },
         })
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
@@ -667,7 +667,7 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
           serviceWithBusyCheck(error).bulkUpdateByQuery({
             collectionName: "posts",
             where: { status: { equals: "draft" } },
-            data: { status: "published" },
+            data: { status: "published", _overwrite: true },
             user: { id: "user-1" },
           })
         ).rejects.toMatchObject(BUSY);

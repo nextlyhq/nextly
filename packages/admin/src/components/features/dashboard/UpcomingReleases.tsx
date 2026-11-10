@@ -13,6 +13,12 @@
  * entries it holds, and whether its checks found it Ready or "N issues", and
  * leads to its release.
  *
+ * With fewer releases than its rows hold, the card asks for the height its line and rows take
+ * rather than its stored rows (`frame/fit`), so the dashboard row it shares with Needs your
+ * attention is as tall as the taller of the two, not always as tall as their stored rows. Its
+ * rows are counted from its stored height, never measured, so a card drawn shorter draws the
+ * same rows.
+ *
  * With nothing scheduled, stopped or overdue the answer is empty: the widget
  * hides when empty, so the dashboard takes it out, and the frame draws its
  * empty state where customise mode shows it. The frame also drew loading and
@@ -24,9 +30,14 @@
 import type { CoreListWidgetData } from "nextly/core-widget-data";
 import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
+import { useContext, useRef } from "react";
 
 import { FrameState } from "@admin/components/features/widgets/frame/card-state";
 import { CardFigure } from "@admin/components/features/widgets/frame/figure";
+import {
+  leavesRowsEmpty,
+  useCardFitsContent,
+} from "@admin/components/features/widgets/frame/fit";
 import {
   ListCard,
   type ListModel,
@@ -37,6 +48,7 @@ import {
   StatusPill,
 } from "@admin/components/features/widgets/frame/row-parts";
 import {
+  CardHeightContext,
   useCardTier,
   useRowsDrawn,
 } from "@admin/components/features/widgets/frame/tier";
@@ -136,6 +148,23 @@ export const UpcomingReleasesCard: React.FC<UpcomingReleasesCardProps> = ({
   );
 
   const { attention, releases } = rowsOf(data.items);
+  const rowsUnder = attention.length > 0 ? drawnUnderLine : drawn;
+  // What the body draws, the line and the rows, for its height to be asked for while the rows
+  // drawn leave at least one whole row of the stored body empty under the line's room. None for
+  // the empty state, which holds no element here.
+  const content = useRef<HTMLDivElement | null>(null);
+  const storedRows = useContext(CardHeightContext);
+  const shown = Math.min(releases.length, rowsUnder);
+  useCardFitsContent(
+    content,
+    leavesRowsEmpty(
+      shown,
+      storedRows,
+      density,
+      attention.length > 0 ? ATTENTION_LINE_PX : 0
+    ),
+    `${shown} ${attention.length} ${tier} ${density}`
+  );
   if (attention.length === 0 && releases.length === 0) {
     return (
       <FrameState
@@ -153,7 +182,7 @@ export const UpcomingReleasesCard: React.FC<UpcomingReleasesCardProps> = ({
     );
   }
   return (
-    <div className="flex flex-col gap-3">
+    <div ref={content} className="flex flex-col gap-3">
       {attention.length > 0 && <AttentionLine counts={attention} />}
       {releases.length > 0 && (
         // The release rows alone, so the footer counts releases and never the attention line's
@@ -161,7 +190,7 @@ export const UpcomingReleasesCard: React.FC<UpcomingReleasesCardProps> = ({
         <ListCard
           model={RELEASE_LIST_MODEL}
           rows={releases}
-          drawn={attention.length > 0 ? drawnUnderLine : drawn}
+          drawn={rowsUnder}
           viewAllHref={ROUTES.RELEASES}
           tier={tier}
           density={density}

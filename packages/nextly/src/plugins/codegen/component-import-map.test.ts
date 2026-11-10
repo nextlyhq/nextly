@@ -600,6 +600,129 @@ describe("field-type and slot components", () => {
   });
 });
 
+describe("declared contributions to admin places", () => {
+  it("imports a plugin whose only admin UI is a side panel section", () => {
+    // The section's component is resolved by its string when the edit page
+    // draws the panel; with no page, settings or view beside it, the map is
+    // the only importer of its module, so leaving it out leaves the section
+    // empty in a consuming app.
+    const p = plugin({
+      contributions: [
+        {
+          id: "acme-x.design",
+          kind: "sidebarSection",
+          place: "collection.edit",
+          label: "Design",
+          component: "@acme/x/admin#DesignSection",
+        },
+      ],
+    });
+
+    expect(collectAdminComponentPaths(p)).toEqual([
+      "@acme/x/admin#DesignSection",
+    ]);
+    expect(componentImportMapEntries([p])).toEqual([
+      {
+        path: "@acme/x/admin#DesignSection",
+        owner: 'plugin "@acme/x"',
+        use: "contribution",
+      },
+    ]);
+    const code = buildComponentImportMap([p]);
+    expect(code).toContain('import * as _p0 from "@acme/x/admin";');
+    expect(code).toContain('"@acme/x/admin#DesignSection": _p0.DesignSection,');
+  });
+
+  it("collects every kind that names a component, and nothing from those that do not", () => {
+    const p = plugin({
+      contributions: [
+        {
+          id: "acme-x.block",
+          kind: "block",
+          place: "dashboard",
+          component: "@acme/x/admin#Block",
+        },
+        {
+          id: "acme-x.tab",
+          kind: "tab",
+          place: "collection.edit",
+          label: "Tab",
+          component: "@acme/x/admin#Tab",
+        },
+        {
+          id: "acme-x.cell",
+          kind: "column",
+          place: "collection.list",
+          label: "Cell",
+          component: "@acme/x/admin#Cell",
+        },
+        // A column showing a field draws nothing of the plugin's.
+        {
+          id: "acme-x.field",
+          kind: "column",
+          place: "collection.list",
+          label: "Field",
+          field: "title",
+        },
+        {
+          id: "acme-x.open",
+          kind: "rowAction",
+          place: "collection.list",
+          label: "Open",
+          action: { open: "@acme/x/admin#RowDialog" },
+        },
+        {
+          id: "acme-x.bulk",
+          kind: "bulkAction",
+          place: "collection.list",
+          label: "Bulk",
+          action: { open: "@acme/x/admin#BulkDialog" },
+        },
+        // An action that calls a route opens no component.
+        {
+          id: "acme-x.run",
+          kind: "rowAction",
+          place: "collection.list",
+          label: "Run",
+          action: { run: { method: "POST", path: "/run" } },
+        },
+      ],
+    });
+
+    expect(collectAdminComponentPaths(p)).toEqual([
+      "@acme/x/admin#Block",
+      "@acme/x/admin#Tab",
+      "@acme/x/admin#Cell",
+      "@acme/x/admin#RowDialog",
+      "@acme/x/admin#BulkDialog",
+    ]);
+  });
+
+  it("registers a component two contributions share once, and none of a disabled plugin's", () => {
+    const shared = {
+      kind: "sidebarSection",
+      place: "collection.edit",
+      label: "Design",
+      component: "@acme/x/admin#DesignSection",
+    };
+    const contributions = [
+      { ...shared, id: "acme-x.one", collections: ["pages"] },
+      { ...shared, id: "acme-x.two", collections: ["posts"] },
+      // Malformed entries are refused at startup, by name; generation skips
+      // them rather than failing on them.
+      null,
+      { id: "acme-x.empty", kind: "block", place: "dashboard", component: "" },
+    ];
+
+    expect(componentImportMapPaths([plugin({ contributions })])).toEqual([
+      "@acme/x/admin#DesignSection",
+    ]);
+    expect(
+      collectAdminComponentPaths(plugin({ contributions }, false))
+    ).toEqual([]);
+  });
+});
+
 /**
  * Meta keys that carry no `ComponentPath`, whatever else they carry.
  *
@@ -673,9 +796,15 @@ function exposedComponentPaths(meta: PluginAdminMeta): ExposedPaths {
     meta.schemaBuilderSlot,
     meta.entryFormToolbarSlot,
     ...(meta.fieldTypes ?? []).map(fieldType => fieldType.component),
+    ...(meta.documentActions ?? []).map(each =>
+      typeof each.override === "object" ? each.override.component : undefined
+    ),
+    ...(meta.panelSections ?? []).map(section => section.component),
   ].filter((path): path is string => Boolean(path));
 
   const readsComponents = new Set([
+    "documentActions",
+    "panelSections",
     "pages",
     "settings",
     "headerSlot",
@@ -717,6 +846,17 @@ describe("parity with the admin-meta surface", () => {
           header: { slot: "@acme/x/admin#HeaderSlot" },
           schemaBuilderSlot: "@acme/x/admin#SchemaSlot",
           entryFormToolbarSlot: "@acme/x/admin#ToolbarSlot",
+          views: {
+            posts: {
+              documentActions: {
+                delete: { component: "@acme/x/admin#RemoveDialog" },
+                unpublish: "hidden",
+              },
+              panelSections: [
+                { title: "Usage", component: "@acme/x/admin#UsageSection" },
+              ],
+            },
+          },
           // A key startup refuses, carried as plain JavaScript can: it must
           // contribute no path at all.
           widgets: [{ id: "stats", component: "@acme/x/admin#StatsWidget" }],
@@ -742,6 +882,8 @@ describe("parity with the admin-meta surface", () => {
         "@acme/x/admin#HeaderSlot",
         "@acme/x/admin#SchemaSlot",
         "@acme/x/admin#ToolbarSlot",
+        "@acme/x/admin#RemoveDialog",
+        "@acme/x/admin#UsageSection",
       ])
     );
 

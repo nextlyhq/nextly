@@ -159,9 +159,11 @@ describe("inspectSelection", () => {
       "checkbox",
       "select",
       "media",
+      "icon",
       "richText",
       "array",
       "relation",
+      "entryField",
     ]);
   });
 

@@ -27,6 +27,17 @@ export type RateLimitPublicData = {
 };
 
 /**
+ * Which rule a `RULE_COULD_NOT_RUN` is about: the collection or Single whose
+ * rule it is, and the field, for a field's rule. The names of what the caller
+ * asked to read or write, and a retry hint.
+ */
+export type RuleCouldNotRunPublicData = {
+  subject: string;
+  field?: string;
+  retryAfterSeconds?: number;
+};
+
+/**
  * Which Single a `NOT_FOUND` from the singles read is ABOUT.
  *
  * The slug the caller named, and nothing more: a Single that is not registered
@@ -147,7 +158,9 @@ export type SampleContentPublicData = {
  * needs (`approve-posts`, as stored), or for an assignment the permissions any one of which each
  * refused part needed; that the person accountable for the part's stage may not approve it; the
  * parts whose stage the step does not leave from, and the stage each is in; or the parts whose
- * review state moved since the caller saw it. A part is a language, or null for the shared part.
+ * review state moved since the caller saw it; or the changed fields an approval would cover that
+ * a read rule hides from the reviewer, with who could approve instead. A part is a language, or
+ * null for the shared part.
  *
  * @experimental
  */
@@ -166,7 +179,12 @@ export type WorkflowRefusalPublicData =
         reason: "not-from-stage";
       }>;
     }
-  | { reason: "stale"; parts: Array<string | null> };
+  | { reason: "stale"; parts: Array<string | null> }
+  | {
+      reason: "field-hidden";
+      fields: string[];
+      approvers: Array<{ kind: "user"; id: string; name: string | null }>;
+    };
 
 /**
  * What an update refused as made from an out-of-date version tells its caller:
@@ -192,29 +210,15 @@ export type StaleVersionPublicData = {
   historyVersion?: { version: number; locale: string | null };
 };
 
-/**
- * What an update refused for saying neither which version it was made from
- * nor that it overwrites tells its caller: the keys that say either, so a
- * client can be told how to send one. `revsKey` only where the update names
- * its documents by id, so a version can be given for each.
- *
- * @experimental
- */
-export type VersionRequiredPublicData = {
-  versionKey: string;
-  overwriteKey: string;
-  revsKey?: string;
-};
-
 export type PublicData =
   | ValidationPublicData
   | StaleVersionPublicData
-  | VersionRequiredPublicData
   | SampleContentPublicData
   | RemovedFromCodePublicData
   | NotMigratedPublicData
   | ReleaseNotDeletablePublicData
   | RateLimitPublicData
+  | RuleCouldNotRunPublicData
   | SingleAbsentPublicData
   | ReleaseProblemsPublicData
   | SharedFieldsConflictPublicData

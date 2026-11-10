@@ -314,7 +314,9 @@ function hasBreakpoints(set: BreakpointSet | undefined): boolean {
  * characters it covers. One cut in two scripts is two files, each with its
  * own `unicode-range`, and both must load.
  */
-function faceIdentity(face: FontFaceDef): string {
+export function faceIdentity(
+  face: Pick<FontFaceDef, "family" | "weight" | "style" | "unicodeRange">
+): string {
   // Weight and style default at emission (`normal` both), so an absent value
   // and the default spelled out are the same face and must collide here.
   return `${face.family} ${face.weight ?? "normal"} ${face.style ?? "normal"} ${face.unicodeRange ?? ""}`;

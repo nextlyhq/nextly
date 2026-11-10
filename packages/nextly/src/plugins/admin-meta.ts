@@ -15,9 +15,16 @@ import type { PluginOverride } from "../shared/types/config";
 import type {
   HeaderButtonId,
   PluginAdminPage,
+  PluginListFilterDeclaration,
   PluginMenuItem,
 } from "./admin-contributions";
+import { contributedListFilters } from "./admin-filters";
 import type { FieldSurface, PluginTranslations } from "./contributions";
+import {
+  publishedDocumentSurfaces,
+  type PublishedDocumentActionOverride,
+  type PublishedPanelSection,
+} from "./document-surfaces";
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
 import type {
   PluginAdminAppearance,
@@ -28,6 +35,11 @@ import { pluginAdminSlug } from "./plugin-slug";
 import { collectPluginTranslations } from "./plugin-translations";
 import { collectPluginRoutes } from "./routes/collect-routes";
 import { isRouteError } from "./routes/route-error";
+import {
+  collectionContributors,
+  renamedSlug,
+  servedCollectionSlug,
+} from "./served-collection-slug";
 import { settingsPermissionOf } from "./settings-permission";
 import { validatedClientConfig } from "./validate-client-config";
 import {
@@ -143,6 +155,23 @@ export interface PluginAdminMeta {
    */
   documentViews?: PublishedDocumentView[];
   /**
+   * @experimental Overrides of a collection's built-in document actions, each
+   * on the slug it applies to (rename map applied) — present only for enabled
+   * plugins.
+   */
+  documentActions?: PublishedDocumentActionOverride[];
+  /**
+   * @experimental Sections added to a collection's document panel, each on
+   * the slug it applies to — present only for enabled plugins.
+   */
+  panelSections?: PublishedPanelSection[];
+  /**
+   * @experimental Filters for the entry list's toolbar, as they passed the
+   * boot check — present only for enabled plugins. Sent only through the
+   * signed-in workspace meta, like the rest of this record.
+   */
+  listFilters?: PluginListFilterDeclaration[];
+  /**
    * Custom field types — `type` → admin editor component path (so the admin
    * renders fields of these types) plus the picker presentation (label, hint,
    * icon, category) and the `surfaces` the type opted into (so each surface's
@@ -221,16 +250,7 @@ function resolvedMenuItem(
   const { collection, ...rest } = withChildren;
   if (collection === undefined) return withChildren;
 
-  // An OWN property only. `renameMap` is an ordinary object, so a plugin whose
-  // collection is legitimately called `constructor` or `toString` would index
-  // into `Object.prototype` and resolve its slug to a function — and `??`
-  // cannot see that, because an inherited method is neither null nor
-  // undefined. The destination becomes `/admin/collections/function Object()
-  // { [native code] }` and the gate an equally unseeded permission.
-  const renamed = Object.prototype.hasOwnProperty.call(renameMap, collection)
-    ? renameMap[collection]
-    : undefined;
-  const slug = typeof renamed === "string" ? renamed : collection;
+  const slug = renamedSlug(renameMap, collection);
 
   return {
     ...rest,
@@ -333,6 +353,30 @@ function mountableRoutes(
     : undefined;
 }
 
+/**
+ * A plugin's entry-list filters for the admin, from the reduction the boot
+ * check runs, so the admin is offered exactly the filters that passed it;
+ * each named collection under the slug the admin serves it as, so a renamed
+ * collection's list still offers it.
+ */
+function listFiltersMeta(
+  plugin: PluginDefinition,
+  contributors: ReadonlyMap<string, PluginDefinition>
+): PluginListFilterDeclaration[] {
+  return contributedListFilters([plugin]).map(
+    ({ plugin: _owner, collections, ...filter }) => ({
+      ...filter,
+      ...(collections
+        ? {
+            collections: collections.map(slug =>
+              servedCollectionSlug(plugin, slug, contributors)
+            ),
+          }
+        : {}),
+    })
+  );
+}
+
 export function buildPluginAdminMeta(
   plugins: PluginDefinition[],
   pluginOverrides: Record<string, PluginOverride> | undefined
@@ -350,6 +394,7 @@ export function buildPluginAdminMeta(
   // Served regardless of enabled state, as `fieldTypes` and `clientConfig`
   // are: a disabled plugin's field editors still mount and read their strings.
   const translations = collectPluginTranslations(plugins);
+  const contributors = collectionContributors(plugins);
 
   return plugins.map(plugin => {
     const slug = pluginAdminSlug(plugin.name);
@@ -455,6 +500,17 @@ export function buildPluginAdminMeta(
         ({ plugin: _owner, ...view }) => view
       );
       if (documentViews.length > 0) meta.documentViews = documentViews;
+      // Read after the boot check, so each names an action this version
+      // knows and something to draw.
+      const surfaces = publishedDocumentSurfaces(plugin);
+      if (surfaces.documentActions.length > 0) {
+        meta.documentActions = surfaces.documentActions;
+      }
+      if (surfaces.panelSections.length > 0) {
+        meta.panelSections = surfaces.panelSections;
+      }
+      const listFilters = listFiltersMeta(plugin, contributors);
+      if (listFilters.length > 0) meta.listFilters = listFilters;
     }
 
     // Routes move to `whenEnabled` when the plugin is disabled, because

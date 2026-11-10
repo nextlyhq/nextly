@@ -546,7 +546,13 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("refuses it on a placement a condition gates, which the page does not compose", async () => {
-        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        // Visitors may read pages, so a condition on a page's title is one
+        // the page can check for them.
+        current = await createTestNextly({
+          dialect,
+          plugins: [pageBuilder()],
+          seedPublic: true,
+        });
         const t = current;
         const id = await promo(t);
         const gated = (overrides: object): Node => ({
@@ -574,7 +580,13 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("refuses an outer component's value relayed into it through a gated nested placement", async () => {
-        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        // Visitors may read pages, so a condition on a page's title is one
+        // the page can check for them.
+        current = await createTestNextly({
+          dialect,
+          plugins: [pageBuilder()],
+          seedPublic: true,
+        });
         const t = current;
         const inner = await promo(t);
         // An outer component placing the promo under a condition, and exposing

@@ -269,12 +269,16 @@ export function sharedStyleSearchText(
   );
 }
 
-/** The rows a search finds, by name, class name, property or value. */
-export function searchSharedStyles(
-  rows: readonly SharedStyleRow[],
+/**
+ * The rows a search finds, by name, class name, property or value, in their
+ * order. Any row a shared style's row extends, so a look's row comes back as
+ * the row it was.
+ */
+export function searchSharedStyles<Row extends SharedStyleRow>(
+  rows: readonly Row[],
   query: string,
-  textOf: (row: SharedStyleRow) => string
-): SharedStyleRow[] {
+  textOf: (row: Row) => string
+): Row[] {
   const needle = searchable(query.trim());
   if (needle === "") return [...rows];
   return rows.filter(row => textOf(row).includes(needle));
@@ -622,7 +626,7 @@ function counted(
 }
 
 /** "a", "a and b", "a, b and c". */
-function listed(parts: readonly string[]): string {
+export function listedWords(parts: readonly string[]): string {
   if (parts.length <= 1) return parts.join("");
   return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1) ?? ""}`;
 }
@@ -654,7 +658,9 @@ export function sharedStyleReachSentence(
       .filter(kind => reach.byKind[kind] > 0)
       .map(kind => counted(reach.byKind[kind], KIND_WORDS[kind]));
     if (kinds.length > 0) {
-      parts.push(`on ${reach.complete ? "" : "at least "}${listed(kinds)}`);
+      parts.push(
+        `on ${reach.complete ? "" : "at least "}${listedWords(kinds)}`
+      );
     }
   }
   if (parts.length > 0) {
@@ -842,6 +848,14 @@ export const SHARED_STYLE_UNCOUNTABLE_REMOVAL =
  */
 export const SHARED_STYLE_UNUSED_UNCERTAIN =
   "Some uses could not all be counted, so some styles can't be called unused yet.";
+
+/**
+ * What a removal's confirmation says the count cannot see. The count reads
+ * only the styles chosen in the editor; a class written by hand elsewhere is
+ * invisible to it, so a zero is what the editor knows, not a promise.
+ */
+export const SHARED_STYLE_UNCOUNTED_USES =
+  "A class written by hand, in custom code, an HTML attribute or another plugin, isn't counted.";
 
 /** The note under counts that are floors. */
 export const SHARED_STYLE_NOT_WHOLE_NOTE =
