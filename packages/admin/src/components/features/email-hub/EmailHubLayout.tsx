@@ -48,7 +48,7 @@ export function EmailHubLayout({
     : [...EMAIL_HUB_TABS];
 
   return (
-    <PageContainer width="wide">
+    <PageContainer type="list">
       <PageHeader
         title="Email"
         description="Every email this site sends, how they look and how they're sent."
