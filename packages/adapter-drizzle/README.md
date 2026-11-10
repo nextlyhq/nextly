@@ -31,3 +31,17 @@ pnpm add @nextlyhq/adapter-postgres pg
 ## License
 
 [MIT](../../LICENSE.md)
+
+## A SQLite adapter of your own
+
+Case-insensitive matches (`contains`, `ICONTAINS`, `ILIKE`) call a Nextly SQL function, `nextly_fold_case`, on SQLite, because SQLite's own `lower()` folds ASCII letters only. The official SQLite adapter registers it on every connection it opens. An adapter of your own that runs on SQLite must register it on each of its connections before Nextly's statements run there:
+
+```ts
+import { registerSqliteFoldCase } from "@nextlyhq/adapter-drizzle/text-match";
+import Database from "better-sqlite3";
+
+const db = new Database("app.db");
+registerSqliteFoldCase(db); // a better-sqlite3 Database, or anything with the same `function` method
+```
+
+Without it, those statements fail with `no such function: nextly_fold_case` rather than matching fewer rows than the other databases do.

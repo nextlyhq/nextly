@@ -26,7 +26,7 @@
  * package registers them. The editor is `@nextlyhq/builder`; blocks render
  * through `@nextlyhq/blocks-react`.
  */
-export { pageBuilder } from "./plugin";
+export { namedQueriesOf, pageBuilder } from "./plugin";
 export type { PageBuilderOptions } from "./plugin";
 export type {
   FontAddLimits,
@@ -109,6 +109,18 @@ export type {
   PageBuilderLayoutsOptions,
   PageBuilderLayoutsProvider,
 } from "./page-layouts";
+// What the site's one content route takes to serve pages and collections'
+// entries from the address store: who holds a path, the addresses to
+// pre-render, and each collection's published template.
+export { pageBuilderContent } from "./page-content";
+export type {
+  ContentAddressHolder,
+  PageBuilderContentDirectApi,
+  PageBuilderContentOptions,
+  PageBuilderContentProvider,
+  PageBuilderContentTemplate,
+} from "./page-content";
+export type { PageBuilderTemplateOptions } from "./templates/template-addresses";
 
 // The class-usage index, the derivation behind it, and the walk that repairs
 // it.
@@ -155,22 +167,15 @@ export type { ClassUsageVariant } from "./collections/class-usage-index";
 // variant, so a host counting rows would report one page as several and watch
 // the figure climb whenever somebody added a translation.
 //
-// `usageCountReader` comes with it: the count is asked of a grouped read that
-// must run as the system, since the index denies every access rule it declares
-// and an untrusted read answers an empty set — indistinguishable from a
-// component nothing uses.
+// The count is asked of a grouped read over the index's own table, which only
+// the plugin's database reaches, so the installed plugin hands it out:
+// `USAGE_HEALTH_SERVICE`'s `counts(index)`, beside the health the count also
+// needs. A reader built on the Direct API would read the retired collection,
+// which holds no rows, and report every component as used nowhere.
 //
-// The SLUG travels with them, because `usageCountReader` takes one and a
-// consumer of the published package has no other way to name it: the plugin
-// resolves it from its own context, and that context is not reachable from
-// application code. Without this export the only way to call the reader is to
-// spell `nx_pb_component_usage` as a literal, which then has to be re-spelled
-// by hand if the constant ever changes — a copy of an identifier the package
-// owns, kept in step by nobody.
-//
-// It is the DECLARED slug. An integrator who renamed the collection passes the
-// name they chose; the plugin's own wiring resolves a rename the same way, from
-// the declared name as the key.
+// `COMPONENT_USAGE_INDEX_SLUG` names that retired collection. It stays
+// exported for callers that pass it to the service's `read`, which no longer
+// consults it.
 //
 // The HEALTH reader is public for the same reason the count is: the count
 // requires it, so without this a consumer of the published package could only
@@ -185,7 +190,6 @@ export {
   componentUsageCount,
   componentUsageIndex as componentUsageIndexDescriptor,
 } from "./component-usage";
-export { usageCountReader } from "./class-usage-runtime";
 export { COMPONENT_RETIRED_SLUG } from "./collections/component-retired-exposures";
 export { COMPONENT_USAGE_INDEX_SLUG } from "./collections/component-usage-index";
 export { indexIsWhole, readUsageIndexHealth } from "./usage-index-health";
@@ -248,13 +252,100 @@ export type {
   DefinitionActionRequest,
   DefinitionActionResult,
   ExposureTargetInput,
+  ListQueryChange,
   PageAction,
   PageActionRequest,
   PageActionResult,
+  UnbindAnswer,
+  UnbindKeep,
 } from "./composition-actions-contract";
+// The collection template actions: give a collection its template, and
+// publish it, each with a dry run.
+export { TEMPLATE_ACTIONS_ROUTE_PATH } from "./templates/template-actions-contract";
+export type {
+  TemplateAction,
+  TemplateActionRequest,
+  TemplateActionResult,
+  TemplateSummary,
+} from "./templates/template-actions-contract";
+export { TEMPLATES_SLUG } from "./collections/templates";
 export type { ActionBy } from "./component-actions-contract";
+export type { ActionAnswer } from "./composition-route-kit";
+// What a client reads before composing: the site's patterns, components and
+// Layouts by the ids the actions take, and the actions with their schemas.
+export {
+  compositionManifestSchema,
+  MANIFEST_FORMAT_VERSION,
+  MANIFEST_LOCALE_PARAM,
+  MANIFEST_ROUTE_PATH,
+} from "./composition-manifest";
+export type {
+  CompositionManifest,
+  ManifestAction,
+  ManifestComponent,
+  ManifestLayout,
+  ManifestPattern,
+  ManifestRequest,
+  ManifestTier,
+} from "./composition-manifest";
+// The same actions and manifest for code serving a request of its own, as
+// `nextly.plugins["@nextlyhq/plugin-page-builder"].composition`.
+export { COMPOSITION_SERVICE } from "./composition-service";
+export type {
+  CompositionCaller,
+  CompositionService,
+} from "./composition-service";
 export type {
   SavePatternDryRun,
   SavePatternDryRunResponse,
   StoredPageAddress,
+} from "./library-contract";
+// Site code every published page carries, `@experimental` until it renders:
+// the rules an entry is held to, the sanitiser turning pasted HTML into
+// entries, and the check of a site's Content Security Policy, with the merge
+// a host's proxy adds what the code needs to its policy by.
+export {
+  SITE_CODE_LIMITS,
+  siteCodeEntryProblem,
+  siteCodeScriptKind,
+  siteCodeUrlProblem,
+} from "./site-code/rules";
+export type {
+  SiteCodeAttrs,
+  SiteCodeEntry,
+  SiteCodeSlot,
+} from "./site-code/rules";
+export { normaliseSiteCodeText, sanitiseSiteCode } from "./site-code/sanitise";
+export type { SanitisedSiteCode } from "./site-code/sanitise";
+export {
+  checkSiteCodeAgainstCsp,
+  cspHash,
+  mergeSiteCodeIntoCsp,
+  parseCsp,
+  siteCodeFacts,
+  siteCodePolicyAdditions,
+} from "./site-code/csp";
+export type {
+  CspAddition,
+  CspCheck,
+  CspCheckInput,
+  CspFinding,
+  CspPolicy,
+  SiteCodeFacts,
+  SiteCodeInlineKind,
+  SiteCodeLoad,
+  SiteCodeResourceKind,
+} from "./site-code/csp";
+// Where site code is kept and changed, `@experimental`: the route Settings
+// reads and saves it through, and how a site declares its policy.
+export { SITE_CODE_SLUG } from "./site-code/storage";
+export type { PageBuilderSiteCodeOptions } from "./site-code/route";
+export { SITE_CODE_ROUTE_PATH } from "./library-contract";
+export type {
+  SiteCodeChecked,
+  SiteCodePolicyChecked,
+  SiteCodeRead,
+  SiteCodeRequest,
+  SiteCodeSaved,
+  SiteCodeSlotJudged,
 } from "./library-contract";

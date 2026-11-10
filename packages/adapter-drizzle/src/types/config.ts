@@ -223,6 +223,13 @@ export interface PostgresAdapterConfig extends BaseAdapterConfig {
 
   /** Enable prepared statements (default: true) */
   preparedStatements?: boolean;
+
+  /**
+   * Connect without creating anything: a configured `schema` that does not
+   * exist fails the connect with code `3F000` (invalid schema name) instead of
+   * being created. For a run that must change nothing, such as a dry run.
+   */
+  readOnly?: boolean;
 }
 
 /**

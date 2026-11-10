@@ -25,6 +25,7 @@ import {
 
 import { toast } from "@admin/components/ui";
 import type { BulkResponse, PerItemError } from "@admin/lib/api/response-types";
+import { STALE_VERSION_CODE } from "@admin/lib/document-version";
 import {
   toastMutationResult,
   warningText,
@@ -103,7 +104,16 @@ function toastBulkResult<T>(payload: BulkCallbackPayload<T>): void {
   // Through the SAME formatter the element path uses, so a failed row does not
   // cost the surviving rows their identity: several identically-worded notices
   // name no page at all.
-  const detail = (warnings ?? []).map(warningText).join(" ");
+  // Documents changed since they were selected are named apart: they were
+  // refused so no one's later work is replaced, and opening them shows it.
+  const changed = payload.errors.filter(e => e.code === STALE_VERSION_CODE);
+  const changedNote =
+    changed.length > 0
+      ? `${changed.length === 1 ? "1 entry" : `${changed.length} entries`} changed since you selected ${changed.length === 1 ? "it" : "them"}, so ${changed.length === 1 ? "it was" : "they were"} left as ${changed.length === 1 ? "it is" : "they are"}: open ${changed.length === 1 ? "it" : "them"} to see the change.`
+      : "";
+  const detail = [changedNote, ...(warnings ?? []).map(warningText)]
+    .filter(text => text.length > 0)
+    .join(" ");
   toast.warning(payload.message, {
     ...(detail.length > 0 ? { description: detail } : {}),
   });
@@ -250,6 +260,17 @@ export interface UseBulkUpdateEntriesOptions {
   showToast?: boolean;
 }
 
+/** What a bulk update writes, and to which documents. */
+export interface BulkUpdateVariables {
+  ids: string[];
+  data: UpdateEntryPayload;
+  /**
+   * Each document's version, as the list showed it: each is judged by its
+   * own, and one changed since is refused alone. All the ids or none.
+   */
+  revs?: Record<string, string>;
+}
+
 /**
  * Bulk-update multiple entries in a single round-trip.
  *
@@ -273,19 +294,13 @@ export function useBulkUpdateEntries({
 }: UseBulkUpdateEntriesOptions): UseMutationResult<
   BulkResponse<Entry>,
   Error,
-  {
-    ids: string[];
-    data: UpdateEntryPayload;
-  },
+  BulkUpdateVariables,
   unknown
 > {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (variables: {
-      ids: string[];
-      data: UpdateEntryPayload;
-    }) => {
+    mutationFn: async (variables: BulkUpdateVariables) => {
       return entryApi.updateByIDs(collectionSlug, variables);
     },
     onSuccess: response => {

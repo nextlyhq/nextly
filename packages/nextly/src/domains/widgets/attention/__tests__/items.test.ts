@@ -211,6 +211,22 @@ describe("the startup check", () => {
   });
 });
 
+describe("the items registered at boot", () => {
+  it("are read by another copy of the module, as a second server graph holds one", async () => {
+    registerAttentionItems([snapshot([item()])]);
+    // A fresh evaluation of the module: what Next.js gives a route compiled
+    // into a graph other than the one boot registered through.
+    vi.resetModules();
+    const other = await import("../items");
+    const caller = { user: { id: "u1" } } as Parameters<
+      typeof pluginItemReaders
+    >[0];
+    expect(
+      other.pluginItemReaders(caller, new Date()).map(reader => reader.id)
+    ).toEqual(["forms/unread"]);
+  });
+});
+
 describe("what an item's count is handed", () => {
   it("is the reader, a signal, read services, its plugin's scope and the answer's instant, and no settings", async () => {
     const count = vi.fn().mockResolvedValue(4);

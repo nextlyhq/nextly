@@ -24,6 +24,17 @@ On a fresh clone the wrapper will:
 
 Visit [http://localhost:3000](http://localhost:3000) - `/` redirects to `/admin`.
 
+## The demo site
+
+The seed publishes a welcome page built from the page builder's shared parts, so there is a real page to look at on a fresh clone:
+
+- [`/site/welcome`](http://localhost:3000/site/welcome) - the page as a public, cached site serves it (`app/(frontend)/site`). [`/welcome`](http://localhost:3000/welcome) serves the same page per request (`app/(frontend)/[...slug]`), which is the route a preview link opens.
+- **A pattern**, "Hero": copied into the top of the page, which owns its copy.
+- **A component with exposed fields**, "Feature card": placed three times, each placement with its own title, description and link.
+- **A Layout with a locked header**, "Site": its header and footer components are drawn around the page, read-only there, and the header's own blocks carry the Layers lock.
+
+Open it in the editor from **Pages → Welcome to Nextly → Open Page Builder**. The pattern, the components and the Layout are under **Page Builder** in the admin menu (**Patterns**, **Components**, **Layouts**). The page and its parts are written by `seed/composition-demo.ts`, only where they are missing, so a re-seed keeps your edits.
+
 ## Switching databases
 
 The default `.env.example` uses SQLite at `apps/playground/data/playground.db`. No Docker, no external services. To switch:

@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (64f5e70084ec44da). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (ebe04fcc7fc711e2). Edit that file, never this one. -->
 
 # packages/nextly: Agent Guide
 
@@ -60,7 +60,7 @@ inside `packages/nextly`.
   write set fields every authenticated user was forbidden from setting. An
   internal writer that needs a protected field says so with
   `overrideAccess: true`.
-- The canonical `FieldType` union has 19 members and the structured-array
+- The canonical `FieldType` union has 20 members and the structured-array
   type is `repeater`; the `array()` factory is a backward-compat alias, use
   `repeater()` in new code. Surface-only types (`url`, `phone` for users;
   plus `file`, `time`, `hidden` for forms) are intentionally NOT in the

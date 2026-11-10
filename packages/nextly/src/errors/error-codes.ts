@@ -31,6 +31,12 @@ export const NEXTLY_ERROR_STATUS = {
   // receives, so the key form can say which: choose a smaller role, or ask
   // for access. The sentence stays FORBIDDEN's and names no permission.
   API_KEY_ROLE_ABOVE_CREATOR: 403,
+  // A plugin's declared action asked of a row its visibility rule hides,
+  // judged on the row as the caller reads it. Separate from FORBIDDEN, which
+  // the action's permission refuses with: the caller may hold every
+  // permission, and the row is what is wrong. Generic: it never says which
+  // rule, or which field.
+  ACTION_NOT_AVAILABLE: 403,
   NOT_FOUND: 404,
   // A write to a collection or Single removed from code: its registry row
   // says the app's code defines it, and the running configuration no longer
@@ -174,6 +180,10 @@ export const NEXTLY_ERROR_STATUS = {
   // A plugin's document view cannot be routed: a malformed or reserved path,
   // or one two declarations claim on the same document. Refused at boot.
   NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID: 500,
+  // A plugin's override of a document action, or a section it adds to the
+  // document panel, cannot be drawn: an unknown action, nothing to draw, or
+  // one action two plugins override on one collection. Refused at boot.
+  NEXTLY_PLUGIN_DOCUMENT_SURFACE_INVALID: 500,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
   // Plugin schema lifecycle. All 409: each is a state
@@ -242,6 +252,16 @@ export const NEXTLY_ERROR_STATUS = {
   // refusals: no request caused it, and the fix is a change to the server's
   // own configuration.
   NEXTLY_POSTGRES_SCHEMA_MISMATCH: 500,
+  // A reloaded config turns `experimental.perLanguageStorage` on or off while the site runs. 500
+  // like the refusals beside it: no request caused it, and the remedy is restarting the site.
+  NEXTLY_PER_LANGUAGE_STORAGE_CHANGED: 500,
+  // `experimental.perLanguageStorage` is on over a database whose main tables still hold
+  // translatable values. 500 for the same reason: the remedy is the server's configuration or data.
+  NEXTLY_PER_LANGUAGE_STORAGE_MIXED: 500,
+  // `experimental.perLanguageStorage` is on, the site declares no languages, so it would serve the
+  // implicit English alone, and its translations in other languages would read as gone. 500 for the
+  // same reason: the remedy is the server's configuration.
+  NEXTLY_PER_LANGUAGE_STORAGE_LANGUAGES_UNDECLARED: 500,
   // `db.postgres.schema` names a schema other than `public`, which the schema
   // push cannot yet create tables in. 500 for the same reason as the mismatch
   // above: a boot-time refusal of the server's own configuration.
@@ -333,6 +353,7 @@ const GENERIC_PUBLIC_MESSAGE: Readonly<
   INVALID_INPUT: "The request could not be processed.",
   AUTH_REQUIRED: "Authentication required.",
   FORBIDDEN: "You don't have permission to perform this action.",
+  ACTION_NOT_AVAILABLE: "This action isn't available for this entry.",
   NOT_FOUND: "Not found.",
   METHOD_NOT_ALLOWED: "That method is not allowed on this address.",
   RANGE_NOT_SATISFIABLE: "The requested range is outside the file.",

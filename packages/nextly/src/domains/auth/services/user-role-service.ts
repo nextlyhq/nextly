@@ -199,7 +199,10 @@ export class UserRoleService extends BaseService {
         };
       }
 
-      await this.invalidateRoleCaches(storedUserId);
+      // Once the grant commits: inside an enclosing transaction that is its
+      // commit. Flushed before it, a check on another connection could cache
+      // the user without the role, and keep that answer.
+      await this.afterCommit(() => this.invalidateRoleCaches(storedUserId));
 
       return {
         success: true,
@@ -271,7 +274,9 @@ export class UserRoleService extends BaseService {
         };
       }
 
-      await this.invalidateRoleCaches(userId);
+      // Once the removal commits, for the same reason as a grant: flushed
+      // before it, a check could cache the role as still held.
+      await this.afterCommit(() => this.invalidateRoleCaches(userId));
 
       return {
         success: true,

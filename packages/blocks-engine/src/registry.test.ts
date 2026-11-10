@@ -207,6 +207,28 @@ describe("registration rules", () => {
     expect(hasBlock("core/g2")).toBe(true);
   });
 
+  it("registers a child gap that scales its token, as the type allows", () => {
+    registerBlocks([
+      block({
+        name: "core/g3",
+        childGap: { $token: "space.stack", times: 0.75 },
+      } as never),
+    ]);
+    expect(getBlock("core/g3")?.childGap).toEqual({
+      $token: "space.stack",
+      times: 0.75,
+    });
+    // Out of range, refused by the same rule a stored value is.
+    expect(() =>
+      registerBlocks([
+        block({
+          name: "core/g4",
+          childGap: { $token: "space.stack", times: 9 },
+        } as never),
+      ])
+    ).toThrow(/NEXTLY_BLOCK_INVALID/);
+  });
+
   it("types a child gap as exactly what registration accepts", () => {
     // A length, the number zero the catalog's `gap` accepts, or a token
     // reference: the declared type and the runtime check are one contract.
@@ -399,6 +421,14 @@ describe("registration rules", () => {
   it("refuses to register a name the engine reserves", () => {
     expect(() =>
       registerBlocks([block({ name: "nextly/component-instance" })])
+    ).toThrow(/NEXTLY_BLOCK_RESERVED_NAME/);
+  });
+
+  it("refuses the type an editor draws a condition-hidden block as", () => {
+    // A plugin block under that name would be drawn as the marker, and the
+    // marker as it, while an editor applies conditions.
+    expect(() =>
+      registerBlocks([block({ name: "nextly/condition-hidden" })])
     ).toThrow(/NEXTLY_BLOCK_RESERVED_NAME/);
   });
 

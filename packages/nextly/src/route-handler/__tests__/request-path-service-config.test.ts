@@ -17,7 +17,10 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { SanitizedNextlyConfig } from "../../shared/types/config";
+import {
+  sanitizeConfig,
+  type SanitizedNextlyConfig,
+} from "../../shared/types/config";
 import { resolveEmailRetentionConfig } from "../../domains/email/retention-config";
 import { buildServiceConfig } from "../../init/build-service-config";
 import { requestPathServiceConfig } from "../auth-handler";
@@ -79,6 +82,7 @@ describe("the service config a request-path cold boot registers", () => {
       // the hop as itself rather than collapsing into absent.
       webhookRetention: null,
       webhookAuditEnabled: true,
+      perLanguageStorage: true,
       auditRetention: {},
       emailRetention: resolveEmailRetentionConfig(),
       db: {
@@ -102,6 +106,18 @@ describe("the service config a request-path cold boot registers", () => {
         canonical[key as keyof typeof canonical]
       );
     }
+  });
+
+  it("carries the per-language storage choice into the service config", () => {
+    // Registration publishes what the service config carries, so a choice dropped here would boot
+    // the site storing translatable values on its main tables whatever the config says.
+    const on = buildServiceConfig({
+      config: sanitizeConfig({ experimental: { perLanguageStorage: true } }),
+    });
+    expect(on.perLanguageStorage).toBe(true);
+    expect(
+      buildServiceConfig({ config: sanitizeConfig({}) }).perLanguageStorage
+    ).toBe(false);
   });
 
   it("forwards the database directories the builder deliberately does not", () => {

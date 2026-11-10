@@ -79,10 +79,11 @@ async function save(
   locale: string,
   data: Record<string, unknown>
 ): Promise<void> {
-  const saved = await singles.update(SLUG, data, {
-    locale,
-    overrideAccess: true,
-  });
+  const saved = await singles.update(
+    SLUG,
+    { ...data, _overwrite: true },
+    { locale, overrideAccess: true }
+  );
   expect(saved.success, JSON.stringify(saved)).toBe(true);
 }
 
@@ -124,6 +125,7 @@ describe.each(getConfiguredTestDialects())(
 
       const published = await singles.publishAllLocales(SLUG, {
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(published.success, JSON.stringify(published)).toBe(true);
       expect(published.data?.languages).toEqual(preview.data?.languages);
@@ -157,6 +159,7 @@ describe.each(getConfiguredTestDialects())(
 
       const published = await singles.publishAllLocales(SLUG, {
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(published.data?.languages).toEqual(preview.data?.languages);
       expect(await siteNameIn(singles, "es")).toBe("Bonjour");
@@ -196,7 +199,10 @@ describe.each(getConfiguredTestDialects())(
       });
 
       await expect(
-        singles.publishAllLocales(SLUG, options)
+        singles.publishAllLocales(SLUG, {
+          ...options,
+          data: { _overwrite: true },
+        })
       ).rejects.toMatchObject({
         statusCode: 409,
         publicData: {
@@ -289,7 +295,10 @@ describe.each(getConfiguredTestDialects())(
       ]);
 
       await expect(
-        singles.publishAllLocales(SLUG, options)
+        singles.publishAllLocales(SLUG, {
+          ...options,
+          data: { _overwrite: true },
+        })
       ).rejects.toMatchObject({
         statusCode: 400,
         publicData: {
@@ -328,13 +337,18 @@ describe.each(getConfiguredTestDialects())(
       const trusted = { locale: "en", overrideAccess: true };
       const live = await singles.update(
         CODED,
-        { siteName: "Hello", code: "OK", status: "published" },
+        {
+          siteName: "Hello",
+          code: "OK",
+          status: "published",
+          _overwrite: true,
+        },
         trusted
       );
       expect(live.success, JSON.stringify(live)).toBe(true);
       const held = await singles.update(
         CODED,
-        { siteName: "Hello again" },
+        { siteName: "Hello again", _overwrite: true },
         trusted
       );
       expect(held.success, JSON.stringify(held)).toBe(true);
@@ -388,7 +402,7 @@ describe.each(getConfiguredTestDialects())(
       expect(blockers.flatMap(blocker => blocker.fields)).not.toContain("code");
 
       const refused = await singles
-        .publishAllLocales(CODED, options)
+        .publishAllLocales(CODED, { ...options, data: { _overwrite: true } })
         .catch((error: unknown) => error);
       expect(refused).toMatchObject({ statusCode: 400 });
       expect(JSON.stringify(refused)).not.toContain('"path":"code"');

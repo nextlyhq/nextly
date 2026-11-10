@@ -35,7 +35,7 @@ import {
 
 import { envelopeOpFor } from "./component-fields";
 import type { EditorState } from "./editor-state";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 
 /**
  * How many placements chose a variant, for the delete dialog.

@@ -95,7 +95,7 @@ describe("a field-group refusal crossing the write's transaction", () => {
       .update({
         collection: "pages",
         id: (created.item as { id: string }).id,
-        data: { badge: { badge: "" } },
+        data: { badge: { badge: "" }, _overwrite: true },
       })
       .catch((e: unknown) => e);
 
@@ -106,7 +106,10 @@ describe("a field-group refusal crossing the write's transaction", () => {
     current = await boot();
 
     const error = await current.nextly
-      .updateSingle({ slug: "landing", data: { headline: "H", ...BLANK } })
+      .updateSingle({
+        slug: "landing",
+        data: { headline: "H", ...BLANK, _overwrite: true },
+      })
       .catch((e: unknown) => e);
 
     expect(error).toMatchObject(REFUSAL);

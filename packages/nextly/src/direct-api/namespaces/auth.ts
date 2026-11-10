@@ -153,7 +153,7 @@ export async function me(
 }
 
 /**
- * Update the current user's profile (name/image only).
+ * Update the current user's own profile: name, image and interface language.
  *
  * Throws `NextlyError` on failure (NOT_FOUND when the user doesn't exist).
  */
@@ -161,7 +161,12 @@ export async function updateMe(
   ctx: NextlyContext,
   args: {
     user: UserContext;
-    data: { name?: string; image?: string };
+    data: {
+      name?: string;
+      image?: string;
+      /** A language tag (`fr`, `pt-BR`), or null to follow the browser. */
+      interfaceLanguage?: string | null;
+    };
   }
 ): Promise<AuthResult> {
   if (!args.user?.id) {

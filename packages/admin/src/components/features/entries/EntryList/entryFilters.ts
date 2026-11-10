@@ -24,6 +24,11 @@ export interface EntryFilterState {
    * true.
    */
   readsTranslationState?: boolean;
+  /**
+   * The `where` of each plugin filter option chosen, added to the request
+   * beside the list's own filters, so each can only narrow it.
+   */
+  pluginWheres?: readonly Record<string, unknown>[];
 }
 
 /** A filter split into its top-level-only keys and everything else. */
@@ -129,6 +134,7 @@ export function buildEntryWhereFilter({
   updatedTo = "",
   translated = null,
   readsTranslationState = true,
+  pluginWheres = [],
 }: EntryFilterState): Record<string, unknown> | undefined {
   const linked = linkedFilter(whereParam);
   const createdRange = buildDateRangeFilter(createdFrom, createdTo);
@@ -138,6 +144,7 @@ export function buildEntryWhereFilter({
     status !== "all" ? { status: { equals: status } } : undefined,
     createdRange ? { createdAt: createdRange } : undefined,
     updatedRange ? { updatedAt: updatedRange } : undefined,
+    ...pluginWheres,
   ].filter((f): f is Record<string, unknown> => f !== undefined);
 
   // The top-level-only keys go back at the TOP level, never nested inside

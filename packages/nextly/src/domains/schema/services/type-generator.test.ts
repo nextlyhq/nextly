@@ -61,7 +61,7 @@ describe("TypeGenerator — a non-required field is a nullable column", () => {
     // the create input is still derived by `Omit` and so still inherits the
     // `?`, which is what keeps the field omittable.
     expect(code).toMatch(
-      /export type \w+CreateInput = Omit<\w+, "id" \| "createdAt" \| "updatedAt">;/
+      /export type \w+CreateInput = Omit<\w+, "id" \| "_rev" \| "createdAt" \| "updatedAt">;/
     );
   });
 });
@@ -257,5 +257,21 @@ describe("TypeGenerator — a field pointing at a built-in collection names a ty
     expect(code).toContain(
       "subject?: string | User | string | MediaFile | string | Posts | null;"
     );
+  });
+});
+
+describe("TypeGenerator — icon", () => {
+  // A type the generator does not know emits no member at all, so a
+  // `string` member here is the icon branch speaking, not a fallback.
+  it("types an icon field as the string id it stores", () => {
+    const { code } = new TypeGenerator().generateTypesFile([
+      collection([
+        { name: "badge", type: "icon", required: true },
+        { name: "other", type: "not-registered", required: true },
+      ]),
+    ]);
+
+    expect(code).toContain("badge: string;");
+    expect(code).not.toMatch(/\bother\??:/);
   });
 });

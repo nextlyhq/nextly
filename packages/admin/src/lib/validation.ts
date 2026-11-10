@@ -7,11 +7,6 @@
 
 import { z } from "zod";
 
-// The shared 3,000-password corpus, imported from its source file: it is
-// plain data with no server imports, so it bundles safely into the client.
-// The `nextly` package entry stays out of the bundle; only this list crosses.
-import { COMMON_PASSWORDS } from "../../../nextly/src/plugins/security/common-passwords";
-
 /**
  * UUID v4 Regular Expression
  *
@@ -76,76 +71,6 @@ export const createSlugSchema = (): z.ZodString => {
     );
 };
 
-// =======================
-// Password validation
-// =======================
-
-/** The server's default policy constants (auth/password/policy.ts). */
-const MIN_LENGTH = 8;
-const MAX_LENGTH = 128;
-const DIGESTER_REACH_BYTES = 72;
-
-// Pre-computed lowercased, NFC-normalized set, as the server keeps one.
-const commonPasswords = new Set(
-  COMMON_PASSWORDS.map(p => p.normalize("NFC").toLowerCase())
-);
-
-/** Counts Unicode code points (characters), not UTF-16 code units. */
-function countCodePoints(value: string): number {
-  let count = 0;
-  for (const _ of value) {
-    count++;
-  }
-  return count;
-}
-
-/**
- * Client-side mirror of the server's PasswordSchema in
- * packages/nextly/src/schemas/_zod/validation.ts, used by every admin form
- * that sets a password. The server is authoritative; mirroring lets the user
- * see failures before submit, and src/types/userform-password.test.ts holds
- * the two to the same verdicts — same rules, same messages, same order:
- * 1. At least 8 characters (code points, after NFC normalization)
- * 2. At most 128 characters (resource safety)
- * 3. Not on the 3,000 common passwords list (NFC-normalized, case-insensitive)
- * 4. Within the default digester's 72-byte reach (UTF-8)
- * No character class is required — a class-less passphrase passes.
- */
-export const passwordSchema: z.ZodString = z
-  .string()
-  .superRefine((value, ctx) => {
-    const addIssue = (message: string) =>
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message });
-
-    if (value.length === 0) {
-      addIssue("Password is required");
-      return;
-    }
-
-    const normalized = value.normalize("NFC");
-    const charCount = countCodePoints(normalized);
-
-    if (charCount < MIN_LENGTH) {
-      addIssue(`Password must be at least ${MIN_LENGTH} characters`);
-    }
-
-    if (charCount > MAX_LENGTH) {
-      addIssue(`Password must be at most ${MAX_LENGTH} characters`);
-    }
-
-    if (commonPasswords.has(normalized.toLowerCase())) {
-      addIssue("This password is too common.");
-    }
-
-    // UTF-8 byte length, browser-safe: the server reads the password raw, so
-    // the mirror measures it raw too, not the NFC-normalized form.
-    if (new TextEncoder().encode(value).length > DIGESTER_REACH_BYTES) {
-      addIssue(
-        `Password exceeds the ${DIGESTER_REACH_BYTES}-byte limit of the password digester.`
-      );
-    }
-  });
-
 export type PasswordStrength = {
   score: number;
   label: "" | "Weak" | "Medium" | "Strong";
@@ -155,7 +80,8 @@ export type PasswordStrength = {
 /**
  * Computes a 0–6 strength score and label/color tokens for the password
  * meter. Visual indicator only — never use this to gate submission;
- * `passwordSchema` is the authoritative client-side check.
+ * `passwordSchema` in `./password-schema` is the authoritative client-side
+ * check.
  */
 export function calculatePasswordStrength(password: string): PasswordStrength {
   if (!password) return { score: 0, label: "", color: "bg-primary/5" };

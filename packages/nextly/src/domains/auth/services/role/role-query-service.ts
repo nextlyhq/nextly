@@ -1,5 +1,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, asc, count, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
+import { and, asc, count, desc, eq, gte, inArray, lte } from "drizzle-orm";
 
 import type { RoleListSelectResult } from "@nextly/types/rbac-operations";
 
@@ -104,10 +105,11 @@ export class RoleQueryService extends BaseService {
 
       // Search by name (case-insensitive)
       if (search) {
-        // Use database-agnostic case-insensitive search
-        // ilike() only works on PostgreSQL, so use sql with LOWER() for cross-database compatibility
-        const searchPattern = `%${search}%`;
-        conditions.push(sql`LOWER(${roles.name}) LIKE LOWER(${searchPattern})`);
+        // The name contains the text as typed, ignoring case on every dialect, through the one
+        // rule for it: ilike() exists on PostgreSQL only, and SQLite's lower() folds ASCII only.
+        conditions.push(
+          caseInsensitiveContains(this.dialect, roles.name, search)
+        );
       }
 
       // Filter by isSystem

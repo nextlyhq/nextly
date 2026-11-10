@@ -124,6 +124,31 @@ describe.each(getConfiguredTestDialects())(
     );
 
     it(
+      "--dry-run names every table it would drop and each migration it would re-run, and drops none",
+      async () => {
+        const before = await migratedWithStray();
+        // No consent given: a dry run deletes nothing, so it needs none.
+        const run = await nextly(["migrate:fresh", "--dry-run"]);
+        expect(run.status, run.stdout + run.stderr).toBe(0);
+        expect(run.stdout).toContain(`Would remove table ${STRAY}`);
+        expect(run.stdout).toContain(`Would remove table dc_${COLLECTION}`);
+        expect(run.stdout).toMatch(/Would run migration \S+_init/);
+        expect(run.stdout).toContain("Dry run: nothing was changed.");
+        expect((await instance!.adapter.listTables()).sort()).toEqual(before);
+
+        // With --seed, the step a real MySQL run takes before the seeders.
+        const seeded = await nextly(["migrate:fresh", "--dry-run", "--seed"]);
+        expect(seeded.status, seeded.stdout + seeded.stderr).toBe(0);
+        expect(seeded.stdout.includes("MySQL schema reconciliation")).toBe(
+          dialect === "mysql"
+        );
+        expect(seeded.stdout).toContain("Would run the seeders");
+        expect((await instance!.adapter.listTables()).sort()).toEqual(before);
+      },
+      3 * NEXTLY_RUN_TIMEOUT
+    );
+
+    it(
       "--accept-data-loss drops every table and rebuilds the migrated ones",
       async () => {
         const before = await migratedWithStray();

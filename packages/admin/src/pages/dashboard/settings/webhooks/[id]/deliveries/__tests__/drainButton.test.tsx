@@ -30,6 +30,9 @@ vi.mock("@admin/hooks/queries", () => ({
   useDeliveries: (id: string, params: unknown, opts: unknown) =>
     useDeliveries(id, params, opts),
   useRunDrain: () => useRunDrain(),
+  // The event-type filter's choices, not yet loaded: what the page shows
+  // before the server's list arrives.
+  useWebhookEventTypes: () => ({ data: undefined, isError: false }),
 }));
 vi.mock("@admin/hooks/useCan", () => ({
   useCan: (slug: string) => canFor(slug),

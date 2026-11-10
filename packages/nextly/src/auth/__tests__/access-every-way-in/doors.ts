@@ -176,10 +176,23 @@ const COLLECTION_REQUESTS: Record<
     byId: false,
     body: { title: "made", status: "published" },
   },
-  update: { method: "PATCH", byId: true, body: { title: "changed" } },
+  // Access is under test, not versions: every write overwrites.
+  update: {
+    method: "PATCH",
+    byId: true,
+    body: { title: "changed", _overwrite: true },
+  },
   delete: { method: "DELETE", byId: true },
-  publish: { method: "PATCH", byId: true, body: { status: "published" } },
-  unpublish: { method: "PATCH", byId: true, body: { status: "draft" } },
+  publish: {
+    method: "PATCH",
+    byId: true,
+    body: { status: "published", _overwrite: true },
+  },
+  unpublish: {
+    method: "PATCH",
+    byId: true,
+    body: { status: "draft", _overwrite: true },
+  },
 };
 
 /** The admin's media routes are their own handler, mounted gated. */
@@ -197,10 +210,14 @@ async function restMedia(headers: Record<string, string>) {
 /** The REST request a Single's row is: a read, an edit, or a status change. */
 function restSingle(row: Row, slug: string, headers: Record<string, string>) {
   if (row.action === "read") return request("GET", ["singles", slug], headers);
+  // Access is under test, not versions: every write overwrites.
   const body =
     row.target === "single-pub"
-      ? { status: row.action === "publish" ? "published" : "draft" }
-      : { headline: "edit" };
+      ? {
+          status: row.action === "publish" ? "published" : "draft",
+          _overwrite: true,
+        }
+      : { headline: "edit", _overwrite: true };
   return request("PATCH", ["singles", slug], headers, body);
 }
 
@@ -370,13 +387,29 @@ const DIRECT_CALLS: Record<
       data: { title: "made", status: "published" },
       ...as,
     }),
+  // Access is under test, not versions: every write overwrites.
   update: (n, collection, id, as) =>
-    n.update({ collection, id, data: { title: "changed" }, ...as }),
+    n.update({
+      collection,
+      id,
+      data: { title: "changed", _overwrite: true },
+      ...as,
+    }),
   delete: (n, collection, id, as) => n.delete({ collection, id, ...as }),
   publish: (n, collection, id, as) =>
-    n.update({ collection, id, data: { status: "published" }, ...as }),
+    n.update({
+      collection,
+      id,
+      data: { status: "published", _overwrite: true },
+      ...as,
+    }),
   unpublish: (n, collection, id, as) =>
-    n.update({ collection, id, data: { status: "draft" }, ...as }),
+    n.update({
+      collection,
+      id,
+      data: { status: "draft", _overwrite: true },
+      ...as,
+    }),
   // A list and a count answer which probe rows were among what they read.
   list: async (n, collection, _id, as) =>
     probesRead(
@@ -414,12 +447,21 @@ async function direct(world: World, row: Row, who: CallerHandle) {
   const { slug, id } = addressOf(world, row, "direct");
   if (row.target === "single") {
     if (row.action === "read") await nextly.findSingle({ slug, ...as });
-    else await nextly.updateSingle({ slug, data: { headline: "edit" }, ...as });
+    else
+      await nextly.updateSingle({
+        slug,
+        data: { headline: "edit", _overwrite: true },
+        ...as,
+      });
     return "A";
   }
   if (row.target === "single-pub") {
     const status = row.action === "publish" ? "published" : "draft";
-    await nextly.updateSingle({ slug, data: { status }, ...as });
+    await nextly.updateSingle({
+      slug,
+      data: { status, _overwrite: true },
+      ...as,
+    });
     return "A";
   }
   const call = DIRECT_CALLS[row.action];
@@ -1342,9 +1384,12 @@ function entryWriteDone(
   if (!byId) return landed;
   const stored = after.find(entry => String(entry.id) === id);
   if (!body) return stored === undefined;
+  // `_overwrite` is the request's choice, not a value it stores.
   return (
     stored !== undefined &&
-    Object.entries(body).every(([field, value]) => stored[field] === value)
+    Object.entries(body).every(
+      ([field, value]) => field === "_overwrite" || stored[field] === value
+    )
   );
 }
 

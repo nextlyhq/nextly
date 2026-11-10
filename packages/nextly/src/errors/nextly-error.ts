@@ -18,6 +18,7 @@ import type {
   StaleVersionPublicData,
   VersionRequiredPublicData,
   ValidationPublicData,
+  WorkflowRefusalPublicData,
 } from "./public-data";
 import { DATABASE_BUSY_RETRY_AFTER_SECONDS } from "./retry-after";
 
@@ -323,10 +324,16 @@ export class NextlyError extends Error {
   static forbidden(opts?: {
     cause?: Error;
     logContext?: Record<string, unknown>;
+    /**
+     * What the caller needs to act on the refusal, where saying it leaks nothing they may not
+     * know: for a workflow step, the permission it needs. Absent, the refusal carries no data.
+     */
+    publicData?: PublicData;
   }): NextlyError {
     return new NextlyError({
       code: "FORBIDDEN",
       publicMessage: "You don't have permission to perform this action.",
+      publicData: opts?.publicData,
       cause: opts?.cause,
       logContext: opts?.logContext,
     });
@@ -589,12 +596,14 @@ export class NextlyError extends Error {
      * What a caller needs to act on the conflict: for a release refused over
      * its documents, the problems by code and member; for a release that
      * cannot be deleted, the reason; for a pending change refused over the
-     * fields every language shares, why and which fields.
+     * fields every language shares, why and which fields; for a workflow
+     * step, the parts it could not move and why.
      */
     data?:
       | ReleaseProblemsPublicData
       | ReleaseNotDeletablePublicData
-      | SharedFieldsConflictPublicData;
+      | SharedFieldsConflictPublicData
+      | WorkflowRefusalPublicData;
     cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
@@ -618,20 +627,33 @@ export class NextlyError extends Error {
    */
   /**
    * An update that said neither which version of a document it was made from
-   * nor that it overwrites whatever is stored. `bulk` names an update that
-   * writes the same values to many documents, which can carry no one
-   * document's version: by its ids, which can be given a version each
+   * nor that it overwrites whatever is stored. Without `bulk`, an update of
+   * one document, which sends back the version it read. `bulk` names an
+   * update that writes the same values to many documents, which can carry no
+   * one document's version: by its ids, which can be given a version each
    * (`keys.revs`), or by a query, which cannot. The keys are the write path's
    * to name, so the message spells them as the request does.
    *
    * @experimental
    */
   static versionRequired(opts: {
-    bulk: "ids" | "query";
+    bulk?: "ids" | "query";
     keys: { version: string; overwrite: string; revs: string };
     logContext?: Record<string, unknown>;
   }): NextlyError {
     const { version, overwrite, revs } = opts.keys;
+    if (opts.bulk === undefined) {
+      const one: VersionRequiredPublicData = {
+        versionKey: version,
+        overwriteKey: overwrite,
+      };
+      return new NextlyError({
+        code: "VERSION_REQUIRED",
+        publicMessage: `This update must say which version of the document it changes. Send back the \`${version}\` from your last read of it, or set \`${overwrite}: true\` to replace whatever is stored.`,
+        publicData: one,
+        logContext: opts.logContext,
+      });
+    }
     const byIds = opts.bulk === "ids";
     const data: VersionRequiredPublicData = {
       versionKey: version,

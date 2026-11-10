@@ -173,6 +173,7 @@ async function seedSwing(t: TestNextly): Promise<string> {
         kind: "component",
         nodes: [heading("s1")],
       },
+      _overwrite: true,
     },
     overrideAccess: true,
   });
@@ -306,7 +307,7 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: "landings" as never,
             id: String(landing.item.id),
-            data: { hero: { content: tooDeep() } } as never,
+            data: { hero: { content: tooDeep() }, _overwrite: true } as never,
             overrideAccess: true,
           })
         )
@@ -328,7 +329,7 @@ describe.each(getConfiguredTestDialects())(
         await refusalCodes(
           t.nextly.updateSingle({
             slug: "homeblock" as never,
-            data: { hero: { content: tooDeep() } } as never,
+            data: { hero: { content: tooDeep() }, _overwrite: true } as never,
           })
         )
       ).toEqual(["depth-exceeded"]);
@@ -358,7 +359,10 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: "landings" as never,
             id,
-            data: { hero: { content: pageOf([card]) } } as never,
+            data: {
+              hero: { content: pageOf([card]) },
+              _overwrite: true,
+            } as never,
             overrideAccess: true,
           })
         )
@@ -368,7 +372,7 @@ describe.each(getConfiguredTestDialects())(
     it("judges a Single's instance's locks against its own starting blocks, not the Single's field of the same name", async () => {
       await t.nextly.updateSingle({
         slug: "homeblock" as never,
-        data: { hero: { title: "Hero" } } as never,
+        data: { hero: { title: "Hero" }, _overwrite: true } as never,
       });
       const [row] = await t.adapter.select<{ id: string }>("single_homeblock");
       // The single's own field holds a card loosened past its lock: planted
@@ -387,7 +391,10 @@ describe.each(getConfiguredTestDialects())(
         await refusalCodes(
           t.nextly.updateSingle({
             slug: "homeblock" as never,
-            data: { hero: { content: pageOf([card]) } } as never,
+            data: {
+              hero: { content: pageOf([card]) },
+              _overwrite: true,
+            } as never,
           })
         )
       ).toEqual(["locked-slot-content-only"]);
@@ -424,7 +431,10 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.update({
           collection: "landings" as never,
           id,
-          data: { hero: { title: "Hero", content: pageOf([card]) } } as never,
+          data: {
+            hero: { title: "Hero", content: pageOf([card]) },
+            _overwrite: true,
+          } as never,
           overrideAccess: true,
         });
 
@@ -493,6 +503,7 @@ describe.each(getConfiguredTestDialects())(
             title: "Tafel",
             status,
             hero: { content: pagePlacing(swing) },
+            _overwrite: true,
           } as never,
           overrideAccess: true,
         });

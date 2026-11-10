@@ -316,7 +316,7 @@ describe("New form submissions", () => {
         expect(init?.method).toBe("PATCH");
         expect(JSON.parse(String(init?.body))).toEqual({
           where: { id: { equals: "s1" }, status: { equals: "new" } },
-          data: { status: "read" },
+          data: { status: "read", _overwrite: true },
         });
 
         // A middle click opens it in a new tab, and marks it read too.

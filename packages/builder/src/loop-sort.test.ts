@@ -1,16 +1,19 @@
 /**
- * A loop's stored sort, as its controls read and write it: the first key
- * edited, every further key kept as stored.
+ * A loop's stored sort, as its single-key control reads and writes it: the
+ * engine's reading of the keys, the first edited, every further key kept.
  */
 import { describe, expect, it } from "vitest";
 
 import { readSort, restKeys, writeSort } from "./loop-sort";
 
 describe("reading a stored sort", () => {
-  it("reads the first key's field and direction, and keeps the rest as stored", () => {
+  it("reads the first key's field and direction, and keeps the rest in order", () => {
     expect(readSort("-publishedAt, title,-id")).toEqual({
       first: { field: "publishedAt", descending: true },
-      rest: ["title", "-id"],
+      rest: [
+        { field: "title", descending: false },
+        { field: "id", descending: true },
+      ],
     });
   });
 
@@ -20,11 +23,16 @@ describe("reading a stored sort", () => {
     }
   });
 
-  it("skips empty keys and a bare dash, as the reader does", () => {
-    expect(readSort(",-, title")).toEqual({
+  it("skips empty keys, as the reader does", () => {
+    expect(readSort(",, title,")).toEqual({
       first: { field: "title", descending: false },
       rest: [],
     });
+  });
+
+  it("reads a sort naming something that is not a field as none, as the reader lists it in id order", () => {
+    expect(readSort("-, title")).toEqual({ first: undefined, rest: [] });
+    expect(readSort("title,a.b")).toEqual({ first: undefined, rest: [] });
   });
 });
 

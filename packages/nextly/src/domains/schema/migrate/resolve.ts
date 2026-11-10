@@ -13,7 +13,14 @@
  *                    only: a plugin module is recorded by `nextly migrate`,
  *                    after --failed-cleanup.
  *   --rolled-back    record a rolled_back event so the next `migrate` re-runs
- *                    the file (requires a prior applied row).
+ *                    the file (requires a prior applied row). With
+ *                    --file-missing, said explicitly, for a file the folder
+ *                    no longer holds: it also retires an attempt a newer
+ *                    build left unfinished, recording the migration rolled
+ *                    back.
+ *   --removed        record that an applied migration's file was removed
+ *                    from the folder on purpose: it stays applied, and the
+ *                    missing-file check no longer counts it.
  *   --failed-cleanup flip the stuck attempts (every failed or unfinished one
  *                    since the file's last other event, its down section's
  *                    included) to rolled_back so the .sql can be edited
@@ -32,6 +39,7 @@ import { isPluginLedgerRow, ledgerFilename } from "../events/ledger-scope";
 import {
   attemptCleared,
   migrationStanding,
+  removedOnPurpose,
   standingOf,
   unresolvedAttempts,
 } from "../events/migration-state";
@@ -44,7 +52,11 @@ import { isRecordedChecksum } from "./applied-checksums";
 import { failedAttemptMayBePartial } from "./drift-reconcile";
 import { isMarkCurrent } from "./old-builder-ledger";
 
-export type ResolveMode = "applied" | "rolled-back" | "failed-cleanup";
+export type ResolveMode =
+  | "applied"
+  | "rolled-back"
+  | "failed-cleanup"
+  | "removed";
 
 /** Structural slice of SchemaEventsRepository this orchestration needs. */
 export interface ResolveRepo {
@@ -61,6 +73,13 @@ export interface ResolveRepo {
   recordChecksum(id: string, sha256: string, note: string): Promise<void>;
   /** The newest old Schema Builder mark of each file (`currentOldBuilderMarks`). */
   currentOldBuilderMarks(): Promise<Map<string, SchemaEventRow>>;
+  /** Record an applied migration's file removed on purpose (`SchemaEventsRepository.recordRemoval`). */
+  recordRemoval(input: {
+    filename: string;
+    sha256: string | null;
+  }): Promise<string>;
+  /** Every recorded removal (`SchemaEventsRepository.listFileRemovals`). */
+  listFileRemovals(): Promise<SchemaEventRow[]>;
 }
 
 export interface ResolveMigrationArgs {
@@ -68,6 +87,12 @@ export interface ResolveMigrationArgs {
   /** Bare or `.sql`-suffixed migration name; normalized internally. */
   filename: string;
   skipVerify?: boolean;
+  /**
+   * `--file-missing`: with `--rolled-back`, the operator says explicitly that
+   * the file is gone from the folder, so it is not read. Refused while the
+   * file is there.
+   */
+  fileMissing?: boolean;
   /**
    * The database the ledger lives in. It decides whether an attempt that did
    * not finish can have left part of a file's work behind
@@ -121,6 +146,7 @@ export type ResolveResult =
       previous: string | null;
     }
   | { kind: "rolled-back"; eventId: string }
+  | { kind: "removed"; eventId: string }
   | {
       kind: "failed-cleanup";
       /**
@@ -149,6 +175,8 @@ export async function resolveMigration(
       return resolveRolledBack(args, filename);
     case "failed-cleanup":
       return resolveFailedCleanup(args, filename);
+    case "removed":
+      return resolveRemoved(args, filename);
     default: {
       const _exhaustive: never = args.mode;
       throw new Error(`Unsupported resolve mode: ${String(_exhaustive)}`);
@@ -377,18 +405,28 @@ async function resolveRolledBack(
   args: ResolveMigrationArgs,
   filename: string
 ): Promise<ResolveResult> {
-  if (!(await args.fileExists(filename))) {
-    throw new NextlyError({
-      code: "NEXTLY_MIGRATION_FILE_MISSING",
-      publicMessage: `Migration file not found: ${filename}`,
-    });
-  }
+  await assertFileAsSaid(args, filename);
 
   const rows = await args.repo.findFileApplies(filename);
-  if (standingOf(filename, rows).state === "rolled_back") {
+  const current = standingOf(filename, rows);
+  // Already rolled back, unless an attempt since is unresolved and the file
+  // is gone: that attempt is what `--file-missing` retires below.
+  if (
+    current.state === "rolled_back" &&
+    (current.unresolvedAttempt === undefined || args.fileMissing !== true)
+  ) {
     return { kind: "noop", reason: `${filename} is already rolled back.` };
   }
-  const appliedRows = rows.filter(r => r.status === "applied");
+  // With the file gone, an attempt a newer build left unfinished is retired
+  // with the applied rows: nothing here can finish it, and the operator has
+  // said what of it ran is reversed.
+  const appliedRows = rows.filter(
+    r =>
+      r.status === "applied" ||
+      (args.fileMissing === true &&
+        !isPluginLedgerRow(filename) &&
+        unresolvedAttempts(filename, rows).includes(r))
+  );
   if (appliedRows.length === 0) {
     throw new NextlyError({
       code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
@@ -425,6 +463,93 @@ async function resolveRolledBack(
     return id;
   });
   return { kind: "rolled-back", eventId };
+}
+
+/**
+ * Refuses a `--rolled-back` that says the wrong thing about the file: one
+ * the folder lacks needs `--file-missing`, said explicitly, and one it holds
+ * refuses the flag, so a typo never records a rollback of the wrong file.
+ */
+async function assertFileAsSaid(
+  args: ResolveMigrationArgs,
+  filename: string
+): Promise<void> {
+  const exists = await args.fileExists(filename);
+  if (!exists && args.fileMissing !== true) {
+    throw new NextlyError({
+      code: "NEXTLY_MIGRATION_FILE_MISSING",
+      publicMessage: `Migration file not found: ${filename}. If it is gone from the folder on purpose, say so: \`nextly migrate:resolve --rolled-back ${filename} --file-missing\`.`,
+    });
+  }
+  if (exists && args.fileMissing === true) {
+    throw new NextlyError({
+      code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+      publicMessage: `${filename} is in the migrations folder, so --file-missing does not apply: run \`nextly migrate:resolve --rolled-back ${filename}\` without it.`,
+    });
+  }
+}
+
+/**
+ * Records that an applied app migration's file was removed from the folder on
+ * purpose (`recordRemoval`), with the checksum its applied outcome carries.
+ * The migration stays applied: the record is no outcome, so it is never run
+ * again if its file returns, and is checked against that checksum. Refused
+ * while the file is there, for a migration not applied, and over an attempt
+ * a newer build left unfinished, which `--rolled-back --file-missing` settles.
+ */
+async function resolveRemoved(
+  args: ResolveMigrationArgs,
+  filename: string
+): Promise<ResolveResult> {
+  assertAppFile(filename);
+  const refuse = (message: string) =>
+    new NextlyError({
+      code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+      publicMessage: message,
+    });
+  if (await args.fileExists(filename)) {
+    throw refuse(
+      `${filename} is in the migrations folder, so there is no removal to record.`
+    );
+  }
+  // Its down section's attempts too, as every history check reads them.
+  const rows = [
+    ...(await args.repo.findFileApplies(filename)),
+    ...(await args.repo.findFileRollbacks(filename)),
+  ];
+  const standing = migrationStanding(rows);
+  if (standing.unresolvedAttempt !== undefined) {
+    throw refuse(
+      `${filename} has an attempt that did not finish, so the database may hold part of it. Record how it ended first: reverse what of it ran and run \`nextly migrate:resolve --failed-cleanup ${filename}\`, or, for a newer build's attempt at the file, \`nextly migrate:resolve --rolled-back ${filename} --file-missing\`.`
+    );
+  }
+  if (standing.state !== "applied" || standing.outcome === undefined) {
+    throw refuse(
+      `${filename} is not applied, so its removal needs no record: a migration the ledger does not record applied is never counted as missing.`
+    );
+  }
+  // The checksum a returning file is held to: a row an earlier version wrote
+  // without one could not hold it, and the next run would record the
+  // returning file's checksum as if it matched.
+  if (!isRecordedChecksum(standing.outcome.sha256)) {
+    throw refuse(
+      `${filename}'s applied record carries no checksum, so a file that returns could not be checked against it. Put the file back as it was when it ran and run \`nextly migrate\` once, which records its checksum, then remove it and record the removal.`
+    );
+  }
+  // Recorded already for the outcome it stands at now.
+  if (
+    removedOnPurpose(rows, await args.repo.listFileRemovals()).has(filename)
+  ) {
+    return {
+      kind: "noop",
+      reason: `${filename}'s removal is already recorded.`,
+    };
+  }
+  const sha256 = standing.outcome.sha256;
+  const eventId = await writeLedger(args, repo =>
+    repo.recordRemoval({ filename, sha256 })
+  );
+  return { kind: "removed", eventId };
 }
 
 async function resolveFailedCleanup(

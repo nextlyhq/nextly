@@ -10,7 +10,7 @@
  *
  * @module host-rewrite/progress
  */
-import { and, eq, inArray } from "@nextlyhq/plugin-sdk/db";
+import { and, asc, eq, inArray } from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
   type PluginDatabase,
@@ -30,10 +30,30 @@ export interface HostProgress {
   readonly reason: string | null;
 }
 
+/** How many documents of each state a run recorded. */
+export type ProgressCounts = Readonly<Record<HostState, number>>;
+
 /** The progress table's operations. */
 export interface ProgressStore {
   /** Every document a run recorded, in no particular order. */
   all(runId: string): Promise<readonly HostProgress[]>;
+  /**
+   * Which of these documents the converting walk need not visit again: those
+   * recorded `rewritten`, `unchanged` or `left`. A left document is settled for
+   * that walk because visiting it again changes nothing until its author acts,
+   * and a budgeted run that kept revisiting one would never get past it. Only
+   * `pending`, a document a write re-queued, is visited again. The final walk
+   * reads every document regardless, left ones included. Read by the keys
+   * named, so a step reads the rows of the documents it passes.
+   */
+  settledAmong(
+    runId: string,
+    documentKeys: readonly string[]
+  ): Promise<ReadonlySet<string>>;
+  /** How many documents of each state a run recorded, counted in the database. */
+  counts(runId: string): Promise<ProgressCounts>;
+  /** The first `limit` documents a run left, by key. */
+  leftPage(runId: string, limit: number): Promise<readonly HostProgress[]>;
   /** Record one document's state, replacing what was recorded. */
   record(
     runId: string,
@@ -41,12 +61,6 @@ export interface ProgressStore {
     state: HostState,
     reason?: string
   ): Promise<void>;
-  /**
-   * A document holding a reference to one of these components was written
-   * while its `delete` run was open: mark it pending and send the run back to
-   * its converting walk, so it is read again whichever write committed last.
-   */
-  requeue(componentIds: readonly string[], documentKey: string): Promise<void>;
   /**
    * A finished run asked again: mark every document it left as pending and
    * move it from done back to its converting walk, in one transaction, so a
@@ -67,7 +81,7 @@ function stateOf(value: string): HostState {
 }
 
 /** The table operations a record is written through: `ctx.db`, or a transaction. */
-type ProgressHandle = Pick<
+export type ProgressHandle = Pick<
   PluginTransaction,
   "select" | "table" | "update" | "insert"
 >;
@@ -98,6 +112,61 @@ async function writeRow(
     hostKey: documentKey,
     ...set,
   });
+}
+
+/**
+ * Mark one document pending in a run's progress, through `handle`: a caller
+ * sending the run back to its converting walk in the same transaction (a
+ * write's own, for the component delete's fence), so the pending row and the
+ * run's phase land together or not at all.
+ */
+export async function markPending(
+  handle: ProgressHandle,
+  runId: string,
+  documentKey: string
+): Promise<void> {
+  await writeRow(handle, runId, documentKey, {
+    state: "pending",
+    reason: null,
+  });
+}
+
+/**
+ * Record one document as left in a run's progress, through `handle`, with
+ * why: a document the run's walk did not strip and still owes.
+ */
+export async function markLeft(
+  handle: ProgressHandle,
+  runId: string,
+  documentKey: string,
+  reason: string
+): Promise<void> {
+  await writeRow(handle, runId, documentKey, { state: "left", reason });
+}
+
+/**
+ * Mark every document a run left as pending again, through `handle` (a
+ * transaction that also moves the run back to its converting walk). Answers
+ * false, changing nothing, when the run left none.
+ */
+export async function leftToPending(
+  handle: ProgressHandle,
+  runId: string
+): Promise<boolean> {
+  const h = handle.table(componentDeletionHosts);
+  const left = and(eq(h.deletionId, runId), eq(h.state, "left"));
+  if (left === undefined) return false;
+  if (
+    (await handle.select(componentDeletionHosts).where(left).first()) === null
+  ) {
+    return false;
+  }
+  // Moves a value (left to pending), so no dialect reads it as matching
+  // nothing.
+  await handle
+    .update(componentDeletionHosts, { state: "pending", reason: null })
+    .where(left);
+  return true;
 }
 
 /** The progress store over the plugin's own `ctx.db`. */
@@ -137,49 +206,70 @@ export function progressStore(
     }
   };
 
+  const states: readonly HostState[] = [
+    "rewritten",
+    "unchanged",
+    "left",
+    "pending",
+  ];
   return {
     all,
-    record,
-    requeue: async (componentIds, documentKey) => {
-      if (componentIds.length === 0) return;
-      const r = db.table(componentDeletions);
-      const runs = await db
-        .select(componentDeletions)
-        .where(inArray(r.componentId, [...componentIds]))
-        .all();
-      // Only a delete run fences references, so only its documents are
-      // re-queued for holding one.
-      for (const run of runs.filter(row => row.purpose !== "strip-retired")) {
-        // ONE transaction: a pending row with the run left in its final walk,
-        // or done, would never be visited again, so the two land together or
-        // neither does.
-        await db.transaction(async tx => {
-          await writeRow(tx, run.id, documentKey, {
-            state: "pending",
-            reason: null,
-          });
-          const t = tx.table(componentDeletions);
-          await tx
-            .update(componentDeletions, { phase: "converting", cursor: null })
-            .where(eq(t.id, run.id));
-        });
+    settledAmong: async (runId, documentKeys) => {
+      const settled = new Set<string>();
+      if (documentKeys.length === 0) return settled;
+      const h = db.table(componentDeletionHosts);
+      const where = and(
+        eq(h.deletionId, runId),
+        inArray(h.hostKey, [...documentKeys])
+      );
+      if (where === undefined) return settled;
+      for (const row of await db
+        .select(componentDeletionHosts)
+        .where(where)
+        .all()) {
+        if (stateOf(row.state) !== "pending") settled.add(row.hostKey);
       }
+      return settled;
     },
+    counts: async runId => {
+      const h = db.table(componentDeletionHosts);
+      const counted = await Promise.all(
+        states.map(async state => {
+          const where = and(eq(h.deletionId, runId), eq(h.state, state));
+          return where === undefined
+            ? 0
+            : db.select(componentDeletionHosts).where(where).count();
+        })
+      );
+      return {
+        rewritten: counted[0] ?? 0,
+        unchanged: counted[1] ?? 0,
+        left: counted[2] ?? 0,
+        pending: counted[3] ?? 0,
+      };
+    },
+    leftPage: async (runId, limit) => {
+      const h = db.table(componentDeletionHosts);
+      const where = and(eq(h.deletionId, runId), eq(h.state, "left"));
+      if (where === undefined) return [];
+      const rows = await db
+        .select(componentDeletionHosts)
+        .where(where)
+        .orderBy(asc(h.hostKey))
+        .limit(limit)
+        .all();
+      return rows.map(row => ({
+        documentKey: row.hostKey,
+        state: stateOf(row.state),
+        reason: row.reason,
+      }));
+    },
+    record,
     reopenLeft: runId =>
       db.transaction(async tx => {
-        const h = tx.table(componentDeletionHosts);
-        const left = and(eq(h.deletionId, runId), eq(h.state, "left"));
-        if (left === undefined) return false;
-        if (
-          (await tx.select(componentDeletionHosts).where(left).first()) === null
-        ) {
-          return false;
-        }
-        // Each statement moves a value (left to pending, done to
-        // converting), so no dialect reads it as matching nothing.
-        await tx
-          .update(componentDeletionHosts, { state: "pending", reason: null })
-          .where(left);
+        if (!(await leftToPending(tx, runId))) return false;
+        // Moves a value (done to converting), so no dialect reads it as
+        // matching nothing.
         const t = tx.table(componentDeletions);
         const done = and(eq(t.id, runId), eq(t.phase, "done"));
         if (done !== undefined) {

@@ -387,26 +387,34 @@ const OPERATIONS: Operation[] = [
       restCollection(
         "updateEntry",
         { collectionName: x.collection, entryId: x.entryId },
-        { headline: "Changed" }
+        { headline: "Changed", _overwrite: true }
       ),
   },
   {
     name: "REST publishAllLocales",
     kind: "collection",
     run: x =>
-      restCollection("publishAllLocales", {
-        collectionName: x.collection,
-        entryId: x.entryId,
-      }),
+      restCollection(
+        "publishAllLocales",
+        {
+          collectionName: x.collection,
+          entryId: x.entryId,
+        },
+        { _overwrite: true }
+      ),
   },
   {
     name: "REST unpublishAllLocales",
     kind: "collection",
     run: x =>
-      restCollection("unpublishAllLocales", {
-        collectionName: x.collection,
-        entryId: x.entryId,
-      }),
+      restCollection(
+        "unpublishAllLocales",
+        {
+          collectionName: x.collection,
+          entryId: x.entryId,
+        },
+        { _overwrite: true }
+      ),
   },
   {
     name: "REST deleteEntry",
@@ -424,7 +432,8 @@ const OPERATIONS: Operation[] = [
       restCollection(
         "bulkUpdateEntries",
         { collectionName: x.collection },
-        { ids: [x.entryId], data: { headline: "Bulk" } }
+        // Removal from code is under test, not versions.
+        { ids: [x.entryId], data: { headline: "Bulk", _overwrite: true } }
       ),
   },
   {
@@ -444,7 +453,10 @@ const OPERATIONS: Operation[] = [
       restCollection(
         "bulkUpdateByQuery",
         { collectionName: x.collection },
-        { where: { id: { equals: x.entryId } }, data: { headline: "Query" } }
+        {
+          where: { id: { equals: x.entryId } },
+          data: { headline: "Query", _overwrite: true },
+        }
       ),
   },
   {
@@ -454,7 +466,10 @@ const OPERATIONS: Operation[] = [
       restCollection(
         "bulkUpdateByQuery",
         { collectionName: x.collection },
-        { where: MATCHES_NOTHING, data: { headline: "Query" } }
+        {
+          where: MATCHES_NOTHING,
+          data: { headline: "Query", _overwrite: true },
+        }
       ),
   },
   {
@@ -494,11 +509,15 @@ const OPERATIONS: Operation[] = [
     name: "REST restoreEntryVersion",
     kind: "collection",
     run: x =>
-      restCollection("restoreEntryVersion", {
-        collectionName: x.collection,
-        entryId: x.entryId,
-        versionNo: String(x.versionNo),
-      }),
+      restCollection(
+        "restoreEntryVersion",
+        {
+          collectionName: x.collection,
+          entryId: x.entryId,
+          versionNo: String(x.versionNo),
+        },
+        { _overwrite: true }
+      ),
   },
   {
     name: "REST discardWorkingDraft",
@@ -507,16 +526,21 @@ const OPERATIONS: Operation[] = [
       restCollection("discardWorkingDraft", {
         collectionName: x.collection,
         entryId: x.entryId,
+        _overwrite: "true",
       }),
   },
   {
     name: "REST takeLiveSharedValues",
     kind: "collection",
     run: x =>
-      restCollection("takeLiveSharedValues", {
-        collectionName: x.collection,
-        entryId: x.entryId,
-      }),
+      restCollection(
+        "takeLiveSharedValues",
+        {
+          collectionName: x.collection,
+          entryId: x.entryId,
+        },
+        { _overwrite: true }
+      ),
   },
   {
     name: "REST autosaveEntry",
@@ -535,13 +559,18 @@ const OPERATIONS: Operation[] = [
       restSingle(
         "updateSingleDocument",
         { slug: x.single },
-        { headline: "Changed" }
+        { headline: "Changed", _overwrite: true }
       ),
   },
   {
     name: "REST publishAllSingleLocales",
     kind: "single",
-    run: x => restSingle("publishAllSingleLocales", { slug: x.single }),
+    run: x =>
+      restSingle(
+        "publishAllSingleLocales",
+        { slug: x.single },
+        { _overwrite: true }
+      ),
   },
   {
     name: "REST setSingleVersionLabel",
@@ -566,20 +595,33 @@ const OPERATIONS: Operation[] = [
     name: "REST restoreSingleVersion",
     kind: "single",
     run: x =>
-      restSingle("restoreSingleVersion", {
-        slug: x.single,
-        versionNo: String(x.singleVersionNo),
-      }),
+      restSingle(
+        "restoreSingleVersion",
+        {
+          slug: x.single,
+          versionNo: String(x.singleVersionNo),
+        },
+        { _overwrite: true }
+      ),
   },
   {
     name: "REST discardSingleWorkingDraft",
     kind: "single",
-    run: x => restSingle("discardSingleWorkingDraft", { slug: x.single }),
+    run: x =>
+      restSingle("discardSingleWorkingDraft", {
+        slug: x.single,
+        _overwrite: "true",
+      }),
   },
   {
     name: "REST takeLiveSingleSharedValues",
     kind: "single",
-    run: x => restSingle("takeLiveSingleSharedValues", { slug: x.single }),
+    run: x =>
+      restSingle(
+        "takeLiveSingleSharedValues",
+        { slug: x.single },
+        { _overwrite: true }
+      ),
   },
   {
     name: "REST autosaveSingle",
@@ -607,18 +649,26 @@ const OPERATIONS: Operation[] = [
     run: x =>
       httpWrite("PATCH", ["collections", x.collection, "entries", x.entryId], {
         headline: "Changed",
+        _overwrite: true,
       }),
   },
   {
     name: "HTTP PATCH /singles/:slug",
     kind: "single",
     run: x =>
-      httpWrite("PATCH", ["singles", x.single], { headline: "Changed" }),
+      httpWrite("PATCH", ["singles", x.single], {
+        headline: "Changed",
+        _overwrite: true,
+      }),
   },
   {
     name: "HTTP PATCH nextly/api/singles-detail",
     kind: "single",
-    run: x => patchSingleStandalone(x.single, { headline: "Changed" }),
+    run: x =>
+      patchSingleStandalone(x.single, {
+        headline: "Changed",
+        _overwrite: true,
+      }),
   },
   // The Direct API.
   {
@@ -637,7 +687,7 @@ const OPERATIONS: Operation[] = [
       t().nextly.update({
         collection: x.collection as never,
         id: x.entryId,
-        data: { headline: "Changed" } as never,
+        data: { headline: "Changed", _overwrite: true } as never,
       }),
   },
   {
@@ -647,7 +697,8 @@ const OPERATIONS: Operation[] = [
       t().nextly.update({
         collection: x.collection as never,
         where: { id: { equals: x.entryId } } as never,
-        data: { headline: "Changed" } as never,
+        // Removal from code is under test, not versions.
+        data: { headline: "Changed", _overwrite: true } as never,
       }),
   },
   {
@@ -682,7 +733,7 @@ const OPERATIONS: Operation[] = [
       t().nextly.update({
         collection: x.collection as never,
         where: MATCHES_NOTHING as never,
-        data: { headline: "Changed" } as never,
+        data: { headline: "Changed", _overwrite: true } as never,
       }),
   },
   {
@@ -709,7 +760,7 @@ const OPERATIONS: Operation[] = [
     run: x =>
       t().nextly.updateSingle({
         slug: x.single as never,
-        data: { headline: "Changed" } as never,
+        data: { headline: "Changed", _overwrite: true } as never,
       }),
   },
   // A plugin's content service and version history.
@@ -740,7 +791,7 @@ const OPERATIONS: Operation[] = [
       plugin!.collections.updateEntry(
         x.collection,
         x.entryId,
-        { headline: "Changed" },
+        { headline: "Changed", _overwrite: true },
         SYSTEM
       ),
   },
@@ -750,7 +801,7 @@ const OPERATIONS: Operation[] = [
     run: x =>
       plugin!.collections.updateMany(
         x.collection,
-        [{ id: x.entryId, data: { headline: "Changed" } }],
+        [{ id: x.entryId, data: { headline: "Changed", _overwrite: true } }],
         SYSTEM
       ),
   },
@@ -781,7 +832,7 @@ const OPERATIONS: Operation[] = [
           tx,
           x.collection,
           x.entryId,
-          { headline: "Changed" },
+          { headline: "Changed", _overwrite: true },
           SYSTEM
         )
       ),
@@ -807,7 +858,10 @@ const OPERATIONS: Operation[] = [
   {
     name: "Plugin versions.deleteWorkingDraft (collection)",
     kind: "collection",
-    run: x => plugin!.versions.deleteWorkingDraft(collectionRef(x), null),
+    run: x =>
+      plugin!.versions.deleteWorkingDraft(collectionRef(x), null, undefined, {
+        _overwrite: true,
+      }),
   },
   {
     name: "Plugin versions.autosave (collection)",
@@ -854,7 +908,10 @@ const OPERATIONS: Operation[] = [
   {
     name: "Plugin versions.deleteWorkingDraft (Single)",
     kind: "single",
-    run: x => plugin!.versions.deleteWorkingDraft(singleRef(x), null),
+    run: x =>
+      plugin!.versions.deleteWorkingDraft(singleRef(x), null, undefined, {
+        _overwrite: true,
+      }),
   },
   {
     name: "Plugin versions.autosave (Single)",
@@ -916,7 +973,7 @@ const OPERATIONS: Operation[] = [
           await entryService().updateEntriesInTransaction(
             tx,
             { collectionName: x.collection, user: founderUser() },
-            [{ id: x.entryId, data: { headline: "Changed" } }]
+            [{ id: x.entryId, data: { headline: "Changed", _overwrite: true } }]
           )
         )
       ),
@@ -1095,12 +1152,16 @@ async function seedEntry(collection: string): Promise<{
     collection: collection as never,
     id: entryId,
     locale: "de",
-    data: { headline: "Erste", status: "published" } as never,
+    data: { headline: "Erste", status: "published", _overwrite: true } as never,
   });
   await nextly.update({
     collection: collection as never,
     id: entryId,
-    data: { headline: "Second", status: "published" } as never,
+    data: {
+      headline: "Second",
+      status: "published",
+      _overwrite: true,
+    } as never,
   });
   await nextly.update({
     collection: collection as never,
@@ -1108,7 +1169,11 @@ async function seedEntry(collection: string): Promise<{
     // In a named language and naming no status, so the published document
     // holds the edit as a working draft rather than writing it live.
     locale: "en",
-    data: { title: "Shared draft", headline: "Draft" } as never,
+    data: {
+      title: "Shared draft",
+      headline: "Draft",
+      _overwrite: true,
+    } as never,
   });
   const ref = {
     scopeKind: "collection" as const,
@@ -1128,21 +1193,34 @@ async function seedSingle(single: string): Promise<{
   const nextly = t().nextly;
   await nextly.updateSingle({
     slug: single as never,
-    data: { title: "Shared", headline: "First", status: "published" } as never,
+    data: {
+      title: "Shared",
+      headline: "First",
+      status: "published",
+      _overwrite: true,
+    } as never,
   });
   await nextly.updateSingle({
     slug: single as never,
     locale: "de",
-    data: { headline: "Erste", status: "published" } as never,
+    data: { headline: "Erste", status: "published", _overwrite: true } as never,
   });
   await nextly.updateSingle({
     slug: single as never,
-    data: { headline: "Second", status: "published" } as never,
+    data: {
+      headline: "Second",
+      status: "published",
+      _overwrite: true,
+    } as never,
   });
   const updated = (await nextly.updateSingle({
     slug: single as never,
     locale: "en",
-    data: { title: "Shared draft", headline: "Draft" } as never,
+    data: {
+      title: "Shared draft",
+      headline: "Draft",
+      _overwrite: true,
+    } as never,
   })) as unknown as { item: { id: string } };
   const singleId = String(updated.item.id);
   const ref = {

@@ -362,11 +362,14 @@ describe("the shared site tier", () => {
      * could still match a real authored container while the node's own rule at
      * that breakpoint is aimed at a name nothing carries.
      */
-    const previewed = compileSiteSheet({
-      breakpoints: set(),
-      classes: classes(),
-      previewContainer: PREVIEW_VIEWPORT_CONTAINER,
-    } as never);
+    const previewed = compileSiteSheet(
+      {
+        breakpoints: set(),
+        classes: classes(),
+        previewContainer: PREVIEW_VIEWPORT_CONTAINER,
+      } as never,
+      {}
+    );
 
     // The population first: a sheet that emitted no class rule at all would
     // contain no `@media` either and satisfy the negative half by vacuity.
@@ -378,10 +381,13 @@ describe("the shared site tier", () => {
   });
 
   it("still emits @media without the option, which is the control", () => {
-    const published = compileSiteSheet({
-      breakpoints: set(),
-      classes: classes(),
-    } as never);
+    const published = compileSiteSheet(
+      {
+        breakpoints: set(),
+        classes: classes(),
+      } as never,
+      {}
+    );
 
     expect(published.css).toContain("@media (max-width: 991px)");
     expect(published.css).not.toContain(PREVIEW_VIEWPORT_CONTAINER);

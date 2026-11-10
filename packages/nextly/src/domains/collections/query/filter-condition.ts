@@ -15,6 +15,7 @@
  * @module domains/collections/query/filter-condition
  */
 import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, or, sql, type SQL, type SQLWrapper } from "drizzle-orm";
 
 import {
@@ -137,6 +138,8 @@ export async function prepareFilterCondition(
   // resolved, so the filter must name the same one for a `dbName` collection
   // or it matches no component row.
   const parentTable = collectionTableName(collection, params.collectionName);
+  // The dialect the condition runs on, which decides how a match that ignores case folds it.
+  const { dialect } = sources.adapter;
 
   return {
     componentTables,
@@ -150,7 +153,8 @@ export async function prepareFilterCondition(
         parentTable,
         schema.id,
         componentTables,
-        componentTypeColumns
+        componentTypeColumns,
+        dialect
       );
       if (componentCondition) parts.push(componentCondition);
       // What remains once the component keys are taken by the EXISTS
@@ -159,6 +163,7 @@ export async function prepareFilterCondition(
         const whereCondition = buildDrizzleCondition(
           buildWhereClause(cleanedWhere),
           schema,
+          dialect,
           localizedCtx,
           buildLocalizedWhereExists
         );
@@ -462,7 +467,8 @@ function componentFieldCondition(
   parentTableName: string,
   parentIdColumn: SQLWrapper | undefined,
   componentTableNames: Map<string, string>,
-  componentTypeColumns: Map<string, string>
+  componentTypeColumns: Map<string, string>,
+  dialect: SupportedDialect
 ): SQL | undefined {
   const existsConditions: SQL[] = [];
   for (const filter of componentFilters) {
@@ -471,6 +477,7 @@ function componentFieldCondition(
       parentIdColumn,
       componentTableNames,
       componentTypeColumns,
+      dialect,
     });
     if (condition) existsConditions.push(condition);
   }
@@ -486,6 +493,8 @@ interface ComponentTables {
   parentIdColumn: SQLWrapper | undefined;
   componentTableNames: Map<string, string>;
   componentTypeColumns: Map<string, string>;
+  /** The dialect the subqueries run on, which decides how a match that ignores case folds it. */
+  dialect: SupportedDialect;
 }
 
 /**
@@ -530,7 +539,11 @@ function componentTableMatches(
     : toSnakeCase(filter.componentFieldPath);
   // An operator with nothing to match — an empty `in` list, or one this
   // builder does not implement — contributes no condition for this table.
-  const valueCondition = componentValueCondition(filter, dbColumnName);
+  const valueCondition = componentValueCondition(
+    filter,
+    dbColumnName,
+    tables.dialect
+  );
   if (valueCondition === undefined) return undefined;
   return sql`
     EXISTS (
@@ -560,7 +573,8 @@ const COMPARISONS: Readonly<Record<string, string>> = {
  */
 function componentValueCondition(
   filter: ComponentFieldFilter,
-  dbColumnName: string
+  dbColumnName: string,
+  dialect: SupportedDialect
 ): SQL | undefined {
   const column = sql.identifier(dbColumnName);
   const comparison = COMPARISONS[filter.operator];
@@ -573,7 +587,11 @@ function componentValueCondition(
     case "search":
       // The same rule as every other case-insensitive search: whatever the
       // collation, and with the text matched as typed.
-      return caseInsensitiveContains(sql`${column}`, String(filter.value));
+      return caseInsensitiveContains(
+        dialect,
+        sql`${column}`,
+        String(filter.value)
+      );
     case "in":
     case "not_in":
       return listCondition(column, filter);

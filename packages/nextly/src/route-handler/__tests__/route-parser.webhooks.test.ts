@@ -189,6 +189,31 @@ describe("webhook routes", () => {
     }
   });
 
+  it("parses the event-type list on GET, and never as an endpoint id", () => {
+    expect(parseRestRoute(["webhooks", "event-types"], "GET")).toMatchObject({
+      service: "webhooks",
+      operation: "list",
+      method: "listWebhookEventTypes",
+    });
+  });
+
+  it("does not route a write to the event-type list", () => {
+    for (const method of ["POST", "PATCH", "DELETE"] as const) {
+      expect(parseRestRoute(["webhooks", "event-types"], method)).toEqual({});
+    }
+  });
+
+  it("routes no prototype-ish sub-path below an endpoint", () => {
+    for (const subresource of ["__proto__", "constructor", "toString"]) {
+      for (const method of ["GET", "POST", "PATCH", "DELETE"] as const) {
+        expect(
+          parseRestRoute(["webhooks", "wh_1", subresource], method),
+          `${method} /webhooks/wh_1/${subresource}`
+        ).toEqual({});
+      }
+    }
+  });
+
   it("does not route a non-GET/POST method to the drain", () => {
     for (const method of ["PATCH", "DELETE", "PUT"] as const) {
       expect(parseRestRoute(["webhooks", "drain"], method)).toEqual({});

@@ -32,6 +32,7 @@ import {
 import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
 import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
 import { appLocalization } from "../i18n/configured-locales";
+import { storesPerLanguage } from "../i18n/per-language-storage";
 import { isValidLocale } from "../i18n/resolve-locale";
 import type { UserContext } from "../singles/types";
 
@@ -524,8 +525,12 @@ export async function restoreVersion(
   // embedding a localized component still holds values that belong to one
   // language, and writing them with no locale resolves the default one — so a
   // German component snapshot would land on top of the default language.
+  // Where its values are stored, which decides whose language a snapshot holds: per language
+  // when it is translated, or always under per-language storage. `localized` stays the
+  // product's flag, for how the restored document publishes.
+  const storedPerLanguage = storesPerLanguage({ localized });
   const perLocaleContent = schemaStoresPerLocaleContent(
-    localized,
+    storedPerLanguage,
     fields,
     componentSchemas
   );
@@ -626,7 +631,7 @@ export async function restoreVersion(
   // reaches no component needs none, and passing a stale one would be rejected.
   const writeLocale =
     storedLocale !== null &&
-    (localized || payloadTouchesComponents(payload, fields))
+    (storedPerLanguage || payloadTouchesComponents(payload, fields))
       ? storedLocale
       : null;
 

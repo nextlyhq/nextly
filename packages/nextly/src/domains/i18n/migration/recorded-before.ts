@@ -14,6 +14,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { Logger } from "../../../shared/types";
+import { storesPerLanguage } from "../per-language-storage";
 import { localizableConfigEntities } from "../runtime/localizable-config-entities";
 
 import type { CompanionFieldLike } from "./reconcile-companion";
@@ -53,8 +54,10 @@ export async function readRecordedEntities(
   config: Parameters<typeof localizableConfigEntities>[0],
   onUnreadable?: (error: unknown) => void
 ): Promise<RecordedEntities | undefined> {
+  // Read whenever an entity keeps its translatable values per language: under per-language
+  // storage, every one does, translated or not.
   const translates = localizableConfigEntities(config).some(([, entities]) =>
-    entities.some(entity => entity.localized === true)
+    entities.some(entity => storesPerLanguage(entity))
   );
   if (!translates) return undefined;
   try {
@@ -80,7 +83,8 @@ export async function readRecordedEntities(
     ] as const) {
       for (const record of records) {
         recorded.set(keyOf(kind, record.slug), {
-          localized: (record as { localized?: boolean }).localized === true,
+          // As stored: what its per-language table held is what a change is judged against.
+          localized: storesPerLanguage(record),
           fields: (record.fields ?? []) as unknown as CompanionFieldLike[],
         });
       }

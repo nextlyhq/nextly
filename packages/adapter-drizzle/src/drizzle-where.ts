@@ -23,22 +23,30 @@ import {
   getColumns,
 } from "drizzle-orm";
 
-import { caseInsensitiveContains, containsPattern } from "./text-match";
+import {
+  caseFolded,
+  caseInsensitiveContains,
+  containsPattern,
+} from "./text-match";
 import type { WhereClause, WhereCondition } from "./types";
+import type { SupportedDialect } from "./types/core";
 
 // Build a Drizzle SQL condition from a WhereClause and a Drizzle table object.
-// Returns undefined if the where clause is empty.
+// Returns undefined if the where clause is empty. The dialect decides how the operators that
+// ignore case fold it, since SQLite's own lower() folds ASCII letters only.
 export function buildDrizzleWhere(
   table: Record<string, unknown>,
-  where: WhereClause
+  where: WhereClause,
+  dialect: SupportedDialect
 ): SQL | undefined {
   const columns = getColumns(table as never);
-  return processWhereClause(columns, where);
+  return processWhereClause(columns, where, dialect);
 }
 
 function processWhereClause(
   columns: Record<string, unknown>,
-  where: WhereClause
+  where: WhereClause,
+  dialect: SupportedDialect
 ): SQL | undefined {
   const parts: SQL[] = [];
 
@@ -46,9 +54,9 @@ function processWhereClause(
     const andParts = where.and
       .map(item => {
         if (isWhereCondition(item)) {
-          return buildCondition(columns, item);
+          return buildCondition(columns, item, dialect);
         }
-        return processWhereClause(columns, item);
+        return processWhereClause(columns, item, dialect);
       })
       .filter((p): p is SQL => p !== undefined);
 
@@ -61,9 +69,9 @@ function processWhereClause(
     const orParts = where.or
       .map(item => {
         if (isWhereCondition(item)) {
-          return buildCondition(columns, item);
+          return buildCondition(columns, item, dialect);
         }
-        return processWhereClause(columns, item);
+        return processWhereClause(columns, item, dialect);
       })
       .filter((p): p is SQL => p !== undefined);
 
@@ -75,8 +83,8 @@ function processWhereClause(
   if (where.not) {
     const notItem = where.not;
     const notCondition = isWhereCondition(notItem)
-      ? buildCondition(columns, notItem)
-      : processWhereClause(columns, notItem);
+      ? buildCondition(columns, notItem, dialect)
+      : processWhereClause(columns, notItem, dialect);
 
     if (notCondition) {
       parts.push(not(notCondition));
@@ -129,7 +137,8 @@ function namesABranch(where: WhereClause): boolean {
 
 function buildCondition(
   columns: Record<string, unknown>,
-  cond: WhereCondition
+  cond: WhereCondition,
+  dialect: SupportedDialect
 ): SQL {
   const column = columns[cond.column];
   if (!column) {
@@ -156,12 +165,13 @@ function buildCondition(
     case "LIKE":
       return like(col, cond.value as string);
     case "ILIKE":
-      // Both sides lower-cased rather than drizzle's `ilike`, which emits the ILIKE keyword that
+      // Both sides folded rather than drizzle's `ilike`, which emits the ILIKE keyword that
       // only PostgreSQL has: on MySQL and SQLite the statement failed to parse. It also keeps
       // MySQL from comparing under the column's collation, which a bare LIKE inherits and which
-      // can be case-sensitive (`utf8mb4_bin`). The value stays a pattern: its `%` and `_` are
+      // can be case-sensitive (`utf8mb4_bin`). Folded as `caseFolded` folds for ICONTAINS, so
+      // letters outside ASCII fold on SQLite too. The value stays a pattern: its `%` and `_` are
       // wildcards, as with LIKE.
-      return sql`lower(${col}) like lower(${cond.value as string})`;
+      return sql`${caseFolded(dialect, col)} like ${caseFolded(dialect, sql`${cond.value as string}`)}`;
     case "IN":
       return inArray(col, cond.value as unknown[]);
     case "NOT IN":
@@ -187,7 +197,7 @@ function buildCondition(
       // its where clause as a required argument, a widened match is a widened deletion.
       return sql`${col} like ${containsPattern(String(cond.value))} escape '!'`;
     case "ICONTAINS":
-      return caseInsensitiveContains(col, String(cond.value));
+      return caseInsensitiveContains(dialect, col, String(cond.value));
     default:
       throw new Error(`Unsupported operator: ${cond.op}`);
   }

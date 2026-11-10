@@ -23,8 +23,20 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { SQL, Table, Column } from "drizzle-orm";
-import { and, eq, ne, or, asc, desc, count, sql, inArray } from "drizzle-orm";
+import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
+import type { SQL, Table } from "drizzle-orm";
+import {
+  and,
+  eq,
+  ne,
+  or,
+  asc,
+  desc,
+  count,
+  inArray,
+  is,
+  Column,
+} from "drizzle-orm";
 
 import { GetUserByIdSchema } from "@nextly/schemas/_zod/user";
 import { EmailSchema } from "@nextly/schemas/_zod/validation";
@@ -309,9 +321,13 @@ export class UserQueryService extends BaseService {
       if (!SEARCHABLE_FIELD_TYPES.has(field.type)) continue;
       if (unsearched?.has(field.name) === true) continue;
 
+      // Only a column of the table: a field the table does not carry has nothing to search.
       const column = userExtTable[field.name];
-      if (column) {
-        conditions.push(sql`LOWER(${column}) LIKE LOWER(${`%${searchTerm}%`})`);
+      if (is(column, Column)) {
+        // The text as typed, ignoring case on every dialect, as the name and email are searched.
+        conditions.push(
+          caseInsensitiveContains(this.dialect, column, searchTerm)
+        );
       }
     }
     return conditions;
@@ -477,12 +493,11 @@ export class UserQueryService extends BaseService {
     const conditions = [];
 
     if (search) {
-      // SQLite's LIKE is case-insensitive by default for ASCII
-      // PostgreSQL uses ILIKE for case-insensitive, MySQL LIKE is case-insensitive by default
-      // Use LOWER for cross-database compatibility
+      // The text as typed, ignoring case on every dialect and whatever the collation, through
+      // the one rule for it: SQLite's own lower() folds ASCII letters only.
       const searchConditions: (SQL | undefined)[] = [
-        sql`LOWER(${users.name}) LIKE LOWER(${`%${search}%`})`,
-        sql`LOWER(${users.email}) LIKE LOWER(${`%${search}%`})`,
+        caseInsensitiveContains(this.dialect, users.name, search),
+        caseInsensitiveContains(this.dialect, users.email, search),
       ];
 
       // Include users whose custom fields matched (pre-queried above)
@@ -767,6 +782,7 @@ export class UserQueryService extends BaseService {
       emailVerified: users.emailVerified,
       name: users.name,
       image: users.image,
+      interfaceLanguage: users.interfaceLanguage,
       isActive: users.isActive,
       createdAt: users.createdAt,
       updatedAt: users.updatedAt,
@@ -808,6 +824,8 @@ export class UserQueryService extends BaseService {
       emailVerified: row.emailVerified ?? null,
       name: row.name ?? null,
       image: row.image ?? null,
+      // The person's own choice for the admin; null follows the browser.
+      interfaceLanguage: row.interfaceLanguage ?? null,
       roles,
       isActive: row.isActive ?? undefined,
       createdAt: row.createdAt ?? undefined,

@@ -120,11 +120,18 @@ describe("bodies and addresses, parsed at the boundary", () => {
       expect(JSON.stringify(error.publicData)).not.toContain(long);
     }
     expect(
-      await readRenameBody(json({ title: "t".repeat(PAGE_TITLE_MAX) }))
+      (await readRenameBody(json({ title: "t".repeat(PAGE_TITLE_MAX) }))).title
     ).toHaveLength(PAGE_TITLE_MAX);
   });
 
-  it("refuses a rename that carries anything but the title", async () => {
+  it("reads the version a rename was made from", async () => {
+    expect(await readRenameBody(json({ title: "A", rev: "6" }))).toEqual({
+      title: "A",
+      rev: "6",
+    });
+  });
+
+  it("refuses a rename that carries anything but the title and its version", async () => {
     const error = await refused(() =>
       readRenameBody(json({ title: "A", slug: "a" }))
     );
@@ -370,6 +377,22 @@ describe("renaming a page", () => {
       title: "New name",
     });
     expect(item).toMatchObject({ id: "p1", title: "New name" });
+  });
+
+  it("sends the version of the page the rename was made from", async () => {
+    // A save of the page since the author's list read it refuses the rename
+    // rather than being lost under it.
+    const writes = writesOver();
+    await renamePage(
+      { collection: "pages", id: "p1" },
+      "New name",
+      writes,
+      "6"
+    );
+    expect(writes.update).toHaveBeenCalledWith("pages", "p1", {
+      title: "New name",
+      _rev: "6",
+    });
   });
 
   it("refuses, writing nothing, a new page a title alone cannot make", async () => {

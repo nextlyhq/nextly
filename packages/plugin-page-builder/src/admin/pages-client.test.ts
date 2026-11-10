@@ -76,6 +76,14 @@ describe("the Pages panel's writes", () => {
     });
   });
 
+  it("sends the page's version, as the list read it, with a rename", async () => {
+    await renamePage({ collection: "pages", id: "p1", rev: "6" }, "New");
+    expect(asked()).toMatchObject({
+      method: "PATCH",
+      body: { title: "New", rev: "6" },
+    });
+  });
+
   it("deletes by DELETE, answering which page it was", async () => {
     writePluginRoute.mockResolvedValue({
       message: "Done.",

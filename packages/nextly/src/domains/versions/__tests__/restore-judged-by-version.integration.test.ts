@@ -120,7 +120,7 @@ async function postWithHistory(t: TestNextly) {
   const id = String((created.data as Doc).id);
   await handlerOf(t).updateEntry(
     { collectionName: POSTS, entryId: id, overrideAccess: true },
-    { title: "second" }
+    { title: "second", _rev: String((created.data as Doc)._rev) }
   );
   return id;
 }
@@ -145,12 +145,12 @@ async function postTitle(t: TestNextly, id: string): Promise<unknown> {
 async function bannerWithHistory(t: TestNextly) {
   await singlesOf(t).update(
     BANNER,
-    { notice: "first" },
+    { notice: "first", _overwrite: true },
     { overrideAccess: true }
   );
   await singlesOf(t).update(
     BANNER,
-    { notice: "second" },
+    { notice: "second", _overwrite: true },
     { overrideAccess: true }
   );
   const recorded = await t.adapter.select<{
@@ -203,7 +203,7 @@ describe.each(getConfiguredTestDialects())(
       const read = await postRev(t, id);
       await handlerOf(t).updateEntry(
         { collectionName: POSTS, entryId: id, overrideAccess: true, user: ANA },
-        { title: "Ana's" }
+        { title: "Ana's", _overwrite: true }
       );
       const viaRest = await rest(
         "POST",
@@ -228,7 +228,7 @@ describe.each(getConfiguredTestDialects())(
       const bannerRead = String((await banner(t))._rev);
       await singlesOf(t).update(
         BANNER,
-        { notice: "Ana's" },
+        { notice: "Ana's", _overwrite: true },
         { overrideAccess: true, user: ANA as never }
       );
       const single = await rest(
@@ -284,21 +284,20 @@ describe.each(getConfiguredTestDialects())(
       expect(single.json._rev).toBe((await banner(t))._rev);
     });
 
-    it("applies a restore with no version, until a version is required", async () => {
+    it("refuses a restore with no version, restoring nothing", async () => {
       const t = await boot(dialect);
       const key = await adminKey(t);
       const id = await postWithHistory(t);
-      await handlerOf(t).updateEntry(
-        { collectionName: POSTS, entryId: id, overrideAccess: true },
-        { title: "third" }
-      );
-      const restored = await rest(
+      const before = await postTitle(t, id);
+      const refused = await rest(
         "POST",
         ["collections", POSTS, "entries", id, "versions", "1", "restore"],
         key
       );
-      expect(restored.status, JSON.stringify(restored.json)).toBe(200);
-      expect(await postTitle(t, id)).toBe("first");
+      expect(refused.status, JSON.stringify(refused.json)).toBe(428);
+      expect((refused.json.error as Doc).code).toBe("VERSION_REQUIRED");
+      expect(await postTitle(t, id)).toBe(before);
+      expect(before).not.toBe("first");
     });
 
     it("applies a restore over a change with the overwrite choice, and records the overwrite", async () => {
@@ -308,7 +307,7 @@ describe.each(getConfiguredTestDialects())(
       const read = await postRev(t, id);
       await handlerOf(t).updateEntry(
         { collectionName: POSTS, entryId: id, overrideAccess: true, user: ANA },
-        { title: "Ana's" }
+        { title: "Ana's", _rev: read }
       );
       const restored = await rest(
         "POST",

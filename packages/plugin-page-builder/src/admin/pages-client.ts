@@ -53,12 +53,18 @@ export function duplicatePage(page: PageReference): Promise<PageItem> {
   return writePage<PageItem>("POST", pageDuplicatePath(page));
 }
 
-/** Give `page` a new title, and change nothing else. */
+/**
+ * Give `page` a new title, and change nothing else. The page's `rev`, as the
+ * list read it, goes with it, so a save of the page since refuses the rename.
+ */
 export function renamePage(
-  page: PageReference,
+  page: PageReference & Pick<PageItem, "rev">,
   title: string
 ): Promise<PageItem> {
-  return writePage<PageItem>("PATCH", pagePath(page), { title });
+  return writePage<PageItem>("PATCH", pagePath(page), {
+    title,
+    ...(page.rev === undefined ? {} : { rev: page.rev }),
+  });
 }
 
 /** Delete `page`, if core lets this author. */

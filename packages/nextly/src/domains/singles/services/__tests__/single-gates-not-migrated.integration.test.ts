@@ -63,7 +63,10 @@ async function boot(dialect: TestDialect): Promise<void> {
     current.nextly as unknown as {
       updateSingle(args: Record<string, unknown>): Promise<unknown>;
     }
-  ).updateSingle({ slug: BANNER, data: { title: "First", subtitle: "One" } });
+  ).updateSingle({
+    slug: BANNER,
+    data: { title: "First", subtitle: "One", _overwrite: true },
+  });
 }
 
 async function execute(dialect: TestDialect, sql: string): Promise<void> {

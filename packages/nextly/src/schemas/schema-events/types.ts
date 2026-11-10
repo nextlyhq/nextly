@@ -31,7 +31,12 @@ export type SchemaEventType =
   // `file_apply` row or status: every build, this one and every earlier one,
   // reads a migration's applied state from `file_apply` rows alone, so a mark
   // can never make one read as applied or unapplied. Never pruned.
-  | "old_builder_file";
+  | "old_builder_file"
+  // An applied app migration's file removed from the folder on purpose,
+  // recorded by `migrate:resolve --removed`. Not an outcome: the migration
+  // stays applied (`migration-state.ts`), and the missing-file check no
+  // longer counts it. Never pruned: it is the reason the check passes.
+  | "file_removed";
 
 /** Lifecycle state of an event row. */
 export type SchemaEventStatus =
@@ -45,7 +50,9 @@ export type SchemaEventStatus =
   // resolves the attempt without being an outcome, so the migration's state
   // stays what it was before the attempt (`migration-state.ts`). A status
   // value, not a column: the column is text, or a VARCHAR(32), everywhere.
-  | "nothing_applied";
+  | "nothing_applied"
+  // A note that is not about the database: a `file_removed` record.
+  | "recorded";
 
 /** Which surface triggered the event. */
 export type SchemaEventSource =

@@ -120,7 +120,7 @@ describe("a single reports its post-commit failures the same way", () => {
 
     const updated = await current.nextly.updateSingle({
       slug: "site-settings",
-      data: { siteName: "Saved anyway" },
+      data: { siteName: "Saved anyway", _overwrite: true },
     });
 
     expect(updated.item).toBeDefined();
@@ -294,7 +294,7 @@ describe("a single's field-level failure names the same entity as its own hooks"
 
     const updated = await current.nextly.updateSingle({
       slug: "site-settings",
-      data: { siteName: "Saved anyway" },
+      data: { siteName: "Saved anyway", _overwrite: true },
     });
 
     expect(updated.item).toBeDefined();

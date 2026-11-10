@@ -239,6 +239,8 @@ interface LibraryCaller {
 
 /** The capabilities the pattern route uses, named rather than imported whole. */
 export interface PatternLibraryContext extends LibraryCaller {
+  /** An API key's own grants, which its read is judged on rather than its owner's. */
+  authenticatedScope?: unknown;
   services: {
     collections: {
       listEntries(
@@ -377,9 +379,7 @@ export const DEFAULT_COMPONENT_STORE: ComponentStore = {
  * A public route has no caller; the routes using this are gated, so the
  * anonymous branch is the honest answer for a context nothing authenticated.
  */
-export async function readingAsUser(
-  ctx: Pick<PluginRouteContext, "caller">
-): Promise<{
+export async function readingAsUser(ctx: IdentifiedCaller): Promise<{
   overrideAccess: false;
   user: PluginRouteIdentity["user"] | undefined;
   actor?: NonNullable<PluginRouteIdentity["authenticatedScope"]>;
@@ -394,7 +394,41 @@ export async function readingAsUser(
   };
 }
 
-function directComponentReads(
+/**
+ * Who a read is made as: a route's caller, or anyone whose identity is known
+ * the same way, such as the person a dashboard card is loaded for. Only the
+ * identity is read, so every such read is judged by one gate.
+ */
+export interface IdentifiedCaller {
+  readonly caller: {
+    identity(): Promise<PluginRouteIdentity>;
+  } | null;
+}
+
+/**
+ * The caller as a call to the plugin's collection service takes them: as the
+ * signed-in user, with an API key's own scope, so the key is judged on its
+ * grants rather than its owner's whether or not the request pinned it. The
+ * one place a route builds those options, for its reads and its writes alike.
+ */
+export function asServiceCaller<TUser, TScope>(ctx: {
+  readonly user: TUser | null;
+  readonly authenticatedScope?: TScope | undefined;
+}): {
+  as: "user";
+  user: TUser | undefined;
+  authenticatedScope?: TScope;
+} {
+  return {
+    as: "user",
+    user: ctx.user ?? undefined,
+    ...(ctx.authenticatedScope === undefined
+      ? {}
+      : { authenticatedScope: ctx.authenticatedScope }),
+  };
+}
+
+export function directComponentReads(
   ctx: Pick<PluginRouteContext, "caller">,
   locale?: string
 ): ComponentReads {
@@ -455,7 +489,7 @@ export async function readPatternLibrary(
   // every caller with every row, whatever the collection's permissions say.
   // NO status predicate, deliberately — see the module docblock. And the same
   // deterministic order the component listing asks for, for the same reason.
-  const asUser = { as: "user" as const, user: ctx.user ?? undefined };
+  const asUser = asServiceCaller(ctx);
   return envelope(
     await readTier(
       async at => {

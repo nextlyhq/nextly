@@ -651,7 +651,7 @@ function placedComponentIds(
  * from the Singles registry, which is the one place a plugin can read it
  * without creating the Single's row.
  */
-async function blocksFieldPaths(
+export async function blocksFieldPaths(
   ctx: RetiredExposurePluginContext,
   slug: string,
   context: HookContext<unknown>

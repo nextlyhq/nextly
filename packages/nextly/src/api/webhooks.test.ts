@@ -3,7 +3,7 @@
 // rules that are not visible in the response shape: mutations are session-only,
 // and revealing a signing secret requires update rather than read.
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../auth/middleware", () => ({
   requireAnyPermission: vi.fn(),
@@ -29,11 +29,13 @@ vi.mock("../di", () => ({
 
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { container } from "../di";
+import { publishWebhookEventTypes } from "../domains/webhooks/event-type-registry";
 
 import {
   createWebhook,
   deleteWebhook,
   getWebhookById,
+  listWebhookEventTypes,
   listWebhooks,
   redeliverWebhookDelivery,
   revealWebhookSecret,
@@ -226,6 +228,121 @@ describe("createWebhook", () => {
 
     expect(res.status).toBe(400);
     expect(createEndpoint).not.toHaveBeenCalled();
+  });
+});
+
+describe("subscribing to a plugin's event type", () => {
+  const create = (eventTypes: string[]) =>
+    createWebhook(
+      new Request(
+        "http://x/api/webhooks",
+        jsonBody({ name: "Orders", url: "https://example.com/h", eventTypes })
+      )
+    );
+
+  beforeEach(() => {
+    publishWebhookEventTypes([
+      { type: "acme-shop.order.paid", owner: "@acme/shop" },
+    ]);
+  });
+  afterEach(() => {
+    publishWebhookEventTypes([]);
+  });
+
+  it("accepts a type a plugin declares", async () => {
+    asSession();
+    const createEndpoint = vi
+      .fn()
+      .mockResolvedValue({ endpoint: ENDPOINT, secret: "whsec_x" });
+    withService({ createEndpoint });
+
+    const res = await create(["acme-shop.order.paid"]);
+
+    expect(res.status).toBe(201);
+    expect(createEndpoint).toHaveBeenCalledWith(
+      expect.objectContaining({ eventTypes: ["acme-shop.order.paid"] }),
+      "user-1"
+    );
+  });
+
+  it("refuses a type nobody declares, naming it, before the service is reached", async () => {
+    asSession();
+    const createEndpoint = vi.fn();
+    withService({ createEndpoint });
+
+    const res = await create(["acme-shop.order.refunded"]);
+
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("acme-shop.order.refunded");
+    expect(createEndpoint).not.toHaveBeenCalled();
+  });
+
+  it("still accepts one of core's types", async () => {
+    asSession();
+    const createEndpoint = vi
+      .fn()
+      .mockResolvedValue({ endpoint: ENDPOINT, secret: "whsec_x" });
+    withService({ createEndpoint });
+
+    const res = await create(["form.submission.created"]);
+
+    expect(res.status).toBe(201);
+  });
+});
+
+describe("listWebhookEventTypes", () => {
+  afterEach(() => {
+    publishWebhookEventTypes([]);
+  });
+
+  it("lists core's and plugins' types, each with its owner, to a reader", async () => {
+    publishWebhookEventTypes([
+      {
+        type: "acme-shop.order.paid",
+        owner: "@acme/shop",
+        label: "Order paid",
+      },
+    ]);
+    asSession();
+
+    const res = await listWebhookEventTypes(
+      new Request("http://x/api/webhooks/event-types")
+    );
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      items: { type: string; owner: string }[];
+      meta: { total: number };
+    };
+    expect(json.items).toContainEqual({ type: "entry.created", owner: "core" });
+    expect(json.items).toContainEqual({
+      type: "acme-shop.order.paid",
+      owner: "@acme/shop",
+      label: "Order paid",
+    });
+    expect(json.meta.total).toBe(json.items.length);
+    // Through the permission gate: read, create (the form that registers an
+    // endpoint offers these) or update.
+    expect(requireAnyPermission).toHaveBeenCalledWith(expect.anything(), [
+      { action: "read", resource: "webhooks" },
+      { action: "create", resource: "webhooks" },
+      { action: "update", resource: "webhooks" },
+    ]);
+  });
+
+  it("refuses a caller who may neither read, create nor update webhooks", async () => {
+    const denied = new Response(null, { status: 403 });
+    (requireAnyPermission as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      denied
+    );
+    (isErrorResponse as ReturnType<typeof vi.fn>).mockReturnValueOnce(true);
+
+    const res = await listWebhookEventTypes(
+      new Request("http://x/api/webhooks/event-types")
+    );
+
+    expect(res.status).not.toBe(200);
+    expect(await res.text()).not.toContain("entry.created");
   });
 });
 

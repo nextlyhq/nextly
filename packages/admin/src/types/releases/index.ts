@@ -217,6 +217,50 @@ export interface ScheduleReleasePayload {
   timezone: string;
 }
 
+/** One document put into a release, going live or coming down at its moment. */
+export interface AddReleaseMemberPayload {
+  scopeKind: "collection" | "single";
+  scopeSlug: string;
+  entryId: string;
+  action: ReleaseMemberAction;
+}
+
+/**
+ * Several documents put into one release in one step, each with its action.
+ * The server adds all of them or none.
+ */
+export interface AddReleaseMembersPayload {
+  members: AddReleaseMemberPayload[];
+}
+
+/** A document an added one links to that will not be live at the release's moment. */
+export interface UnpublishedLink {
+  scopeKind: "collection";
+  scopeSlug: string;
+  entryId: string;
+  /** Every field of the added document that links to it. */
+  fields: string[];
+}
+
+/**
+ * What an add says of an added document's links, as the reader may be told
+ * them: the linked documents they may read, and counts for the rest.
+ */
+export interface UnpublishedLinksReport {
+  links: UnpublishedLink[];
+  /** Links to, or from, documents the reader may not read. */
+  hiddenCount: number;
+  /** Links in fields the reader may not view. */
+  inHiddenFields: number;
+  /** Fields linking to documents that no longer exist, and how many each. */
+  deletedLinks: Array<{ field: string; count: number }>;
+}
+
+/** A member as an add answers it, with its document's unpublished links. */
+export interface AddedReleaseMember extends ReleaseMember {
+  unpublishedLinks: UnpublishedLinksReport;
+}
+
 /**
  * One document put into a release in one all-or-nothing step, going live or
  * coming down at the release's moment. Mirrors the server's strict body: a key

@@ -222,7 +222,7 @@ test("recognises each kind of write it is there for", () => {
   ).toBe(true);
   expect(
     WRITERS.find(w => w.lock === "siteStyle")?.writes(
-      'const SITE_STYLE = "/admin/api/singles/site-style";\nawait page.request.patch(SITE_STYLE, { data });'
+      'const SITE_STYLE = "/admin/api/singles/site-style";\nawait page.request.patch(SITE_STYLE, { data: { ...data, _overwrite: true } });'
     )
   ).toBe(true);
   expect(

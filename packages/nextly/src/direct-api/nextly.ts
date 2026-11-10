@@ -65,11 +65,16 @@ import { assertBootMigrationsSettled } from "../init/boot-migrations-gate";
 import { createNextlyPrincipals } from "../plugins/principals/api";
 import type { NextlyPrincipals } from "../plugins/principals/types";
 import { buildPluginServicesNamespace } from "../plugins/services/plugin-services-registry";
+import {
+  publicSiteSettingsOf,
+  type PublicSiteSettings,
+} from "../runtime/site-settings-read";
 import type { CollectionsHandler } from "../services/collections-handler";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 import type { EmailService } from "../services/email/email-service";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 import type { FieldGroupRegistryService } from "../services/field-groups/field-group-registry-service";
+import type { GeneralSettingsService } from "../services/general-settings/general-settings-service";
 import type { MediaService } from "../services/media/media-service";
 import type { Logger } from "../services/shared";
 import type { SingleEntryService } from "../services/singles/single-entry-service";
@@ -195,6 +200,7 @@ import type {
   FindFormsArgs,
   FindMediaArgs,
   FindMediaByIDArgs,
+  FindMediaByIDsArgs,
   FindOneUserArgs,
   FindPermissionByIDArgs,
   FindPermissionsArgs,
@@ -681,6 +687,25 @@ export class Nextly implements NextlyContext {
     );
   }
 
+  /**
+   * The site's general settings a published page may show: its name, its
+   * address, its logo and its time zone, each `null` until the site sets it.
+   * Nothing else the settings hold comes back, the administrator's email
+   * among it, since the answer is the public allowlist's.
+   *
+   * A method of the instance so a page served by an instance of its own reads
+   * that instance's site, as it reads its content: `readPublicSiteSettings`
+   * from `nextly/runtime`, and the block page routes, read it through here.
+   *
+   * @experimental
+   */
+  async publicSiteSettings(): Promise<PublicSiteSettings> {
+    const settings = await container
+      .get<GeneralSettingsService>("generalSettingsService")
+      .getSettings();
+    return publicSiteSettingsOf(settings);
+  }
+
   /** Verify credentials and return a signed session token. */
   login(args: LoginArgs): Promise<LoginResult> {
     return authNs.login(this, args);
@@ -699,7 +724,12 @@ export class Nextly implements NextlyContext {
   /** Update the current user's profile (name/image only). */
   updateMe(args: {
     user: UserContext;
-    data: { name?: string; image?: string };
+    data: {
+      name?: string;
+      image?: string;
+      /** A language tag (`fr`, `pt-BR`), or null to follow the browser. */
+      interfaceLanguage?: string | null;
+    };
   }): Promise<AuthResult> {
     return authNs.updateMe(this, args);
   }
@@ -922,13 +952,22 @@ export const nextly = {
     requireNextly().updateSingle(args),
   findSingles: (args?: FindSinglesArgs) =>
     requireNextly().findSingles(args ?? {}),
+  // Delegated like the reads above, so this object handed to a page route as
+  // its reader still shows the site's settings.
+  publicSiteSettings: (): Promise<PublicSiteSettings> =>
+    requireNextly().publicSiteSettings(),
 
   login: (args: LoginArgs) => requireNextly().login(args),
   logout: () => requireNextly().logout(),
   me: (args: { user: UserContext }) => requireNextly().me(args),
   updateMe: (args: {
     user: UserContext;
-    data: { name?: string; image?: string };
+    data: {
+      name?: string;
+      image?: string;
+      /** A language tag (`fr`, `pt-BR`), or null to follow the browser. */
+      interfaceLanguage?: string | null;
+    };
   }) => requireNextly().updateMe(args),
   register: (args: RegisterArgs) => requireNextly().register(args),
   changePassword: (args: ChangePasswordArgs & { user: UserContext }) =>
@@ -1008,6 +1047,8 @@ export const nextly = {
     upload: (args: UploadMediaArgs) => requireNextly().media.upload(args),
     find: (args?: FindMediaArgs) => requireNextly().media.find(args),
     findByID: (args: FindMediaByIDArgs) => requireNextly().media.findByID(args),
+    findByIDs: (args: FindMediaByIDsArgs) =>
+      requireNextly().media.findByIDs(args),
     update: (args: UpdateMediaArgs) => requireNextly().media.update(args),
     delete: (args: DeleteMediaArgs) => requireNextly().media.delete(args),
     bulkDelete: (args: BulkDeleteMediaArgs) =>

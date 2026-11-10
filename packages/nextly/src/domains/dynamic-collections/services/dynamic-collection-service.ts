@@ -42,6 +42,10 @@ import {
   type FieldRename,
 } from "../../i18n/migration/reconcile-companion";
 import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import { companionHasStatusColumn } from "../../i18n/runtime/companion-io";
 import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
 import type { ForeignKeySpec } from "../../schema/pipeline/diff/types";
@@ -589,7 +593,7 @@ export class DynamicCollectionService extends BaseService {
       userDefinedFields,
       // i18n: omit translatable columns from the main table when localized — they
       // live in the companion `_locales` table created below.
-      { hasStatus: data.status === true, localized: data.localized === true }
+      { hasStatus: data.status === true, localized: storesPerLanguage(data) }
     );
 
     // i18n: for a localized collection, append the companion `<table>_locales`
@@ -597,10 +601,12 @@ export class DynamicCollectionService extends BaseService {
     // fresh collection, no data to seed, no main-table columns to drop). Without
     // this, a UI-created localized collection has nowhere to store per-language
     // values and every language shares the main columns.
-    const withCompanion = data.localized
+    // Whenever its translatable values live in a companion (`storesPerLanguage`).
+    const withCompanion = storesPerLanguage(data)
       ? this.appendCompanionCreateSQL(migrationSQL, normalizedName, tableName, {
           fields: userDefinedFields,
-          status: data.status === true,
+          // A per-language `_status` only where the collection publishes each language on its own.
+          status: publishesPerLanguage(data),
         })
       : migrationSQL;
 
@@ -2010,6 +2016,15 @@ export class DynamicCollectionService extends BaseService {
 
   async unregisterCollection(name: string): Promise<unknown> {
     return this.registryService.unregisterCollection(name);
+  }
+
+  /** Lock the registry rows of `slugs` inside `tx`; see the registry's `holdCollectionsIn`. */
+  async holdCollectionsIn(
+    tx: TransactionContext,
+    slugs: readonly string[],
+    strength: "share" | "update"
+  ): ReturnType<DynamicCollectionRegistryService["holdCollectionsIn"]> {
+    return this.registryService.holdCollectionsIn(tx, slugs, strength);
   }
 
   /** Remove a collection's registry row inside `tx`; forget it once `tx` commits. */

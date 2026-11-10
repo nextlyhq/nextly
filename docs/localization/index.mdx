@@ -89,7 +89,17 @@ export const Posts = defineCollection({
 });
 ```
 
-Fields inherit the collection's setting, so the common case is one flag.
+A field's type decides whether it is translated when it sets no `localized` of its own:
+
+| Field types                                        | Unset `localized`                      |
+| -------------------------------------------------- | -------------------------------------- |
+| `text`, `textarea`, `richText`, `email`, `code`    | Translated                             |
+| Every other type                                   | Shared by every language               |
+| `password`, and any virtual field                  | Shared, whatever `localized` says      |
+| A many-to-many `relationship`                      | Shared, whatever `localized` says: its links are kept in one table for every language |
+| A `component` reference                            | Decided by the component's own fields, whatever `localized` says on the reference |
+
+Set `localized: true` to translate a field of another type, or `localized: false` to share a text field, as `externalId` does above. On a collection or Single that is not localized, the flag does nothing.
 
 ### When a field stops being translated
 

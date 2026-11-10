@@ -4,6 +4,7 @@
  */
 import { Option, type Command } from "commander";
 
+import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -12,9 +13,12 @@ import { lazyAction } from "../lazy-action";
  * @param program - Commander program instance
  */
 export function registerMigrateFreshCommand(program: Command): void {
-  program
-    .command("migrate:fresh")
-    .description("Drop all tables and re-run all migrations")
+  // `--dry-run` carries the one meaning and help line it has everywhere.
+  withDryRun(
+    program
+      .command("migrate:fresh")
+      .description("Drop all tables and re-run all migrations")
+  )
     .option(
       "--accept-data-loss [targets]",
       "Consent to deleting every table, for a run with no terminal; takes no targets. Same as NEXTLY_ACCEPT_DATA_LOSS=1."

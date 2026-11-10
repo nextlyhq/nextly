@@ -17,6 +17,7 @@ import {
   previewStateClass,
 } from "./compile-page";
 import type { StyleCompileContext } from "./compile-page";
+import { overlaid } from "./overlay";
 import {
   CHILD_GAP_CLASS,
   nodeClassName,
@@ -150,7 +151,8 @@ describe("urls", () => {
     const out = css(
       doc([node("n1", { base: { base: { background: { url: "/a.png" } } } })])
     );
-    expect(out).toContain('background-image: url("/a.png")');
+    // Behind the overlay's layer, which is laid over every image.
+    expect(out).toContain(`background-image: ${overlaid('url("/a.png")')}`);
   });
 
   it("leaves a keyword alone rather than going looking for a file", () => {
@@ -2275,5 +2277,26 @@ describe("the space a container puts between its children", () => {
       CTX
     );
     expect(out).not.toContain("> * + *");
+  });
+});
+
+describe("the overlay's two properties", () => {
+  it("are reset on every element of a page that uses them, so none inherits", () => {
+    // Inherited, a section's overlay would darken every image nested in it.
+    // The reset has no specificity, so a block's own value beats it.
+    const used = css(
+      doc([node("n1", { base: { base: { background: { url: "/a.png" } } } })])
+    );
+    expect(
+      used.startsWith(
+        ":where(.nx-pb-page *) { --nx-pb-overlay: initial; --nx-pb-overlay-strength: initial; --nx-pb-overlay-layer: initial; --nx-pb-overlay-position: initial; --nx-pb-overlay-size: initial; --nx-pb-overlay-repeat: initial; --nx-pb-overlay-attachment: initial; }\n"
+      )
+    ).toBe(true);
+  });
+
+  it("are not reset on a page with no background to lay one over", () => {
+    expect(
+      css(doc([node("n1", { base: { base: { color: "#fff" } } })]))
+    ).not.toContain("--nx-pb-overlay");
   });
 });

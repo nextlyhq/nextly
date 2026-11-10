@@ -66,7 +66,7 @@ import {
   type LockRefusalFacts,
 } from "./lock-refusal";
 import { refusalAnnouncement } from "./move-refusal";
-import { applyOps, type BuilderOp } from "./ops";
+import { applyOps, type BuilderOp } from "./op-vocabulary";
 import {
   EMPTY_SELECTION,
   applySelection,
@@ -227,6 +227,36 @@ export interface EditorState {
    * test can read it — which a boolean derived inside a component cannot.
    */
   undoDepth: number;
+  /**
+   * The collection lists the canvas draws in their empty state rather than
+   * their entries, by id: what "Canvas shows: When empty" chose, so an author
+   * can design what visitors see when nothing matches. Editor state only,
+   * never stored, and not a step of the history.
+   * @experimental
+   */
+  listsShowingEmpty?: ReadonlySet<string>;
+  /** Draw one list's empty state on the canvas, or its entries again. */
+  showListEmpty?: (id: string, empty: boolean) => void;
+  /**
+   * The collection lists whose author picked a new source that waits for an
+   * input, by id, with the tag the canvas shows over each ("Still showing
+   * Events"): the list still draws what it stores. Editor state only, never
+   * stored, and not a step of the history.
+   * @experimental
+   */
+  listsStillShowing?: ReadonlyMap<string, string>;
+  /** Tag one list as still showing what it stores, or `undefined` to clear it. */
+  tagListStillShowing?: (id: string, words: string | undefined) => void;
+  /**
+   * The list whose sort the author last asked to fix, from its canvas note's
+   * "Choose a field", with a count that grows on each ask, so the inspector
+   * takes the author to the list's first sort row once per press. Editor
+   * state only, never stored.
+   * @experimental
+   */
+  sortFieldAsked?: { readonly id: string; readonly seq: number };
+  /** Select a list and take the author to its first sort row. */
+  askSortField?: (id: string) => void;
 }
 
 export interface UseEditorStateArgs {
@@ -1085,7 +1115,107 @@ function replayStep(
  * empty, so keeping them in state would re-render every consumer on each edit
  * to deliver a value none of them read.
  */
-export function useEditorState({
+/**
+ * Which lists the canvas shows empty, and the way to change it: a new set
+ * only when one changes, so the canvas, which draws per set, draws again only
+ * then.
+ */
+function useListsShowingEmpty(): {
+  listsShowingEmpty: ReadonlySet<string>;
+  showListEmpty: (id: string, empty: boolean) => void;
+} {
+  const [listsShowingEmpty, setListsShowingEmpty] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const showListEmpty = useCallback((id: string, empty: boolean) => {
+    setListsShowingEmpty(current => toggled(current, id, empty));
+  }, []);
+  return { listsShowingEmpty, showListEmpty };
+}
+
+/**
+ * Which lists the canvas tags as still showing what they store, and the way
+ * to change it: a new map only when one changes, as for the empty state.
+ */
+function useListsStillShowing(): {
+  listsStillShowing: ReadonlyMap<string, string>;
+  tagListStillShowing: (id: string, words: string | undefined) => void;
+} {
+  const [listsStillShowing, setListsStillShowing] = useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
+  const tagListStillShowing = useCallback(
+    (id: string, words: string | undefined) => {
+      setListsStillShowing(current => {
+        if (current.get(id) === words) return current;
+        const next = new Map(current);
+        if (words === undefined) next.delete(id);
+        else next.set(id, words);
+        return next;
+      });
+    },
+    []
+  );
+  return { listsStillShowing, tagListStillShowing };
+}
+
+/** `current` with `id` in it or not, the same set when nothing changes. */
+function toggled(
+  current: ReadonlySet<string>,
+  id: string,
+  present: boolean
+): ReadonlySet<string> {
+  if (current.has(id) === present) return current;
+  const next = new Set(current);
+  if (present) next.add(id);
+  else next.delete(id);
+  return next;
+}
+
+/**
+ * The editor's state: the document and its history, with which lists the
+ * canvas shows empty and which list's sort the author asked to fix beside
+ * them, which are editor state and no step of the history.
+ */
+export function useEditorState(args: UseEditorStateArgs): EditorState {
+  const state = useDocumentState(args);
+  const { listsShowingEmpty, showListEmpty } = useListsShowingEmpty();
+  const { listsStillShowing, tagListStillShowing } = useListsStillShowing();
+  const [sortFieldAsked, setSortFieldAsked] =
+    useState<EditorState["sortFieldAsked"]>(undefined);
+  const { select } = state;
+  // Selecting first, so the inspector the author is taken to is the list's.
+  const askSortField = useCallback(
+    (id: string) => {
+      select(id);
+      setSortFieldAsked(current => ({ id, seq: (current?.seq ?? 0) + 1 }));
+    },
+    [select]
+  );
+  return useMemo(
+    () => ({
+      ...state,
+      listsShowingEmpty,
+      showListEmpty,
+      listsStillShowing,
+      tagListStillShowing,
+      ...(sortFieldAsked === undefined ? {} : { sortFieldAsked }),
+      askSortField,
+    }),
+    [
+      state,
+      listsShowingEmpty,
+      showListEmpty,
+      listsStillShowing,
+      tagListStillShowing,
+      sortFieldAsked,
+      askSortField,
+    ]
+  );
+}
+
+/** The document, its selection and its history: see {@link useEditorState}. */
+function useDocumentState({
   initialDocument,
   limits = DEFAULT_LIMITS,
   definitions,

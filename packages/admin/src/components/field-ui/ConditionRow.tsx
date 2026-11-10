@@ -152,6 +152,8 @@ const TEXT_TYPES = new Set([
   "email",
   "code",
   "password",
+  // An icon field stores its id as text, so it takes the text operators.
+  "icon",
 ]);
 const BOOLEAN_TYPES = new Set(["checkbox", "boolean"]);
 const CHOICE_TYPES = new Set(["select", "radio"]);

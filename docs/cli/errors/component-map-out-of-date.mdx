@@ -7,7 +7,7 @@ description: "`nextly generate:types --check` found the committed component map 
 
 `nextly generate:types --check` found the committed component map out of step with the configuration.
 
-`nextly generate:types` writes the component map, a pair of files that tell the admin which components plugins and the site register. `--check` compares the committed pair with what the configuration declares, writes nothing, and exits 2 when they differ, and 1 when it could not check. The Why line lists each difference.
+`nextly generate:types` writes the component map, a pair of files that tell the admin which components plugins and the site register. `--check` compares the committed pair with what the configuration declares, writes nothing, and exits 2 when they differ, and 1 when it could not check. The Why line lists each difference. `--check` cannot be combined with `--dry-run`, which lists the files a real run would write and exits 0.
 
 ## Fix
 

@@ -21,6 +21,16 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: vi.fn(),
 }));
 
+// The pages ask through the router-free hook, which reads the same answer.
+vi.mock("@admin/hooks/useHasPermission", async () => {
+  const { useCurrentUserPermissions } = await import(
+    "@admin/hooks/useCurrentUserPermissions"
+  );
+  return {
+    useHasPermission: () => useCurrentUserPermissions().hasPermission,
+  };
+});
+
 vi.mock("@admin/hooks/queries/useEmailProviders", () => ({
   useEmailProviders: () => ({
     data: {
@@ -99,7 +109,7 @@ describe("the providers table, by grant", () => {
   it("offers a test send to someone who may create providers", async () => {
     holding(["read-email-providers", "create-email-providers"]);
     render(<EmailProviderTable />);
-    expect(await rowActions()).toEqual(["Send Test"]);
+    expect(await rowActions()).toEqual(["Send a test"]);
   });
 
   it("offers a manager every action", async () => {
@@ -113,7 +123,7 @@ describe("the providers table, by grant", () => {
     expect(await rowActions()).toEqual([
       "Edit",
       "Set Default",
-      "Send Test",
+      "Send a test",
       "Delete",
     ]);
   });

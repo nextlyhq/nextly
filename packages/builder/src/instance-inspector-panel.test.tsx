@@ -866,7 +866,11 @@ function passage(text: string): unknown {
 }
 
 /** The header with a rich-text body exposed, mounted with the given services. */
-function mountRich(node: BlockNode, services: ContentServices) {
+function mountRich(
+  node: BlockNode,
+  services: ContentServices,
+  canvasPassage?: { placementId: string; exposureId: string }
+) {
   const definition = header({
     nodes: [
       {
@@ -895,6 +899,7 @@ function mountRich(node: BlockNode, services: ContentServices) {
         components: LIBRARY,
       }}
       contentServices={services}
+      {...(canvasPassage === undefined ? {} : { canvasPassage })}
     />
   );
   return editor;
@@ -916,6 +921,39 @@ function richEditor(read: unknown) {
   })) as unknown as ContentServices["loadRichTextEditor"];
   return { attach, load };
 }
+
+describe("an exposed rich text the canvas is editing", () => {
+  it("is held in the panel, saying where it is being edited", async () => {
+    // One editor serves both: opening it here would take the passage from
+    // under the author's caret on the canvas.
+    const { attach, load } = richEditor(passage("Edited"));
+    mountRich(
+      instance(),
+      { loadRichTextEditor: load },
+      { placementId: "i1", exposureId: "body" }
+    );
+    const field = screen.getByRole("textbox", { name: "Body" });
+    await act(async () => {
+      fireEvent.focus(field);
+    });
+    expect(attach).not.toHaveBeenCalled();
+    expect(screen.getByText(/being edited on the canvas/i)).toBeDefined();
+  });
+
+  it("is not held while the canvas edits another placement's", async () => {
+    const { attach, load } = richEditor(passage("Edited"));
+    mountRich(
+      instance(),
+      { loadRichTextEditor: load },
+      { placementId: "other", exposureId: "body" }
+    );
+    const field = screen.getByRole("textbox", { name: "Body" });
+    await act(async () => {
+      fireEvent.focus(field);
+    });
+    expect(attach).toHaveBeenCalled();
+  });
+});
 
 describe("an exposed rich text", () => {
   it("is edited with the admin's rich-text editor, written as the placement's own", async () => {

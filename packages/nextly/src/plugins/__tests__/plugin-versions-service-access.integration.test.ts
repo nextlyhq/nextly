@@ -64,7 +64,8 @@ interface PluginVersions {
   deleteWorkingDraft(
     ref: VersionRef,
     locale: string | null,
-    opts?: ServiceOpts
+    opts?: ServiceOpts,
+    version?: Readonly<Record<string, unknown>>
   ): Promise<number>;
   autosave(
     input: {
@@ -175,7 +176,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           user: { id: ownerId },
         },
-        { title: "edited" }
+        { title: "edited", _overwrite: true }
       );
       const ref = refOf(slug, id);
       expect(
@@ -425,7 +426,9 @@ describe.each(getConfiguredTestDialects())(
       it("is refused to a person who may not update, and the draft stays", async () => {
         const ref = await withWorkingDraft(NOTES);
         await expect(
-          versions.deleteWorkingDraft(ref, null, asUser(readerId))
+          versions.deleteWorkingDraft(ref, null, asUser(readerId), {
+            _overwrite: true,
+          })
         ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
         expect((await draftParts(ref)).length).toBeGreaterThan(0);
       });
@@ -433,14 +436,21 @@ describe.each(getConfiguredTestDialects())(
       it("is refused to a public caller as an anonymous one", async () => {
         const ref = await withWorkingDraft(NOTES);
         await expect(
-          versions.deleteWorkingDraft(ref, null, { as: "public" })
+          versions.deleteWorkingDraft(
+            ref,
+            null,
+            { as: "public" },
+            { _overwrite: true }
+          )
         ).rejects.toMatchObject({ code: "AUTH_REQUIRED" });
         expect((await draftParts(ref)).length).toBeGreaterThan(0);
       });
 
       it("is done for a person who may read and update", async () => {
         const ref = await withWorkingDraft(NOTES);
-        await versions.deleteWorkingDraft(ref, null, asUser(editorId));
+        await versions.deleteWorkingDraft(ref, null, asUser(editorId), {
+          _overwrite: true,
+        });
         expect(await draftParts(ref)).toEqual([]);
       });
 
@@ -448,7 +458,9 @@ describe.each(getConfiguredTestDialects())(
         // The shared discard path: the one that holds the document while it
         // removes the draft, and records the discard in the document's history.
         const ref = await withWorkingDraft(NOTES);
-        await versions.deleteWorkingDraft(ref, null, asUser(editorId));
+        await versions.deleteWorkingDraft(ref, null, asUser(editorId), {
+          _overwrite: true,
+        });
         const { items } = await versions.listEvents(
           { kind: "collection", slug: NOTES, id: ref.entryId },
           // The kind as history stores it.
@@ -469,10 +481,15 @@ describe.each(getConfiguredTestDialects())(
         };
         registerHook("beforeRead", NOTES, needsContext as never);
         try {
-          await versions.deleteWorkingDraft(ref, null, {
-            ...asUser(editorId),
-            context: { allow: true },
-          });
+          await versions.deleteWorkingDraft(
+            ref,
+            null,
+            {
+              ...asUser(editorId),
+              context: { allow: true },
+            },
+            { _overwrite: true }
+          );
         } finally {
           unregisterHook("beforeRead", NOTES, needsContext as never);
         }
@@ -482,13 +499,18 @@ describe.each(getConfiguredTestDialects())(
       it("is refused to an API key, whose own id a plugin cannot name, and the draft stays", async () => {
         const ref = await withWorkingDraft(NOTES);
         await expect(
-          versions.deleteWorkingDraft(ref, null, {
-            ...asUser(editorId),
-            authenticatedScope: {
-              actorType: "apiKey",
-              permissions: [`read-${NOTES}`, `update-${NOTES}`],
+          versions.deleteWorkingDraft(
+            ref,
+            null,
+            {
+              ...asUser(editorId),
+              authenticatedScope: {
+                actorType: "apiKey",
+                permissions: [`read-${NOTES}`, `update-${NOTES}`],
+              },
             },
-          })
+            { _overwrite: true }
+          )
         ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
         expect((await draftParts(ref)).length).toBeGreaterThan(0);
       });
@@ -669,7 +691,12 @@ describe.each(getConfiguredTestDialects())(
 
       it("refuses a checked discard, even to an editor", async () => {
         await expect(
-          versions.deleteWorkingDraft(pageRef("page-b"), null, asUser(editorId))
+          versions.deleteWorkingDraft(
+            pageRef("page-b"),
+            null,
+            asUser(editorId),
+            { _overwrite: true }
+          )
         ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
       });
 

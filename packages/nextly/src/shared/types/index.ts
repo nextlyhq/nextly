@@ -10,6 +10,7 @@
  */
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import type { RequestActor } from "../../auth/request-actor";
 import { maskingServiceLogger } from "../../observability/mask-emails";
 import type { HookExemptRead } from "../../services/collections/trust-grant";
 
@@ -116,6 +117,17 @@ export interface RequestContext {
    * it copies this field's shape.
    */
   hookExemptRead?: HookExemptRead;
+
+  /**
+   * @internal Who a write made with this context is recorded under, in place
+   * of `user`. Set only by the plugin collection facade, from the actor of the
+   * plugin route request it serves, and only on a write made as that
+   * request's own user: an API key's write is then recorded as the key, as it
+   * is through REST. A plugin's `ServiceOpts` has no field for it, so a plugin
+   * cannot choose whom its write is attributed to. Attribution only: no
+   * access check reads it.
+   */
+  actor?: RequestActor;
 }
 
 /**

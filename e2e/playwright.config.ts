@@ -73,8 +73,9 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  *   (`tests/production/widget-preview.spec.ts`).
  * - `removed-from-code-singles-list`: the Singles list it reads is the Schema
  *   Builder's, which a production build turns off.
- * - `builder-field-gates`, `builder-runtime-collection`, `builder-nested-field`:
- *   each makes its collection through the Schema Builder's own calls.
+ * - `builder-field-gates`, `builder-runtime-collection`, `builder-nested-field`,
+ *   `builder-repeater-row`: each makes its collection through the Schema
+ *   Builder's own calls.
  * - `builder-fonts`: its stand-in font catalogue is plain http on localhost,
  *   which only a development server may reach; a production server rightly
  *   refuses it.
@@ -88,6 +89,7 @@ const DEV_SPECS = [
   "**/builder-field-gates.spec.ts",
   "**/builder-runtime-collection.spec.ts",
   "**/builder-nested-field.spec.ts",
+  "**/builder-repeater-row.spec.ts",
   "**/builder-canvas-embed.spec.ts",
   "**/removed-from-code-singles-list.spec.ts",
   "**/builder-fonts.spec.ts",
@@ -258,6 +260,11 @@ export default defineConfig({
       // asserts against. They are off by default so a contributor's admin
       // keeps the monochrome identity a default install has.
       NEXTLY_E2E_BRANDING: "1",
+      // Turns off Next.js's development indicator, whose button a development
+      // server injects into the canvas's frame too: a tab stop inside the
+      // canvas that a production build never draws, which the keyboard specs
+      // walking in and out of the frame would otherwise meet.
+      NEXTLY_E2E_DEV_INDICATORS: "0",
       // Registers the style fixture, which plugin-admin-styling.spec.ts and
       // plugin-page-routing.spec.ts both depend on. Off by default so a test
       // double does not appear in a contributor's plugins list or inject a

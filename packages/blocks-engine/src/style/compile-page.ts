@@ -60,8 +60,10 @@ import {
   usableNamedClassPositions,
   MAX_NAMED_CLASS_NAME_LENGTH,
   classNameOf,
+  isDefaultLook,
   isLook,
   NAMED_CLASS_SLUG_RE,
+  ownLooksRead,
 } from "./named-class";
 import {
   blockPartClassName,
@@ -71,6 +73,12 @@ import {
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
 } from "./node-class";
+import { OVERLAY_PREFIX, OVERLAY_RESET } from "./overlay";
+import {
+  partRouting,
+  routeDeclarations,
+  type PartRouting,
+} from "./part-routing";
 import { serializeRules } from "./serialize";
 import type { CssRule } from "./serialize";
 import type { SpacingMode } from "./spacing-mode";
@@ -1262,6 +1270,12 @@ function unknownBreakpointWarnings(
 /** What one envelope is, and what may be written from it. */
 interface EnvelopeContext {
   origin: StyleOrigin;
+  /**
+   * The properties block parts take from a wrapping root, for the tiers that
+   * style a node's root (its own values, shared styles, looks). Absent for
+   * the defaults tiers, whose type class sits on the part itself.
+   */
+  routing?: PartRouting;
   /** Appended to as declarations are emitted; absent when no caller asked for a trace. */
   trace?: StyleTraceEntry[];
   /** Which hosts this site will fetch from; unasked when absent. */
@@ -1328,7 +1342,14 @@ function envelopeRules(
    */
   about: EnvelopeContext
 ): CssRule[] {
-  const { origin, trace, mayFetchUrl, weightlessAnchor, previewStates } = about;
+  const {
+    origin,
+    trace,
+    mayFetchUrl,
+    weightlessAnchor,
+    previewStates,
+    routing,
+  } = about;
   // Chosen ONCE per envelope rather than per rule: it is a property of the
   // compile, and re-deciding it inside the loop invites the two forms to
   // disagree between a node's base rule and its hover one.
@@ -1415,7 +1436,12 @@ function envelopeRules(
       // A property that styles something inside the block goes into its own
       // rule. Keeping the exception in the catalog rather than in a branch here
       // is what makes the set of them enumerable; this only has to honour it.
-      for (const rule of groupByDescendant(compiled.declarations)) {
+      for (const rule of anchoredGroups(
+        compiled.declarations,
+        selector,
+        stateSelectors[state],
+        weightlessAnchor === undefined ? routing : undefined
+      )) {
         rules.push({
           ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
           // Everything after the anchor is wrapped, state and descendant
@@ -1424,15 +1450,18 @@ function envelopeRules(
           // itself would outrank a host rule of the same shape. The anchor is
           // the only part that weighs.
           selector:
-            weightlessAnchor === undefined
+            rule.selector ??
+            (weightlessAnchor === undefined
               ? `${selector}${stateSelectors[state]}${rule.descendant}`
-              : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${rule.descendant})`,
+              : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${rule.descendant})`),
           declarations: rule.declarations,
         });
         // Recorded here, from the same declarations that were just emitted, in the same loop.
         // Anywhere else it would be a second reading of the document, and a second reading can
         // disagree with the first — which is the one failure a provenance record must not have.
-        if (trace === undefined) continue;
+        // A routed declaration is written twice (off the wrapper, onto the
+        // part) and traced once: it is one value the node was given.
+        if (trace === undefined || rule.traced === false) continue;
         for (const declaration of rule.declarations) {
           trace.push({
             origin,
@@ -1448,6 +1477,46 @@ function envelopeRules(
     }
   }
   return rules;
+}
+
+/**
+ * The rules one compiled style map writes: grouped by the descendant each
+ * declaration attaches to, root first, with the root's declarations a block
+ * part takes from a wrapping root split off to their own selectors. A routed
+ * group's second rule carries `traced: false`, so the trace records each
+ * value once.
+ */
+function anchoredGroups(
+  declarations: readonly Declaration[],
+  selector: string,
+  state: string,
+  routing: PartRouting | undefined
+): {
+  descendant: string;
+  declarations: Declaration[];
+  selector?: string;
+  traced?: false;
+}[] {
+  const groups = groupByDescendant(declarations);
+  if (routing === undefined || routing.size === 0) return groups;
+  return groups.flatMap(group => {
+    if (group.descendant !== "") return [group];
+    const { kept, routed } = routeDeclarations(
+      selector,
+      state,
+      group.declarations,
+      routing
+    );
+    return [
+      ...(kept.length === 0 ? [] : [{ descendant: "", declarations: kept }]),
+      ...routed.map((rule, index) => ({
+        descendant: "",
+        declarations: rule.declarations,
+        selector: rule.selector,
+        ...(index % 2 === 1 ? { traced: false as const } : {}),
+      })),
+    ];
+  });
 }
 
 /** Split declarations by the descendant they attach to, root first. */
@@ -1911,6 +1980,9 @@ export function compilePageCss(
     scope === ""
       ? `.${PAGE_ROOT_CLASS}`
       : `.${PAGE_ROOT_CLASS}:where(${scope})`;
+  // Which root properties block parts take from a wrapping root, read once
+  // for the node and class tiers below.
+  const routing = partRouting(ctx.blockParts);
 
   const nodes = documentNodes(
     doc,
@@ -2279,10 +2351,28 @@ export function compilePageCss(
   // the library could not use and those can be primitives: `[null, null]` is two entries needing
   // two separate repairs, and a lookup keyed by the entry answers with the first position for
   // both, sending an editor to a class it has already fixed.
+  // The own looks the bases are laid from, one per block type: any other is reported below.
+  const ownRead = new Set<NamedClass>(ownLooksRead(library));
   const orderedPositions = orderedNamedClassPositions(library);
   for (const position of orderedPositions) {
     const cls = library[position];
     if (written.has(position)) continue;
+    // A block's own look is read as its type's base edits, never written as a class: not dropped.
+    // A second one for the same type is never read, and is said so.
+    if (isUsableNamedClass(cls) && isDefaultLook(cls)) {
+      if (ownRead.has(cls)) {
+        ownRead.delete(cls);
+        continue;
+      }
+      pushBoundedWarning(warningAllowance, warnings, {
+        path: pointer("/classes", String(position)),
+        code: "duplicate-own-look",
+        severity: "warning",
+        message: `The class ${describeValue(cls.id)} is another own look for ${describeValue(cls.blockType)} blocks, so it was not read; the first one in the library's order is.`,
+        suggestion: "Keep one own look per block type, and remove the other.",
+      });
+      continue;
+    }
     // Reported once per entry the library could not use, naming which of the three reasons it
     // was. A usable record whose name is free is not reachable here, so the remaining case after
     // the two structural ones is a name another class already took.
@@ -2364,6 +2454,7 @@ export function compilePageCss(
           previewStates,
           trace,
           mayFetchUrl,
+          routing,
         }
       )
     );
@@ -2426,6 +2517,7 @@ export function compilePageCss(
           trace,
           mayFetchUrl,
           previewStates,
+          routing,
         }
       ),
       ...visibilityRules(
@@ -2631,7 +2723,7 @@ export function compilePageCss(
     // The NORMALISED name, so a refused one leaves this absent and the artifact
     // reads as the published sheet it actually is.
     ...(preview === undefined ? {} : { previewContainer: preview }),
-    css: serializeRules(rules),
+    css: withOverlayReset(rules, gated),
     warnings,
     classes: attributeClasses,
     // Omitted rather than empty when nobody asked, so a caller cannot mistake "not requested"
@@ -2641,4 +2733,29 @@ export function compilePageCss(
     // the shape it did before this field existed.
     ...(Object.keys(gated).length === 0 ? {} : { gated }),
   };
+}
+
+/**
+ * The page's rules, preceded by the overlay's reset when a rule reads it: so a
+ * section's overlay stops at its own image rather than reaching nested ones.
+ */
+function withOverlayReset(
+  rules: readonly CssRule[],
+  gated: Readonly<Record<string, string>>
+): string {
+  const css = serializeRules(rules);
+  // Any of the overlay's properties read: the image's layer, or a longhand's
+  // entry lined up with it.
+  const reading = `var(${OVERLAY_PREFIX}`;
+  // A gated node's rules are kept apart, and appended for a reader who sees
+  // it: the reset stays in the sheet, so the page put back together is the
+  // one an ungated compile writes.
+  const reads =
+    rules.some(rule =>
+      rule.declarations.some(declaration => declaration.value.includes(reading))
+    ) || Object.values(gated).some(fragment => fragment.includes(reading));
+  if (!reads) return css;
+  // Joined only to what is there: a sheet whose every rule is gated is the
+  // reset alone, so the page put back together has no blank line in it.
+  return css === "" ? OVERLAY_RESET : `${OVERLAY_RESET}\n${css}`;
 }

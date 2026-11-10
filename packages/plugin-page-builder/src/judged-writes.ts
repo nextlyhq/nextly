@@ -102,7 +102,7 @@ export function verdictOf(
 }
 
 /** The first error in `error`'s cause chain of the class given. */
-function inCauses<T extends Error>(
+export function inCauses<T extends Error>(
   error: unknown,
   kind: abstract new (...args: never[]) => T
 ): T | undefined {

@@ -143,7 +143,7 @@ describe("CollectionMutationService m2m write atomicity (integration)", () => {
       collections.updateEntry(
         "posts",
         postId,
-        { title: "Changed", tags: [] },
+        { title: "Changed", tags: [], _overwrite: true },
         { overrideAccess: true }
       )
     ).rejects.toThrow();

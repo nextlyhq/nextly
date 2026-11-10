@@ -45,6 +45,11 @@ import {
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
+import {
+  assertPerLanguageStorageUnchanged,
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../domains/i18n/per-language-storage";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import {
   clearActiveExtensionSchema,
@@ -1176,21 +1181,30 @@ async function ensureLocalizedCompanionsForReload(
   // Where transitions are recorded. Resolved whether or not the app names a default locale: an app
   // that has just removed its `localization` block still has companions to unwind, and asking for a
   // locale first would hide exactly those entities.
-  const { bindTransitionRecorder, resolveTransitionStore } = await import(
-    "../domains/i18n/migration/transition-recorder"
-  );
+  const {
+    bindTransitionRecorder,
+    resolveTransitionStore,
+    transitionDefaultLocale,
+  } = await import("../domains/i18n/migration/transition-recorder");
   const { beginI18nTransition, settleI18nTransition } = await import(
     "../domains/i18n/migration/transition-state"
   );
   const transitionStore = await resolveTransitionStore(adapter);
   // The same store, plus the locale a newly created companion gets recorded with.
-  const transitions = bindTransitionRecorder(transitionStore, config);
+  // `AdapterLike` is a narrow view of the registered adapter, which is a
+  // `DrizzleAdapter` at runtime.
+  const transitions = bindTransitionRecorder(
+    transitionStore,
+    await transitionDefaultLocale(adapter as unknown as DrizzleAdapter, config)
+  );
 
   for (const [kind, entities, resolveTableName] of groups) {
     for (const entity of entities) {
       if (!entity.slug) continue;
       if (deferred.has(`${kind}:${entity.slug}`)) continue;
-      if (entity.localized !== true) {
+      // Restored only when its translatable values no longer belong in a companion: an entity that
+      // is not translatable, on a site that does not keep every translatable field per language.
+      if (!storesPerLanguage(entity)) {
         // Turning localization off is a transition too. Only the Schema Builder used to perform
         // it, so an entity localized from configuration and then un-localized kept its content in
         // a companion nothing reads any more, and fell back to whatever the main table held before
@@ -1260,7 +1274,7 @@ async function ensureLocalizedCompanionsForReload(
           tableName,
           fields: entity.fields ?? [],
           dialect: adapter.dialect,
-          status: entity.status === true,
+          status: publishesPerLanguage(entity),
           // Turns creation into a transition: content already on the main table is
           // copied in as this locale's rows, instead of being left behind an empty
           // companion that reads null.
@@ -1334,7 +1348,7 @@ async function ensureLocalizedCompanionsForReload(
           tableName: resolveTableName(entity),
           fields: entity.fields ?? [],
           dialect: adapter.dialect,
-          status: entity.status === true,
+          status: publishesPerLanguage(entity),
           // Decides whether `_updated_at` can be seeded from version history for this
           // entity kind; a kind with no history correctly seeds nothing.
           versionScope: versionScopeForEntityKind(kind),
@@ -1558,10 +1572,25 @@ async function applyReload(opts?: {
     "../plugins/principals/registry"
   );
   const principalKinds = stagePrincipalKinds();
+  // The webhook event types the reloaded config declares, held the same way:
+  // subscriptions are judged against them only once the reload lands.
+  const { stageWebhookEventTypes } = await import(
+    "../domains/webhooks/event-type-registry"
+  );
+  const webhookEventTypes = stageWebhookEventTypes();
   try {
-    await applyReloadHolding(principalKinds, opts);
+    await applyReloadHolding(
+      {
+        commit: () => {
+          principalKinds.commit();
+          webhookEventTypes.commit();
+        },
+      },
+      opts
+    );
   } finally {
     principalKinds.abandon();
+    webhookEventTypes.abandon();
   }
 }
 
@@ -1589,6 +1618,8 @@ async function applyReloadHolding(
         singles?: SingleDef[];
         fieldGroups?: ComponentDef[];
         webhookAuditEnabled?: boolean;
+        /** The per-language storage choice, which a reload may not change. */
+        perLanguageStorage?: boolean;
         auditRetention?: ResolvedAuditRetentionConfig;
         localization?: { defaultLocale?: string };
         /**
@@ -1693,12 +1724,17 @@ async function applyReloadHolding(
           singles?: SingleDef[];
           fieldGroups?: ComponentDef[];
           webhookAuditEnabled?: boolean;
+          perLanguageStorage?: boolean;
           plugins?: PluginDefinition[];
           db?: unknown;
           admin?: { dashboard?: unknown };
         };
       }
     ).config;
+
+    // The tables the running site reads and writes were laid out for the per-language storage
+    // choice it started with, so a config that changes it is refused until the site restarts.
+    assertPerLanguageStorageUnchanged(newConfig?.perLanguageStorage);
 
     // The reload repopulates the field-type registry through `loadConfig` but
     // never goes back through `registerServices`, so the boot gate does not run
@@ -2323,7 +2359,7 @@ async function applyReloadHolding(
           // These branches apply a CONFIG edit, so the table is the pipeline's.
           builtBy: "codeFirst" as const,
           hasStatus: target.status === true,
-          localized: target.localized === true,
+          localized: storesPerLanguage(target),
         }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
@@ -2374,7 +2410,7 @@ async function applyReloadHolding(
         target.tableName,
         heldFields(leaving.entries, "fieldGroup", target.slug, target.fields),
         dialect,
-        { builtBy: "codeFirst" as const, localized: target.localized === true }
+        { builtBy: "codeFirst" as const, localized: storesPerLanguage(target) }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
@@ -3026,7 +3062,7 @@ async function applyReloadHolding(
         // `localized` now travels on the DesiredCollection entry (set above from
         // the config target), so the main table is regenerated without the
         // translatable columns and the companion is registered.
-        const localized = c.localized === true;
+        const localized = storesPerLanguage(c);
         const { table } = generateRuntimeSchema(
           c.tableName,
           c.fields as Parameters<typeof generateRuntimeSchema>[1],
@@ -3043,7 +3079,7 @@ async function applyReloadHolding(
             // companion carries a per-locale `_status` column when the
             // collection has Draft/Published (mirrors loadCompanionSchema). M9.
             localized: true,
-            status: c.status === true,
+            status: publishesPerLanguage(c),
           });
           if (companion) {
             companionFreshTables.set(
@@ -3057,7 +3093,7 @@ async function applyReloadHolding(
         // i18n: a localized single omits its translatable columns from the main
         // runtime table and registers the companion `single_<slug>_locales` table —
         // mirrors the collection branch above.
-        const localized = (s as { localized?: boolean }).localized === true;
+        const localized = storesPerLanguage(s);
         const { table } = generateRuntimeSchema(
           s.tableName,
           s.fields as Parameters<typeof generateRuntimeSchema>[1],
@@ -3072,7 +3108,7 @@ async function applyReloadHolding(
             fields: s.fields as { name: string; type: string }[],
             dialect,
             localized: true,
-            status: s.status === true,
+            status: publishesPerLanguage(s),
           });
           if (companion) {
             companionFreshTables.set(
@@ -3107,7 +3143,7 @@ async function applyReloadHolding(
       for (const comp of Object.values(desiredComponents)) {
         // i18n: a localized component omits its translatable columns from the main
         // comp_ runtime table and registers the companion `comp_<slug>_locales` table.
-        const localized = (comp as { localized?: boolean }).localized === true;
+        const localized = storesPerLanguage(comp);
         const table = fieldGroupSchemaService.generateRuntimeSchema(
           comp.tableName,
           comp.fields,

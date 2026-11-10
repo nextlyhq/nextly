@@ -156,6 +156,7 @@ describe.each(getConfiguredTestDialects())(
       );
       const answer = await call("PATCH", ["singles", SITE_STYLE_SLUG], cookie, {
         breakpoints: TABLET,
+        _overwrite: true,
       });
       expect(answer.status).toBe(403);
       expect(JSON.stringify(answer.body)).toContain(
@@ -169,6 +170,7 @@ describe.each(getConfiguredTestDialects())(
       const cookie = await holding(t, "read-site-style", "update-site-style");
       const answer = await call("PATCH", ["singles", SITE_STYLE_SLUG], cookie, {
         tokens: { tokens: [] },
+        _overwrite: true,
       });
       expect(answer.status).toBe(200);
     });

@@ -494,7 +494,7 @@ describe("the upload tray", () => {
     // Close is the last stop in the page's tab order: Shift+Tab from the
     // start of the document lands on it, and it carries the focus ring.
     const close = within(tray()).getByRole("button", { name: "Close uploads" });
-    expect(close.className).toMatch(/focus-visible:ring/);
+    expect(close.className).toMatch(/focus-visible:outline-2/);
     const user = userEvent.setup({
       advanceTimers: vi.advanceTimersByTime,
     });

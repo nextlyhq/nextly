@@ -302,6 +302,13 @@ export interface CreateTestNextlyOptions {
   fieldGroups?: FieldGroupConfig[];
   /** Content-localization config (i18n). Normalized and wired so localized reads resolve. */
   localization?: LocalizationConfig;
+  /**
+   * Keep every translatable field per language from the start, as a config's
+   * `experimental.perLanguageStorage` does. Off by default.
+   *
+   * @experimental
+   */
+  perLanguageStorage?: boolean;
   /** Override the adapter (defaults to a fresh in-memory SQLite adapter). */
   adapter?: TestAdapter;
   /** Override the logger (defaults to a near-silent test logger). */
@@ -891,6 +898,7 @@ async function bootServices(
       // off. Passed through the config (not set after) so it is published before
       // plugin init() runs, and boot-time plugin events are recorded too.
       webhookAuditEnabled: true,
+      perLanguageStorage: opts.perLanguageStorage === true,
     });
   } catch (error) {
     throw namingTestConsentOption(error, opts.pluginConsent);

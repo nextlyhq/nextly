@@ -20,9 +20,19 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 
-import { publishedSummary } from "@admin/components/features/entries/publishAllOutcomes";
+import {
+  languageLabelOf,
+  publishedSummary,
+} from "@admin/components/features/entries/publishAllOutcomes";
 import { toast } from "@admin/components/ui";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import {
+  refusedAsChangedSince,
+  EVERY_LANGUAGE,
+  PUBLISH_ALL_CHANGED_SINCE,
+  versionToPublishEveryLanguage,
+  type ShownCopy,
+} from "@admin/lib/document-version";
 import type { PublishAllLanguageOutcome } from "@admin/services/publishAllPreview";
 import { singleApi } from "@admin/services/singleApi";
 
@@ -36,11 +46,14 @@ export interface UsePublishAllSingleLocalesOptions {
   slug: string;
   /** Suppress the success/error toast (default: false). */
   silent?: boolean;
+  /** The editor's copy, where there is one; see `versionToPublishEveryLanguage`. */
+  shown?: () => ShownCopy | undefined;
 }
 
 export function usePublishAllSingleLocales({
   slug,
   silent = false,
+  shown,
 }: UsePublishAllSingleLocalesOptions): UseMutationResult<
   {
     id: string;
@@ -52,12 +65,25 @@ export function usePublishAllSingleLocales({
   unknown
 > {
   const queryClient = useQueryClient();
-  const { locales } = useLocalization();
-  const labelOf = (code: string) =>
-    locales.find(locale => locale.code === code)?.label ?? code;
+  const labelOf = languageLabelOf(useLocalization().locales);
 
   return useMutation({
-    mutationFn: () => singleApi.publishAllLocales(slug),
+    // With the version of every language, from a read of every language just
+    // before: the editor reads one, and a publish of every language is judged
+    // on all of them.
+    mutationFn: async () =>
+      singleApi.publishAllLocales(
+        slug,
+        await versionToPublishEveryLanguage(
+          () => singleApi.getDocument(slug, { locale: EVERY_LANGUAGE }),
+          shown?.(),
+          copy =>
+            singleApi.getDocument(slug, {
+              locale: copy.locale,
+              draft: copy.draft,
+            })
+        )
+      ),
     onSuccess: data => {
       // Every locale-keyed variant of this document changed status, so the
       // whole detail key goes rather than one language's entry.
@@ -71,9 +97,20 @@ export function usePublishAllSingleLocales({
       // A Single removed from code refuses in a sentence that says what to do
       // next, so that is shown in place of the general one.
       refreshRemovedFromCodeSchema(queryClient, error);
+      // Changed since the editor opened it: read again, so the editor shows
+      // the version a second publish would make live.
+      const changed = refusedAsChangedSince(error);
+      if (changed) {
+        void queryClient.invalidateQueries({
+          queryKey: singleDocumentKeys.detail(slug),
+        });
+      }
       if (!silent) {
         toast.error(
-          removedFromCodeRefusal(error) ?? "Couldn't publish all languages."
+          removedFromCodeRefusal(error) ??
+            (changed
+              ? PUBLISH_ALL_CHANGED_SINCE
+              : "Couldn't publish all languages.")
         );
       }
     },

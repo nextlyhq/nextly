@@ -319,14 +319,17 @@ async function applyBootMigrations(
  * The refusal a failed run amounts to, or undefined when the failure is one
  * the app can serve through.
  *
- * Two fatal shapes: the refusal itself, and the schema lock's own refusal,
+ * Three fatal shapes: the refusal itself; the schema lock's own refusal,
  * `NEXTLY_MIGRATE_LOCK_BUSY`, which it throws on every dialect when the wait
- * ends with the lock still held. Either means this process never learned
- * whether the schema it would serve matches its code.
+ * ends with the lock still held; and `MIGRATION_MISSING`, an older build
+ * whose folder lacks a migration a newer build applied. Each means this
+ * process would serve a schema it cannot account for.
  */
 function fatalBootMigrationError(err: unknown): NextlyError | undefined {
   if (!(err instanceof NextlyError)) return undefined;
   if (err.code === "NEXTLY_BOOT_MIGRATIONS_NOT_RUN") return err;
+  // Refused as itself: its message names each missing migration and what to do.
+  if (err.code === "MIGRATION_MISSING") return err;
   if (err.code === "NEXTLY_MIGRATE_LOCK_BUSY") {
     return bootMigrationsNotRun(err);
   }

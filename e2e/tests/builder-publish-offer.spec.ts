@@ -13,7 +13,7 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 test.describe.configure({ mode: "serial", lock: [LOCK.siteDefaultLayout] });
 
@@ -198,7 +198,7 @@ test("publishes the page only, leaving the component, when asked to", async ({
   const promo = await component(api, `Promo ${s}`, "published");
   const unpublished = await api.patch(
     `${API}/collections/components/entries/${promo}`,
-    { data: { status: "draft" } }
+    { data: { status: "draft", _overwrite: true } }
   );
   expect(unpublished.ok(), await unpublished.text()).toBe(true);
   const pageId = await draftPage(api, `Offers ${s}`, [promo]);
@@ -266,7 +266,7 @@ test("cancelling leaves the page a draft and the save state as it was", async ({
   await expect(offer(page)).toBeHidden();
   await expect(pageStatus(page)).toHaveText("Page status: Draft");
   // A cancelled publish is not a failed one.
-  await expect(page.getByText("Not saved")).toHaveCount(0);
+  await expect(includingHidden(page).getByText("Not saved")).toHaveCount(0);
   expect(await statusOf(api, "pages", pageId)).toBe("draft");
   expect(await statusOf(api, "components", card)).toBe("draft");
 });
@@ -288,6 +288,58 @@ test("asks the same question when the page is published from its form", async ({
     .poll(() => statusOf(api, "pages", pageId), { timeout: 15_000 })
     .toBe("published");
   expect(await statusOf(api, "components", card)).toBe("published");
+});
+
+test("asks about a Layout chosen on the form while the question was out", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  const api = page.request;
+  const s = stamp();
+  const header = await component(api, `Late header ${s}`, "published");
+  await layout(api, `Late ${s}`, header, "draft");
+  const pageId = await draftPage(api, `Edited while asked ${s}`, []);
+
+  await gotoAdmin(page, `/collections/pages/${pageId}`);
+  const picker = page.getByRole("combobox", { name: "Layout" });
+  await expect(picker).toBeVisible({ timeout: 30_000 });
+
+  // The first question is held until the Layout has changed, so its answer is
+  // about the draft from before the change.
+  let arrived!: () => void;
+  const asked = new Promise<void>(resolve => {
+    arrived = resolve;
+  });
+  let release!: () => void;
+  const released = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  let questions = 0;
+  await page.route("**/publish-readiness", async route => {
+    try {
+      questions += 1;
+      if (questions === 1) {
+        arrived();
+        await released;
+      }
+      await route.continue();
+    } catch {
+      // The page went away with the request held: nothing is left to answer.
+    }
+  });
+
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await asked;
+  await picker.click();
+  await page.getByRole("option", { name: new RegExp(`^Late ${s}`) }).click();
+  release();
+
+  await expect(offer(page)).toContainText("This page's Layout isn't published");
+  await expect(offer(page)).toContainText(`Late ${s}`);
+  expect(questions).toBe(2);
+  await offer(page).getByRole("button", { name: "Cancel" }).click();
+  await expect(offer(page)).toBeHidden();
+  expect(await statusOf(api, "pages", pageId)).toBe("draft");
 });
 
 test("warns before a Layout with an unpublished header becomes the default", async ({

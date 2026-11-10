@@ -114,6 +114,7 @@ async function documentWithGuardedComponent(dialect: TestDialect) {
       title: "T2",
       keyed: "K-2",
       banner: { heading: "H2", secret: "S-2", fragile: "F-2" },
+      _overwrite: true,
     }
   );
   return id;
@@ -212,6 +213,7 @@ describe.each(getConfiguredTestDialects())(
         ...at(id),
         user: CLERK,
         versionNo: 1,
+        version: { _overwrite: true },
       });
       expect(JSON.stringify(result)).toContain("banner");
       const live = await current!.getService("collectionsHandler").getEntry({

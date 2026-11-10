@@ -1,0 +1,225 @@
+---
+title: Named queries
+description: Give a Collection list a custom source written in code, with typed inputs authors fill in, that reads only what it declares and only what visitors may see.
+---
+
+A Collection list usually shows the entries of one collection, narrowed by filters and
+ordered by a sort. When that is not enough (rows joined from two collections, a date
+window that moves with today, entries chosen by a rule an author should not have to
+rebuild), a developer writes a **named query** and authors pick it as the list's source.
+Authors see it as a **custom source**. Nothing an author types is ever a query: they choose
+one by name and fill in its inputs.
+
+Named queries are experimental: the contract may change before the page builder is
+stable. A list takes one in the editor, as below, or through the
+[API](/docs/page-builder/compose-through-the-api).
+
+## Declare a query
+
+```ts
+// app/named-queries.ts
+import { defineNamedQuery, param } from "@nextlyhq/plugin-sdk/blocks";
+
+export const upcomingEvents = defineNamedQuery({
+  name: "events.upcoming",
+  label: "Upcoming events",
+  description: "Events from today on, soonest first.",
+  params: {
+    city: param.choice({
+      label: "City",
+      required: true,
+      options: [
+        { value: "lahore", label: "Lahore" },
+        { value: "karachi", label: "Karachi" },
+      ],
+    }),
+    from: param.day({ label: "From", default: "today" }),
+    freeOnly: param.boolean({ label: "Free only" }),
+  },
+  reads: { collections: ["events"] },
+  rows: {
+    key: "id",
+    fields: [
+      { name: "id", type: "text" },
+      { name: "title", type: "text" },
+      { name: "startsAt", type: "date" },
+      { name: "price", type: "number" },
+    ],
+  },
+  total: true,
+  // "today" moves at midnight, so a cached result lives at most an hour.
+  revalidate: 3600,
+  async run({ params, window, reader }) {
+    const events = await reader.find({
+      collection: "events",
+      filters: [
+        { field: "city", op: "equals", value: params.city },
+        { field: "startsAt", op: "gte", value: params.from },
+        ...(params.freeOnly
+          ? [{ field: "price", op: "equals" as const, value: 0 }]
+          : []),
+      ],
+      sort: ["startsAt"],
+      limit: window.limit,
+      offset: window.offset,
+      select: ["title", "startsAt", "price"],
+    });
+    return {
+      total: events.meta.total,
+      rows: events.items.map(event => ({
+        id: String(event.id),
+        title: event.title,
+        startsAt: event.startsAt,
+        price: event.price,
+      })),
+    };
+  },
+});
+```
+
+Register the site's queries with the page builder:
+
+```ts
+// nextly.config.ts
+import { pageBuilder } from "@nextlyhq/plugin-page-builder";
+
+import { upcomingEvents } from "./app/named-queries";
+
+export const builder = pageBuilder({ namedQueries: [upcomingEvents] });
+```
+
+Then hand the route that renders the site's pages that page builder's queries, with
+`namedQueriesOf`. Each page builder keeps its own, so two sites served from one process
+never run each other's queries. A route handed none knows of none, and a list that names
+a query shows its empty state.
+
+```ts
+// app/[...slug]/page.tsx
+import { createBlocksPage } from "@nextlyhq/blocks-react/next";
+import { namedQueriesOf } from "@nextlyhq/plugin-page-builder";
+
+import { builder } from "../../nextly.config";
+
+const route = createBlocksPage({
+  collections: ["pages"],
+  field: "content",
+  namedQueries: namedQueriesOf(builder),
+});
+```
+
+A plugin declares its own beside its blocks, in
+`contributes.declarations["@nextlyhq/plugin-page-builder"].namedQueries`. Every query is
+registered when the site boots, all or nothing: a malformed declaration, or a name two
+sources register, stops the boot and names both sources.
+
+## What a declaration says
+
+- **`name`** is stored on every list that uses the query, so it is an id: never rename it.
+  Lowercase words joined by hyphens, in segments joined by dots, at most 64 characters.
+- **`label`** and **`description`** are what authors read when they choose a source.
+- **`params`** are the inputs, at most 12, each made with `param`: `text`, `number`,
+  `boolean` (yes or no), `choice`, `day` (a calendar day, `YYYY-MM-DD`; a default of
+  `"today"` reaches `run` as the render's day) and `entry` (an entry's id, of a
+  collection the query reads). A list stores one value per input it sets.
+- **`reads`** names every collection, Single and site setting `run` may read. A read of
+  anything else is refused before it is made. A published page is refreshed when any of
+  them changes, whether or not that render read it. At most 64 in all.
+- **`rows`** is what a row is: a collection's entries (`{ collection }`, keyed by id), or
+  a field schema of your own with a text or number `key`. The editor's binding picker and
+  the binding checks read a list's items from it.
+- **`total`** says `run` returns how many rows match before the window. A list split into
+  pages needs it: its pages are counted from the total, so the save refuses Split into
+  pages on a list whose query does not declare it.
+- **`timeoutMs`** bounds how long `run` may take: 5000 by default, at most 30000.
+- **`revalidate`** bounds how long a cached result lives, in seconds. Set it when the
+  answer depends on the date.
+
+## What `run` may read
+
+`run` receives the list's inputs, already checked against the declaration with defaults
+applied, its `window` (Number of items and Skip the first), the page's `locale`, `today`
+in the site's time zone, an abort `signal`, and a `reader`. The reader reads as an
+anonymous visitor: published entries only, and only the fields the public may read.
+Each read counts against the page's read allowance, so a query that loops over its reader
+is bounded like nested lists are.
+
+Named queries run as your app's code. The reader keeps them to what visitors may read; it isn't a sandbox for untrusted code.
+
+`run` gets no other handle: no instance, request or user. While it runs, the ways into the
+server refuse: every Direct API method (a visitor's read included), the Nextly instance's
+own services, and reaching a service a plugin contributes. A query that calls one of them
+by mistake fails rather than reading more than visitors may, so everything it reads is
+declared, counted and refreshes the page when it changes.
+
+The guard sits at those entry points, not on what they hand out. An object your code took
+before the run, such as a service kept in a module, and calls during it is not refused: that
+is code written to get round the guard, which your own code can always do. Keep a named
+query to its reader.
+
+Rows are then cut to the fields the query declares, or to the public fields of the
+collection its rows are entries of, and each row's key must be present and unique.
+
+## Set it on a list
+
+In the editor, select the Collection list and open **Source** in its Content tab. The
+site's queries are listed as **Custom sources**, above the collections, each with its
+`description` under its label; a query with a required input that has no default is
+tagged **Needs input**. One search covers every group, descriptions included.
+
+Choosing one shows an **Inputs** group with a control for each input: text, a number
+with its `unit`, yes or no, a choice, a day (empty means `default`, such as Today) and
+an entry. A note names the inputs the query needs, and each empty input shows what empty
+means. Until every required input has a value nothing is written: the list keeps what it
+stores, and the canvas tags it "Still showing …". **Filters and sort** becomes one line
+saying the query sets them.
+
+The canvas draws the query's rows, run on the server as you, the person editing, read
+them, drafts included. If a query reads a collection visitors can't read, the inspector
+and the canvas name the fields visitors see the rows without on the published page; the
+page still saves.
+
+Through the API, `set-list-query` takes a `namedQuery`:
+
+```json
+{
+  "page": { "collection": "pages", "id": "…" },
+  "action": {
+    "kind": "set-list-query",
+    "listId": "list-1",
+    "query": {
+      "namedQuery": {
+        "name": "events.upcoming",
+        "params": { "city": "lahore" }
+      },
+      "limit": 6
+    }
+  }
+}
+```
+
+Choosing a custom source removes the list's collection, related entries, filters and
+sort in the same write: the query decides which rows show and their order. Number of
+items and Skip the first stay, and become the query's window.
+
+The save refuses a list missing a required input, a value an input does not take and a
+query the site does not register, in the words the editor shows. A page saved before a
+query was removed keeps saving, with a warning, and the list shows its empty state. An
+input the query no longer takes is left out, with a warning.
+
+## Split into pages
+
+A list whose query declares `total: true` can be split into pages, as a collection list
+can: page `n` at `<address>/page/n` asks `run` for the window that starts `limit` rows
+further on for each page before it, after Skip the first, and the number of pages is the
+total less the skipped rows, divided by Number of items and rounded up. A page past the
+last is not found. A query that stops returning a total draws the list's empty state, and
+the editor says why, rather than guessing how many pages there are.
+
+## When a query fails
+
+A query that throws, runs past its time, reads something it does not declare, spends the
+page's read allowance or returns rows without unique keys draws the list's empty state.
+Visitors see nothing else. In the editor and a preview, the list says what failed. When
+`run` throws, authors see a reference such as `NQ-7F3A2C` rather than the error, with
+a button on the editor's canvas that copies it, and are asked to quote it to their
+developer; the server log carries the same reference, the page and the list.

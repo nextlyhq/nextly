@@ -135,6 +135,10 @@ export function Toaster({
           // in place of the library's own: its light text read below 4.5:1.
           "--success-bg": "var(--nx-toast-success-bg)",
           "--success-text": "var(--nx-toast-success-text)",
+          // A warning toast's too: the library's light amber text read at
+          // 3.07:1 on its own surface.
+          "--warning-bg": "var(--nx-toast-warning-bg)",
+          "--warning-text": "var(--nx-toast-warning-text)",
         } as React.CSSProperties
       }
       {...props}

@@ -111,6 +111,13 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
     hint: "Integer or decimal",
     icon: "Hash",
   },
+  {
+    type: "icon",
+    label: "Icon",
+    category: "Basic",
+    hint: "An icon from the site's icon sets",
+    icon: "Star",
+  },
   // Advanced
   {
     type: "code",
@@ -405,13 +412,16 @@ export const FORM_FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry<FormFieldCa
  * - `blocks` is excluded because a prop holding a whole nested document is
  *   what slots already express, and nesting documents inside documents would
  *   put two migration boundaries in one value.
+ * - `icon` is excluded for now: the icon block prop arrives with the Icon
+ *   block, together with its prop builder, and until then a block cannot
+ *   declare one.
  *
  * Link-shaped props keep using `text` until the dedicated link picker joins
  * the catalog with its admin component.
  */
 export type BlockFieldCatalogType = Exclude<
   FieldType,
-  "password" | "component" | "fieldGroup"
+  "password" | "component" | "fieldGroup" | "icon"
 >;
 
 /** Every block-prop field type, in catalog order. */
@@ -446,6 +456,10 @@ export const BLOCK_FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry<BlockField
 export function isBlockFieldType(type: string): type is BlockFieldCatalogType {
   return (BLOCK_FIELD_TYPES as readonly string[]).includes(type);
 }
+
+// Which repeaters get a saved row id, for the admin's new rows: the rule the
+// server gives ids by, read where the admin reads the catalog.
+export { declaresOwnId } from "./repeater-row-identity";
 
 // The engine's own functions, not wrappers: `bindingKindOf` answers the kind
 // a field produces, and `canBindFieldToProp` whether a field fits a prop, by
@@ -489,6 +503,7 @@ export const FIELD_TYPE_BINDING_KIND: Readonly<
   email: ENGINE_FIELD_TYPE_BINDING_KIND.email,
   password: ENGINE_FIELD_TYPE_BINDING_KIND.password,
   code: ENGINE_FIELD_TYPE_BINDING_KIND.code,
+  icon: ENGINE_FIELD_TYPE_BINDING_KIND.icon,
   number: ENGINE_FIELD_TYPE_BINDING_KIND.number,
   checkbox: ENGINE_FIELD_TYPE_BINDING_KIND.checkbox,
   date: ENGINE_FIELD_TYPE_BINDING_KIND.date,
@@ -563,6 +578,9 @@ export const FIELD_TYPE_VALIDATION_RULES: Readonly<
   email: ["required", "minLength", "maxLength", "pattern", "message"],
   password: ["required", "minLength", "maxLength", "pattern", "message"],
   code: ["required", "minLength", "maxLength", "pattern", "message"],
+  // An icon is picked, never typed, and its id shape is checked by the type
+  // itself, so length and pattern bounds say nothing a person could act on.
+  icon: ["required", "message"],
   number: ["required", "min", "max", "message"],
   // A date is ordered, so it bounds by value rather than by length.
   date: ["required", "min", "max", "message"],
@@ -769,6 +787,7 @@ const FIELD_TYPE_SYNONYMS: Readonly<
   password: ["secret", "credential"],
   number: ["integer", "decimal", "float", "price", "amount", "count"],
   code: ["snippet", "script", "embed", "source"],
+  icon: ["symbol", "glyph", "emoji", "pictogram"],
   date: ["time", "datetime", "calendar", "day", "timestamp"],
   select: ["dropdown", "choice", "option", "enum"],
   radio: ["radio buttons", "choice", "option", "one of"],

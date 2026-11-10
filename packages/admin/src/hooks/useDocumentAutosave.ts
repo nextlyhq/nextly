@@ -24,6 +24,7 @@ import {
   type AutosaveStatus,
   DEFAULT_AUTOSAVE_DEBOUNCE_MS,
 } from "@admin/hooks/useSnapshotAutosave";
+import { DOCUMENT_VERSION_KEY } from "@admin/lib/document-version";
 import { versionApi, type VersionScope } from "@admin/services/versionApi";
 
 /**
@@ -110,6 +111,13 @@ export interface UseDocumentAutosaveOptions {
    * recovery point written now would describe a state that never existed.
    */
   enabled?: boolean;
+
+  /**
+   * The version the form's copy started from, recorded with each point so its
+   * read can say what changed since, and a save of its restored edits is
+   * judged by it.
+   */
+  version?: () => string | undefined;
 }
 
 export interface UseDocumentAutosaveResult {
@@ -134,6 +142,7 @@ export function useDocumentAutosave({
   locale = null,
   debounceMs = DEFAULT_AUTOSAVE_DEBOUNCE_MS,
   enabled = true,
+  version,
 }: UseDocumentAutosaveOptions): UseDocumentAutosaveResult {
   /*
    * The snapshot, read at flush time rather than captured when the recording
@@ -147,8 +156,15 @@ export function useDocumentAutosave({
    */
   const save = useCallback(async () => {
     if (!scope) throw new Error("autosave: no scope");
-    return versionApi.saveAutosave(scope, form.getValues(), locale);
-  }, [scope, form, locale]);
+    const startedFrom = version?.();
+    return versionApi.saveAutosave(
+      scope,
+      startedFrom === undefined
+        ? form.getValues()
+        : { ...form.getValues(), [DOCUMENT_VERSION_KEY]: startedFrom },
+      locale
+    );
+  }, [scope, form, locale, version]);
 
   /*
    * The identity the core keys a pending recording to.

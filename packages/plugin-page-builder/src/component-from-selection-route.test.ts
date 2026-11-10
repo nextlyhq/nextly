@@ -147,13 +147,24 @@ function contextOver(
   };
 }
 
-/** Reads over a stored page and a set of published definitions. */
+/**
+ * Reads over a stored page and a set of published definitions. `revs` is the
+ * version each successive page read gives, the last one repeated.
+ */
 function readsOver(
   stored: BlockDocument | null,
-  definitions: Record<string, BlockDocument> = {}
+  definitions: Record<string, BlockDocument> = {},
+  revs: readonly string[] = []
 ): ComponentFromSelectionReads {
+  let reads = 0;
   return {
-    page: () => Promise.resolve(stored),
+    page: () => {
+      const rev = revs[Math.min(reads, revs.length - 1)];
+      reads += 1;
+      return Promise.resolve(
+        stored === null ? null : { document: stored, rev }
+      );
+    },
     definitions: id =>
       Promise.resolve(
         definitions[id] === undefined
@@ -481,7 +492,7 @@ describe("who may run it", () => {
       ...readsOver(threeBlocks),
       page: address => {
         asked.push(address);
-        return Promise.resolve(threeBlocks);
+        return Promise.resolve({ document: threeBlocks, rev: undefined });
       },
     };
 
@@ -670,6 +681,26 @@ describe("in the API's stored mode", () => {
     });
   });
 
+  it("updates the page with the version read just before the write", async () => {
+    // Planned from the first read, written after a second: a save of the page
+    // in between is refused by the version this write sends.
+    const { ctx, updateEntryInTransaction } = contextOver();
+    await componentFromSelection(
+      request({
+        action: "convert",
+        apply: "stored",
+        page: { collection: "pages", id: "page-1" },
+        selectedIds: ["b"],
+        fields,
+      }),
+      ctx,
+      { reads: readsOver(threeBlocks, {}, ["7", "8"]) }
+    );
+    expect(updateEntryInTransaction.mock.calls[0]?.[3]).toMatchObject({
+      _rev: "8",
+    });
+  });
+
   it("rolls the create back when the page update fails", async () => {
     const { ctx, journal } = contextOver({ failUpdate: true });
 
@@ -702,7 +733,10 @@ describe("in the API's stored mode", () => {
       ...readsOver(threeBlocks),
       page: () => {
         reads += 1;
-        return Promise.resolve(reads === 1 ? threeBlocks : edited);
+        return Promise.resolve({
+          document: reads === 1 ? threeBlocks : edited,
+          rev: undefined,
+        });
       },
     };
 

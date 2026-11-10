@@ -15,7 +15,11 @@
  *
  * @module derive-seo
  */
-import type { BlockSeoContribution, BlockSeoImage } from "./block";
+import type {
+  BlockSeoContribution,
+  BlockSeoImage,
+  BlockSeoRead,
+} from "./block";
 import type { BlockDocument, BlockNode } from "./document";
 import { declaresNoMarkup } from "./visibility";
 
@@ -53,7 +57,10 @@ export type NodeVisibilityTest = (node: BlockNode) => boolean;
 /** Looks a block definition up by type. */
 export type SeoDefinitionSource = (type: string) =>
   | {
-      seo?: (props: never) => BlockSeoContribution | undefined;
+      seo?: (
+        props: never,
+        read?: BlockSeoRead
+      ) => BlockSeoContribution | undefined;
       /** Declared child regions, in declaration order. */
       slots?: Record<string, unknown>;
       /** Slots the block may decline to render. See `conditionalSlots`. */
@@ -133,14 +140,18 @@ function candidates(
  */
 function offerOf(
   node: BlockNode,
-  definitions: SeoDefinitionSource
+  definitions: SeoDefinitionSource,
+  bound: BlockSeoRead["bound"]
 ): BlockSeoContribution | undefined {
   const definition = definitions(node.type);
   if (!definition?.seo) return undefined;
   let offer: BlockSeoContribution | undefined;
   let deferred = false;
   try {
-    offer = definition.seo(node.props as never);
+    offer = definition.seo(
+      node.props as never,
+      bound === undefined ? {} : { bound }
+    );
     // Inspected INSIDE the guard. `then` may be a getter, and a getter that
     // throws would escape a check made after the `try` — so the containment
     // this function promises would fail on the way to enforcing itself.
@@ -176,7 +187,9 @@ function offerOf(
 export function deriveSeoFromDocument(
   document: BlockDocument,
   definitions: SeoDefinitionSource,
-  isVisible: NodeVisibilityTest
+  isVisible: NodeVisibilityTest,
+  /** What each node's bound props hold, by node id, as its render is given. */
+  boundOf?: (nodeId: string) => BlockSeoRead["bound"]
 ): DerivedSeo {
   const derived: DerivedSeo = {};
 
@@ -212,7 +225,7 @@ export function deriveSeoFromDocument(
       // which costs unused work rather than a missing page.
       if (declaresNoMarkup(node, definitions)) continue;
 
-      const offer = offerOf(node, definitions);
+      const offer = offerOf(node, definitions, boundOf?.(node.id));
       if (offer) {
         derived.title ??= usable(offer.title);
         derived.description ??= usable(offer.description);

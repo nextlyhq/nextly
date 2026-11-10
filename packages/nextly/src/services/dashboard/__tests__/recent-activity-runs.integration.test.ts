@@ -208,8 +208,11 @@ describe.each(getConfiguredTestDialects())(
       for (let i = 0; i < 5; i++) {
         const saved = await singles.update(
           HOME,
-          { headline: `Welcome ${i}` },
-          { overrideAccess: true, actor: { type: "user", id: ANA.id } }
+          { headline: `Welcome ${i}`, _overwrite: true },
+          {
+            overrideAccess: true,
+            actor: { type: "user", id: ANA.id },
+          }
         );
         expect(saved.success).toBe(true);
       }
@@ -467,7 +470,10 @@ describe.each(getConfiguredTestDialects())(
       });
       const update = (minutes: number, data: Record<string, unknown>) =>
         written(t, at(minutes), () =>
-          handler.updateEntry({ ...asAna, entryId: id }, data)
+          handler.updateEntry(
+            { ...asAna, entryId: id },
+            { ...data, _overwrite: true }
+          )
         );
       const firstSave = await update(4, { title: "one" });
       await update(3, { title: "two" });

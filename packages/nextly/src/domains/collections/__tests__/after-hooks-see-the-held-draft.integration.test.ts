@@ -143,7 +143,10 @@ describe.each(getConfiguredTestDialects())(
         [
           "the single-entry update",
           async (id, title) => {
-            await entries.updateEntry({ ...ctx, entryId: id }, { title });
+            await entries.updateEntry(
+              { ...ctx, entryId: id },
+              { title, _overwrite: true }
+            );
           },
         ],
         [
@@ -152,7 +155,8 @@ describe.each(getConfiguredTestDialects())(
             await entries.bulkUpdateEntries({
               collectionName: SLUG,
               ids: [id],
-              data: { title },
+              // What the hooks are handed is under test, not versions.
+              data: { title, _overwrite: true },
               overrideAccess: true,
             });
           },
@@ -162,7 +166,7 @@ describe.each(getConfiguredTestDialects())(
           async (id, title) => {
             const result = await service.updateMany(
               SLUG,
-              [{ id, data: { title } }],
+              [{ id, data: { title, _overwrite: true } }],
               { overrideAccess: true }
             );
             expect(result.successful).toBe(1);
@@ -176,7 +180,7 @@ describe.each(getConfiguredTestDialects())(
                 tx,
                 SLUG,
                 id,
-                { title },
+                { title, _overwrite: true },
                 { overrideAccess: true }
               )
             );
@@ -229,7 +233,7 @@ describe.each(getConfiguredTestDialects())(
           tx,
           SLUG,
           id,
-          { title: "draft1" },
+          { title: "draft1", _overwrite: true },
           { overrideAccess: true }
         )
       );
@@ -243,7 +247,16 @@ describe.each(getConfiguredTestDialects())(
       const id = await publishedEntry();
       const result = await service.updateMany(
         SLUG,
-        [{ id, data: { title: "republished", status: "published" } }],
+        [
+          {
+            id,
+            data: {
+              title: "republished",
+              status: "published",
+              _overwrite: true,
+            },
+          },
+        ],
         { overrideAccess: true }
       );
       expect(result.successful).toBe(1);

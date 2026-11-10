@@ -35,10 +35,6 @@
     "count": 1,
     "digests": ["84381fd424963009"]
   },
-  ".github/workflows/scaffold-build.yml": {
-    "count": 1,
-    "digests": ["4466be5c8d0ef87e"]
-  },
   "packages/admin/src/components/features/entries/EntryForm/EntryForm.tsx": {
     "count": 2,
     "digests": ["69eafeb47e136856", "92043ca6e49d929a"]
@@ -535,13 +531,12 @@
     "digests": ["e8838f11906c806e"]
   },
   "packages/nextly/src/domains/schema/migrate-create/generate.ts": {
-    "count": 5,
+    "count": 4,
     "digests": [
       "17f0655986bf0777",
       "22bdeef8b108fa89",
       "40a73a66250cbdba",
-      "90205d6af96dc8ee",
-      "9d1d040c27e42ac0"
+      "90205d6af96dc8ee"
     ]
   },
   "packages/nextly/src/domains/schema/migrate-create/prompt-renames.ts": {
@@ -1020,8 +1015,8 @@
     "digests": ["f5f700e664b1c588"]
   },
   "packages/nextly/src/services/collection-file-manager.ts": {
-    "count": 3,
-    "digests": ["00bbf87050b2aa4e", "9780f092f71bb287", "b64ae3ab9c465ebb"]
+    "count": 2,
+    "digests": ["00bbf87050b2aa4e", "9780f092f71bb287"]
   },
   "packages/nextly/src/services/collections-handler.ts": {
     "count": 9,

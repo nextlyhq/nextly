@@ -147,6 +147,8 @@ export function useRefusedForm(gate: {
    * loads. Called once the recovery's reloaded document is there.
    */
   resetToDocument: () => void;
+  /** The version the editor's copy started from; see `RefusedForm.version`. */
+  version?: () => string | undefined;
 }): {
   refusedForm: RefusedForm;
   /**
@@ -201,6 +203,7 @@ export function useRefusedForm(gate: {
   const refusedForm = useMemo<RefusedForm>(
     () => ({
       mayWrite: () => !gateNow.current.writesHeld(),
+      version: () => gateNow.current.version?.(),
       recover: async take => {
         // The same gate the editor's own saves pass.
         const { writesHeld, latch } = gateNow.current;

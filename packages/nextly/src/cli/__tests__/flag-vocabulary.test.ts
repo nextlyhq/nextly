@@ -18,6 +18,7 @@ import {
   setCancelEndsRun,
   setNonInteractive,
 } from "../../domains/schema/migrate/can-prompt";
+import { DRY_RUN_HELP } from "../dry-run";
 import { createProgram } from "../program";
 
 import { commandAt, commandPaths } from "./helpers/answer-only-invocations";
@@ -122,10 +123,182 @@ describe("the flag vocabulary", () => {
     );
     expect(redeclared).toEqual([]);
   });
+});
 
-  it.todo(
-    "offers --dry-run on every command that writes the database or the project folder by default"
-  );
+/**
+ * What each command does when given no flag that changes it: writes the
+ * database or the project folder (or a user-level setting), previews until
+ * `--apply`, or reads only. Every command the program defines is listed, so a
+ * new one fails here until it is placed.
+ */
+const WRITES = [
+  "add",
+  "build",
+  "generate:manifest",
+  "generate:types",
+  "generate:widget",
+  "i18n:restore",
+  "init",
+  "media reindex-usage",
+  "migrate",
+  "migrate:baseline",
+  "migrate:create",
+  "migrate:fresh",
+  "migrate:down",
+  "migrate:resolve",
+  "permissions:cleanup",
+  "plugins install",
+  "plugins uninstall",
+  "prune",
+  "setup-token",
+  "telemetry disable",
+  "telemetry enable",
+  "telemetry reset",
+  "upgrade",
+  "users:create-admin",
+  "webhooks:prune",
+];
+/**
+ * Commands that write by default and do not offer `--dry-run` yet. This list
+ * may only shrink: a command leaves it in the change that gives it the flag.
+ */
+const WRITES_WITHOUT_DRY_RUN_YET = ["db:sync"];
+const PREVIEWS = [
+  "media orphans",
+  "media remove-sizes",
+  "migrate:field-groups",
+  "users:clear-plaintext-passwords",
+];
+const READS = [
+  "generate:schema",
+  "media",
+  "migrate:check",
+  "migrate:status",
+  "plugins",
+  "plugins info",
+  "plugins list",
+  "repair-columns",
+  "telemetry",
+  "telemetry status",
+];
+
+describe("--dry-run and --apply by what a command does", () => {
+  const longs = (name: string) =>
+    named(name).options.map(option => option.long);
+
+  it("places every command the program defines exactly once", () => {
+    const placed = [
+      ...WRITES,
+      ...WRITES_WITHOUT_DRY_RUN_YET,
+      ...PREVIEWS,
+      ...READS,
+    ];
+    expect([...placed].sort()).toEqual([...paths].sort());
+  });
+
+  it("offers --dry-run on every command that writes by default", () => {
+    expect(WRITES.filter(name => !longs(name).includes("--dry-run"))).toEqual(
+      []
+    );
+  });
+
+  it("names, among the rest, none that already offers --dry-run", () => {
+    expect(
+      WRITES_WITHOUT_DRY_RUN_YET.filter(name =>
+        longs(name).includes("--dry-run")
+      )
+    ).toEqual([]);
+  });
+
+  it("describes --dry-run in the same words on every command", () => {
+    const worded = paths.flatMap(name =>
+      named(name)
+        .options.filter(option => option.long === "--dry-run")
+        .filter(option => option.description !== DRY_RUN_HELP)
+        .map(option => `${name}: ${option.description}`)
+    );
+    expect(worded).toEqual([]);
+  });
+
+  it("refuses --dry-run together with --check wherever a command has both", async () => {
+    // `--check` exits non-zero on drift and `--dry-run` exits 0 with the plan,
+    // so the two together would have one silently override the other.
+    const both = paths.filter(name => {
+      const flags = longs(name);
+      return flags.includes("--dry-run") && flags.includes("--check");
+    });
+    expect(both.length).toBeGreaterThan(0);
+    const unrefused: string[] = [];
+    for (const name of both) {
+      const run = createProgram();
+      const command = commandAt(run, name.split(" "));
+      // Its action is replaced and its output kept, so nothing it does runs.
+      command
+        .exitOverride()
+        .configureOutput({ writeErr: () => {} })
+        .action(() => {});
+      const code = await run
+        .parseAsync([
+          "node",
+          "nextly",
+          ...name.split(" "),
+          "--check",
+          "--dry-run",
+        ])
+        .then(
+          () => undefined,
+          (error: { code?: string }) => error.code
+        );
+      if (code !== "commander.conflictingOption") unrefused.push(name);
+    }
+    expect(unrefused).toEqual([]);
+  });
+
+  it("ends a run given both flags before anything runs, naming the clash", async () => {
+    const run = createProgram();
+    const command = commandAt(run, ["generate:types"]);
+    let written = "";
+    command
+      .exitOverride()
+      .configureOutput({ writeErr: text => void (written += text) });
+    // The action is replaced, so reaching it would show the run went on.
+    let ran = false;
+    command.action(() => {
+      ran = true;
+    });
+
+    await expect(
+      run.parseAsync([
+        "node",
+        "nextly",
+        "generate:types",
+        "--check",
+        "--dry-run",
+      ])
+    ).rejects.toMatchObject({
+      code: "commander.conflictingOption",
+      exitCode: 1,
+    });
+    expect(written).toContain(
+      "option '--dry-run' cannot be used with option '--check'"
+    );
+    expect(ran).toBe(false);
+  });
+
+  it("offers --apply on every command that previews by default", () => {
+    expect(PREVIEWS.filter(name => !longs(name).includes("--apply"))).toEqual(
+      []
+    );
+  });
+
+  it("offers neither on a command that only reads", () => {
+    expect(
+      READS.filter(
+        name =>
+          longs(name).includes("--dry-run") || longs(name).includes("--apply")
+      )
+    ).toEqual([]);
+  });
 });
 
 describe("every global option reaches every command", () => {

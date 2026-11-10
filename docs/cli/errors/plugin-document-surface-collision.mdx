@@ -1,0 +1,24 @@
+---
+title: PLUGIN_DOCUMENT_SURFACE_COLLISION
+description: "Two plugins override the same document action on one collection."
+---
+
+## Cause
+
+Two plugins override the same document action on one collection.
+
+A plugin may hide a built-in action of a collection's document screen, such as Delete, or replace it with its own dialog, through `contributes.admin.views[slug].documentActions`. Two plugins declare an override of the same action on the same collection, and one action can be drawn one way.
+
+## Fix
+
+- Drop the override from one of the two plugins.
+- Or configure only one of the two plugins.
+
+## Example
+
+```text
+✗ Plugin "archive" overrides the "delete" action on "pages", which "layouts" already overrides.
+  Why:  One action can be drawn one way.
+  Next: Drop one of the two overrides.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-surface-collision  (PLUGIN_DOCUMENT_SURFACE_COLLISION)
+```

@@ -307,6 +307,59 @@ describe("a page write that landed while its Layout was removed", () => {
     ]);
   });
 
+  it("clears it with the version the page was read at, so a save since refuses the clear", async () => {
+    const page = { id: "p1", layout: FENCED, status: "draft", _rev: "9" };
+    const { run, updates } = guard(row({ step: "final" }), page);
+    await run("afterUpdate", { data: page, originalData: page });
+    expect(updates[0]?.data).toEqual({ layout: null, _rev: "9" });
+  });
+
+  // A save of the page between the clear's read and its write moves the
+  // version, so the clear is refused; the page is read again and judged
+  // afresh, so the removed Layout is not left behind.
+  it("reads the page again and clears it when a save since refused the clear", async () => {
+    const page = { id: "p1", layout: FENCED, status: "draft", _rev: "9" };
+    const { run, nextly, updates } = guard(row({ step: "final" }), page);
+    nextly.findByID
+      .mockResolvedValueOnce(page)
+      .mockResolvedValueOnce({ ...page, title: "Saved since", _rev: "10" });
+    nextly.update.mockImplementationOnce(
+      async (args: Record<string, unknown>) => {
+        updates.push(args);
+        throw new NextlyError({
+          code: "STALE_VERSION",
+          publicMessage: "This document changed since the version you gave.",
+        });
+      }
+    );
+    await run("afterUpdate", { data: page, originalData: page });
+    expect(updates.map(update => update.data)).toEqual([
+      { layout: null, _rev: "9" },
+      { layout: null, _rev: "10" },
+    ]);
+  });
+
+  it("leaves the page alone when the save that refused the clear chose another Layout", async () => {
+    const page = { id: "p1", layout: FENCED, status: "draft", _rev: "9" };
+    const { run, nextly, updates } = guard(row({ step: "final" }), page);
+    nextly.findByID
+      .mockResolvedValueOnce(page)
+      .mockResolvedValueOnce({ ...page, layout: "other", _rev: "10" });
+    nextly.update.mockImplementationOnce(
+      async (args: Record<string, unknown>) => {
+        updates.push(args);
+        throw new NextlyError({
+          code: "STALE_VERSION",
+          publicMessage: "This document changed since the version you gave.",
+        });
+      }
+    );
+    await run("afterUpdate", { data: page, originalData: page });
+    expect(updates.map(update => update.data)).toEqual([
+      { layout: null, _rev: "9" },
+    ]);
+  });
+
   it("logs which page was cleared, from which Layout, and why", async () => {
     const page = { id: "p1", layout: FENCED, status: "draft" };
     const { run, logged } = guard(row({ step: "final" }), page);

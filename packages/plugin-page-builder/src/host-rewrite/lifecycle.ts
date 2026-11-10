@@ -6,21 +6,15 @@
  * `published`; a comparison with the word `published` reads those as drafts.
  * So there is one rule here, used by the host reader and by the fence alike:
  *
- * - Where a stored row can be asked, core is asked: a read bounded to
- *   {@link PUBLIC_STATES} answers with the row only when it is in a state its
- *   workflow calls public, whatever that state is named.
+ * - Where a stored row can be asked, core is asked: the stored read gives
+ *   the live row's state only when it is one its workflow calls public,
+ *   whatever that state is named.
  * - Where it cannot (the status a write is about to store), any named state
  *   counts as possibly public, so the write is judged against the live form
  *   as well as the draft. That refuses more, never less.
  *
  * @module host-rewrite/lifecycle
  */
-
-/**
- * The status a read is bounded to, to read a row only in a public state.
- * Core resolves it to every state the collection's workflow calls public.
- */
-export const PUBLIC_STATES = "published" as const;
 
 /**
  * The stored forms a write naming `nextStatus` may change, in the shape

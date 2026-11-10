@@ -215,7 +215,11 @@ export async function pluginsListAction(
 /** The action of `nextly plugins install`, loaded when it runs. */
 export async function pluginsInstallAction(
   name: string | undefined,
-  cmdOptions: { all?: boolean; acceptDataLoss?: AcceptDataLossOption },
+  cmdOptions: {
+    all?: boolean;
+    acceptDataLoss?: AcceptDataLossOption;
+    dryRun?: boolean;
+  },
   cmd: Command
 ): Promise<void> {
   const globalOpts = cmd.optsWithGlobals();
@@ -232,7 +236,12 @@ export async function pluginsInstallAction(
       flag: cmdOptions.acceptDataLoss,
       warn: message => context.logger.warn(message),
     });
-    const options = { config: globalOpts.config, cwd: globalOpts.cwd, consent };
+    const options = {
+      config: globalOpts.config,
+      cwd: globalOpts.cwd,
+      consent,
+      dryRun: cmdOptions.dryRun === true,
+    };
     const { runPluginInstall, runPluginInstallAll } = await import(
       "./plugin-lifecycle-runner"
     );
@@ -250,6 +259,7 @@ export async function pluginsUninstallAction(
     keepData?: boolean;
     yes?: boolean;
     acceptDataLoss?: AcceptDataLossOption;
+    dryRun?: boolean;
   },
   cmd: Command
 ): Promise<void> {
@@ -269,6 +279,7 @@ export async function pluginsUninstallAction(
         keepData: cmdOptions.keepData === true,
         yes: cmdOptions.yes === true,
         consent,
+        dryRun: cmdOptions.dryRun === true,
       },
       context
     );

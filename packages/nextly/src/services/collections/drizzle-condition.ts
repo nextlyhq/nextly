@@ -14,7 +14,11 @@
  * unresolved, which its own untranslatable check is expected to catch before
  * this point rather than silently dropping the predicate.
  */
-import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
+import {
+  caseFolded,
+  caseInsensitiveContains,
+} from "@nextlyhq/adapter-drizzle/text-match";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { SQL } from "drizzle-orm";
 import {
   and,
@@ -90,12 +94,16 @@ export interface LocalizedQueryContext {
   statusValues?: readonly string[];
 }
 
-/** Emits the companion-table EXISTS for a filter on a localized field. */
+/**
+ * Emits the companion-table EXISTS for a filter on a localized field, on `dialect`, which decides
+ * how the operators that ignore case fold it.
+ */
 export type LocalizedExistsBuilder = (
   localizedCtx: LocalizedQueryContext,
   column: string,
   op: string,
-  value: unknown
+  value: unknown,
+  dialect: SupportedDialect
 ) => SQL | undefined;
 
 /**
@@ -114,7 +122,8 @@ export function buildLocalizedWhereExists(
   ctx: LocalizedQueryContext,
   column: string,
   op: string,
-  value: unknown
+  value: unknown,
+  dialect: SupportedDialect
 ): SQL | undefined {
   const t = sql.identifier(ctx.companionTableName);
   const col = sql.identifier(column);
@@ -176,12 +185,17 @@ export function buildLocalizedWhereExists(
       valueCondition = sql`${t}.${col} LIKE ${value}`;
       break;
     case "ILIKE":
-      // Lower-cased on both sides, as the adapter compiles ILIKE: only PostgreSQL has the
-      // keyword, and a bare LIKE follows the column's collation.
-      valueCondition = sql`lower(${t}.${col}) like lower(${value})`;
+      // Case-folded on both sides, as the adapter compiles ILIKE: only PostgreSQL has the
+      // keyword, a bare LIKE follows the column's collation, and SQLite's lower() folds ASCII
+      // letters only.
+      valueCondition = sql`${caseFolded(dialect, sql`${t}.${col}`)} like ${caseFolded(dialect, sql`${value}`)}`;
       break;
     case "ICONTAINS":
-      valueCondition = caseInsensitiveContains(sql`${t}.${col}`, String(value));
+      valueCondition = caseInsensitiveContains(
+        dialect,
+        sql`${t}.${col}`,
+        String(value)
+      );
       break;
     case "IS NULL": {
       // A localized field is absent for the locale when no companion row holds
@@ -356,6 +370,8 @@ export function buildDrizzleCondition(
   whereClause: ReturnType<typeof buildWhereClause>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
   schema: any,
+  // The dialect the condition runs on, which decides how the operators that ignore case fold it.
+  dialect: SupportedDialect,
   localizedCtx?: LocalizedQueryContext | null,
   localizedExists?: LocalizedExistsBuilder
 ): ReturnType<typeof and> | undefined {
@@ -371,6 +387,7 @@ export function buildDrizzleCondition(
       return buildDrizzleCondition(
         condition,
         schema,
+        dialect,
         localizedCtx,
         localizedExists
       );
@@ -426,7 +443,8 @@ export function buildDrizzleCondition(
           { ...localizedCtx, locale },
           localizedWhereField.column,
           op,
-          operand
+          operand,
+          dialect
         )
       );
       const localizedCond = perLanguage.every(cond => cond !== undefined)
@@ -468,11 +486,12 @@ export function buildDrizzleCondition(
       case "LIKE":
         return like(schemaColumn, value);
       case "ILIKE":
-        // Lower-cased on both sides, as the adapter compiles ILIKE: only PostgreSQL has the
-        // keyword, and a bare LIKE follows the column's collation.
-        return sql`lower(${schemaColumn}) like lower(${value})`;
+        // Case-folded on both sides, as the adapter compiles ILIKE: only PostgreSQL has the
+        // keyword, a bare LIKE follows the column's collation, and SQLite's lower() folds
+        // ASCII letters only.
+        return sql`${caseFolded(dialect, schemaColumn)} like ${caseFolded(dialect, sql`${value}`)}`;
       case "ICONTAINS":
-        return caseInsensitiveContains(schemaColumn, String(value));
+        return caseInsensitiveContains(dialect, schemaColumn, String(value));
       case "IN":
         // The filter shape refuses an empty `in` and drops an empty
         // `not_in` before this point; refused again here rather than skipped,

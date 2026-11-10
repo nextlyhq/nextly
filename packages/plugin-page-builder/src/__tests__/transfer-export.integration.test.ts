@@ -89,7 +89,8 @@ describe.each(getConfiguredTestDialects())(
       ]);
       expect(file.layouts).toEqual([]);
       // The card style, the variable it uses, and the breakpoints its style
-      // and the image's hide setting name; the unused ones stay home.
+      // and the image's hide setting name; the unused ones stay home, and so
+      // does the site's edit of the image's own look.
       expect(file.classes.map(entry => entry.id)).toEqual(["c-card"]);
       expect(file.tokens.map(token => token.name)).toEqual(["color.brand"]);
       expect(file.breakpoints).toEqual([

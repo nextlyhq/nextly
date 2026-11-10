@@ -113,6 +113,26 @@ describe("runProdMigrationsIfEnabled", () => {
    * than returning `ran: false`, so a catch that rethrew only the refusal let
    * MySQL serve the unmigrated schema this change exists to prevent.
    */
+  it("refuses to start an older build that lacks a migration the database records applied", async () => {
+    process.env.NODE_ENV = "production";
+    const missing = new NextlyError({
+      code: "MIGRATION_MISSING",
+      publicMessage:
+        "The ledger records 1 applied migration this build's migrations folder lacks.",
+    });
+    const a = args({
+      migrateCore: vi.fn(async () => {
+        throw missing;
+      }),
+    });
+
+    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toBe(missing);
+    // The refusal stands: a later boot in this process refuses at once.
+    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toMatchObject({
+      code: "MIGRATION_MISSING",
+    });
+  });
+
   it("refuses when the lock was busy on a dialect that throws instead", async () => {
     process.env.NODE_ENV = "production";
     const a = args({

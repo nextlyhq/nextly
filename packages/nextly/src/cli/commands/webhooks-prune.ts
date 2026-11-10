@@ -25,14 +25,11 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
-import { getDialectTables } from "../../database/index";
-import { SchemaRegistry } from "../../database/schema-registry";
-import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { pruneWebhookData } from "../../domains/webhooks/prune";
 import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import {
-  connectOrExit,
+  openOrConnect,
   requireDatabaseEnv,
 } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
@@ -41,6 +38,7 @@ import {
   readDataLossConsent,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
+import { installRegistryResolver } from "../utils/registry-resolver";
 
 interface WebhooksPruneCommandOptions {
   dryRun?: boolean;
@@ -95,28 +93,19 @@ export async function runWebhooksPruneCommand(
   const dbValidation = requireDatabaseEnv(logger);
   const configuredDialect = dbValidation.dialect;
 
-  const adapter = await connectOrExit(
-    {
-      dialect: configuredDialect,
-      databaseUrl: dbValidation.databaseUrl,
-    },
+  const adapter = await openOrConnect(
+    { dialect: configuredDialect, databaseUrl: dbValidation.databaseUrl },
+    dryRun,
     logger
   );
+  if (adapter === undefined) return;
 
   try {
     // The ORM resolves table names through a SchemaRegistry, and this command
     // creates none of its own. The webhook queue tables are static system
     // tables, so the static registration alone is enough (no component sweep).
     const drizzleAdapter = adapter as unknown as DrizzleAdapter;
-    const { dialect } = drizzleAdapter.getCapabilities();
-    const schemaRegistry = new SchemaRegistry(dialect);
-    // Both spellings of the field-group registry: a database whose storage
-    // migration has run has no handle for its registry otherwise.
-    schemaRegistry.registerStaticSchemas({
-      ...getDialectTables(dialect),
-      ...getFieldGroupRegistryAliases(dialect),
-    });
-    drizzleAdapter.setTableResolver(schemaRegistry);
+    installRegistryResolver(drizzleAdapter);
 
     const result = await pruneWebhookData(
       { adapter: drizzleAdapter, logger },
