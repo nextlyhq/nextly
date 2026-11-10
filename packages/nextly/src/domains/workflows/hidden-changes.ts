@@ -13,6 +13,10 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import {
+  registeredReadLanguagesFor,
+  withRuleLanguage,
+} from "../../auth/access/rule-language";
 import { canonicalJson } from "../../shared/lib/canonical-json";
 import {
   applyFieldReadAccess,
@@ -100,9 +104,15 @@ export async function readerOf(
  * it gives them, or given with something inside withheld. `fieldGroupPass` is the field-group
  * read pass a read of the document's collection makes (undefined where no field group has a read
  * rule), so the rules of fields inside field groups apply here as they do on a read.
+ *
+ * `part` is the part `shown` is: a language's, judged as a read of exactly that language is (the
+ * read the editor makes, with no fallback standing in), so a rule that answers by language answers
+ * as it does for the reviewer reading it; or the shared part (null), the same content in every
+ * language, judged as the operation it is asked in judges it.
  */
 export async function hiddenFrom(
   document: ReviewDocument,
+  part: string | null,
   shown: unknown,
   fields: readonly string[],
   user: UserContext,
@@ -113,18 +123,23 @@ export async function hiddenFrom(
   const whole = snapshotRecord(shown);
   // A copy the evaluation may strip at any depth; the snapshot is JSON, so a JSON copy is whole.
   const readable = JSON.parse(JSON.stringify(whole)) as Record<string, unknown>;
-  await applyFieldReadAccess({
-    kind: entityOf(document),
-    slug: document.scopeSlug,
-    entry: readable,
-    // The reader whole, as a read gives them to the rules: never a narrower copy.
-    user,
-    grants,
-    overrideAccess: false,
-  });
-  // The collection's own pass does not reach inside a field group; a read then makes this one,
-  // with the same reader and grants.
-  await fieldGroupPass?.(readable, { user, grants });
+  const passes = async () => {
+    await applyFieldReadAccess({
+      kind: entityOf(document),
+      slug: document.scopeSlug,
+      entry: readable,
+      // The reader whole, as a read gives them to the rules: never a narrower copy.
+      user,
+      grants,
+      overrideAccess: false,
+    });
+    // The collection's own pass does not reach inside a field group; a read then makes this one,
+    // with the same reader and grants, in the same language.
+    await fieldGroupPass?.(readable, { user, grants });
+  };
+  await (part === null
+    ? passes()
+    : withRuleLanguage(registeredReadLanguagesFor(part, false), passes));
   return fields.filter(name => withheld(name, whole, readable));
 }
 
@@ -147,7 +162,11 @@ function withheld(
 interface ApproversQuestion {
   document: ReviewDocument;
   action: string;
-  parts: ReadonlyArray<{ shown: unknown; changed: readonly string[] }>;
+  parts: ReadonlyArray<{
+    part: string | null;
+    shown: unknown;
+    changed: readonly string[];
+  }>;
   excluded: ReadonlySet<string>;
   /** The field-group read pass the refused reviewer was judged with. */
   fieldGroupPass: LiveFieldGroupReadPass | undefined;
@@ -173,6 +192,7 @@ async function readsEveryChange(
   for (const part of question.parts) {
     const hidden = await hiddenFrom(
       question.document,
+      part.part,
       part.shown,
       part.changed,
       reader,
