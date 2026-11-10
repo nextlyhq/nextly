@@ -15,6 +15,7 @@
  *
  * @module domains/schema/services/collection-schema-apply
  */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
 import {
@@ -350,6 +351,68 @@ export async function applyCollectionSchemaChange(
   );
 }
 
+/**
+ * Refuse a change that makes a main-table column unique, by its Unique mark or by a relationship
+ * becoming one-to-one, while the column's entries already repeat a value.
+ *
+ * The database refuses the unique index part-way through the apply, and MySQL keeps every schema
+ * statement that ran before it. So the question is asked first, by the precondition the service's
+ * save asks (`refusalsForCollectionSave`, uniqueness only), and the two roads refuse alike. A
+ * translated field's column is its companion's, whose per-language uniqueness is judged where the
+ * companion's unique indexes are made.
+ */
+async function refuseUniqueOverRepeats(args: {
+  adapter: DrizzleAdapter;
+  tableName: string;
+  oldFields: FieldDefinition[];
+  newFields: FieldDefinition[];
+  wasLocalized: boolean;
+  isLocalized: boolean;
+}): Promise<void> {
+  const { adapter, tableName } = args;
+  // A table still to be made holds no entries, so nothing can repeat yet.
+  if (!(await adapter.tableExists(tableName))) return;
+  const [{ refusalsForCollectionSave }, { introspectLiveSnapshot }] =
+    await Promise.all([
+      import("../../dynamic-collections/services/save-preconditions"),
+      import("../pipeline/diff/introspect-live"),
+    ]);
+  const onMain = (fields: FieldDefinition[], localized: boolean) => {
+    const translated = new Set(resolveLocalizedFieldNames(fields, localized));
+    return fields.filter(field => !translated.has(field.name));
+  };
+  const live = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [tableName]
+  );
+  const refusals = await refusalsForCollectionSave({
+    adapter,
+    dialect: adapter.dialect,
+    tableName,
+    oldFields: onMain(args.oldFields, args.wasLocalized),
+    newFields: onMain(args.newFields, args.isLocalized),
+    // A column this apply adds takes NULL in every existing entry, and NULL never repeats.
+    addedColumnBackfill: () => null,
+    presentColumns: new Set(
+      live.tables[0]?.columns.map(column => column.name) ?? []
+    ),
+    only: "uniqueness",
+  });
+  if (refusals.length > 0) {
+    throw NextlyError.validation({
+      errors: refusals.map(refusal => refusal.error),
+      logContext: {
+        tableName,
+        fields: refusals.map(refusal => refusal.error.path),
+        details: refusals.flatMap(refusal =>
+          refusal.logContext ? [refusal.logContext] : []
+        ),
+      },
+    });
+  }
+}
+
 /** The registry and the adapter, which a schema change cannot run without. */
 function requireSchemaChangeDeps(slug: string) {
   const registry = getCollectionRegistryFromDI();
@@ -650,6 +713,16 @@ async function applyHoldingSchemaLock(
     oldFields,
     newFields: fields,
     subject: `Collection '${slug}'`,
+  });
+  // A column made unique over entries that already repeat a value is refused before anything
+  // runs, naming the field and how many values repeat.
+  await refuseUniqueOverRepeats({
+    adapter,
+    tableName,
+    oldFields,
+    newFields: fields,
+    wasLocalized,
+    isLocalized,
   });
   // A Required or Unique field leaving translation is pushed without its setting first, and the
   // setting is pushed once the companion transition has copied its values in, before its companion

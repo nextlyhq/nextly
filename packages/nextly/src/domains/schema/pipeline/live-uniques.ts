@@ -17,6 +17,8 @@
  *
  * @module domains/schema/pipeline/live-uniques
  */
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { toSnakeCase } from "../services/field-column-descriptor";
@@ -153,4 +155,57 @@ export function liveUniqueConstraintsToKeep(
     }
   }
   return keep;
+}
+
+/**
+ * The planned operations less each add of a single-column unique index whose column the live
+ * table already keeps unique.
+ *
+ * On SQLite an inline `UNIQUE` (a one-to-one's from the Builder's own DDL, or a unique field's
+ * from a release that kept uniqueness inline) is backed by an internal `sqlite_autoindex_*` that
+ * the live snapshot leaves out, so the diff reads the column as not unique and plans a second,
+ * redundant unique index on a column that already refuses repeats: an operation on upgrade for a
+ * schema nobody changed. PostgreSQL and MySQL list the index behind the constraint, which the diff
+ * already matches by columns and uniqueness, so only SQLite is asked.
+ *
+ * @param ops the operations the diff planned
+ * @param args.live the live snapshot the diff read: a table it does not hold has nothing yet
+ */
+export async function withoutUniquesAlreadyEnforced(
+  ops: readonly Operation[],
+  args: { db: unknown; dialect: SupportedDialect; live: NextlySchemaSnapshot }
+): Promise<Operation[]> {
+  if (args.dialect !== "sqlite") return [...ops];
+  const liveTables = new Set(
+    args.live.tables.map(table => table.name.toLowerCase())
+  );
+  // A unique index over one column, on a table the database already has.
+  const addsUniqueOnLiveTable = (
+    op: Operation
+  ): op is Extract<Operation, { type: "add_index" }> =>
+    op.type === "add_index" &&
+    op.index.unique &&
+    op.index.columns.length === 1 &&
+    liveTables.has(op.tableName.toLowerCase());
+  const candidates = ops.filter(addsUniqueOnLiveTable);
+  if (candidates.length === 0) return [...ops];
+  // Loaded when there is something to ask: the catalog readers carry every dialect's queries.
+  const { readUniqueColumns } = await import("./live-table-facts");
+  const enforced = new Map<string, ReadonlyMap<string, string | null>>();
+  for (const op of candidates) {
+    const table = op.tableName.toLowerCase();
+    if (!enforced.has(table)) {
+      enforced.set(
+        table,
+        await readUniqueColumns(args.db, args.dialect, op.tableName)
+      );
+    }
+  }
+  return ops.filter(
+    op =>
+      !(
+        addsUniqueOnLiveTable(op) &&
+        enforced.get(op.tableName.toLowerCase())?.has(op.index.columns[0])
+      )
+  );
 }

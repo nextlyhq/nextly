@@ -28,7 +28,9 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../../errors/nextly-error";
+import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
+import { builderColumnIsUnique } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
 import {
   assertIndexBuildable,
@@ -272,11 +274,19 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
       : (field.type === "relationship" || field.type === "upload") &&
         field.hasMany !== true &&
         !Array.isArray(field.relationTo);
+    // Unique by its mark, or by a relationship the Builder stored one-to-one: one rule for every
+    // road (`builderColumnIsUnique`), so a migration file, a push and a save's preview all make a
+    // one-to-one's column unique, and take the uniqueness away when it stops being one.
+    const unique = builderColumnIsUnique(field as unknown as FieldDefinition);
     // Asked through the same rule the generators use. Where a dialect cannot key the column they
     // keep the uniqueness inline and write no index, so declaring one here would make every diff
     // propose a `CREATE UNIQUE INDEX` the server refuses.
     const uniqueIsIndexable =
-      field.unique === true && context.uniquenessIsIndexable(field, col);
+      unique && context.uniquenessIsIndexable(field, col);
+    // A relationship unique by its cardinality alone keeps the plain index it has always had
+    // beside its unique one: every one-to-one made before its uniqueness was declared carries it,
+    // and dropping it would plan an operation for a column that is already unique.
+    const keepsPlainIndex = !uniqueIsIndexable || field.unique !== true;
 
     if (uniqueIsIndexable) {
       indexes.push({
@@ -284,7 +294,9 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
         columns: [col],
         unique: true,
       });
-    } else if (
+    }
+    if (
+      keepsPlainIndex &&
       (field.index === true || isSingleRelation) &&
       (context.columnIsIndexable?.(field, col) ?? true)
     ) {

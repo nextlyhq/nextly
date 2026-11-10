@@ -272,6 +272,7 @@ export async function translatePipelinePreviewToLegacy(
       ...changedWarnings,
       ...notNullWarnings,
       ...eventWarnings,
+      ...uniquenessWarnings(preview, context),
     ],
     interactiveFields,
     ddlPreview: [],
@@ -361,4 +362,63 @@ async function computeNonNullCounts(
     }
   }
   return counts;
+}
+
+/**
+ * One line per kept field whose column this change makes unique, or stops being unique, as the
+ * planned operations say: a unique index added or dropped on the entity's table. Read from the
+ * operations rather than from the fields, so the preview names exactly what the apply will run,
+ * including nothing for a column that is already unique.
+ *
+ * A relationship made unique is one-to-one, each entry pointing at its own target, and is named
+ * that way.
+ */
+function uniquenessWarnings(
+  preview: PipelinePreviewResult,
+  context: TranslateContext
+): string[] {
+  const kept = new Set(context.currentFields.map(field => field.name));
+  const byColumn = new Map(
+    context.newFields
+      .filter(field => kept.has(field.name))
+      .map(field => [toSnakeCase(field.name).toLowerCase(), field])
+  );
+  return uniqueIndexChanges(preview.operations, context.tableName).flatMap(
+    ({ column, adding }) => {
+      const field = byColumn.get(column);
+      return field === undefined ? [] : [uniquenessLine(field, adding)];
+    }
+  );
+}
+
+/** Each single-column unique index the operations add or drop on `tableName`, by its column. */
+function uniqueIndexChanges(
+  operations: PipelinePreviewResult["operations"],
+  tableName: string
+): { column: string; adding: boolean }[] {
+  return operations.flatMap(op =>
+    (op.type === "add_index" || op.type === "drop_index") &&
+    op.tableName === tableName &&
+    op.index.unique &&
+    op.index.columns.length === 1
+      ? [
+          {
+            column: op.index.columns[0].toLowerCase(),
+            adding: op.type === "add_index",
+          },
+        ]
+      : []
+  );
+}
+
+/** What the preview says of a field whose column becomes, or stops being, unique. */
+function uniquenessLine(field: FieldDefinition, adding: boolean): string {
+  if (field.type === "relationship") {
+    return adding
+      ? `"${field.name}" becomes one-to-one: its column will be made unique.`
+      : `"${field.name}" is no longer one-to-one: its column will no longer be unique.`;
+  }
+  return adding
+    ? `"${field.name}" becomes unique: its column will refuse a value another entry already holds.`
+    : `"${field.name}" is no longer unique: its column will take a value another entry holds.`;
 }

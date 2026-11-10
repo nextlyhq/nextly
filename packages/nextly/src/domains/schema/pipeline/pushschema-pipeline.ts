@@ -97,6 +97,7 @@ import {
   liveUniqueConstraintsToKeep,
   renamesOf,
   uniqueColumnsToKeep,
+  withoutUniquesAlreadyEnforced,
 } from "./live-uniques";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
 import {
@@ -816,7 +817,13 @@ export class PushSchemaPipeline {
       // operations here, so the confirmation, the refusals and the apply read one set, as the
       // preview does (`relationSwitches`).
       const liveWithShapes = withRecordedShapes(liveSnapshot, desired);
-      const diffed = diffSnapshots(liveWithShapes, snapshotBeforeRenames);
+      // Less the unique indexes a column already has, which SQLite's snapshot cannot show: an
+      // inline constraint is backed by an index the snapshot leaves out
+      // (`withoutUniquesAlreadyEnforced`).
+      const diffed = await withoutUniquesAlreadyEnforced(
+        diffSnapshots(liveWithShapes, snapshotBeforeRenames),
+        { db, dialect, live: liveSnapshot }
+      );
       const switches = await relationSwitches({
         db,
         dialect,

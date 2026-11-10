@@ -23,6 +23,8 @@ import {
   isTextStorageKind,
 } from "../../schema/services/field-column-descriptor";
 
+import { builderColumnIsUnique } from "./dynamic-collection-schema-service";
+
 type Refusal = ValidationPublicData["errors"][number];
 
 /**
@@ -89,6 +91,12 @@ export async function refusalsForCollectionSave(args: {
   presentColumns: ReadonlySet<string>;
   /** The entity the table belongs to, and its Drizzle handle: asks the required-column count. */
   requiredColumns?: { db: unknown; entity: RequiredColumnEntity };
+  /**
+   * Ask only whether a column the save makes unique holds values that repeat. The push road's
+   * apply narrows other columns and fills required ones by its own preconditions, and asks this
+   * one question here so both roads answer it alike.
+   */
+  only?: "uniqueness";
 }): Promise<SaveRefusal[]> {
   const { adapter, dialect } = args;
   const table = quote(dialect, args.tableName);
@@ -122,7 +130,7 @@ export async function refusalsForCollectionSave(args: {
     );
   }
   // Fields made required over rows holding no value, each named with the entity and the count.
-  if (args.requiredColumns)
+  if (args.requiredColumns && args.only === undefined)
     refusals.push(
       ...(
         await requiredColumnSaveRefusals({
@@ -145,16 +153,23 @@ export async function refusalsForCollectionSave(args: {
     col: string,
     column: { length?: number }
   ): Promise<SaveRefusal[]> {
+    // Unique by its mark or, for a relationship the Builder stored as one-to-one, by its
+    // cardinality: one rule, so a relationship becoming one-to-one is asked as a field marked
+    // unique is.
     const unique =
-      field.unique === true && previous?.unique !== true
+      builderColumnIsUnique(field) &&
+      !(previous !== undefined && builderColumnIsUnique(previous))
         ? await uniqueRefusal({ field, previous, col })
         : undefined;
-    const length = await lengthRefusal({
-      field,
-      previous,
-      col,
-      length: column.length,
-    });
+    const length =
+      args.only === undefined
+        ? await lengthRefusal({
+            field,
+            previous,
+            col,
+            length: column.length,
+          })
+        : undefined;
     return [unique, length].filter(
       (refusal): refusal is SaveRefusal => refusal !== undefined
     );
@@ -182,29 +197,41 @@ export async function refusalsForCollectionSave(args: {
           })
         : undefined;
     }
+    // How many values repeat, and how many entries share the commonest of them: never the values,
+    // which are stored content. An entry holding no value (NULL) never repeats; a unique index
+    // leaves those free on every dialect.
     const [repeat] = await adapter.executeQuery<{
       n: number | string;
+      most: number | string | null;
     }>(
-      // Only how many share the commonest repeated value: the value itself is never read.
-      `SELECT COUNT(*) AS n FROM ${table} WHERE ${at.col} IS NOT NULL ` +
-        `GROUP BY ${at.col} HAVING COUNT(*) > 1 ORDER BY COUNT(*) DESC LIMIT 1`
+      `SELECT COUNT(*) AS n, MAX(c) AS most FROM (SELECT COUNT(*) AS c FROM ${table} ` +
+        `WHERE ${at.col} IS NOT NULL GROUP BY ${at.col} HAVING COUNT(*) > 1) repeated`
     );
+    const repeated = Number(repeat?.n ?? 0);
+    if (repeated === 0) return undefined;
+    const most = Number(repeat?.most ?? 0);
     // The repeated value is stored content, which someone who may edit the schema need not be
     // allowed to read, so neither the message nor the log carries it.
-    return repeat
-      ? refused(
-          {
-            path,
-            code: "UNIQUE_OVER_DUPLICATES",
-            message:
-              `${entries(Number(repeat.n))} share a value for ${at.field.name}, which must be unique. ` +
+    return refused(
+      {
+        path,
+        code: "UNIQUE_OVER_DUPLICATES",
+        message:
+          at.field.type === "relationship"
+            ? // A relationship made unique is one-to-one: each entry points at its own target.
+              `"${at.field.name}" can't become one-to-one: ${repeated === 1 ? "1 target is" : `${repeated} targets are`} each pointed at by more than one entry. ` +
+              `Point each entry at its own target, or clear the repeats, then make it one-to-one.`
+            : `${entries(most)} share a value for ${at.field.name}, which must be unique. ` +
               `Give them their own values first, then turn Unique on.`,
-          },
-          // The field and how many entries share a value, never the value: logs are kept and
-          // read more widely than the table, and the value may be a secret.
-          { field: at.field.name, entriesSharingAValue: Number(repeat.n) }
-        )
-      : undefined;
+      },
+      // The field and how many values repeat, never the values: logs are kept and read more
+      // widely than the table, and a value may be a secret.
+      {
+        field: at.field.name,
+        valuesRepeated: repeated,
+        entriesSharingAValue: most,
+      }
+    );
   }
 
   async function lengthRefusal(at: {

@@ -104,20 +104,27 @@ describe("a one-to-one relationship", () => {
     },
   ] as unknown as FieldDefinition[];
 
-  it.each(DIALECTS)("keeps its inline UNIQUE on %s", dialect => {
-    // Deliberately unchanged. Its cardinality has NO other enforcement — no constraint on the
-    // add-column path, no unique index in the desired schema, no runtime check — so moving it to a
-    // named index without also changing what the desired schema declares would silently let a
-    // one-to-one hold duplicates.
-    const column = columnLineFor(ddlFor(dialect, oneToOne), "profile");
-    expect(column).toMatch(/\bUNIQUE\b/i);
-  });
+  it.each(DIALECTS)(
+    "gets the named uq_ index, as a field marked unique does, on %s",
+    dialect => {
+      // A one-to-one's uniqueness has one spelling everywhere: the desired schema declares
+      // `uq_<table>_<column>` for it as for a field marked unique, so the create emits the same
+      // named index, and the next diff finds it and plans nothing.
+      const sql = ddlFor(dialect, oneToOne);
+      expect(sql).toContain("uq_dc_widgets_profile");
+      expect(columnLineFor(sql, "profile")).not.toMatch(/\bUNIQUE\b/i);
+    }
+  );
 
-  it.each(DIALECTS)("does NOT get a uq_ index on %s", dialect => {
-    // The desired schema declares a one-to-one's index as NON-unique. Emitting a unique one here
-    // would be a third spelling of the same property, and the next diff would propose dropping it.
-    expect(ddlFor(dialect, oneToOne)).not.toContain("uq_dc_widgets_profile");
-  });
+  it.each(DIALECTS)(
+    "keeps its plain index beside the unique one on %s",
+    dialect => {
+      // Every one-to-one made before its uniqueness was declared carries the plain index; the
+      // desired schema keeps declaring it, so a new one-to-one gets it too and an upgrade plans no
+      // drop of it.
+      expect(ddlFor(dialect, oneToOne)).toContain("idx_dc_widgets_profile");
+    }
+  );
 });
 
 describe("a unique field MySQL cannot key", () => {

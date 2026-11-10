@@ -987,7 +987,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           ...draftSplitResponseFields(draftSplit),
         } as Record<string, unknown>,
       ]);
-      return respondDoc(marked);
+      // As the Builder's editor reads it: a relationship the earlier Builder stored gets the
+      // target and the Unique mark the editor reads (`withEditorRelationshipShape`).
+      const { withEditorRelationshipShape } = await import(
+        "../../domains/schema/services/editor-relationship-fields"
+      );
+      return respondDoc(withEditorRelationshipShape(marked));
     },
   },
 

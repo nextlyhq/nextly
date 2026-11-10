@@ -581,7 +581,12 @@ const COLLECTIONS_METHODS: Record<
       const [marked] = await withRemovedFromCodeMarks("collection", [
         collectionWithViews as unknown as Record<string, unknown>,
       ]);
-      return respondDoc(marked as unknown);
+      // As the Builder's editor reads it: a relationship the earlier Builder stored gets the
+      // target and the Unique mark the editor reads (`withEditorRelationshipShape`).
+      const { withEditorRelationshipShape } = await import(
+        "../../domains/schema/services/editor-relationship-fields"
+      );
+      return respondDoc(withEditorRelationshipShape(marked) as unknown);
     },
   },
   updateCollection: {
