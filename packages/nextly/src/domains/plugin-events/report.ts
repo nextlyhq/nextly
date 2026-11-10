@@ -27,7 +27,11 @@ const WARN_INTERVAL_MS = 60 * 60 * 1000;
  */
 const OVERDUE_MS = 60 * 60 * 1000;
 /** The statuses that need an operator. */
-const STUCK = { column: "status", op: "IN" as const, value: ["held", "failed"] };
+const STUCK = {
+  column: "status",
+  op: "IN" as const,
+  value: ["held", "failed"],
+};
 
 /** @experimental A delivery that needs an operator. */
 export interface StuckDelivery {
