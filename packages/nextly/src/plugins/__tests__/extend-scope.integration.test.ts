@@ -646,6 +646,7 @@ describe.each(getConfiguredTestDialects())(
               t.adapter.dialect as Parameters<typeof liveKeptColumns>[1],
               await currentTypes({
                 configured: configuredTypes({ collections: [posts, pages] }),
+                deferredExtends: [],
                 registries: {
                   collections: t.getService(
                     "collectionRegistryService"

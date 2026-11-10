@@ -19,6 +19,7 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { FieldConfig } from "../../collections/fields/types";
 import { companionTableOf } from "../../domains/i18n/migration/derive-companion-spec";
 import { loadLatestSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
@@ -27,13 +28,12 @@ import {
   keptScopeFields,
   type ExistingColumns,
 } from "../../domains/schema/pipeline/kept-scope-fields";
-import {
-  scopedTypeKey,
-  withheldScopeFieldsOf,
-} from "../../domains/schema/pipeline/withheld-scope-fields";
+import { scopedTypeKey } from "../../domains/schema/pipeline/withheld-scope-fields";
 import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import { resolveCollectionTableName } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
+import type { DeferredExtend } from "../../plugins/schema/apply-contributions";
+import { reconcileBuilderContributions } from "../../plugins/schema/reconcile-builder-contributions";
 
 /** A kept column, on a type's own table or its translations table. */
 export interface KeptColumn {
@@ -120,13 +120,16 @@ export function configuredTypes(config: {
 
 /**
  * Every type with the fields it declares now: the configuration's as it reads
- * now, and the Schema Builder's from their registry rows. A row still lists a
- * plugin's field until the site next starts, so a plugin field its scope now
- * holds back from the type is not counted as declared: read as declared, it
- * would hide the very column a prune is there to drop.
+ * now, and the Schema Builder's from their registry rows as the running site
+ * reconciles them with the configuration's plugin clauses
+ * (`reconcileBuilderContributions`). A row still lists a plugin's field until
+ * the site next starts, so a field its scope now holds back must not be read
+ * as declared, while one a clause naming the type still gives it is.
  */
 export async function currentTypes(args: {
   configured: readonly RegisteredType[];
+  /** The configuration's plugin clauses left for the Builder's types. */
+  deferredExtends: readonly DeferredExtend[];
   registries: {
     collections: { getAllCollections(): Promise<readonly RegistryRow[]> };
     singles: { getAllSingles(): Promise<readonly RegistryRow[]> };
@@ -135,49 +138,49 @@ export async function currentTypes(args: {
   const configured = new Set(
     args.configured.map(type => scopedTypeKey(type.kind, type.slug))
   );
-  const builder = (
+  const builderRows = (
     kind: RegisteredType["kind"],
     rows: readonly RegistryRow[]
+  ) =>
+    rows.filter(
+      row =>
+        row.source === "ui" && !configured.has(scopedTypeKey(kind, row.slug))
+    );
+  const collections = builderRows(
+    "collection",
+    await args.registries.collections.getAllCollections()
+  );
+  const singles = builderRows(
+    "single",
+    await args.registries.singles.getAllSingles()
+  );
+  const asEntity = (row: RegistryRow) => ({
+    slug: row.slug,
+    fields: (Array.isArray(row.fields) ? row.fields : []) as FieldConfig[],
+  });
+  const { entities } = reconcileBuilderContributions(
+    [...args.deferredExtends],
+    {
+      collections: collections.map(asEntity),
+      singles: singles.map(asEntity),
+    }
+  );
+  const reconciled = (
+    kind: RegisteredType["kind"],
+    rows: readonly RegistryRow[],
+    now: readonly { slug: string; fields?: readonly unknown[] }[] = []
   ): RegisteredType[] =>
-    rows
-      .filter(
-        row =>
-          row.source === "ui" && !configured.has(scopedTypeKey(kind, row.slug))
-      )
-      .map(row => ({
-        kind,
-        slug: row.slug,
-        tableName: row.tableName,
-        fields: declaredNow(kind, row),
-      }));
+    rows.map(row => ({
+      kind,
+      slug: row.slug,
+      tableName: row.tableName,
+      fields: now.find(entity => entity.slug === row.slug)?.fields ?? [],
+    }));
   return [
     ...args.configured,
-    ...builder(
-      "collection",
-      await args.registries.collections.getAllCollections()
-    ),
-    ...builder("single", await args.registries.singles.getAllSingles()),
+    ...reconciled("collection", collections, entities.collections),
+    ...reconciled("single", singles, entities.singles),
   ];
-}
-
-/** A Builder row's fields, less the plugin fields a scope now holds back from it. */
-function declaredNow(
-  kind: RegisteredType["kind"],
-  row: RegistryRow
-): unknown[] {
-  const nameOf = (field: unknown) => {
-    const name = (field as { name?: unknown }).name;
-    return typeof name === "string" ? name.toLowerCase() : undefined;
-  };
-  const held = new Set(withheldScopeFieldsOf(kind, row.slug).map(nameOf));
-  const fields = Array.isArray(row.fields) ? row.fields : [];
-  return fields.filter(
-    field =>
-      !(
-        (field as { source?: unknown }).source === "plugin" &&
-        held.has(nameOf(field))
-      )
-  );
 }
 
 /** Where `nextly prune` finds the kept columns, by how the site applies its schema. */
@@ -216,10 +219,15 @@ export async function keptColumnsFor(args: {
       inMigration: [],
     };
   }
+  // On a type's own table only. A migration never drops a translations
+  // table's column, here as for any field that leaves a type: the table is
+  // only ever added to. So a kept translated column is not listed as one the
+  // migration drops; a site applying its schema directly drops it with the rest.
+  const tables = new Set(types.map(type => type.tableName));
   return {
     inMigration: keptColumnsOf(
       types,
       columnsByTable(latest.data.snapshot, args.dialect)
-    ),
+    ).filter(kept => tables.has(kept.table)),
   };
 }

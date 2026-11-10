@@ -78,6 +78,13 @@ const staleRegistries = {
   singles: { getAllSingles: async () => [] },
 };
 
+/** The scope, deferred for the Builder's types, that switches `cases` off. */
+const offForCases = {
+  target: { every: ["collection" as const], except: ["cases"] },
+  fields: [text({ name: "seo" })],
+  owner: "@t/seo",
+};
+
 describe("currentTypes", () => {
   it("judges each type by what it declares now, not by its registry row", async () => {
     publishWithheldScopeFields(
@@ -91,6 +98,7 @@ describe("currentTypes", () => {
       configured: configuredTypes({
         collections: [{ slug: "pages", fields: [text({ name: "title" })] }],
       }),
+      deferredExtends: [offForCases],
       registries: staleRegistries,
     });
 
@@ -137,6 +145,52 @@ describe("keptColumnsFor", () => {
 
     expect(kept.live).toBeUndefined();
     expect(kept.inMigration).toEqual([{ table: "dc_pages", column: "seo" }]);
+  });
+});
+
+describe("currentTypes and a plugin clause still naming the type", () => {
+  it("keeps a field a clause naming a Builder type still gives it as declared", async () => {
+    publishWithheldScopeFields(
+      new Map([[scopedTypeKey("collection", "cases"), [text({ name: "seo" })]]])
+    );
+
+    const types = await currentTypes({
+      configured: [],
+      deferredExtends: [
+        offForCases,
+        { target: "cases", fields: [text({ name: "seo" })], owner: "@t/seo" },
+      ],
+      registries: staleRegistries,
+    });
+
+    expect(
+      types
+        .filter(type => type.slug === "cases")
+        .map(type => (type.fields as { name: string }[]).map(f => f.name))
+    ).toEqual([["summary", "seo"]]);
+  });
+});
+
+describe("keptColumnsFor and a translated kept column", () => {
+  it("lists none a migration never drops, on a site that keeps migration files", async () => {
+    await writeSnapshot(
+      join(dir, "migrations", "meta"),
+      "20261110_000000_000_create",
+      {
+        tables: [
+          {
+            name: "dc_pages",
+            columns: [{ name: "title", type: "text", nullable: true }],
+            indexes: [],
+            localized: true,
+            localizedColumns: ["seo"],
+          },
+        ],
+      } as never,
+      "SELECT 1;"
+    );
+
+    expect((await keptColumnsFor(args())).inMigration).toEqual([]);
   });
 });
 

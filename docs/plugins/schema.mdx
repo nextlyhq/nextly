@@ -132,7 +132,9 @@ else it would drop, and asks first; `--accept-data-loss` (or naming each
   runs `nextly migrate`. Dropping them from one database alone would leave its
   next migration refusing to run, since the migration history still lists the
   columns. The migration carries any other change your configuration has pending
-  too, as `migrate:create` does.
+  too, as `migrate:create` does. A translated field's column in the type's translations table
+  stays: a migration never drops a translations table's column, as for any field
+  that leaves a type.
 
 `typesReachedBy(scope, types)` gives the same answer to anything else that needs to
 know which types a scope covers.

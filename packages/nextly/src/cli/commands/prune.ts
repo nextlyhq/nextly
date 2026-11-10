@@ -622,6 +622,7 @@ export async function runPruneCommand(
       dialect,
       types: await currentTypes({
         configured: configuredTypes(configResult.config),
+        deferredExtends: configResult.deferredExtends ?? [],
         registries: {
           collections: registry,
           singles: new SingleRegistryService(drizzleAdapter, logger),
