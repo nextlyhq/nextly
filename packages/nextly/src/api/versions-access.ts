@@ -28,6 +28,7 @@ import {
   appLocalization,
   configuredLocales,
 } from "../domains/i18n/configured-locales";
+import { storesPerLanguage } from "../domains/i18n/per-language-storage";
 import {
   resolveSingleDocumentId,
   singleDocumentEditable,
@@ -301,7 +302,9 @@ export async function historyLanguagesOf(
 ): Promise<ReadonlySet<string>> {
   const configured = configuredLocales() ?? new Set<string>();
   const entity = await registryEntityOf(scopeKind, slug);
-  if ((entity as { localized?: boolean } | null)?.localized === true) {
+  // A save of an entity kept per language is recorded in its language: a translated one, or any
+  // under `experimental.perLanguageStorage`.
+  if (entity !== null && storesPerLanguage(entity)) {
     return configured;
   }
   const defaultLocale = appLocalization()?.defaultLocale ?? null;

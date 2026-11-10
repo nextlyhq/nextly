@@ -655,19 +655,14 @@ export interface AdminBrandingConfig {
   colors?: AdminBrandingColors;
 
   /**
-   * Toggle visibility of builder-related navigation (Collections/Singles/Components builders).
+   * Turn the schema builder (Collections, Singles and Field Groups builders) off outside
+   * production with `false`: its navigation is hidden and its schema writes are refused.
    *
-   * This is evaluated at runtime via the `/api/admin-meta` response.
+   * The builder is always off in production, whatever this says: schema reaches production
+   * through migrations, and a production start that finds `true` here logs that it has no
+   * effect. Evaluated at runtime and sent to the admin in the `/api/admin-meta` response.
    *
-   * Default behavior follows `NODE_ENV`:
-   * - `production` => hidden
-   * - `development` / `test` => visible
-   *
-   * Precedence:
-   * 1) `admin.branding.showBuilder` (this field)
-   * 2) `NODE_ENV` default mapping
-   *
-   * @default `process.env.NODE_ENV !== "production"`
+   * @default on outside production
    */
   showBuilder?: boolean;
 }

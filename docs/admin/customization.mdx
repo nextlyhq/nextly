@@ -154,7 +154,7 @@ The admin sidebar is permission-gated. Items only render for users who have the 
 | API Keys | `update-api-keys` |
 | Email Providers / Templates / Layout | `read-email-providers` (Sending) or `read-email-templates` (Messages, Design) |
 | Plugins overview | `create-settings`, `update-settings` or `delete-settings` |
-| Builders (Collections / Singles / Components) | Gated by `admin.branding.showBuilder` |
+| Builders (Collections / Singles / Components) | Off in production; elsewhere off when `admin.branding.showBuilder` is `false` |
 
 Permissions are stored as `<action>-<resource>` slugs and can be assigned to roles from `/admin/security/roles`. The default seeded roles and permissions are documented in [Admin Panel Overview](/docs/admin#permissions).
 
