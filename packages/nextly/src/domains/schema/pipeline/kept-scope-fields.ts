@@ -10,9 +10,10 @@
  * drops them, with the data-loss consent. A type switched off before its
  * column was ever made gets none.
  *
- * The fold publishes what each switched-off type would have had. Every road a
- * schema change takes reads it here: dev push against the live tables, and
- * `migrate:create` and `migrate:check` against the last migration's snapshot.
+ * The fold publishes what each switched-off type would have had
+ * (`withheld-scope-fields.ts`). Every road a schema change takes reads it
+ * here: dev push against the live tables, and `migrate:create` and
+ * `migrate:check` against the last migration's snapshot.
  * A held-back field whose column is already there is added back to the type's
  * desired shape, so none of them plans a drop, and as optional, so a row
  * written while the type is off saves without it.
@@ -26,34 +27,11 @@ import { columnsDeclaredBy } from "../services/field-column-descriptor";
 
 import type { NextlySchemaSnapshot } from "./diff/types";
 import type { DesiredSchema } from "./types";
-
-/** The kinds of type a scope reaches. */
-export type ScopedKind = "collection" | "single";
-
-/** The held-back fields, by {@link scopedTypeKey}. */
-export type WithheldScopeFields = ReadonlyMap<string, readonly FieldConfig[]>;
-
-/** The key one type's held-back fields are published under. */
-export function scopedTypeKey(kind: ScopedKind, slug: string): string {
-  return `${kind}:${slug}`;
-}
-
-// On `globalThis`, as the per-language storage choice is: Next.js can
-// evaluate this module in more than one server module graph, and the fold
-// that publishes may run in a different one from the push that reads.
-const store = globalThis as unknown as {
-  __nextly_withheldScopeFields?: WithheldScopeFields;
-};
-
-/**
- * Publish what the latest fold held back. Replaces what an earlier fold
- * published, so a type switched on again is no longer read as held back.
- */
-export function publishWithheldScopeFields(
-  withheld: WithheldScopeFields
-): void {
-  store.__nextly_withheldScopeFields = withheld;
-}
+import {
+  scopedTypeKey,
+  withheldScopeFieldsOf,
+  type ScopedKind,
+} from "./withheld-scope-fields";
 
 /** The names of the columns each table has, from a snapshot. */
 export function columnsByTable(
@@ -86,10 +64,8 @@ export function keptScopeFields(
   type: TypeShape,
   existing: ReadonlyMap<string, ReadonlySet<string>>
 ): NamedField[] {
-  const withheld = store.__nextly_withheldScopeFields?.get(
-    scopedTypeKey(kind, type.slug)
-  );
-  if (withheld === undefined || withheld.length === 0) return [];
+  const withheld = withheldScopeFieldsOf(kind, type.slug);
+  if (withheld.length === 0) return [];
   const held = new Set([
     ...(existing.get(type.tableName) ?? []),
     ...(existing.get(companionTableOf(type.tableName)) ?? []),

@@ -26,7 +26,7 @@ import type { NextlyServiceConfig } from "../../di/register";
 import {
   publishWithheldScopeFields,
   scopedTypeKey,
-} from "../../domains/schema/pipeline/kept-scope-fields";
+} from "../../domains/schema/pipeline/withheld-scope-fields";
 import { NextlyError } from "../../errors";
 import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
 import {

@@ -76,7 +76,6 @@ import {
   keptScopeFieldsChanged,
   noteKeptScopeFieldsServed,
   keptScopeFields,
-  scopedTypeKey,
 } from "../domains/schema/pipeline/kept-scope-fields";
 import { RealPreCleanupExecutor } from "../domains/schema/pipeline/pre-cleanup/executor";
 import { ClackTerminalPromptDispatcher } from "../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
@@ -108,6 +107,7 @@ import type {
   DesiredSchema,
   DesiredSingle,
 } from "../domains/schema/pipeline/types";
+import { scopedTypeKey } from "../domains/schema/pipeline/withheld-scope-fields";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import {

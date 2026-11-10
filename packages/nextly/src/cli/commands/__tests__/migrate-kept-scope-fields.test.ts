@@ -30,7 +30,7 @@ import {
 } from "../../../config";
 import type { NextlyServiceConfig } from "../../../di/register";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
-import { publishWithheldScopeFields } from "../../../domains/schema/pipeline/kept-scope-fields";
+import { publishWithheldScopeFields } from "../../../domains/schema/pipeline/withheld-scope-fields";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { applyPluginSchemaContributionsDeferred } from "../../../plugins/schema/apply-contributions";
 import { uiSchemaManifest } from "../../../schemas/_zod/ui-schema";

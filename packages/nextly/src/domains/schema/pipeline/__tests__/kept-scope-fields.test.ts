@@ -9,11 +9,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { text } from "../../../../config";
+import { keptScopeFields } from "../kept-scope-fields";
 import {
-  keptScopeFields,
   publishWithheldScopeFields,
   scopedTypeKey,
-} from "../kept-scope-fields";
+} from "../withheld-scope-fields";
 
 const pages = {
   slug: "pages",
