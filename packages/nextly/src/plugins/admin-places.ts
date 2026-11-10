@@ -87,7 +87,10 @@ export const CORE_ADMIN_PLACES = Object.freeze({
       "rowAction",
       "bulkAction",
     ] as const),
-    builtIns: Object.freeze({}),
+    // The list page's own header, and the list itself.
+    builtIns: Object.freeze({
+      block: Object.freeze(["toolbar", "table"] as const),
+    }),
   }),
   "collection.edit": Object.freeze({
     page: "a collection entry's edit page",
