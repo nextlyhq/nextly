@@ -521,8 +521,10 @@ describe.each(getConfiguredTestDialects())(
         .filter(f => f.endsWith(".sql"))
         .sort();
       expect(files).toHaveLength(2);
+      // The update's file writes the registry row, whose fields name `price`, and changes no
+      // column: a definition that lost the storage keys would retype it here.
       expect(readFileSync(join(folder, files[1]!), "utf-8")).not.toMatch(
-        /price/i
+        /ALTER TABLE\s+[`"]?dc_products/i
       );
     });
 
