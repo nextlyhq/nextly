@@ -14,9 +14,13 @@
  * @module cli/commands/prune-kept-columns
  */
 
+import { resolve } from "node:path";
+
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { companionTableOf } from "../../domains/i18n/migration/derive-companion-spec";
+import { loadLatestSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import {
   columnsByTable,
@@ -40,7 +44,7 @@ export interface RegisteredType {
 }
 
 /** The columns `existing` has for the fields each of `types` keeps. */
-export function keptColumnsOf(
+function keptColumnsOf(
   types: readonly RegisteredType[],
   existing: ExistingColumns
 ): KeptColumn[] {
@@ -101,4 +105,47 @@ export async function registeredTypes(registries: {
     ...of("collection", await registries.collections.getAllCollections()),
     ...of("single", await registries.singles.getAllSingles()),
   ];
+}
+
+/** Where `nextly prune` finds the kept columns, by how the site applies its schema. */
+export interface KeptColumnsByMode {
+  /**
+   * A site with no migration files: the kept columns its tables have, read
+   * when the prune plans, which drops them.
+   */
+  live?: () => Promise<KeptColumn[]>;
+  /**
+   * A site with migration files: the kept columns its latest snapshot has,
+   * which a migration the prune writes drops in every environment. Dropping
+   * them from one database alone would leave its next migration refusing to
+   * run, since the history would still list them.
+   */
+  inMigration: KeptColumn[];
+}
+
+/** The kept columns of the site `config` describes, by how it applies its schema. */
+export async function keptColumnsFor(args: {
+  cwd?: string;
+  migrationsDir: string;
+  adapter: Pick<DrizzleAdapter, "getDrizzle">;
+  dialect: SupportedDialect;
+  registries: Parameters<typeof registeredTypes>[0];
+}): Promise<KeptColumnsByMode> {
+  const types = await registeredTypes(args.registries);
+  const latest = await loadLatestSnapshot(
+    resolve(args.cwd ?? process.cwd(), args.migrationsDir, "meta")
+  );
+  if (latest === null) {
+    return {
+      live: () =>
+        liveKeptColumns(args.adapter.getDrizzle(), args.dialect, types),
+      inMigration: [],
+    };
+  }
+  return {
+    inMigration: keptColumnsOf(
+      types,
+      columnsByTable(latest.data.snapshot, args.dialect)
+    ),
+  };
 }

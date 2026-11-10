@@ -39,12 +39,12 @@ import { planChangedAfterConsent } from "../../domains/schema/migrate/plan-chang
 import type { ExtensionSchemaRecord } from "../../domains/schema/ownership/dependent-elements";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
+import { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import { NextlyError } from "../../errors/nextly-error";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import { nextlyI18nArchiveTables } from "../../schemas/nextly-i18n-archive";
 import { UNKNOWN_ARCHIVE_KIND } from "../../schemas/nextly-i18n-archive/ddl";
 import { reportDryRun } from "../dry-run";
-import type { KeptColumn } from "./prune-kept-columns";
 import { exitWithError } from "../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
@@ -60,6 +60,8 @@ import {
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
 import { installRegistryResolver } from "../utils/registry-resolver";
+
+import { keptColumnsFor, type KeptColumn } from "./prune-kept-columns";
 
 export { registerPruneCommand } from "./prune.command";
 
@@ -598,7 +600,20 @@ export async function runPruneCommand(
       adapter as unknown as DrizzleAdapter,
       logger
     );
+    // What a plugin's scope keeps on types switched off: dropped with the rest
+    // here, or, on a site that keeps migration files, by a migration below.
+    const kept = await keptColumnsFor({
+      cwd: options.cwd,
+      migrationsDir: configResult.config.db.migrationsDir,
+      adapter: drizzleAdapter,
+      dialect,
+      registries: {
+        collections: registry,
+        singles: new SingleRegistryService(drizzleAdapter, logger),
+      },
+    });
     const result = await runPrune({
+      keptColumns: kept.live,
       dryRun: options.dryRun === true,
       registry,
       adapter: adapter as unknown as Parameters<typeof runPrune>[0]["adapter"],
@@ -638,8 +653,16 @@ export async function runPruneCommand(
       },
     });
 
-    // A dry run names what the real prune drops, in the consent's words.
+    // A dry run names what the real prune drops, in the consent's words, and
+    // the kept columns a migration it writes would drop.
     if (options.dryRun === true) {
+      await releaseThroughMigration(kept.inMigration, {
+        options,
+        context,
+        consent,
+        db: drizzleAdapter.getDrizzle(),
+        dialect,
+      });
       reportDryRun(logger, {
         changes: result.refusal ? [] : deletionChanges(result.planned),
         refusals: result.refusal ? [result.refusal] : [],
@@ -659,6 +682,19 @@ export async function runPruneCommand(
       );
     }
 
+    if (result.droppedColumns.length > 0) {
+      logger.info(
+        `Dropped ${result.droppedColumns.length} column(s) kept for switched-off types: ${result.droppedColumns.join(", ")}`
+      );
+    }
+    await releaseThroughMigration(kept.inMigration, {
+      options,
+      context,
+      consent,
+      db: drizzleAdapter.getDrizzle(),
+      dialect,
+    });
+
     // Reported separately: these have no registry row, so they are not "collections" from
     // the operator's point of view and would be confusing to fold into the counts above.
     if (result.orphanedCompanions.length > 0) {
@@ -675,6 +711,52 @@ export async function runPruneCommand(
   } finally {
     await adapter.disconnect();
   }
+}
+
+/**
+ * On a site that keeps migration files, write the migration that drops the
+ * kept columns, once the data-loss consent agrees: every environment then
+ * drops them at its next `nextly migrate`, and none is left with a history
+ * listing columns its database lacks. A dry run names them and writes nothing.
+ */
+async function releaseThroughMigration(
+  kept: readonly KeptColumn[],
+  args: {
+    options: PruneCommandOptions;
+    context: CommandContext;
+    consent: DataLossConsent;
+    db: unknown;
+    dialect: SupportedDialect;
+  }
+): Promise<void> {
+  if (kept.length === 0) return;
+  const { options, context } = args;
+  const deletions: Deletion[] = kept.map(({ table, column }) => ({
+    kind: "column",
+    table,
+    column,
+  }));
+  if (options.dryRun === true) {
+    context.logger.info(
+      `A migration would drop the column(s) kept for switched-off types: ${kept.map(columnName).join(", ")}`
+    );
+    return;
+  }
+  await pruneApproval({
+    consent: args.consent,
+    interactive: canPrompt(),
+    ask: askToDeleteInTerminal,
+    print: line => context.logger.info(line),
+    db: args.db,
+    dialect: args.dialect,
+  })(deletions);
+  // Loaded only when a migration is written, not with every prune.
+  const { runMigrateCreate } = await import("./migrate-create");
+  await runMigrateCreate(
+    "drop-columns-kept-for-switched-off-types",
+    { cwd: options.cwd, config: options.config, releaseHeldBack: true },
+    context
+  );
 }
 
 /** The action of `nextly prune`, loaded when it runs. */

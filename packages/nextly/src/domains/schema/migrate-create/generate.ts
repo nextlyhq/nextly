@@ -671,8 +671,7 @@ export async function generateMigration(
         args.collections,
         args.singles,
         args.components,
-        args.dialect,
-        args.releaseHeldBack === true ? undefined : previous?.data.snapshot
+        args.dialect
       ),
       args.tablesAsTheyStand
     ),
