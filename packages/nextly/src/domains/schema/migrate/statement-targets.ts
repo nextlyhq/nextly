@@ -58,6 +58,20 @@ function createdOn(cursor: StatementCursor): string[] | undefined {
 }
 
 /**
+ * After `ALTER TABLE`: the table altered, and the one it is renamed to where a
+ * clause renames it; undefined when either cannot be read.
+ */
+function alteredTables(cursor: StatementCursor): string[] | undefined {
+  cursor.acceptCondition();
+  cursor.accept("ONLY");
+  const table = cursor.name();
+  if (table === undefined) return undefined;
+  const renamedTo = renameDestination(cursor.rest());
+  if (renamedTo === null) return undefined;
+  return renamedTo === undefined ? [table] : [table, renamedTo];
+}
+
+/**
  * The tables `statement` changes, lower-cased, or `undefined` when it is not a
  * form read here: CREATE/ALTER/DROP TABLE, CREATE [UNIQUE] INDEX … ON, MySQL's
  * DROP INDEX … ON, INSERT INTO, UPDATE and DELETE FROM.
@@ -68,15 +82,7 @@ export function tablesChangedIn(
 ): string[] | undefined {
   const cursor = cursorOf(statement, dialect);
   if (cursor.accept("CREATE")) return createdOn(cursor);
-  if (cursor.accept("ALTER", "TABLE")) {
-    cursor.acceptCondition();
-    cursor.accept("ONLY");
-    const table = cursor.name();
-    if (table === undefined) return undefined;
-    const renamedTo = renameDestination(cursor.rest());
-    if (renamedTo === null) return undefined;
-    return renamedTo === undefined ? [table] : [table, renamedTo];
-  }
+  if (cursor.accept("ALTER", "TABLE")) return alteredTables(cursor);
   if (cursor.accept("DROP", "TABLE")) {
     cursor.acceptCondition();
     return cursor.names();
