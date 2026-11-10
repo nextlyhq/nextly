@@ -748,6 +748,56 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_one_time_secrets" ("subject_key")`,
     `CREATE INDEX IF NOT EXISTS "nextly_one_time_secrets_expires_idx"
       ON "nextly_one_time_secrets" ("expires_at")`,
+    // The webhooks plugins have received, one claim per plugin, provider and
+    // delivery. Columns match schemas/received-webhooks/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_received_webhooks" (
+      "delivery_key" TEXT PRIMARY KEY NOT NULL,
+      "owner" TEXT NOT NULL,
+      "provider" TEXT NOT NULL,
+      "delivery_id" TEXT,
+      "freshness" TEXT NOT NULL,
+      "status" TEXT NOT NULL,
+      "claim_token" TEXT NOT NULL,
+      "lease_until" INTEGER,
+      "received_at" INTEGER NOT NULL,
+      "completed_at" INTEGER,
+      "prune_at" INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nextly_received_webhooks_prune_idx"
+      ON "nextly_received_webhooks" ("prune_at")`,
+    // Durable plugin events and their deliveries. Columns match
+    // schemas/plugin-events/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_plugin_events" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "owner" TEXT NOT NULL,
+      "name" TEXT NOT NULL,
+      "payload" TEXT NOT NULL,
+      "created_at" INTEGER NOT NULL,
+      "fanned_out_at" INTEGER,
+      "finished_at" INTEGER
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nextly_plugin_events_fan_out_idx"
+      ON "nextly_plugin_events" ("fanned_out_at", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_plugin_events_finished_idx"
+      ON "nextly_plugin_events" ("finished_at")`,
+    `CREATE TABLE IF NOT EXISTS "nextly_plugin_event_deliveries" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "event_id" TEXT NOT NULL,
+      "subscriber" TEXT NOT NULL,
+      "subscriber_key" TEXT NOT NULL,
+      "status" TEXT NOT NULL,
+      "attempt_count" INTEGER NOT NULL DEFAULT 0,
+      "next_attempt_at" INTEGER NOT NULL,
+      "locked_by" TEXT,
+      "locked_until" INTEGER,
+      "last_error" TEXT,
+      "created_at" INTEGER NOT NULL,
+      "finished_at" INTEGER
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_plugin_event_deliveries_event_subscriber_unique"
+      ON "nextly_plugin_event_deliveries" ("event_id", "subscriber_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_plugin_event_deliveries_due_idx"
+      ON "nextly_plugin_event_deliveries" ("status", "next_attempt_at")`,
     // The database limit store's counts, used when a site selects it. An
     // integer of milliseconds for the expiry, as the Drizzle bundle declares.
     `CREATE TABLE IF NOT EXISTS "${LIMIT_STORE_TABLE}" (

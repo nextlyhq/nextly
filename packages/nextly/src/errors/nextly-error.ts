@@ -14,6 +14,7 @@ import type {
   PublicData,
   ReleaseNotDeletablePublicData,
   ReleaseProblemsPublicData,
+  RuleCouldNotRunPublicData,
   SharedFieldsConflictPublicData,
   StaleVersionPublicData,
   VersionRequiredPublicData,
@@ -726,6 +727,35 @@ export class NextlyError extends Error {
       publicData: busy.publicData,
       cause: opts?.cause,
       logContext: opts?.logContext,
+    });
+  }
+
+  /**
+   * An access or field rule the request needs could not run, because its own
+   * database query waited out the bound for a connection. Not a refusal: the
+   * rule never answered. Names the collection or Single whose rule it is, and
+   * the field for a field's rule, and says when to retry.
+   */
+  static ruleCouldNotRun(opts: {
+    subject: string;
+    field?: string;
+    cause?: Error;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    // Typed as the published shape names it, so the payload and the type a
+    // client reads it by cannot drift apart.
+    const publicData: RuleCouldNotRunPublicData = {
+      subject: opts.subject,
+      ...(opts.field !== undefined ? { field: opts.field } : {}),
+      retryAfterSeconds: DATABASE_BUSY_RETRY_AFTER_SECONDS,
+    };
+    return new NextlyError({
+      code: "RULE_COULD_NOT_RUN",
+      statusCode: NEXTLY_ERROR_STATUS.RULE_COULD_NOT_RUN,
+      publicMessage: genericPublicMessage("RULE_COULD_NOT_RUN"),
+      publicData,
+      cause: opts.cause,
+      logContext: opts.logContext,
     });
   }
 

@@ -31,6 +31,4 @@
 
 Each person can store their own interface language, the language they want the admin in, through their own profile: `PATCH /admin/api/me` or `updateMe` take `interfaceLanguage` (a language tag such as `fr` or `pt-BR`, or `null` to follow the browser), and `GET /admin/api/me` returns it. It is kept in a new nullable `interface_language` column on `users`, which `nextly migrate` adds to an existing install without rewriting a row. An administrator's `PATCH /admin/api/users/:id` or `users.update` naming it is refused, naming the field.
 
-
-
 **Compatibility:** `interfaceLanguage` is now a reserved user field name. An app that defines a custom user field with exactly that name is refused at startup and must rename it.
