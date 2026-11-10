@@ -292,9 +292,11 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
 
       expect((await create(project(["cases"]))).code).toBeUndefined();
       expect(statements(written(before))).not.toMatch(/seo_title/);
-      // Nor does the check plan its drop. Asked of the column alone: on MySQL
-      // the check reads a Builder type's text columns as another type than
-      // the migration wrote them, its own fields' included.
+      // Nor does the check plan its drop. Asked of the column alone, not as a
+      // clean check: on MySQL, migrate:check currently reads a Builder type's
+      // text columns as another type than migrate:create wrote them, its own
+      // fields' included, which is wrong and not this change's. Once the two
+      // agree, this asserts a clean check again, as the cases above do.
       expect((await check(project(["cases"]))).said).not.toMatch(
         /drop_column[^\n]*seo_title/
       );
