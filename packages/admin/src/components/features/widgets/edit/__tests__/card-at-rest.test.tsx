@@ -48,8 +48,8 @@ const toast = vi.hoisted(() => ({
 
 // The header's New button reads collections and permissions of its own,
 // which this test does not set up; it is a marker here.
-vi.mock("@admin/components/features/dashboard/header/NewSplitButton", () => ({
-  NewSplitButton: () => <div data-testid="dashboard-new" />,
+vi.mock("@admin/components/features/new-menu/NewMenu", () => ({
+  NewMenu: () => <div data-testid="dashboard-new" />,
 }));
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
@@ -334,7 +334,7 @@ describe("Size in the card menu at rest", () => {
     const atRest = renderGrid();
     const user = userEvent.setup();
     // The first card, so a write that put the resized card anywhere else would differ.
-    await chooseWidthAtRest(user, "Styled", "Half width, 6 columns");
+    await chooseWidthAtRest(user, "Styled", "50% width");
     await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
     const rest = sent(0);
     const restPath = api.put.mock.calls[0]?.[0];
@@ -344,7 +344,7 @@ describe("Size in the card menu at rest", () => {
     vi.clearAllMocks();
     layoutResponse = layout();
     renderGrid();
-    await chooseWidthAndSave(user, "Styled", "Half width, 6 columns");
+    await chooseWidthAndSave(user, "Styled", "50% width");
     const saved = sent(0);
 
     expect(api.put.mock.calls[0]?.[0]).toBe(restPath);
@@ -358,10 +358,10 @@ describe("Size in the card menu at rest", () => {
   it("offers Undo, which puts the card back at the size it had", async () => {
     renderGrid();
     const user = userEvent.setup();
-    await chooseWidthAtRest(user, "Plain", "Half width, 6 columns");
+    await chooseWidthAtRest(user, "Plain", "50% width");
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
     expect(toast.success.mock.calls.at(-1)?.[0]).toBe(
-      "Plain: Size set to 6 columns by 3 rows."
+      "Plain: Size set to 50% wide by 3 rows."
     );
     pressUndo();
     await waitFor(() => expect(api.put).toHaveBeenCalledTimes(2));
@@ -424,7 +424,7 @@ describe("what a card's own write says it is", () => {
     api.put.mockRejectedValue(new Error("network down"));
     renderGrid();
     const user = userEvent.setup();
-    await chooseWidthAtRest(user, "Drafts board", "Half width, 6 columns");
+    await chooseWidthAtRest(user, "Drafts board", "50% width");
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     expect(toast.error.mock.calls.at(-1)?.[0]).toMatch(
       /^Could not save Drafts board's size/

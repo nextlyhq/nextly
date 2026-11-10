@@ -687,6 +687,16 @@ export {
   type ContentTypeScope,
 } from "./plugins/content-type-scope";
 
+// Where an entry is served, as the site declares it: one answer for every
+// reader of a page's public address.
+// @experimental
+export {
+  publicAddressOf,
+  typesWithoutAddress,
+  type PublicAddress,
+  type PublicAddressType,
+} from "./domains/public-addresses/public-address";
+
 // The plugin limiter: `contributes.limits` rules and `ctx.limits`.
 // @experimental
 export type { LimitRule } from "./domains/limits/limit-rules";
@@ -1191,6 +1201,7 @@ export {
   type NavFilterContext,
   type ListQueryWhere,
   type ListQueryFilterContext,
+  type PublicAddressTemplateContext,
 } from "./filters";
 
 // ============================================================

@@ -7,6 +7,7 @@
   "scripts": {
     "test:e2e": "playwright test",
     "test:e2e:prod": "playwright test --config playwright.production.config.ts",
+    "test:admin-speed": "node admin-speed/measure.mjs --build",
     "test:e2e:dev-reload": "playwright test --config playwright.dev-reload.config.ts",
     "test:e2e:multi-instance": "playwright test --config playwright.multi-instance.config.ts",
     "test:e2e:ui": "playwright test --ui",

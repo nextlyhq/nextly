@@ -39,6 +39,7 @@ function Controlled(props: {
   const [field, setField] = useState<BuilderField>(props.initial);
   return (
     <ValidationTab
+      surface="entries"
       field={field}
       readOnly={props.readOnly}
       onChange={next => {
