@@ -24,7 +24,7 @@
  * @module cli/commands/migrate-baseline
  */
 import { mkdir, readdir, writeFile } from "node:fs/promises";
-import { relative, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -74,7 +74,12 @@ import {
 import { generateStatements } from "../../domains/schema/pipeline/sql-templates/index";
 import { NextlyError } from "../../errors/index";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
-import { reportDryRun, type DryRunChange, type DryRunPlan } from "../dry-run";
+import {
+  projectPath,
+  reportDryRun,
+  type DryRunChange,
+  type DryRunPlan,
+} from "../dry-run";
 import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
@@ -945,8 +950,8 @@ function baselineChanges(
   cwd: string
 ): DryRunChange[] {
   return [
-    { action: "write", target: relative(cwd, result.sqlPath) },
-    { action: "write", target: relative(cwd, result.snapshotPath) },
+    { action: "write", target: projectPath(cwd, result.sqlPath) },
+    { action: "write", target: projectPath(cwd, result.snapshotPath) },
     ...(result.createsLedger
       ? [
           {

@@ -49,6 +49,7 @@ import {
 } from "../../schema/services/collection-schema-apply";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { loadUiSchema } from "../../schema/ui-schema/loader";
+import { withSystemTextFields } from "../system-text-fields";
 
 import { collectionSaveIssuesDdl } from "./collection-save-issues-ddl";
 import { collectionTableName } from "./collection-utils";
@@ -160,41 +161,6 @@ function errorToMetadataResult(
     ...errorEnvelopeFields(mapped),
   };
 }
-
-/**
- * Synthetic title field definition for dynamic collections.
- * This field is automatically added to all UI-created collections.
- * Used as the primary display name for entries.
- */
-const TITLE_FIELD: FieldDefinition = {
-  name: "title",
-  type: "text",
-  label: "Title",
-  required: true,
-  admin: {
-    placeholder: "Enter title",
-  },
-};
-
-/**
- * Synthetic slug field definition for dynamic collections.
- * This field is automatically added to all UI-created collections.
- * Auto-generated from title/name if left empty.
- */
-const SLUG_FIELD: FieldDefinition = {
-  name: "slug",
-  type: "text",
-  label: "Slug",
-  required: true,
-  unique: true,
-  admin: {
-    placeholder: "my-entry-slug",
-  },
-  validation: {
-    pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
-    message: "Slug must be lowercase with hyphens only (e.g., my-entry-slug)",
-  },
-};
 
 /**
  * Parse labels from a JSON string or return as-is if already an object.
@@ -794,13 +760,7 @@ export class CollectionMetadataService extends BaseService {
           string,
           unknown
         >[];
-        const hasTitle = baseFields.some(f => f.name === "title");
-        const hasSlug = baseFields.some(f => f.name === "slug");
-        const fields = [
-          ...(hasTitle ? [] : [TITLE_FIELD]),
-          ...(hasSlug ? [] : [SLUG_FIELD]),
-          ...baseFields,
-        ];
+        const fields = withSystemTextFields(baseFields);
 
         // Parse labels from JSON string if needed (SQLite stores JSON as strings)
         const parsedLabels = parseLabels(collection.labels);
@@ -911,13 +871,7 @@ export class CollectionMetadataService extends BaseService {
         name?: string;
         [k: string]: unknown;
       }>;
-      const hasTitle = baseFields.some(f => f.name === "title");
-      const hasSlug = baseFields.some(f => f.name === "slug");
-      const fields = [
-        ...(hasTitle ? [] : [TITLE_FIELD]),
-        ...(hasSlug ? [] : [SLUG_FIELD]),
-        ...baseFields,
-      ];
+      const fields = withSystemTextFields(baseFields);
 
       // Parse labels from JSON string if needed (SQLite stores JSON as strings)
       const parsedLabels = parseLabels(collection.labels);

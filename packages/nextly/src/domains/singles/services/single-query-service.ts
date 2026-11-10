@@ -54,6 +54,7 @@ import {
 } from "../../../errors/error-codes";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
+import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import {
   buildContext,
   type BuildContextOptions,
@@ -2734,6 +2735,9 @@ export class SingleQueryService extends BaseService {
       );
       return expandedDoc as SingleDocument;
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with the relationships returned as stored references.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.error("Failed to expand relationship fields for Single", {
         error,
       });

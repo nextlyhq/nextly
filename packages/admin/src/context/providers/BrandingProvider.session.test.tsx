@@ -32,6 +32,7 @@ vi.mock("@admin/hooks/queries/useAuthSession", () => ({
 
 import {
   BrandingProvider,
+  useBranding,
   useBrandingStatus,
 } from "@admin/context/providers/BrandingProvider";
 
@@ -138,6 +139,51 @@ describe("the session-gated half of admin-meta", () => {
 
     await waitFor(() =>
       expect(screen.getByTestId("status").textContent).toBe("unavailable")
+    );
+  });
+
+  it("keeps the login page's contributions beside the signed-in places'", async () => {
+    // The public half carries only the login page's; the signed-in half every
+    // other place's. A plain merge of the two halves would let the second
+    // replace the first.
+    const login = { block: [{ builtIn: "form" }] };
+    const settings = { block: [{ builtIn: "content" }] };
+    get.mockResolvedValue({
+      contributions: { login },
+    } as unknown as AdminBranding);
+    protectedGet.mockResolvedValue({
+      plugins: [],
+      contributions: { settings },
+    } as unknown as AdminBranding);
+    session.mockReturnValue(signedIn());
+
+    function Places() {
+      const { contributions } = useBranding();
+      return (
+        <span data-testid="places">
+          {Object.keys(contributions ?? {})
+            .sort()
+            .join(",")}
+        </span>
+      );
+    }
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <BrandingProvider>
+          <Probe />
+          <Places />
+        </BrandingProvider>
+      </QueryClientProvider>
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("status").textContent).toBe("answered")
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("places").textContent).toBe("login,settings")
     );
   });
 });

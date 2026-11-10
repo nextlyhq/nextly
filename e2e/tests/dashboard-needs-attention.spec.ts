@@ -3,8 +3,9 @@
  * while something is.
  *
  * A stopped and an overdue release are left as the release runner would leave
- * them. The card then draws a critical row for each, with its reason, and each
- * Review opens Releases' Needs attention tab narrowed to that row's part. A
+ * them. The card then draws a critical row for each, with its reason and the
+ * release named under it, linked to its page, and each Review opens Releases'
+ * Needs attention tab narrowed to that row's part. A
  * reader who may not read releases has nothing waiting, so their dashboard
  * draws no card at all, rather than one that says all is clear.
  *
@@ -59,6 +60,18 @@ test("rows for stopped and overdue releases, each with its reason and Review; no
     const overdue = row("Overdue releases");
     await expect(overdue).toContainText("Still scheduled after its time.");
     await expect(overdue.getByTestId("needs-attention-critical")).toBeVisible();
+    // Each row names its releases as well as counting them, each linked to
+    // its page.
+    for (const { id, outcome } of seeded) {
+      const named = (outcome === "stopped" ? stopped : overdue).getByRole(
+        "link",
+        { name: `Attention e2e ${outcome} ${stamp}` }
+      );
+      await expect(named).toHaveAttribute(
+        "href",
+        new RegExp(`/admin/releases/${id}$`)
+      );
+    }
     // Nothing on the card dismisses an item.
     await expect(
       card.getByRole("button", { name: /dismiss|mark/i })

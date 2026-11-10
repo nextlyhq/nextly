@@ -42,6 +42,13 @@ const EDIT_PANEL_SECTIONS = Object.freeze([
 ] as const);
 
 /**
+ * The edit page's own blocks, as both editors draw them: the document bar with
+ * the banners under it, then the editor, which is the form's notices and the
+ * row of the field column and the side panel.
+ */
+const EDIT_PAGE_BLOCKS = Object.freeze(["document-bar", "editor"] as const);
+
+/**
  * @experimental Core's admin places, keyed by id: one for each page a plugin
  * may add to, and the entry form, which is part of a collection entry's and a
  * Single's edit pages.
@@ -74,27 +81,36 @@ export const CORE_ADMIN_PLACES = Object.freeze({
   "collection.edit": Object.freeze({
     page: "a collection entry's edit page",
     accepts: Object.freeze(["block", "tab", "sidebarSection"] as const),
-    builtIns: Object.freeze({ sidebarSection: EDIT_PANEL_SECTIONS }),
+    builtIns: Object.freeze({
+      block: EDIT_PAGE_BLOCKS,
+      sidebarSection: EDIT_PANEL_SECTIONS,
+    }),
   }),
   "single.edit": Object.freeze({
     page: "a Single's edit page",
     accepts: Object.freeze(["block", "tab", "sidebarSection"] as const),
-    builtIns: Object.freeze({ sidebarSection: EDIT_PANEL_SECTIONS }),
+    builtIns: Object.freeze({
+      block: EDIT_PAGE_BLOCKS,
+      sidebarSection: EDIT_PANEL_SECTIONS,
+    }),
   }),
   "entry.form": Object.freeze({
     page: "the entry form, on a collection entry's or a Single's edit page",
     accepts: Object.freeze(["block"] as const),
-    builtIns: Object.freeze({}),
+    // The form's own fields, as both editors draw them.
+    builtIns: Object.freeze({ block: Object.freeze(["fields"] as const) }),
   }),
   settings: Object.freeze({
     page: "settings",
     accepts: Object.freeze(["block", "tab"] as const),
-    builtIns: Object.freeze({}),
+    // The general settings page's own form.
+    builtIns: Object.freeze({ block: Object.freeze(["content"] as const) }),
   }),
   "user.detail": Object.freeze({
     page: "a user's detail page",
     accepts: Object.freeze(["block", "tab"] as const),
-    builtIns: Object.freeze({}),
+    // The page's own card: the avatar and the user's details form.
+    builtIns: Object.freeze({ block: Object.freeze(["content"] as const) }),
   }),
   account: Object.freeze({
     page: "the signed-in admin's account page",
@@ -104,7 +120,8 @@ export const CORE_ADMIN_PLACES = Object.freeze({
   login: Object.freeze({
     page: "the login page",
     accepts: Object.freeze(["block"] as const),
-    builtIns: Object.freeze({}),
+    // The sign-in form itself.
+    builtIns: Object.freeze({ block: Object.freeze(["form"] as const) }),
   }),
 } as const);
 

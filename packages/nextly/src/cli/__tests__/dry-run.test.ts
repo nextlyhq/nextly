@@ -4,10 +4,12 @@
  * simulate, and a last line saying nothing was changed. One meaning and one
  * help line for the flag on every command.
  */
+import { posix, win32 } from "node:path";
+
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 
-import { DRY_RUN_HELP, dryRunLines, withDryRun } from "../dry-run";
+import { DRY_RUN_HELP, dryRunLines, projectPath, withDryRun } from "../dry-run";
 
 describe("dryRunLines", () => {
   it("says what each change would be, then that nothing was changed", () => {
@@ -65,5 +67,21 @@ describe("withDryRun", () => {
     expect(command.opts<{ dryRun?: boolean }>().dryRun).toBeFalsy();
     command.parse(["--dry-run"], { from: "user" });
     expect(command.opts<{ dryRun?: boolean }>().dryRun).toBe(true);
+  });
+});
+
+describe("projectPath", () => {
+  // What a dry run names, read on any machine: the path from the project
+  // folder, with `/` between its parts, whichever separator the machine uses.
+  it("names a file from the project folder with forward slashes on Windows", () => {
+    expect(
+      projectPath("C:\\site", "C:\\site\\migrations\\0001_init.sql", win32)
+    ).toBe("migrations/0001_init.sql");
+  });
+
+  it("names it the same way on POSIX", () => {
+    expect(projectPath("/site", "/site/src/types/nextly-types.ts", posix)).toBe(
+      "src/types/nextly-types.ts"
+    );
   });
 });

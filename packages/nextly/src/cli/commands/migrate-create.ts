@@ -86,7 +86,7 @@ import { pluginAdminSlug } from "../../plugins/plugin-slug";
 import { topoSortPlugins } from "../../plugins/topo-sort";
 import { CORE_TABLE_NAMES } from "../../schemas/core-schema";
 import type { CommandContext } from "../context";
-import { reportDryRun } from "../dry-run";
+import { projectPath, reportDryRun } from "../dry-run";
 import {
   migrationCreateCancelled,
   migrationNameRequired,
@@ -283,16 +283,16 @@ function reportMigrationDryRun(
   cwd: string,
   logger: CommandContext["logger"]
 ): void {
-  const sqlFile = relative(cwd, result.sqlPath);
+  const sqlFile = projectPath(cwd, result.sqlPath);
   logger.info(`${sqlFile} would hold:\n${result.sqlContent.trimEnd()}`);
   reportDryRun(logger, {
     changes: [
       { action: "write", target: sqlFile },
-      { action: "write", target: relative(cwd, result.snapshotPath) },
+      { action: "write", target: projectPath(cwd, result.snapshotPath) },
       // The translation-table migration files, written after the pair.
       ...result.companionFiles.map(file => ({
         action: "write" as const,
-        target: relative(cwd, file.path),
+        target: projectPath(cwd, file.path),
       })),
     ],
   });
@@ -612,7 +612,7 @@ async function runBlankPath(
   });
   // A dry run prints the file and its path, and writes neither the file nor its folder.
   if (dryRun) {
-    const sqlFile = relative(context.cwd, sqlPath);
+    const sqlFile = projectPath(context.cwd, sqlPath);
     logger.info(`${sqlFile} would hold:\n${content.trimEnd()}`);
     reportDryRun(logger, { changes: [{ action: "write", target: sqlFile }] });
     return;
@@ -1218,14 +1218,14 @@ function reportPluginDryRun(
   cwd: string,
   logger: CommandContext["logger"]
 ): void {
-  const moduleFile = relative(cwd, planned.modulePath);
+  const moduleFile = projectPath(cwd, planned.modulePath);
   logger.info(`${moduleFile} would hold:\n${planned.moduleContent.trimEnd()}`);
   reportDryRun(logger, {
     changes: [
       { action: "write", target: moduleFile },
       {
         action: existsSync(planned.indexPath) ? "edit" : "write",
-        target: relative(cwd, planned.indexPath),
+        target: projectPath(cwd, planned.indexPath),
       },
     ],
   });

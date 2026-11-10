@@ -130,6 +130,7 @@
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 import { CORE_TABLE_NAMES } from "../../../schemas/core-schema";
+import { SCHEMA_OWNERS_TABLE } from "../../../schemas/schema-owners";
 import { scanSql, type SqlSegment } from "../migrate/sql-scan";
 import type { ContributedElements, TableSpec } from "../pipeline/diff/types";
 import { plainMysqlEquivalents } from "../pipeline/sql-templates/mysql-live-restate";
@@ -6254,12 +6255,24 @@ export function dropsPluginMigratedTable(
  * registry. Undefined when the registry cannot be read (a database that
  * predates it, or a fresh install before core reconcile), which callers read
  * as "nothing is claimed" — the pre-registry behaviour exactly.
+ *
+ * Whether the registry exists is asked of the catalog first, never learned
+ * from a failed read: `db` may be a schema apply's open transaction, and on
+ * PostgreSQL a statement that fails there aborts it, so every statement the
+ * apply runs after it would be refused.
  */
 export async function pluginMigratedTableSet(
   db: unknown,
   dialect: SupportedDialect
 ): Promise<ReadonlySet<string> | undefined> {
   try {
+    const { introspectTableNames } = await import(
+      "../pipeline/diff/introspect-live"
+    );
+    const registry = await introspectTableNames(db, dialect, [
+      SCHEMA_OWNERS_TABLE,
+    ]);
+    if (registry.length === 0) return undefined;
     const rows = await new SchemaOwnersRepository(db, dialect).read();
     return new Set(
       rows

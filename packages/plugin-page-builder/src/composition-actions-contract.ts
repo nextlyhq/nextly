@@ -67,7 +67,6 @@ export interface PageActionRequest {
   readonly publish?: boolean;
 }
 
-
 /** @experimental Settles when the composition API ships. */
 export interface PageActionResult {
   readonly dryRun: boolean;
