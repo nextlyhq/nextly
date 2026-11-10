@@ -26,29 +26,67 @@ import type { Command } from "commander";
 import { abandonDurableDeliveries } from "../../domains/plugin-events/abandon";
 import { reportStuckDeliveries } from "../../domains/plugin-events/report";
 import { reportDryRun } from "../dry-run";
-import { exitWithError } from "../errors";
+import { CliError, exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
+import { openDryRunAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
 import {
   openOrConnect,
   requireDatabaseEnv,
 } from "../utils/command-prerequisites";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
+/** The longest stored value a line of output shows. */
+const MAX_SHOWN = 200;
+
 /**
- * Run `work` on the database, opened read-only when `readOnly`, then close
- * it; nothing when the database could not be opened, which has been said.
+ * A stored value as one printable line: a failure is a plugin's own message,
+ * and a newline or a terminal escape in it would split a row or act on the
+ * operator's terminal. Each control character becomes a space, and a long
+ * value is cut short.
  */
+function printable(value: string): string {
+  const line = value
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
+    .replace(/ {2,}/g, " ")
+    .trim();
+  return line.length > MAX_SHOWN ? `${line.slice(0, MAX_SHOWN - 1)}…` : line;
+}
+
+/**
+ * How the command opens the database: `report` read-only, failing when the
+ * database is not there; `dry-run` read-only, reporting a missing database as
+ * a real run's refusal; `write` connected for writing.
+ */
+type OpenAs = "report" | "dry-run" | "write";
+
+/** The database, opened `as`; undefined when a dry run found none, which it has said. */
+async function openDatabase(
+  context: CommandContext,
+  as: OpenAs
+): Promise<CLIDatabaseAdapter | undefined> {
+  const env = requireDatabaseEnv(context.logger);
+  const connection = { dialect: env.dialect, databaseUrl: env.databaseUrl };
+  if (as !== "report") {
+    return openOrConnect(connection, as === "dry-run", context.logger);
+  }
+  // Read-only, but not a dry run: a database that is not there is a failure
+  // of the report, not a refusal a real run would make.
+  const opened = await openDryRunAdapter(connection);
+  if (!("missing" in opened)) return opened;
+  throw new CliError("DATABASE_UNREACHABLE", {
+    what: "The database to report on is not there.",
+    why: opened.missing,
+    next: "Check `DATABASE_URL`, and run the command where the application's database is.",
+  });
+}
+
+/** Run `work` on the database, opened `as`, then close it. */
 async function withDatabase(
   context: CommandContext,
-  readOnly: boolean,
+  as: OpenAs,
   work: (db: DrizzleAdapter) => Promise<void>
 ): Promise<void> {
-  const env = requireDatabaseEnv(context.logger);
-  const adapter = await openOrConnect(
-    { dialect: env.dialect, databaseUrl: env.databaseUrl },
-    readOnly,
-    context.logger
-  );
+  const adapter = await openDatabase(context, as);
   if (adapter === undefined) return;
   try {
     // Both tables are static system tables: the static registration is
@@ -68,7 +106,7 @@ export async function runEventsReportCommand(
   const { logger } = context;
   logger.header("Durable event deliveries needing an operator");
   // Read-only: the report changes nothing.
-  await withDatabase(context, true, async db => {
+  await withDatabase(context, "report", async db => {
     const stuck = await reportStuckDeliveries(db);
     if (stuck.length === 0) {
       logger.info("No delivery is held or out of attempts.");
@@ -77,12 +115,12 @@ export async function runEventsReportCommand(
     logger.table(
       ["Delivery", "Event", "Subscriber", "Status", "Attempts", "Last error"],
       stuck.map(row => [
-        row.id,
-        row.eventId,
-        row.subscriber,
-        row.status,
+        printable(row.id),
+        printable(row.eventId),
+        printable(row.subscriber),
+        printable(row.status),
         row.attemptCount,
-        row.lastError ?? "",
+        printable(row.lastError ?? ""),
       ])
     );
     logger.info(
@@ -100,7 +138,7 @@ export async function runEventsAbandonCommand(
   const { logger } = context;
   logger.header("Abandon durable event deliveries");
   const dryRun = options.dryRun ?? false;
-  await withDatabase(context, dryRun, async db => {
+  await withDatabase(context, dryRun ? "dry-run" : "write", async db => {
     const named = await abandonDurableDeliveries(
       db,
       { deliveryId, subscriber: options.subscriber },
@@ -110,7 +148,7 @@ export async function runEventsAbandonCommand(
       reportDryRun(logger, {
         changes: named.map(row => ({
           action: "abandon",
-          target: `delivery ${row.id} to ${row.subscriber} (${row.status})`,
+          target: `delivery ${printable(row.id)} to ${printable(row.subscriber)} (${printable(row.status)})`,
         })),
       });
       return;
@@ -123,7 +161,9 @@ export async function runEventsAbandonCommand(
       return;
     }
     for (const row of named) {
-      logger.success(`Abandoned delivery ${row.id} to ${row.subscriber}.`);
+      logger.success(
+        `Abandoned delivery ${printable(row.id)} to ${printable(row.subscriber)}.`
+      );
     }
   });
 }

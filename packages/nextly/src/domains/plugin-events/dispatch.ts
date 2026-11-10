@@ -64,8 +64,7 @@ const HOLD_MS = 15 * 60 * 1000;
 /** What dispatching needs from the database adapter. */
 export type DispatchAdapter = Pick<
   DrizzleAdapter,
-  // `count` for the stuck-subscriber warnings' exact counts.
-  "transaction" | "select" | "count" | "dialect"
+  "transaction" | "select" | "dialect"
 >;
 
 /** One pass's inputs. */
@@ -86,7 +85,17 @@ export interface DispatchOptions {
    * Told of stuck deliveries after each pass, to warn about them at a pace
    * of its own (`createStuckWarnings`).
    */
-  warnings?: { check(adapter: DispatchAdapter, now: Date): Promise<void> };
+  /**
+   * The stuck-subscriber warnings, checked at the start of the pass with
+   * whether each subscriber is registered in this process.
+   */
+  warnings?: {
+    check(
+      adapter: DispatchAdapter,
+      now: Date,
+      isRegistered: (subscriber: string) => boolean
+    ): Promise<void>;
+  };
 }
 
 /** What one pass did. */
@@ -195,7 +204,11 @@ export async function dispatchDurableEvents(
   // The stuck-subscriber warnings first, before any bounded work: a pass that
   // runs out of time below returns early, and under a lasting backlog every
   // pass would.
-  await options.warnings?.check(adapter, now());
+  await options.warnings?.check(
+    adapter,
+    now(),
+    subscriber => subscribers.handlerOf(subscriber) !== undefined
+  );
 
   // Fan out the events not yet dispatched, oldest first.
   const undispatched = await adapter.select<{ id: string }>(

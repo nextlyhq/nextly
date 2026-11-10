@@ -514,6 +514,35 @@ describe.each(getConfiguredTestDialects())(
       const all = await reportStuckDeliveries(first, { pageSize: 2 });
       expect(all).toHaveLength(5);
       expect(new Set(all.map(row => row.id)).size).toBe(5);
+
+      // An operator abandons the first delivery the report read while it is
+      // still reading: every delivery still stuck is listed all the same.
+      let pages = 0;
+      const reading = {
+        select: async <T,>(
+          table: string,
+          options: Parameters<DrizzleAdapter["select"]>[1]
+        ): Promise<T[]> => {
+          const page = await first.select<T>(table, options);
+          if (pages++ === 0) {
+            const [earliest] = page as unknown as Array<{ id: string }>;
+            await abandonDurableDeliveries(
+              first,
+              { deliveryId: earliest?.id },
+              { now }
+            );
+          }
+          return page;
+        },
+      };
+      const whileSettling = await reportStuckDeliveries(reading, {
+        pageSize: 2,
+      });
+      const stillStuck = await reportStuckDeliveries(first);
+      expect(stillStuck).toHaveLength(4);
+      for (const row of stillStuck) {
+        expect(whileSettling.map(seen => seen.id)).toContain(row.id);
+      }
     });
 
     it("a pass out of time still warns, and a logger that throws fails nothing and is tried again", async () => {
@@ -556,7 +585,37 @@ describe.each(getConfiguredTestDialects())(
         warnings,
       });
       expect(warned).toHaveLength(1);
-      expect(warned[0]).toContain("1 out of attempts");
+      expect(warned[0]).toContain("ran out of attempts");
+    });
+
+    it("a held delivery whose subscriber is back is not warned about", async () => {
+      const { events, dispatch } = await boot();
+      const before = createDurableSubscribers();
+      before.register("@test/loyalty", PAID, "award", () => {
+        throw new Error("the points service is down");
+      });
+      await events.record(PAID, { order: "o-17" });
+      await dispatch(before);
+      clock = new Date(T0.getTime() + 2 * SECOND);
+      expect(await dispatch(createDurableSubscribers())).toMatchObject({
+        held: 1,
+      });
+
+      // Its subscriber is registered again: the pass that delivers it says
+      // nothing about it.
+      const warned: string[] = [];
+      const warnings = createStuckWarnings({
+        warn: message => {
+          warned.push(message);
+        },
+      });
+      const back = createDurableSubscribers();
+      back.register("@test/loyalty", PAID, "award", () => {});
+      clock = new Date(T0.getTime() + 16 * 60 * SECOND);
+      expect(await dispatch(back, { warnings })).toMatchObject({
+        delivered: 1,
+      });
+      expect(warned).toEqual([]);
     });
 
     it("a stuck subscriber is warned about once, not on the next pass, and again an hour later", async () => {
@@ -580,8 +639,8 @@ describe.each(getConfiguredTestDialects())(
       await dispatch(subscribers, { maxAttempts: 1, warnings });
       expect(warned).toHaveLength(1);
       expect(warned[0]).toContain('"@test/email:receipt"');
-      expect(warned[0]).toContain("0 held");
-      expect(warned[0]).toContain("1 out of attempts");
+      expect(warned[0]).toContain("ran out of attempts");
+      expect(warned[0]).not.toContain("held");
       expect(warned[0]).toContain("nextly events report");
       expect(warned[0]).toContain(
         "nextly events abandon --subscriber @test/email:receipt"

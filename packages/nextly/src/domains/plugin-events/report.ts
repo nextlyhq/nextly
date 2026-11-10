@@ -35,8 +35,10 @@ export interface StuckDelivery {
 }
 
 /**
- * Every delivery that needs an operator, oldest first, read a page at a time
- * so none is left out however many there are.
+ * Every delivery that needs an operator, in id order, read a page at a time
+ * so none is left out however many there are. Each page starts after the
+ * last id the one before it read, not at a count of rows: a delivery settled
+ * or newly stuck while the report reads cannot shift a page past another.
  */
 export async function reportStuckDeliveries(
   adapter: Pick<DrizzleAdapter, "select">,
@@ -44,6 +46,7 @@ export async function reportStuckDeliveries(
 ): Promise<StuckDelivery[]> {
   const pageSize = options.pageSize ?? REPORT_PAGE;
   const all: StuckDelivery[] = [];
+  let after: string | undefined;
   for (;;) {
     const page = await adapter.select<StuckDelivery>(
       PLUGIN_EVENT_DELIVERIES_TABLE,
@@ -56,88 +59,124 @@ export async function reportStuckDeliveries(
           "attemptCount",
           "lastError",
         ],
-        where: { and: [STUCK] },
-        // The id breaks ties, so pages neither repeat nor skip a delivery.
-        orderBy: [
-          { column: "createdAt", direction: "asc" },
-          { column: "id", direction: "asc" },
-        ],
+        where: {
+          and:
+            after === undefined
+              ? [STUCK]
+              : [STUCK, { column: "id", op: ">", value: after }],
+        },
+        orderBy: [{ column: "id", direction: "asc" }],
         limit: pageSize,
-        offset: all.length,
       }
     );
     all.push(...page);
     if (page.length < pageSize) return all;
+    after = page[page.length - 1]?.id;
   }
 }
 
-/** One subscriber's held and failed deliveries, counted in the database. */
-async function stuckCountsOf(
-  adapter: Pick<DrizzleAdapter, "count">,
-  subscriberKey: string
-): Promise<{ held: number; failed: number }> {
-  const countOf = (status: string) =>
-    adapter.count(PLUGIN_EVENT_DELIVERIES_TABLE, {
-      where: {
-        and: [
-          { column: "subscriberKey", op: "=", value: subscriberKey },
-          { column: "status", op: "=", value: status },
-        ],
-      },
-    });
-  return { held: await countOf("held"), failed: await countOf("failed") };
+/** What a subscriber has stuck: deliveries held for it, out of attempts, or both. */
+interface Stuck {
+  subscriber: string;
+  held: boolean;
+  failed: boolean;
+}
+
+/** The warning for one stuck subscriber. */
+function warningOf({ subscriber, held, failed }: Stuck): string {
+  const what = [
+    ...(held ? ["some are held for a subscriber that is not registered"] : []),
+    ...(failed ? ["some ran out of attempts"] : []),
+  ].join(", and ");
+  return `Durable event deliveries to "${subscriber}" are stuck: ${what}. List them with \`nextly events report\`; give them up with \`nextly events abandon --subscriber ${subscriber}\`.`;
+}
+
+/** A stored (subscriber, status) pair of a stuck delivery. */
+interface StuckRow {
+  subscriber: string;
+  subscriberKey: string;
+  status: string;
+}
+
+/**
+ * What each subscriber has stuck, by its key, leaving out a delivery held for
+ * a subscriber that is registered again: the pass runs it.
+ */
+function stuckBySubscriber(
+  rows: readonly StuckRow[],
+  isRegistered: (subscriber: string) => boolean
+): Map<string, Stuck> {
+  const stuck = new Map<string, Stuck>();
+  for (const row of rows) {
+    const held = row.status === "held";
+    if (held && isRegistered(row.subscriber)) continue;
+    const entry = stuck.get(row.subscriberKey) ?? {
+      subscriber: row.subscriber,
+      held: false,
+      failed: false,
+    };
+    entry.held ||= held;
+    entry.failed ||= !held;
+    stuck.set(row.subscriberKey, entry);
+  }
+  return stuck;
 }
 
 /**
  * The dispatcher's warnings about stuck subscribers: one when a subscriber
  * first becomes stuck, then at most one an hour while it stays so. Kept in
- * memory, so a restart warns again, which is as it should be. The
- * subscribers are read distinct and each one's deliveries counted in the
- * database, so none is missed and no count is short, however many are stuck.
- * A logger that throws fails nothing, and the subscriber is warned about
- * again on the next pass.
+ * memory, so a restart warns again, which is as it should be.
+ *
+ * One read a pass, however many subscribers are stuck: the distinct
+ * subscribers and statuses, with no count of each (the report has those).
+ * A delivery held for a subscriber that is registered again is left out: the
+ * pass runs it. A logger that throws fails nothing, and the subscriber is
+ * warned about again on the next pass.
  */
 export function createStuckWarnings(logger: Pick<Logger, "warn">): {
   check(
-    adapter: Pick<DrizzleAdapter, "select" | "count">,
-    now: Date
+    adapter: Pick<DrizzleAdapter, "select">,
+    now: Date,
+    isRegistered: (subscriber: string) => boolean
   ): Promise<void>;
 } {
   const warnedAt = new Map<string, number>();
-  return {
-    async check(adapter, now) {
-      const stuck = await adapter.select<{
-        subscriber: string;
-        subscriberKey: string;
-      }>(PLUGIN_EVENT_DELIVERIES_TABLE, {
-        columns: ["subscriber", "subscriberKey"],
-        where: { and: [STUCK] },
-        distinct: true,
+
+  /** Warn about `entry` unless it was warned about within the hour. */
+  const warnOnce = (key: string, entry: Stuck, now: Date): void => {
+    const last = warnedAt.get(key);
+    if (last !== undefined && now.getTime() - last < WARN_INTERVAL_MS) return;
+    try {
+      logger.warn(warningOf(entry), {
+        subscriber: entry.subscriber,
+        held: entry.held,
+        failed: entry.failed,
       });
-      const keys = new Set(stuck.map(row => row.subscriberKey));
+      // Only once the warning is written.
+      warnedAt.set(key, now.getTime());
+    } catch {
+      // An app-supplied logger that throws must not fail a dispatch whose
+      // deliveries are already recorded; the next pass warns again.
+    }
+  };
+
+  return {
+    async check(adapter, now, isRegistered) {
+      const rows = await adapter.select<StuckRow>(
+        PLUGIN_EVENT_DELIVERIES_TABLE,
+        {
+          columns: ["subscriber", "subscriberKey", "status"],
+          where: { and: [STUCK] },
+          distinct: true,
+        }
+      );
+      const stuck = stuckBySubscriber(rows, isRegistered);
       // A subscriber no longer stuck is forgotten: stuck again later, it is
       // warned about at once.
       for (const key of warnedAt.keys()) {
-        if (!keys.has(key)) warnedAt.delete(key);
+        if (!stuck.has(key)) warnedAt.delete(key);
       }
-      for (const { subscriber, subscriberKey } of stuck) {
-        const last = warnedAt.get(subscriberKey);
-        if (last !== undefined && now.getTime() - last < WARN_INTERVAL_MS) {
-          continue;
-        }
-        const { held, failed } = await stuckCountsOf(adapter, subscriberKey);
-        try {
-          logger.warn(
-            `Durable event deliveries to "${subscriber}" are stuck: ${held} held for a subscriber that is not registered, ${failed} out of attempts. List them with \`nextly events report\`; give them up with \`nextly events abandon --subscriber ${subscriber}\`.`,
-            { subscriber, held, failed }
-          );
-          // Only once the warning is written.
-          warnedAt.set(subscriberKey, now.getTime());
-        } catch {
-          // An app-supplied logger that throws must not fail a dispatch whose
-          // deliveries are already recorded; the next pass warns again.
-        }
-      }
+      for (const [key, entry] of stuck) warnOnce(key, entry, now);
     },
   };
 }

@@ -29,6 +29,8 @@ vi.mock("../utils/adapter", () => ({
   createCliAdapter: vi.fn(async () => stand),
   // The dry run's read-only open, which answers the same stand-in.
   openCommandAdapter: vi.fn(async () => stand),
+  // The report's read-only open.
+  openDryRunAdapter: vi.fn(async () => stand),
 }));
 
 const abandon = vi.hoisted(() =>
@@ -61,7 +63,11 @@ vi.mock("../../domains/plugin-events/report", () => ({
   reportStuckDeliveries: report,
 }));
 
-import { createCliAdapter, openCommandAdapter } from "../utils/adapter";
+import {
+  createCliAdapter,
+  openCommandAdapter,
+  openDryRunAdapter,
+} from "../utils/adapter";
 
 function fakeContext() {
   const lines: string[] = [];
@@ -137,11 +143,12 @@ describe("nextly events report", () => {
   it("opens read-only and lists each stuck delivery", async () => {
     vi.mocked(createCliAdapter).mockClear();
     vi.mocked(openCommandAdapter).mockClear();
+    vi.mocked(openDryRunAdapter).mockClear();
     const { rows, context } = fakeContext();
 
     await runEventsReportCommand(context);
 
-    expect(openCommandAdapter).toHaveBeenCalledTimes(1);
+    expect(openDryRunAdapter).toHaveBeenCalledTimes(1);
     expect(createCliAdapter).not.toHaveBeenCalled();
     expect(rows).toEqual([
       [
@@ -153,5 +160,37 @@ describe("nextly events report", () => {
         "the address is refused",
       ],
     ]);
+  });
+
+  it("prints a stored failure as one printable line", async () => {
+    report.mockImplementationOnce(async () => [
+      {
+        id: "d-3",
+        eventId: "e-3",
+        subscriber: "@acme/email:receipt",
+        status: "failed",
+        attemptCount: 10,
+        lastError: "line one\nline two\u001b]0;title\u0007\u001b[2Jend",
+      },
+    ]);
+    const { rows, context } = fakeContext();
+
+    await runEventsReportCommand(context);
+
+    const cell = String(rows[0]?.[5]);
+    expect(cell).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    expect(cell).toContain("line one line two");
+  });
+
+  it("a database that is not there fails the report, and is not a dry run", async () => {
+    vi.mocked(openDryRunAdapter).mockImplementationOnce(async () => ({
+      missing: "the SQLite file ./data.db does not exist",
+    }));
+    const { lines, context } = fakeContext();
+
+    await expect(runEventsReportCommand(context)).rejects.toMatchObject({
+      code: "DATABASE_UNREACHABLE",
+    });
+    expect(lines.join("\n")).not.toContain("Dry run");
   });
 });
