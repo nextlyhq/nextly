@@ -38,6 +38,7 @@ import type { EditorState } from "./editor-state";
 import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
 import { BlockKeyboardActions } from "./keyboard-actions";
 import { toolbarActions } from "./toolbar-actions";
+import { VisitorUnreadableBadges } from "./visitor-unreadable-badges";
 
 afterEach(() => {
   cleanup();
@@ -519,6 +520,87 @@ describe("BlockToolbar", () => {
       if (scroller === null) throw new Error("no scroller");
       fireEvent.scroll(scroller);
       expect(bar.getAttribute("data-side")).toBe("pinned");
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("keeps the selected block's visitor badge out from under the bar: the badge goes on its outline's bottom edge", () => {
+    // A 300px by 40px block 200px down a 500px screen, read by a field
+    // visitors can't read. Selected, the 200px by 30px bar sits 6px above it
+    // (164px to 194px, from the block's left edge), over where its badge
+    // would sit above its outline (177px to 199px, leftwards from its right
+    // edge). The bar keeps its place, and the badge takes its outline's
+    // bottom edge: 198px + 44px, less the 1px foot. CONTROL: unselected, no
+    // bar is drawn and the badge keeps the top edge.
+    register();
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        if (this.matches("[data-scroller]"))
+          return new DOMRect(0, 0, 1000, 500);
+        if (this.matches(".nx-canvas")) return new DOMRect(0, 0, 1000, 2000);
+        if (this.matches('[data-nx-node="a"]')) {
+          return new DOMRect(0, 200, 300, 40);
+        }
+        if (this.matches(".nx-block-toolbar")) {
+          return new DOMRect(0, 0, 200, 30);
+        }
+        if (this.matches(".nx-visitor-unreadable__badge")) {
+          return new DOMRect(0, 0, 150, 22);
+        }
+        // The canvas's size for everything else: a block's ancestors are
+        // asked whether they clip it, and an empty box would.
+        return new DOMRect(0, 0, 1000, 2000);
+      });
+    const marked = new Map([
+      ["a", [{ prop: "text", path: "internalNote" }] as const],
+    ]);
+    const drawn = (selectedId: string | null) => {
+      const editor = editorSpy(pair(), selectedId);
+      return (
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          <ShortcutProvider>
+            <BlockKeyboardActions
+              onSaveAsPattern={() => undefined}
+              editor={editor}
+            >
+              <Canvas
+                document={editor.document}
+                siteStyles={{ css: "", classes: {} } as never}
+                selectedId={editor.selectedId}
+                onSelect={editor.select}
+                overlay={
+                  // As the host draws them: the badges, then the bar.
+                  <>
+                    <VisitorUnreadableBadges marked={marked} />
+                    <BlockToolbar editor={editor} />
+                  </>
+                }
+              />
+            </BlockKeyboardActions>
+          </ShortcutProvider>
+        </div>
+      );
+    };
+    const badge = () =>
+      document.querySelector<HTMLElement>(".nx-visitor-unreadable__badge");
+    try {
+      render(drawn("a"));
+      expect(
+        screen
+          .getByRole("toolbar", { name: "Block actions" })
+          .getAttribute("data-side")
+      ).toBe("above");
+      expect(badge()?.style.top).toBe("241px");
+      expect(badge()?.hasAttribute("data-below")).toBe(true);
+      cleanup();
+      render(drawn(null));
+      expect(screen.queryByRole("toolbar", { name: "Block actions" })).toBe(
+        null
+      );
+      expect(badge()?.style.top).toBe("177px");
+      expect(badge()?.hasAttribute("data-below")).toBe(false);
     } finally {
       boxes.mockRestore();
     }

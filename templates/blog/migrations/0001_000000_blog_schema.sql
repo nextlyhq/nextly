@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS "dc_posts" (
   "excerpt" text,
   "featured_image" text,
   "author" text,
+  "byline" text,
   "categories" jsonb,
   "tags" jsonb,
   "published_at" timestamp with time zone,
@@ -55,6 +56,23 @@ CREATE TABLE IF NOT EXISTS "dc_tags" (
   "name" text NOT NULL,
   "slug" text NOT NULL UNIQUE,
   "description" text,
+  "status" text NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  "first_published_at" timestamp with time zone,
+  "created_at" timestamp with time zone DEFAULT now(),
+  "updated_at" timestamp with time zone DEFAULT now(),
+  "created_by" text
+);
+
+-- Authors collection: the public profiles a post's byline credits. A post's
+-- "author" is the account that owns it; its "byline" is one of these.
+CREATE TABLE IF NOT EXISTS "dc_authors" (
+  "id" text PRIMARY KEY DEFAULT (gen_random_uuid()::text),
+  "title" text NOT NULL,
+  "name" text NOT NULL,
+  "slug" text NOT NULL UNIQUE,
+  "bio" text,
+  "avatar" text,
+  "account" text,
   "status" text NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   "first_published_at" timestamp with time zone,
   "created_at" timestamp with time zone DEFAULT now(),
@@ -122,7 +140,7 @@ CREATE TABLE IF NOT EXISTS "dc_posts_tags" (
 -- and use snake_case column names for all fields (e.g., hero_title not heroTitle).
 
 -- Site Settings single
-CREATE TABLE IF NOT EXISTS "single_site_settings" (
+CREATE TABLE "single_site_settings" (
   "id" text PRIMARY KEY DEFAULT (gen_random_uuid()::text),
   "title" text NOT NULL DEFAULT 'Site Settings',
   "slug" text NOT NULL DEFAULT 'site-settings',
@@ -139,7 +157,7 @@ CREATE TABLE IF NOT EXISTS "single_site_settings" (
 );
 
 -- Navigation single
-CREATE TABLE IF NOT EXISTS "single_navigation" (
+CREATE TABLE "single_navigation" (
   "id" text PRIMARY KEY DEFAULT (gen_random_uuid()::text),
   "title" text NOT NULL DEFAULT 'Navigation',
   "slug" text NOT NULL DEFAULT 'navigation',
@@ -155,7 +173,7 @@ CREATE TABLE IF NOT EXISTS "single_navigation" (
 );
 
 -- Homepage single
-CREATE TABLE IF NOT EXISTS "single_homepage" (
+CREATE TABLE "single_homepage" (
   "id" text PRIMARY KEY DEFAULT (gen_random_uuid()::text),
   "title" text NOT NULL DEFAULT 'Homepage',
   "slug" text NOT NULL DEFAULT 'homepage',
@@ -185,12 +203,18 @@ CREATE INDEX IF NOT EXISTS "idx_posts_status" ON "dc_posts"("status");
 CREATE INDEX IF NOT EXISTS "idx_posts_published" ON "dc_posts"("published_at" DESC);
 CREATE INDEX IF NOT EXISTS "idx_posts_featured" ON "dc_posts"("featured") WHERE "featured" = true;
 CREATE INDEX IF NOT EXISTS "idx_posts_author" ON "dc_posts"("author");
+CREATE INDEX IF NOT EXISTS "idx_posts_byline" ON "dc_posts"("byline");
 
 -- Categories indexes
 CREATE INDEX IF NOT EXISTS "idx_categories_slug" ON "dc_categories"("slug");
 
 -- Tags indexes
 CREATE INDEX IF NOT EXISTS "idx_tags_slug" ON "dc_tags"("slug");
+
+-- Authors indexes
+CREATE INDEX IF NOT EXISTS "idx_authors_slug" ON "dc_authors"("slug");
+-- One profile per account: a new post is credited to its writer's profile.
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_authors_account" ON "dc_authors"("account");
 
 -- Junction table indexes (FK columns not covered by composite PK)
 CREATE INDEX IF NOT EXISTS "idx_posts_categories_category" ON "dc_posts_categories"("category_id");
@@ -213,12 +237,29 @@ ALTER TABLE "dc_posts"
 ADD CONSTRAINT "fk_posts_author"
 FOREIGN KEY ("author") REFERENCES "users"("id") ON DELETE SET NULL;
 
+-- Posts byline -> authors: a post whose profile is deleted keeps no dangling credit
+ALTER TABLE "dc_posts"
+ADD CONSTRAINT "fk_posts_byline"
+FOREIGN KEY ("byline") REFERENCES "dc_authors"("id") ON DELETE SET NULL;
+
+-- Authors avatar -> media, and account -> users, as posts' own
+ALTER TABLE "dc_authors"
+ADD CONSTRAINT "fk_authors_avatar"
+FOREIGN KEY ("avatar") REFERENCES "media"("id") ON DELETE SET NULL;
+
+ALTER TABLE "dc_authors"
+ADD CONSTRAINT "fk_authors_account"
+FOREIGN KEY ("account") REFERENCES "users"("id") ON DELETE SET NULL;
+
 -- Site Settings logo -> media (text FK — media.id is text in the core schema)
 ALTER TABLE "single_site_settings"
 ADD CONSTRAINT "fk_site_settings_logo"
 FOREIGN KEY ("logo") REFERENCES "media"("id") ON DELETE SET NULL;
 
 -- ============ SINGLES DATA DEFAULTS ============
+-- The tables above are created without IF NOT EXISTS: this file made them, so the
+-- rows written here reach no table that was already there, and `nextly migrate`
+-- does not have to ask for consent before writing them.
 -- Insert default documents for each single so they're accessible immediately
 INSERT INTO "single_site_settings" ("id", "title", "slug", "status", "site_name", "tagline", "created_at", "updated_at")
 VALUES (gen_random_uuid(), 'Site Settings', 'site-settings', 'published', 'My Blog', 'Thoughts on web development', now(), now())
@@ -239,6 +280,9 @@ ON CONFLICT DO NOTHING;
 -- Drop foreign keys first
 ALTER TABLE "dc_posts" DROP CONSTRAINT IF EXISTS "fk_posts_author";
 ALTER TABLE "dc_posts" DROP CONSTRAINT IF EXISTS "fk_posts_featured_image";
+ALTER TABLE "dc_posts" DROP CONSTRAINT IF EXISTS "fk_posts_byline";
+ALTER TABLE "dc_authors" DROP CONSTRAINT IF EXISTS "fk_authors_avatar";
+ALTER TABLE "dc_authors" DROP CONSTRAINT IF EXISTS "fk_authors_account";
 ALTER TABLE "single_site_settings" DROP CONSTRAINT IF EXISTS "fk_site_settings_logo";
 ALTER TABLE "user_ext" DROP CONSTRAINT IF EXISTS "fk_user_ext_user_id";
 
@@ -248,6 +292,9 @@ DROP INDEX IF EXISTS "idx_posts_status";
 DROP INDEX IF EXISTS "idx_posts_published";
 DROP INDEX IF EXISTS "idx_posts_featured";
 DROP INDEX IF EXISTS "idx_posts_author";
+DROP INDEX IF EXISTS "idx_posts_byline";
+DROP INDEX IF EXISTS "idx_authors_slug";
+DROP INDEX IF EXISTS "uq_authors_account";
 DROP INDEX IF EXISTS "idx_categories_slug";
 DROP INDEX IF EXISTS "idx_tags_slug";
 DROP INDEX IF EXISTS "idx_posts_categories_category";
@@ -270,5 +317,6 @@ DROP TABLE IF EXISTS "single_homepage" CASCADE;
 DROP TABLE IF EXISTS "single_navigation" CASCADE;
 DROP TABLE IF EXISTS "single_site_settings" CASCADE;
 DROP TABLE IF EXISTS "dc_tags" CASCADE;
+DROP TABLE IF EXISTS "dc_authors" CASCADE;
 DROP TABLE IF EXISTS "dc_categories" CASCADE;
 DROP TABLE IF EXISTS "dc_posts" CASCADE;

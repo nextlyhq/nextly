@@ -152,6 +152,45 @@ export function waitingKey(
 }
 
 /**
+ * The key of `waiter`'s wait for the later pages of its list at `list` on the
+ * claim keyed `blocking`. Spelled apart from an address's wait (its
+ * namespace is followed by `space:` and two encoded parts, where an
+ * address's has one, and no encoded part holds a `:`), since a page waits
+ * for its own address and its list's later pages on separate claims.
+ */
+export function spaceWaitingKey(
+  waiter: { readonly collection: string; readonly id: string },
+  list: ServedAddress,
+  blocking: string
+): string {
+  return `${NAMESPACE.waiting}:space:${encodeURIComponent(waiter.collection)}:${encodeURIComponent(waiter.id)}|${list.locale}|${pathOf(list)}|${blocking}`;
+}
+
+/**
+ * The key of the lock row a holder's own claims are reconciled under, so the
+ * start-up pass and a save of the same page take turns. Its namespace is the
+ * lock's, but it holds no `|`, which every address's lock key does after its
+ * language, so the two never meet.
+ */
+export function holderLockKey(holder: {
+  readonly collection: string;
+  readonly id: string;
+}): string {
+  return `${NAMESPACE.lock}:holder:${encodeURIComponent(holder.collection)}:${encodeURIComponent(holder.id)}`;
+}
+
+/**
+ * The key of the lock row a collection's entries are claimed under, so an
+ * entry's save, its template's publish and a change of its address take
+ * turns. Keyed by the collection rather than its address, so a save that has
+ * not yet read the address takes the same lock as a change that moves it.
+ * Like a holder's lock key, it holds no `|`, so it never meets an address's.
+ */
+export function collectionLockKey(collection: string): string {
+  return `${NAMESPACE.lock}:collection:${encodeURIComponent(collection)}`;
+}
+
+/**
  * The list whose page-segment space holds `address`, or null when `address`
  * is not a later page of any list. `/news/page/2` is in the space of `/news`;
  * `/news` itself is not, since the list's first page is a document's own
@@ -172,4 +211,30 @@ export function spaceHolding(address: ServedAddress): ServedAddress | null {
     return null;
   }
   return { locale: address.locale, segments: segments.slice(0, -2) };
+}
+
+/**
+ * The space key of the list whose later pages hold `address`, as
+ * {@link spaceHolding} places it, or null where it is no list's later page:
+ * the one answer to which list's space a document is published inside,
+ * which a page's save asks of the pages in a space, and an entry's of an
+ * index of every published page by the space each stands in.
+ */
+export function spaceKeyHolding(address: ServedAddress): string | null {
+  const space = spaceHolding(address);
+  return space === null ? null : claimKey("space", space);
+}
+
+/**
+ * The addresses among `addresses` that are later pages of one of the lists
+ * whose space keys are `spaces`, as {@link spaceKeyHolding} places them.
+ */
+export function addressesInSpaces(
+  addresses: readonly ServedAddress[],
+  spaces: ReadonlySet<string>
+): ServedAddress[] {
+  return addresses.filter(address => {
+    const space = spaceKeyHolding(address);
+    return space !== null && spaces.has(space);
+  });
 }

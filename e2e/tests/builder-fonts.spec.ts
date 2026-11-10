@@ -76,7 +76,9 @@ async function storedFonts(page: Page): Promise<unknown> {
 }
 
 async function restoreFonts(page: Page, fonts: unknown): Promise<void> {
-  const response = await page.request.patch(SITE_STYLE, { data: { fonts } });
+  const response = await page.request.patch(SITE_STYLE, {
+    data: { fonts, _overwrite: true },
+  });
   expect(
     response.ok(),
     `restoring the site's fonts: ${response.status()}`

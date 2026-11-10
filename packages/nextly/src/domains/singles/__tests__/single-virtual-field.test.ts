@@ -58,7 +58,7 @@ describe("a virtual field on a Single", () => {
 
     const result = await service.update(
       "site-settings",
-      { siteName: "New", displayTitle: "Computed" },
+      { siteName: "New", displayTitle: "Computed", _overwrite: true },
       { overrideAccess: true }
     );
 

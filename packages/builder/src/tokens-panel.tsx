@@ -39,6 +39,7 @@ import {
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
 import {
+  Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -63,7 +64,7 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 
 import { ShowMore, withOpenRow } from "./panel-actions";
-import { usePrefersDark } from "./prefers-dark";
+import { useCanvasTokenModeAt } from "./prefers-dark";
 import { SpacingModeChoice } from "./spacing-mode-choice";
 import { colourHexOf, colourPairOf } from "./style-colour";
 import { lengthInPx, variableValueText } from "./style-variables";
@@ -91,6 +92,12 @@ import {
   type VariableUsageHere,
 } from "./variable-usage-view";
 import { useVariablesTransfer } from "./variables-transfer";
+
+/** A save's note to the author, and the way to read the variables again. */
+export interface TokensPanelNotice {
+  readonly text: string;
+  readonly onReload: () => void;
+}
 
 export interface TokensPanelProps {
   /**
@@ -127,11 +134,20 @@ export interface TokensPanelProps {
   /** What the last save said, when it failed. */
   issue?: string;
   /**
+   * What the last save has to tell the author although it was stored: that
+   * it met someone else's change to the same variables. Drawn beside
+   * `issue` as a status rather than an alert, since nothing failed, with a
+   * Reload that reads the variables again and drops the host's own copy.
+   * The host clears it on the next edit and on Reload.
+   */
+  notice?: TokensPanelNotice;
+  /**
    * Which mode the preview opens on.
    *
    * - `true`: Dark, whatever the device prefers.
    * - `false`: Light, whatever the device prefers.
-   * - omitted: the device's own scheme, followed live, as the canvas does.
+   * - omitted: the mode the canvas draws, followed live: the page's own
+   *   theme marker where it states one, else the device's scheme.
    *
    * Either way the author can switch it afterwards.
    */
@@ -192,35 +208,63 @@ export interface VariablesHeader {
 }
 
 /**
+ * The preview mode held by a host rather than by the header, for a host that
+ * draws its canvas in the mode the author picks too, so the switch and the
+ * canvas cannot disagree.
+ */
+export interface VariablesPreview {
+  /**
+   * The mode the author picked, or `null` while nothing is picked and the
+   * switch shows the mode the canvas draws by itself.
+   */
+  readonly picked: TokenMode | null;
+  /** The author picked a mode on the switch. */
+  readonly onPick: (mode: TokenMode) => void;
+}
+
+/**
  * The header controls and their state, for a host that keeps them while the
  * Design panel's tabs change under them: the preview mode, the switch that
  * chooses it, and the import-and-export menu with what it reports.
  *
- * `prefersDark` is as {@link TokensPanelProps.prefersDark} reads it.
+ * `prefersDark` is as {@link TokensPanelProps.prefersDark} reads it. Given
+ * `preview`, the host holds the picked mode and `prefersDark` is not read;
+ * without it, the header holds the mode itself.
  */
 export function useVariablesHeader({
   onChange,
   currentTokens,
   readOnly,
   prefersDark,
+  preview,
 }: {
   onChange: (tokens: SiteTokenSet) => void;
   currentTokens: () => SiteTokenSet | undefined;
   readOnly: boolean;
   prefersDark?: boolean;
+  preview?: VariablesPreview;
 }): VariablesHeader {
-  // The device's scheme until the author picks one, as the canvas shows it.
-  const device = usePrefersDark();
-  const [picked, setMode] = React.useState<TokenMode | null>(() =>
+  /*
+   * Until a mode is picked, the one the canvas actually draws: the marker on
+   * the page it shows, which a site's own page may state, else the device's
+   * scheme. The bare device setting would name the wrong mode on a page that
+   * states its own.
+   */
+  const drawn = useCanvasTokenModeAt(null);
+  const [own, setOwn] = React.useState<TokenMode | null>(() =>
     statedPreview(prefersDark)
   );
-  const mode: TokenMode = picked ?? (device ? "dark" : "light");
+  const picked = preview === undefined ? own : preview.picked;
+  const mode: TokenMode = picked ?? drawn;
   const transfer = useVariablesTransfer({ onChange, currentTokens, readOnly });
   return {
     mode,
     controls: (
       <div className="nx-vars__controls">
-        <PreviewSwitch mode={mode} onMode={setMode} />
+        <PreviewSwitch
+          mode={mode}
+          onMode={preview === undefined ? setOwn : preview.onPick}
+        />
         {transfer.menu}
       </div>
     ),
@@ -319,7 +363,7 @@ function VariablesView({
         />
       </div>
       <div className="nx-vars__body">
-        <PanelNotes readOnly={readOnly} issue={issue} />
+        <PanelNotes readOnly={readOnly} issue={issue} notice={hosted.notice} />
         {placed ? header.overlays : null}
         <VariableGroups
           shown={shown}
@@ -587,13 +631,15 @@ function HeaderControls({
   return <div className="nx-vars__head">{children}</div>;
 }
 
-/** The read-only line, and a save that failed. */
+/** The read-only line, a save that failed, and a save that met another. */
 function PanelNotes({
   readOnly,
   issue,
+  notice,
 }: {
   readOnly: boolean;
   issue: string | undefined;
+  notice: TokensPanelNotice | undefined;
 }): React.JSX.Element {
   return (
     <>
@@ -606,6 +652,22 @@ function PanelNotes({
         <p className="nx-vars__alert" role="alert">
           {issue}
         </p>
+      )}
+      {notice === undefined ? null : (
+        // A status, not an alert: the save was stored, and this says what
+        // it met on the way.
+        <div className="nx-vars__notice" role="status">
+          <p className="nx-vars__notice-text">{notice.text}</p>
+          <Button
+            className="nx-vars__notice-reload"
+            onClick={notice.onReload}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            Reload
+          </Button>
+        </div>
       )}
     </>
   );
@@ -748,8 +810,10 @@ function statedPreview(prefersDark: boolean | undefined): TokenMode | null {
 }
 
 /**
- * The preview switch: which mode's values the swatches and specimens show.
- * It changes nothing that is stored; each variable's editor shows both.
+ * The preview switch: which mode's values the swatches and specimens show,
+ * and, where the host holds the mode (see {@link VariablesPreview}), the mode
+ * the canvas draws the page in as well. It changes nothing that is stored, so
+ * a published page is untouched; each variable's editor shows both values.
  */
 function PreviewSwitch({
   mode,

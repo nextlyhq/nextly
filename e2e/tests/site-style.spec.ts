@@ -218,7 +218,9 @@ test.beforeAll(async ({ playwright }, testInfo) => {
     // PATCH is idempotent, so a retried run re-writes the same document and
     // needs no duplicate handling.
     await expectOk(
-      await api.patch(SITE_STYLE, { data: STORED_STYLE }),
+      await api.patch(SITE_STYLE, {
+        data: { ...STORED_STYLE, _overwrite: true },
+      }),
       "storing the site style"
     );
 
@@ -378,6 +380,7 @@ test("a token value that would fetch is refused, and the page keeps the last goo
           },
         ],
       },
+      _overwrite: true,
     },
   });
   expect(refused.ok()).toBe(false);

@@ -211,3 +211,30 @@ export function standingsByFilename<T extends LedgerRecord>(
   }
   return standings;
 }
+
+/**
+ * The app migrations whose file's removal `migrate:resolve --removed` recorded
+ * for the outcome they stand at now: applied, with a removal recorded after
+ * that applied outcome. A removal is about one applied outcome, so a
+ * migration rolled back and applied again since is not covered by it; its
+ * file missing again is missing.
+ */
+export function removedOnPurpose<T extends LedgerRecord>(
+  rows: readonly T[],
+  removals: readonly T[]
+): Set<string> {
+  const standings = standingsByFilename(rows);
+  const removed = new Set<string>();
+  for (const removal of removals) {
+    if (!removal.filename) continue;
+    const { state, outcome } = standings.get(removal.filename) ?? {};
+    if (
+      state === "applied" &&
+      outcome !== undefined &&
+      removal.startedAt.getTime() > outcome.startedAt.getTime()
+    ) {
+      removed.add(removal.filename);
+    }
+  }
+  return removed;
+}

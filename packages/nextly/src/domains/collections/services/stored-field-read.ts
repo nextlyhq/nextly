@@ -126,6 +126,73 @@ export function entryWriteContext(args: {
   };
 }
 
+/** What {@link storedReadsOn} answers. */
+export interface StoredReads {
+  /** One stored value of `allowedType`, as {@link readStoredField} reads it. */
+  read(
+    allowedType: string,
+    target: StoredFieldTarget
+  ): Promise<PluginStoredValue>;
+  /** The document's fields of `allowedType`, as a stored read names them. */
+  fieldPaths(
+    document: { readonly collection: string } | { readonly single: string },
+    allowedType: string
+  ): Promise<string[]>;
+}
+
+/**
+ * Stored reads on one connection for one handler: values of a field type, and
+ * which of a document's fields are of it, sharing one registry lookup per
+ * collection as a write context does ({@link entryWriteContext}).
+ */
+export function storedReadsOn(connection: StoredFieldConnection): StoredReads {
+  const records = registryRecords(connection);
+  return {
+    read: (allowedType, target) =>
+      readStoredField(connection, allowedType, target, records),
+    fieldPaths: async (document, allowedType) => {
+      const fields =
+        "single" in document
+          ? ((
+              await getService("singleRegistryService").getSingleBySlug(
+                document.single,
+                connection.executor
+              )
+            )?.fields as unknown as FieldDefinition[] | undefined)
+          : await records(document.collection).then(record =>
+              record === null ? undefined : collectionFields(record)
+            );
+      return fields === undefined ? [] : pathsOfType(fields, allowedType);
+    },
+  };
+}
+
+/**
+ * The paths of the fields of `allowedType` among `fields`, at their level and
+ * through named groups, as a stored read names them (`hero.body`). Unnamed
+ * groups store their fields at the level they sit in; a repeater's rows and a
+ * field-group instance are not walked, being stored elsewhere. A group kept
+ * per language is walked: the write holds a value for a field inside it,
+ * though a stored read of that field is refused.
+ */
+function pathsOfType(
+  fields: readonly FieldDefinition[],
+  allowedType: string,
+  prefix = ""
+): string[] {
+  const paths: string[] = [];
+  for (const field of storedAtLevel(fields)) {
+    if (typeof field.name !== "string" || field.name === "") continue;
+    const path = `${prefix}${field.name}`;
+    if (field.type === allowedType) {
+      paths.push(path);
+    } else if (field.type === "group" && Array.isArray(field.fields)) {
+      paths.push(...pathsOfType(field.fields, allowedType, `${path}.`));
+    }
+  }
+  return paths;
+}
+
 /** A collection's registry record by slug, or `null` where there is none. */
 type RegistryRecords = (
   slug: string

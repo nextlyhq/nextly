@@ -42,6 +42,7 @@ import type { ComponentType } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import type { DocumentLockGates } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
+import type { PlaceContributionProps } from "@admin/components/shared/target-slot";
 
 import {
   componentRegistry,
@@ -147,6 +148,39 @@ export interface DocumentViewProps {
    * @experimental
    */
   fieldPath?: string;
+  /**
+   * For a view offered on a field type: the field's address from the
+   * document's root, which the view's own address carries (`?field=`). The
+   * same as `fieldPath` except inside a repeater's row, which the address
+   * names by its saved id (`sections.<rowId>.body`) and the form by its
+   * position (`sections.1.body`). It names the same field however the rows are
+   * reordered, so key anything that must stay with the field by this.
+   *
+   * @experimental
+   */
+  fieldAddress?: string;
+  /**
+   * For a field below the top level: where it sits, in words an author reads,
+   * each container's label and each row's title as the form's row header
+   * shows it, then the field's label (`Sections · Hero banner · Body`).
+   * Absent for a top-level field.
+   *
+   * @experimental
+   */
+  fieldLocation?: string;
+  /**
+   * For a field inside a repeater's row: where its address names it in a copy
+   * of the document's values — the values as stored, a recovery point, or,
+   * given none, the form's own values at the moment of asking — finding the
+   * row by its id wherever it now stands, or `undefined` where that row is
+   * not there. Ask it at the moment of writing and write only where it
+   * answers, never through a path read earlier: a row that moved since would
+   * put the value in another row. Absent where the field sits in no row, and
+   * `fieldPath` names it in every copy.
+   *
+   * @experimental
+   */
+  fieldPathIn?: (values?: Record<string, unknown>) => string | undefined;
 }
 
 /**
@@ -224,6 +258,19 @@ export interface DocumentPanelSectionProps {
    */
   documentChanged: (result: DocumentChangeResult) => void;
 }
+
+/**
+ * @experimental Props passed to a side panel section a plugin declares at an
+ * edit page's place (`kind: "sidebarSection"`): the place's `context` and
+ * `entry`, as every contributed component receives them, and on a collection
+ * entry's page also the document's own handles that a section added through
+ * `views[slug].panelSections` is given. One component written against the
+ * place's props works on both edit pages; on a collection entry's page it may
+ * also act on the document.
+ */
+export type SidebarSectionProps =
+  | (PlaceContributionProps<"collection.edit"> & DocumentPanelSectionProps)
+  | PlaceContributionProps<"single.edit">;
 
 /**
  * Props passed to injection point components (BeforeListTable, etc.).

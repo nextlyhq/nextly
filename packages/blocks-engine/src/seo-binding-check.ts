@@ -5,7 +5,8 @@
  *
  * A text segment is checked as a text prop's binding is. A social image is
  * checked as an image binds: to a media field, or to a URL field, the one text
- * field that says its value is an address.
+ * field that says its value is an address. Its fallback is an image address
+ * only, not the media library id a block's image may fall back to.
  *
  * @module seo-binding-check
  */
@@ -47,13 +48,25 @@ export function checkSeoBinding(input: SeoBindingCheckInput): BindingCheck {
       props: { [SEO_PROP]: { type } },
       ...(input.schema === undefined ? {} : { schema: input.schema }),
       ...(input.refs === undefined ? {} : { refs: input.refs }),
+      // The social image's fallback is an address only: a page's export
+      // and import carry no media from a document's own metadata, so a
+      // media id there would be lost on the way. It asks nothing of text.
+      imageFallback: "address",
     });
   if (input.place === "text") return check("text");
 
   // A media field first, then a URL field: the binding fits at most one. A
   // link prop also takes a plain text field, which an image does not.
   const media = check("upload");
-  if (media.outcome === "resolve" || !misfits(media.issues)) return media;
+  // An image prop also takes a URL field, and reads its fallback as an image
+  // would. A URL field is judged as the address it is, so the media reading
+  // is kept only for a binding that doesn't end at one.
+  if (
+    !endsAtUrlField(media) &&
+    (media.outcome === "resolve" || !misfits(media.issues))
+  ) {
+    return media;
+  }
   const address = check("url");
   if (address.outcome !== "resolve" || isAddressField(address.binding)) {
     return address;
@@ -73,6 +86,11 @@ export function checkSeoBinding(input: SeoBindingCheckInput): BindingCheck {
       : { fallback: address.binding.fallback }),
     issues: [...address.issues, issue],
   };
+}
+
+/** Whether a check found the binding ends at a field declared as a URL. */
+function endsAtUrlField(check: BindingCheck): boolean {
+  return check.outcome === "resolve" && check.binding.field?.type === "url";
 }
 
 /** Whether a check refused a binding because its field's type did not fit. */

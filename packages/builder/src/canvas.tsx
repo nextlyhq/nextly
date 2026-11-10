@@ -30,25 +30,38 @@
  */
 
 import {
+  entryContentFieldOf,
+  entryContentPlacements,
   findNode,
+  isPlainRecord,
   PAGE_ROOT_CLASS,
+  placementGatesOf,
   previewStateClass,
   resolveSiteTokens,
   resolveTokenPrefix,
+  revealConditioned,
   statePropagatesToAncestors,
   STYLE_STATES,
   tokenCustomProperty,
   tokenIdentity,
   walkNodes,
+  DEFAULT_LIMITS,
+  resolveComponentInstances,
   type BlockDocument,
+  type BlockNode,
+  type DefinitionsById,
+  type DocumentLimits,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 import {
+  ENTRY_CONTENT_DRAWN_ATTRIBUTE,
   INSTANCE_ATTRIBUTE,
   layoutPartSheets,
   LIST_ACTION_ATTRIBUTE,
+  LIST_REF_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PageRenderer,
+  registeredBlocks,
   sharedStyleInputs,
   type PagePart,
   type PageRendererProps,
@@ -69,13 +82,31 @@ import {
   useState,
 } from "react";
 
+import {
+  revealedForCanvas,
+  type AppliedConditions,
+} from "./applied-conditions";
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { guardCanvasNavigation } from "./canvas-link-guard";
-import { CanvasRegionFrame, type CanvasRegion } from "./canvas-regions";
+import {
+  CANVAS_REGION_CLASS,
+  CanvasRegionFrame,
+  type CanvasRegion,
+} from "./canvas-regions";
+import {
+  asStoredDefinitions,
+  gatedAsDrawn,
+  gatedAsStored,
+} from "./condition-gate";
+import { withConditionHiddenBlock } from "./condition-hidden-block";
 import { isElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
+import {
+  useAppliedDrawing,
+  useEntryContentDrawing,
+} from "./entry-content-canvas";
 import {
   canvasContentRect,
   canvasScroller,
@@ -87,6 +118,11 @@ import { useHoveredBlockSetter } from "./hovered-block";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
 import { useNearestThemeMarker } from "./nearest-theme";
+import {
+  entryContentLabel,
+  usePreviewedCollection,
+  type PreviewedCollection,
+} from "./previewed-entry";
 import { RefusalNotice } from "./refusal-notice";
 import { nodeElements } from "./rendered-nodes";
 import { observeRenderedTree } from "./rendered-tree";
@@ -144,6 +180,392 @@ export function lockMarksOf(document: BlockDocument): Map<string, LockMark> {
     }
   });
   return marks;
+}
+
+/**
+ * Marks a block whose visibility conditions decide who sees it. The canvas
+ * draws it whoever the page would show it to, so the author can see and
+ * select it, and this says it isn't shown to everyone: `conditional`, or
+ * `unchecked` for one whose conditions the page can't check, which visitors
+ * never see.
+ */
+export const CONDITIONED_ATTRIBUTE = "data-nx-conditioned";
+
+/**
+ * Marks an element whose condition mark is its own block's, a block of a
+ * placed component's definition, rather than its placement's: the marks
+ * badge each such block apart, where a placement's roots share one badge.
+ * Its value names the placement nested in a component whose gate the block
+ * carries, when that gate is all it carries, so that placement's roots share
+ * one badge too; empty for a block's own conditions.
+ */
+export const CONDITIONED_OWN_ATTRIBUTE = "data-nx-conditioned-own";
+
+/**
+ * How a conditioned block is marked on the canvas: conditional, or conditions
+ * the page can't check, or, while conditions are applied, shown for the
+ * previewed entry.
+ */
+type ConditionMark = "conditional" | "unchecked" | "shown";
+
+/**
+ * Every conditioned block's mark, and for a composed block gated only by a
+ * placement nested in a component, which placement: the badge its roots
+ * share.
+ */
+interface ConditionMarks {
+  readonly marks: ReadonlyMap<string, ConditionMark>;
+  readonly nested: ReadonlyMap<string, string>;
+}
+
+/**
+ * Every conditioned block's mark, from one walk, asked of the engine's own
+ * gate so the canvas marks exactly the blocks the page judges. `unchecked`
+ * names the blocks whose conditions the page can't check, which only a host
+ * knowing the collections' fields can say.
+ */
+function conditionMarksOf(
+  document: BlockDocument,
+  unchecked: ReadonlySet<string> | undefined,
+  composed: { definitions?: DefinitionsById; limits?: DocumentLimits },
+  applied?: AppliedConditions
+): ConditionMarks {
+  const marks = new Map<string, ConditionMark>();
+  const nested = new Map<string, string>();
+  const markIf = (node: BlockNode, gated: boolean): void => {
+    if (marks.has(node.id) || !gated) return;
+    marks.set(
+      node.id,
+      unchecked?.has(node.id) === true ? "unchecked" : "conditional"
+    );
+  };
+  const bound = {
+    maxNodes: composed.limits?.maxNodes ?? DEFAULT_LIMITS.maxNodes,
+  };
+  // The page's own blocks, a placement among them, by their ids, which are
+  // the addresses the canvas draws them with.
+  walkNodes(document.nodes, node => markIf(node, gatedAsStored(node)), bound);
+  // And the blocks a placed component's definition holds, by the ids the
+  // composed tree gives them, which the canvas draws them with: composed as
+  // the renderer composes, each conditioned placement expanded too. The
+  // page's own conditions are lifted first, as the canvas draws the page, so
+  // what a composed block carries is its definition's: its own conditions,
+  // and the gates of the placements nested inside a component that were
+  // expanded into it, which only the composed tree still holds.
+  if (composed.definitions !== undefined && composed.definitions.size > 0) {
+    // Under the limits the canvas renders with, so a page the site allows
+    // past the default is composed here as it is drawn, from the definitions
+    // as the renderer reads them.
+    const tree = resolveComponentInstances(
+      revealConditioned(document),
+      asStoredDefinitions(composed.definitions, composed.limits),
+      {
+        conditioned: "carry",
+        ...(composed.limits === undefined ? {} : { limits: composed.limits }),
+      }
+    ).document;
+    const placements = new Map<string, string>();
+    walkNodes(
+      tree.nodes,
+      node => {
+        markIf(node, gatedAsDrawn(node));
+        const placement = nestedPlacementOf(node);
+        if (placement === undefined) return;
+        // The innermost placement's gate is the first a root carries, the
+        // same for each of its roots, so they share one badge.
+        let group = placements.get(placement);
+        if (group === undefined) {
+          group = `p${String(placements.size + 1)}`;
+          placements.set(placement, group);
+        }
+        nested.set(node.id, group);
+      },
+      bound
+    );
+  }
+  // While conditions are applied, a judged block a visitor would see says so,
+  // and one they would not is drawn as its marker, which says so itself.
+  if (applied !== undefined) {
+    for (const id of applied.shown) marks.set(id, "shown");
+    for (const block of applied.hidden) marks.delete(block.id);
+  }
+  return { marks, nested };
+}
+
+/**
+ * The gate of the innermost placement nested in a component that a composed
+ * block is a root of, as text, when that gate, and not conditions of its own,
+ * is what gates it.
+ */
+function nestedPlacementOf(node: BlockNode): string | undefined {
+  if (gatedAsStored(node) || !isPlainRecord(node.visibility)) return undefined;
+  const gates = placementGatesOf(node.visibility);
+  return gates.length === 0 ? undefined : JSON.stringify(gates[0]);
+}
+
+/**
+ * The definitions a page reaches, the components it places and those they
+ * place, with each one's conditions lifted so the canvas draws its
+ * conditioned blocks; every other definition as it is. The reached ones are
+ * those the resolver reads composing the page as the canvas does, so a
+ * component a variant or an override selects, at any depth and through any
+ * setting a placement rewrites, is lifted exactly when it is drawn. Only
+ * those are walked, so a large component library costs nothing on a page
+ * that places none of it.
+ *
+ * Exported so a surface that reads the page as the canvas draws it composes
+ * it from these same definitions.
+ *
+ * @experimental
+ */
+export function revealedDefinitions(
+  document: BlockDocument,
+  definitions: DefinitionsById,
+  limits: DocumentLimits | undefined
+): DefinitionsById {
+  const reached = new Set(
+    resolveComponentInstances(document, definitions, {
+      conditioned: "carry",
+      ...(limits === undefined ? {} : { limits }),
+    }).referenced
+  );
+  if (reached.size === 0) return definitions;
+  const next = new Map(definitions);
+  for (const id of reached) {
+    const definition = definitions.get(id);
+    if (definition !== undefined) next.set(id, revealConditioned(definition));
+  }
+  return next;
+}
+
+/**
+ * Marks an Entry content block, with the words its at-rest mark's tab reads:
+ * "Entry content · Body". The block draws the entry's own content rather
+ * than the template's, which is edited on the entry, so the canvas says so
+ * whether or not it is selected.
+ */
+export const ENTRY_CONTENT_ATTRIBUTE = "data-nx-entry-content";
+
+/**
+ * Every Entry content block's words, by its id, from one walk: the field it
+ * draws named as the template's collection names it.
+ */
+function entryContentMarksOf(
+  document: BlockDocument,
+  collection: PreviewedCollection | undefined,
+  maxNodes: number | undefined
+): Map<string, string> {
+  const marks = new Map<string, string>();
+  for (const { node } of entryContentPlacements(
+    document.nodes,
+    maxNodes ?? DEFAULT_LIMITS.maxNodes
+  )) {
+    marks.set(
+      node.id,
+      entryContentLabel(entryContentFieldOf(node), collection)
+    );
+  }
+  return marks;
+}
+
+/**
+ * The words an Entry content block's outermost element carries, by its
+ * address. Never inside a Layout region, a document of its own whose ids
+ * may repeat the page's.
+ */
+function entryContentMarkFor(
+  element: Element,
+  container: HTMLElement,
+  marks: ReadonlyMap<string, string>
+): string | undefined {
+  if (marks.size === 0) return undefined;
+  const address = nodeAddressOf(element);
+  if (address === null) return undefined;
+  if (element.closest(`.${CANVAS_REGION_CLASS}`) !== null) return undefined;
+  return isOutermostForAddress(element, address, container)
+    ? marks.get(address)
+    : undefined;
+}
+
+/**
+ * Marks the drawn element of each of the entry's own blocks this canvas draws
+ * in Entry content as ours to make `inert`. Its value says whether the `inert`
+ * is ours to give back ({@link INERT_ADDED}) or was the block's own before the
+ * canvas marked it ({@link INERT_KEPT}).
+ */
+export const ENTRY_CONTENT_INERT_ATTRIBUTE = "data-nx-entry-content-inert";
+
+/** The canvas made the element inert, and takes that back when it leaves. */
+const INERT_ADDED = "added";
+
+/** The element was inert already, by its own block, and stays so. */
+const INERT_KEPT = "kept";
+
+/**
+ * Each canvas's observer of who owns its marked elements' `inert`, by
+ * container, so a marking pass reads what it has not delivered yet first.
+ */
+const inertOwnership = new WeakMap<HTMLElement, MutationObserver>();
+
+/**
+ * Watch whose `inert` each element marked in Entry content holds, as its block
+ * changes its own after the canvas marked it. Returns the unsubscribe.
+ *
+ * A block that starts rendering inert on an element the canvas already made
+ * inert changes nothing the tree shows, so only the mutation tells: React's
+ * `setAttribute` on a present attribute still queues a record, with the old
+ * value. The canvas writes `inert` only where it is absent, so a record with an
+ * old value that leaves the attribute present is the block's write, and the
+ * element's inert is now its own. One that leaves it absent is the block
+ * dropping its inert, and the canvas holds the element inert in its place.
+ */
+export function observeEntryContentInertOwnership(
+  container: HTMLElement
+): () => void {
+  // From the container's own window, as the rendered tree's observer is.
+  const Mutations = container.ownerDocument.defaultView?.MutationObserver;
+  if (typeof Mutations !== "function") return () => undefined;
+  const observer = new Mutations(records =>
+    readInertOwnership(container, records)
+  );
+  observer.observe(container, {
+    attributes: true,
+    attributeFilter: ["inert"],
+    attributeOldValue: true,
+    subtree: true,
+  });
+  inertOwnership.set(container, observer);
+  return () => {
+    readInertOwnership(container, observer.takeRecords());
+    observer.disconnect();
+    if (inertOwnership.get(container) === observer) {
+      inertOwnership.delete(container);
+    }
+  };
+}
+
+function readInertOwnership(
+  container: HTMLElement,
+  records: readonly MutationRecord[]
+): void {
+  const marked = new Set<Element>();
+  records.forEach((record, index) => {
+    // An attribute record's target is always an element.
+    const element = record.target as Element;
+    if (
+      !element.hasAttribute(ENTRY_CONTENT_INERT_ATTRIBUTE) ||
+      !ownedByCanvas(element, container)
+    ) {
+      return;
+    }
+    marked.add(element);
+    // Absent before: an add, which is how the canvas writes it.
+    if (record.oldValue === null) return;
+    // What this write left: the next record's old value, or the tree now.
+    const next = records
+      .slice(index + 1)
+      .find(later => later.target === element);
+    const present =
+      next === undefined
+        ? element.hasAttribute("inert")
+        : next.oldValue !== null;
+    if (present) setMark(element, ENTRY_CONTENT_INERT_ATTRIBUTE, INERT_KEPT);
+  });
+  marked.forEach(holdEntryContentInert);
+}
+
+/**
+ * Make a marked element inert where it is not. Not inert now, the inert it
+ * gets is the canvas's to give back, also where its block had one and dropped
+ * it: left `kept`, it would stay inert once no longer drawn in Entry content.
+ */
+function holdEntryContentInert(element: Element): void {
+  if (element.hasAttribute("inert")) return;
+  setMark(element, ENTRY_CONTENT_INERT_ATTRIBUTE, INERT_ADDED);
+  element.setAttribute("inert", "");
+}
+
+/**
+ * Make the entry's blocks an Entry content block draws on this canvas inert,
+ * and nothing else: each child of a drawn wrapper, so no link, field or button
+ * inside takes focus, a caret or a press, while the wrapper, the block's own
+ * element, stays the one a click lands on and selects. The page's markup is
+ * not changed, so the canvas lays the blocks out as the published page does.
+ * An element no longer drawn there gives back the inert this set, and only
+ * that: one a block rendered inert itself (a custom block whose root is inert)
+ * keeps its `inert` when it leaves, as the canvas frame keeps a site's own.
+ * Written only where it changes, as every mark here is.
+ */
+export function markEntryContentInert(container: HTMLElement): void {
+  // A block's write to its inert this commit, before this pass gives any back.
+  const pending = inertOwnership.get(container);
+  if (pending !== undefined) {
+    readInertOwnership(container, pending.takeRecords());
+  }
+  const wanted = new Set<Element>();
+  container
+    .querySelectorAll(`[${ENTRY_CONTENT_DRAWN_ATTRIBUTE}]`)
+    .forEach(wrapper => {
+      if (!ownedByCanvas(wrapper, container)) return;
+      for (const child of Array.from(wrapper.children)) wanted.add(child);
+    });
+  container
+    .querySelectorAll(`[${ENTRY_CONTENT_INERT_ATTRIBUTE}]`)
+    .forEach(element => {
+      // Another canvas's marks are that canvas's to clear, as they were its
+      // to set: a canvas drawn inside this one (a component's own view) keeps
+      // its entry's blocks inert whatever this one re-marks.
+      if (wanted.has(element) || !ownedByCanvas(element, container)) return;
+      const ours =
+        element.getAttribute(ENTRY_CONTENT_INERT_ATTRIBUTE) !== INERT_KEPT;
+      element.removeAttribute(ENTRY_CONTENT_INERT_ATTRIBUTE);
+      if (ours) element.removeAttribute("inert");
+    });
+  wanted.forEach(element => {
+    // Whether the inert was the block's own is read when the canvas first
+    // marks the element, before it adds any; after that, its block changing
+    // it is read by `observeEntryContentInertOwnership` and the hold below.
+    if (!element.hasAttribute(ENTRY_CONTENT_INERT_ATTRIBUTE)) {
+      element.setAttribute(
+        ENTRY_CONTENT_INERT_ATTRIBUTE,
+        element.hasAttribute("inert") ? INERT_KEPT : INERT_ADDED
+      );
+    }
+    holdEntryContentInert(element);
+  });
+}
+
+/**
+ * The mark a drawn element carries: a definition's own conditioned block by
+ * its composed id, else the block or placement it is the outermost element
+ * of, by its address. Never inside a Layout region, a document of its own
+ * whose ids may repeat the page's.
+ */
+function conditionMarkFor(
+  element: Element,
+  container: HTMLElement,
+  { marks, nested }: ConditionMarks
+): { mark: ConditionMark; own: boolean; nested?: string } | undefined {
+  const address = nodeAddressOf(element);
+  if (address === null) return undefined;
+  if (element.closest(`.${CANVAS_REGION_CLASS}`) !== null) return undefined;
+  const id = element.getAttribute(NODE_ID_ATTRIBUTE);
+  const own = id !== null && id !== address ? marks.get(id) : undefined;
+  const placed = isOutermostForAddress(element, address, container)
+    ? marks.get(address)
+    : undefined;
+  if (own === undefined) {
+    return placed === undefined ? undefined : { mark: placed, own: false };
+  }
+  // A block with conditions of its own that is also the root of a
+  // conditioned placement is drawn only when both hold, so its one badge says
+  // "Can't be checked" when either can't be.
+  const placement = id === null ? undefined : nested.get(id);
+  return {
+    mark: placed === "unchecked" ? "unchecked" : own,
+    own: true,
+    ...(placement === undefined ? {} : { nested: placement }),
+  };
 }
 
 /**
@@ -327,6 +749,45 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 function isChrome(target: EventTarget | null): boolean {
   return isElement(target) && target.closest(`[${CHROME_ATTRIBUTE}]`) !== null;
+}
+
+/** How long a list note's Copy ref says "Copied" once pressed. */
+const COPIED_FOR_MS = 2000;
+
+/**
+ * A list note's Copy ref, when a press landed on it: the log reference it
+ * names goes to the clipboard, and the button says so for a moment. Answers
+ * whether it was one, so the press does nothing else.
+ */
+function copyNoteReference(target: EventTarget | null): boolean {
+  if (!isElement(target)) return false;
+  const button = target.closest(`[${LIST_ACTION_ATTRIBUTE}="copy-ref"]`);
+  const ref = button?.getAttribute(LIST_REF_ATTRIBUTE);
+  if (
+    button === null ||
+    button === undefined ||
+    ref === null ||
+    ref === undefined
+  ) {
+    return false;
+  }
+  // The editor's own clipboard, not the canvas frame's: a frame may not be
+  // allowed to write to it.
+  const clipboard: Clipboard | undefined =
+    typeof navigator === "undefined" ? undefined : navigator.clipboard;
+  void clipboard?.writeText(ref).then(
+    () => {
+      button.setAttribute("data-nx-list-copied", "");
+      setTimeout(
+        () => button.removeAttribute("data-nx-list-copied"),
+        COPIED_FOR_MS
+      );
+    },
+    // A clipboard the page may not write to leaves the reference selectable
+    // in the note, where it is set apart to be copied by hand.
+    () => undefined
+  );
+  return true;
 }
 
 /** The action a list's note offers, when a press landed on it. */
@@ -544,7 +1005,9 @@ function useCanvasMarkers(
   page: React.ReactNode,
   forcedState: StyleState | undefined,
   drag: CanvasDragState | undefined,
-  lockedIds: ReadonlyMap<string, LockMark>
+  lockedIds: ReadonlyMap<string, LockMark>,
+  conditionMarks: ConditionMarks,
+  entryContentMarks: ReadonlyMap<string, string>
 ): void {
   /*
    * The drag's three marks are read into plain ids here rather than inside the
@@ -607,6 +1070,9 @@ function useCanvasMarkers(
             `[${DROP_PARENT_ATTRIBUTE}]`,
             `[${DROP_REFUSED_ATTRIBUTE}]`,
             `[${LOCKED_ATTRIBUTE}]`,
+            `[${CONDITIONED_ATTRIBUTE}]`,
+            `[${CONDITIONED_OWN_ATTRIBUTE}]`,
+            `[${ENTRY_CONTENT_ATTRIBUTE}]`,
             ...STYLE_STATES.map(state => `.${previewStateClass(state)}`),
           ].join(", ")
         )
@@ -686,6 +1152,21 @@ function useCanvasMarkers(
           element,
           LOCKED_ATTRIBUTE,
           address === null ? undefined : lockedIds.get(address)
+        );
+        // On the block's own outermost element, so a block a list draws once
+        // per entry is marked once per copy and its parts are not marked again.
+        const condition = conditionMarkFor(element, container, conditionMarks);
+        setMark(element, CONDITIONED_ATTRIBUTE, condition?.mark);
+        setMark(
+          element,
+          CONDITIONED_OWN_ATTRIBUTE,
+          condition?.own === true ? (condition.nested ?? "") : undefined
+        );
+        // An Entry content block's words, on its outermost element alike.
+        setMark(
+          element,
+          ENTRY_CONTENT_ATTRIBUTE,
+          entryContentMarkFor(element, container, entryContentMarks)
         );
         for (const [attribute, wanted] of dragMarks) {
           setFlag(element, attribute, id !== null && id === wanted);
@@ -783,14 +1264,24 @@ function useCanvasMarkers(
           element.classList.add(wanted);
         }
       });
+      // The entry's blocks drawn in Entry content: looked at, never used.
+      markEntryContentInert(container);
     };
 
+    // Before the first pass, so a block's change to an element's inert after
+    // the pass marks it is seen; it writes only `inert` and the inert mark,
+    // neither of which counts as the tree changing.
+    const stopOwnership = observeEntryContentInertOwnership(container);
     mark();
     // Subscribed AFTER the first pass, because an observer reports what changes
     // from the moment it attaches and says nothing about the tree already
     // there. Writing the markers cannot re-enter this: what counts as the tree
     // changing excludes every attribute `mark` writes.
-    return observeRenderedTree(container, mark);
+    const stopTree = observeRenderedTree(container, mark);
+    return () => {
+      stopTree();
+      stopOwnership();
+    };
   }, [
     box,
     selectedId,
@@ -801,6 +1292,8 @@ function useCanvasMarkers(
     parentId,
     refusedId,
     lockedIds,
+    conditionMarks,
+    entryContentMarks,
   ]);
 }
 
@@ -975,6 +1468,12 @@ function useCanvasPointer(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (onSelect === undefined || isChrome(event.target)) return;
       const id = nodeIdFromEvent(event.target);
+      // A failed list's Copy ref copies the reference and stays on the
+      // list: the author is about to paste it to a developer, not edit.
+      if (copyNoteReference(event.target)) {
+        if (id !== null) onSelect(id, "replace");
+        return;
+      }
       // A list note's "Choose a field", pressed or activated from the
       // keyboard: the host selects the list and takes the author to its sort,
       // in place of the plain selection a click inside the list makes.
@@ -1233,6 +1732,33 @@ export interface CanvasProps {
    * page exactly as it always has.
    */
   regions?: readonly CanvasRegion[];
+  /**
+   * The blocks whose visibility conditions the page can't check, which the
+   * canvas marks in red: visitors never see them. Judged by the host, which
+   * knows the collections' fields. Absent, every conditioned block is marked
+   * only as conditional.
+   */
+  conditionsUnchecked?: ReadonlySet<string>;
+  /**
+   * The page with its visibility conditions applied for the entry it is
+   * previewed with (`appliedConditionsOf`): a block hidden for that entry is
+   * drawn as a one-line marker in its place, and one shown is badged so.
+   * Absent, every conditioned block is drawn and marked as conditional.
+   *
+   * Applied to the page as drawn: a template's with the previewed entry's
+   * own blocks already composed into its Entry content (`composed`), so the
+   * entry's blocks are judged with the template's and the canvas draws this
+   * document as it is, composing nothing of its own.
+   */
+  conditionsApplied?: AppliedConditions;
+  /**
+   * `document` with the previewed entry's own blocks composed into its Entry
+   * content block (`useComposedEntryContent`), where the host composed it
+   * for the conditions it applies: the canvas draws it rather than composing
+   * its own, so the page has one composition. Absent, the canvas composes
+   * `document` with the entry the seam names.
+   */
+  composed?: BlockDocument;
 }
 
 /**
@@ -1879,6 +2405,37 @@ function useCanvasEnvironment(
 }
 
 /**
+ * What the canvas renders the page with. Conditions not applied, a placed
+ * component's definitions with their conditions lifted, so each conditioned
+ * block is drawn. Applied, the definitions as stored, their blocks judged
+ * for the previewed entry by the renderer as the page's route judges them
+ * (`entryJudged`), and the blocks with the hidden-block marker among them.
+ */
+function drawnRenderOf(
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
+  document: BlockDocument,
+  applied: AppliedConditions | undefined
+): Omit<PageRendererProps, "document" | "siteStyles"> | undefined {
+  if (applied === undefined) {
+    return rendered?.definitions === undefined
+      ? rendered
+      : {
+          ...rendered,
+          definitions: revealedDefinitions(
+            document,
+            rendered.definitions,
+            rendered.limits
+          ),
+        };
+  }
+  return {
+    ...rendered,
+    entryJudged: applied.entryJudgement,
+    blocks: withConditionHiddenBlock(rendered?.blocks ?? registeredBlocks()),
+  };
+}
+
+/**
  * The page, drawn, and the regions of its Layout around it.
  *
  * The parts in drawing order, each with how it treats the site sheet:
@@ -1891,20 +2448,41 @@ function useDrawnPage({
   sheet,
   document,
   environment,
+  applied,
 }: {
   regions: readonly CanvasRegion[] | undefined;
   rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
   sheet: NonNullable<PageRendererProps["siteStyles"]>;
   document: BlockDocument;
   environment: BlockEnvironment | undefined;
+  applied: AppliedConditions | undefined;
 }): { drawn: LayoutParts | undefined; page: React.JSX.Element } {
   const drawn = useLayoutParts(regions, rendered, sheet);
+  // Every conditioned block drawn, whoever the page would show it to, so the
+  // author can see and select it; the marks say it isn't shown to everyone.
+  // While conditions are applied, `document` is already the page as they
+  // leave it (a hidden block as its marker), with the previewed entry's
+  // blocks composed in, which are revealed as they are without conditions.
+  // A block a list's entry decides keeps its conditions while the entries
+  // are judged, for the renderer to judge against each one drawn.
+  const limits = rendered?.limits;
+  const drawable = useMemo(
+    () => revealedForCanvas(document, applied, limits),
+    [document, applied, limits]
+  );
+  // A placed component's definition too: its conditioned blocks are drawn,
+  // as the page's are. While conditions are applied, the renderer also knows
+  // the marker a hidden block is drawn as.
+  const drawnRender = useMemo(
+    () => drawnRenderOf(rendered, document, applied),
+    [rendered, document, applied]
+  );
   const page = useMemo(
     () => (
       <BlockEnvironmentProvider value={environment}>
         <PageRenderer
-          {...rendered}
-          document={document}
+          {...drawnRender}
+          document={drawable}
           siteStyles={sheet}
           {...drawn?.page}
           // What makes the hit-testing above possible at all. The renderer emits
@@ -1917,7 +2495,7 @@ function useDrawnPage({
         />
       </BlockEnvironmentProvider>
     ),
-    [rendered, document, sheet, environment, drawn]
+    [drawnRender, drawable, sheet, environment, drawn]
   );
   return { drawn, page };
 }
@@ -1939,6 +2517,9 @@ export function Canvas({
   onListSortField,
   overlay,
   regions,
+  conditionsUnchecked,
+  conditionsApplied,
+  composed,
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
   usePublishedRoot(root, rootRef, onRoot);
@@ -1963,12 +2544,31 @@ export function Canvas({
   const canvasScale = useCanvasFrame().scale;
 
   const environment = useCanvasEnvironment(root);
+  // The page as the conditions leave it while they are applied for the
+  // previewed entry (a hidden block as its marker), else the page itself.
+  const shownDocument = conditionsApplied?.document ?? document;
+  // A template draws its previewed entry's own blocks in its Entry content
+  // block; only the drawn page carries them, never the document edited.
+  // Composed once: by the host where it hands the page as drawn
+  // (`composed`), else here.
+  const entryDrawing = useEntryContentDrawing(document, render, composed);
+  // The page as composed, before any conditions are applied: what its
+  // conditioned blocks, the entry's among them, are badged on.
+  const composedPage = entryDrawing.document;
+  // Conditions applied, the page as they leave it, the entry composed into
+  // it here unless the host handed the page as composed.
+  const appliedDrawing = useAppliedDrawing(
+    conditionsApplied?.document,
+    composed,
+    render
+  );
   const { drawn, page } = useDrawnPage({
     regions,
-    rendered: render,
+    rendered: entryDrawing.render,
     sheet: siteStyles,
-    document,
+    document: appliedDrawing ?? composedPage,
     environment,
+    applied: conditionsApplied,
   });
 
   /*
@@ -1978,6 +2578,41 @@ export function Canvas({
    * a locked block, which the lock covers too.
    */
   const lockedIds = useMemo(() => lockMarksOf(document), [document]);
+  const conditionMarks = useMemo(
+    () =>
+      conditionMarksOf(
+        composedPage,
+        conditionsUnchecked,
+        {
+          ...(render?.definitions === undefined
+            ? {}
+            : { definitions: render.definitions }),
+          ...(render?.limits === undefined ? {} : { limits: render.limits }),
+        },
+        conditionsApplied
+      ),
+    [
+      composedPage,
+      conditionsUnchecked,
+      render?.definitions,
+      render?.limits,
+      conditionsApplied,
+    ]
+  );
+
+  // Each Entry content block's words, named by the template's collection:
+  // of the blocks drawn, so one the conditions hide, drawn as its marker,
+  // says only that it is hidden, as a hidden block's badge does.
+  const previewedCollection = usePreviewedCollection();
+  const entryContentMarks = useMemo(
+    () =>
+      entryContentMarksOf(
+        shownDocument,
+        previewedCollection,
+        render?.limits?.maxNodes
+      ),
+    [shownDocument, previewedCollection, render?.limits]
+  );
 
   useCanvasMarkers(
     root,
@@ -1986,7 +2621,9 @@ export function Canvas({
     page,
     forcedState,
     drag,
-    lockedIds
+    lockedIds,
+    conditionMarks,
+    entryContentMarks
   );
 
   // The refusal the cursor shows, asked of the same rule the notice draws by.

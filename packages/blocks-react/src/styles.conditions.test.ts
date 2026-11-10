@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import { coreBlocks } from "./blocks";
 import { createBlockResolver } from "./resolver";
-import { itemDecidedRules, resolvePageStyles } from "./styles";
+import { drawlessTestFor, itemDecidedRules, resolvePageStyles } from "./styles";
 
 const resolver = createBlockResolver([...coreBlocks]);
 const context = {
@@ -44,9 +44,26 @@ describe("the sheet of a page decided by its entry", () => {
       doc(coloured("held", "#c01234", vip)),
       undefined,
       context,
-      resolver
+      resolver,
+      false,
+      { drawn: true }
     );
     expect(styles.css).toContain("#c01234");
+  });
+
+  it("holds a conditioned block's rules apart in a sheet compiled for saving", () => {
+    // Nothing has decided the block's conditions at save, so its rules must
+    // stay out of the sheet every visitor gets; `gated` carries them to the
+    // readers whose page keeps it.
+    const styles = resolvePageStyles(
+      doc(coloured("kept", "#c01234", vip), coloured("plain", "#c09abc")),
+      undefined,
+      context,
+      resolver
+    );
+    expect(styles.css).toContain("#c09abc");
+    expect(styles.css).not.toContain("#c01234");
+    expect(styles.gated?.kept).toContain("#c01234");
   });
 
   it("keeps a block a list's item decides out of the page's sheet, and names its rules for the list", () => {
@@ -130,5 +147,26 @@ describe("the sheet of a page decided by its entry", () => {
     // CONTROL: its drawn sibling's rules travel with the block around them.
     expect(rules.get("outer")).toContain("#c06666");
     expect(rules.get("outer")).not.toContain("#c05555");
+  });
+
+  it("keeps the rules of a block that draws once its list item fills it", () => {
+    // Empty as stored, and bound to each item's title: it draws per item,
+    // so its rules must reach the list, judged as the renderer judges it.
+    const badge = {
+      ...coloured("badge", "#c07777", vip),
+      props: { text: "", level: 3 },
+      bindings: { text: { $bind: "title", source: "item" } },
+    };
+    const list = {
+      id: "l",
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts" },
+      slots: { children: [badge] },
+    };
+    const document = doc(list);
+    const styles = resolvePageStyles(document, undefined, context, resolver);
+    const rules = itemDecidedRules(styles, document, drawlessTestFor(resolver));
+    expect(rules.get("badge")).toContain("#c07777");
   });
 });

@@ -62,7 +62,6 @@ const releaseDocument = {
 function panel(props: Partial<DocumentPanelProps> = {}, localized = false) {
   const element = (
     <DocumentPanel
-      place={{ place: "collection.edit", context: null }}
       mode="edit"
       entry={{ id: "e1", createdAt: "2026-10-01T09:00:00Z" }}
       hasStatus
