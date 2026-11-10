@@ -531,7 +531,9 @@ describe.skipIf(lockingDialects.length === 0).each(lockingDialects)(
         t.nextly.update({
           collection: OPEN_POSTS,
           id: own,
-          data: { owner: OTHER },
+          // Over whatever is stored: the race is with the delete's rule, not
+          // with another version of the entry.
+          data: { owner: OTHER, _overwrite: true },
         })
       );
 

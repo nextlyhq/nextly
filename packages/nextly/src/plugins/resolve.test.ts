@@ -288,6 +288,33 @@ describe("a plugin event under a reserved prefix", () => {
   });
 });
 
+describe("a plugin event declared durable", () => {
+  const declaring = (durable: unknown) =>
+    p("@t/cache", {
+      contributes: { events: [{ name: "t-cache.cleared", durable }] },
+    } as never);
+
+  it("accepts durable: true, and an event that says nothing", () => {
+    expect(() => assertPluginManifests([declaring(true)])).not.toThrow();
+    expect(() => assertPluginManifests([declaring(undefined)])).not.toThrow();
+  });
+
+  it("refuses a durable flag that is not true or false, at boot", () => {
+    // A string or a number would read as durable to a truthiness check and
+    // as not durable to a strict one: refused, so no reader has to guess.
+    for (const durable of ["yes", 1, null, {}]) {
+      expect(() => assertPluginManifests([declaring(durable)])).toThrow(
+        expect.objectContaining({
+          logContext: expect.objectContaining({
+            reason: "plugin-event-durable-invalid",
+            event: "t-cache.cleared",
+          }),
+        })
+      );
+    }
+  });
+});
+
 describe("resolvePlugins: schemaVersion declarations", () => {
   const opts = { coreVersion: "0.0.2-alpha.66" };
 

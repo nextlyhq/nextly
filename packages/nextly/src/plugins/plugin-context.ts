@@ -128,10 +128,7 @@ import {
 } from "./plugin-versions";
 import { createPluginPrincipals } from "./principals/api";
 import type { PluginPrincipalsApi, PrincipalRef } from "./principals/types";
-import {
-  createPluginReceivedWebhooks,
-  type PluginReceivedWebhooks,
-} from "./security/inbound-webhooks";
+import type { PluginReceivedWebhooks } from "./security/inbound-webhooks";
 import {
   createOneTimeSecrets,
   type OneTimeSecrets,
@@ -145,6 +142,10 @@ import {
   createPasswordHelper,
   type PasswordHelper,
 } from "./security/password-helper";
+import {
+  createPluginReceivedWebhooks,
+  type ReceivedWebhooksAdapter,
+} from "./security/received-webhooks";
 import type { PluginSelf } from "./self";
 import { resolvePluginSelf } from "./self";
 import { methodFacade } from "./service-facade";
@@ -1876,6 +1877,33 @@ function asSecretsAdapter(adapter: AdapterTransactions): SecretsAdapter {
 }
 
 /**
+ * The resolved adapter as received-webhook claims need it, or a named failure
+ * when a stand-in lacks a part of it, rather than a TypeError mid-claim.
+ */
+function asReceivedWebhooksAdapter(
+  adapter: AdapterTransactions
+): ReceivedWebhooksAdapter {
+  const value: unknown = adapter;
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Record<string, unknown>).transaction === "function" &&
+    typeof (value as Record<string, unknown>).transactionOpenInFlow ===
+      "function" &&
+    typeof (value as Record<string, unknown>).dialect === "string"
+  ) {
+    return value as ReceivedWebhooksAdapter;
+  }
+  throw new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: "An unexpected error occurred.",
+    logMessage:
+      "The adapter this plugin context resolves has no transaction, transactionOpenInFlow or dialect, which received-webhook claims need.",
+    logContext: { reason: "received-webhooks-adapter-incomplete" },
+  });
+}
+
+/**
  * @experimental The handle a plugin receives as `ctx.db.raw`: Drizzle's fluent
  * builder and a transaction whose handle is the same restricted builder. For
  * a plugin that declares `capabilities.db.rawSql` and that the app lists in
@@ -2811,9 +2839,14 @@ export function createPluginContext(
         logger,
       }),
       opaque: createOpaqueSecrets(),
-      // Pure, holding no state: the secrets come with each call, from
-      // wherever the plugin keeps them.
-      webhooks: createPluginReceivedWebhooks(),
+      // Verifying holds no state: the secrets come with each call, from
+      // wherever the plugin keeps them. Claims are kept within this plugin's
+      // name, on the adapter read per call through this context's own
+      // resolver, as the secrets helper's is.
+      webhooks: createPluginReceivedWebhooks({
+        owner,
+        adapter: () => asReceivedWebhooksAdapter(getServiceFn("adapter")),
+      }),
       // Kept within this plugin's name. The adapter is read per call, as the
       // context can be built before the database connects, and through this
       // context's own resolver rather than the global container: a context

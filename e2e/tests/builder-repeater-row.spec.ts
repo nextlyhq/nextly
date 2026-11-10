@@ -136,6 +136,22 @@ test("opens a repeater row's blocks field by the row's id, and stays on that row
       .and(page.locator(`[href$="field=sections.${heroId}.body"]`));
     await expect(heroWayIn).toBeFocused();
 
+    // Each row's miniature draws its page the first time it is seen, and the
+    // row then takes the page's height in place of the placeholder's. Back
+    // from the builder the form is scrolled to row 2, so row 1's is not drawn
+    // yet, and a drag that scrolled it into view would change its height
+    // under the drag, which aims at where the rows were when it started. So
+    // every row is seen and drawn first; this test is about which row the
+    // builder opens, not about a row resizing mid-drag.
+    const miniatures = page.locator('main [data-slot="page-miniature"]');
+    await expect(miniatures).toHaveCount(3);
+    for (const miniature of await miniatures.all()) {
+      await miniature.scrollIntoViewIfNeeded();
+    }
+    await expect(
+      page.locator('main [data-slot="page-miniature-page"][style*="height"]')
+    ).toHaveCount(3);
+
     // Row 2 dragged to the top, by its handle and the keyboard.
     const handle = page.getByRole("button", {
       name: /^Drag to reorder .* 2$/,

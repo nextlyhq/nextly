@@ -278,6 +278,74 @@ describe("generateClientSchema — optional fields tolerate empty string", () =>
   });
 });
 
+describe("generateClientSchema — a repeater row's saved id", () => {
+  const sections = (fields: unknown[]) =>
+    ({ type: "repeater", name: "sections", fields }) as unknown as FieldConfig;
+
+  it("keeps each row's id, which the save sends back to keep the row's identity", () => {
+    const schema = generateClientSchema([
+      sections([{ type: "text", name: "heading" }]),
+    ]);
+    const parsed = schema.parse({
+      sections: [
+        { id: "row-2", heading: "Moved" },
+        { id: "row-1", heading: "Stays" },
+      ],
+    });
+    expect(parsed.sections).toEqual([
+      { id: "row-2", heading: "Moved" },
+      { id: "row-1", heading: "Stays" },
+    ]);
+  });
+
+  it("keeps the ids of rows in a repeater inside a row", () => {
+    const schema = generateClientSchema([
+      sections([
+        {
+          type: "repeater",
+          name: "items",
+          fields: [{ type: "text", name: "label" }],
+        },
+      ]),
+    ]);
+    const value = {
+      sections: [{ id: "outer", items: [{ id: "inner", label: "One" }] }],
+    };
+    expect(schema.parse(value)).toEqual(value);
+  });
+
+  it("does not add an id to a row that has none yet", () => {
+    const schema = generateClientSchema([
+      sections([{ type: "text", name: "heading" }]),
+    ]);
+    expect(schema.parse({ sections: [{ heading: "New" }] })).toEqual({
+      sections: [{ heading: "New" }],
+    });
+  });
+
+  it("leaves a row's own id field to its own rules", () => {
+    const schema = generateClientSchema([
+      sections([{ type: "number", name: "id" }]),
+    ]);
+    // The control: the row's declared rule still judges the value.
+    expect(schema.safeParse({ sections: [{ id: "text" }] }).success).toBe(
+      false
+    );
+    expect(schema.parse({ sections: [{ id: 7 }] })).toEqual({
+      sections: [{ id: 7 }],
+    });
+  });
+
+  it("drops any other key a row's fields do not name", () => {
+    const schema = generateClientSchema([
+      sections([{ type: "text", name: "heading" }]),
+    ]);
+    expect(
+      schema.parse({ sections: [{ heading: "A", stray: "dropped" }] })
+    ).toEqual({ sections: [{ heading: "A" }] });
+  });
+});
+
 describe("generateClientSchema — repeater row bounds (minRows / maxRows)", () => {
   it("rejects a text hasMany list below minRows with the items wording", () => {
     const schema = generateClientSchema([

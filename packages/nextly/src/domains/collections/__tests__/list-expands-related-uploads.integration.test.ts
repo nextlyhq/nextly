@@ -130,7 +130,7 @@ async function boot(
           repeater({
             name: "credits",
             fields: [
-              text({ name: "role" }),
+              text({ name: "duty" }),
               relationship({ name: "person", relationTo: "authors" }),
               // Never set: an unset to-many value inside a repeater row.
               relationship({
@@ -195,7 +195,7 @@ async function boot(
       byline: authorId,
       contributors: [authorId, creditId],
       featured: { relationTo: "authors", value: authorId },
-      credits: [{ role: "editor", person: creditId }],
+      credits: [{ duty: "editor", person: creditId }],
     });
     posts.push({ id, author: authorId, credit: creditId });
   }
@@ -205,7 +205,7 @@ async function boot(
     title: "Bare post",
     byline: posts[0].author,
     featured: { relationTo: "authors", value: posts[0].author },
-    credits: [{ role: "editor", person: posts[0].credit }],
+    credits: [{ duty: "editor", person: posts[0].credit }],
   });
   return { t, posts, bare };
 }
@@ -453,10 +453,13 @@ describe.each(getConfiguredTestDialects())(
       }
 
       // Below the post itself an unset to-many value stays as stored in the
-      // list too: on the related author, and inside the repeater row.
+      // list too: null in the related author's column, and absent from the
+      // repeater row, whose stored JSON holds only the keys it was given.
       const two = (await listed(fx.t, 2)).find(i => i.id === bare);
       expect((two?.byline as Doc | undefined)?.mentors).toBeNull();
-      expect(((two?.credits as Doc[] | undefined) ?? [])[0]?.also).toBeNull();
+      const [row] = (two?.credits as Doc[] | undefined) ?? [];
+      expect(row).toMatchObject({ duty: "editor" });
+      expect(row).not.toHaveProperty("also");
       // At depth 0 nothing is populated, and the list gives it as stored.
       const zero = (await listed(fx.t, 0)).find(i => i.id === bare);
       expect(zero?.contributors).toBeNull();

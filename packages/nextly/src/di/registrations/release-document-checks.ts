@@ -31,6 +31,7 @@ import type { ReleaseDocumentChecks } from "../../domains/releases/services/rele
 import { resolveSingleForRequest } from "../../domains/singles/services/ensure-runtime-table";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import { checkSingleAccess } from "../../domains/singles/services/single-query-service";
+import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
 import type { ReleaseMemberAction } from "../../schemas/releases/types";
 import type { CollectionsHandler } from "../../services/collections-handler";
@@ -170,6 +171,11 @@ export async function entriesMayAct(
       user,
       ...keyed,
     });
+    // A rule that could not run never answered: the request ends with that,
+    // not with no entry the author may act on.
+    if ("denied" in judged && judged.denied.code === "RULE_COULD_NOT_RUN") {
+      throw errorFromServiceEnvelope(judged.denied);
+    }
     return "within" in judged ? judged.within : new Set();
   }
   const denied = await checkSingleAccess({
@@ -182,6 +188,10 @@ export async function entriesMayAct(
     logger,
     ...keyed,
   });
+  // As above: a Single's rule that could not run ends the request.
+  if (denied?.code === "RULE_COULD_NOT_RUN") {
+    throw errorFromServiceEnvelope(denied);
+  }
   return denied === null ? new Set(entryIds) : new Set();
 }
 
