@@ -10,8 +10,12 @@
  * @experimental
  */
 import { NextlyError } from "../../errors/nextly-error";
+import { isFieldGroupFieldType } from "../field-groups/storage/field-group-field-type";
 
-import { resolveLocalizedFieldNames } from "./classify-fields";
+import {
+  isFieldLocalized,
+  resolveLocalizedFieldNames,
+} from "./classify-fields";
 
 // Stored on `globalThis`, as the webhook audit gate is: Next.js and Turbopack can evaluate this
 // module in more than one server module graph, and HMR evaluates it again, so a module-local value
@@ -100,6 +104,32 @@ export function mainTableFields<F extends { name?: string; type: string }>(
     )
   );
   return fields.filter(field => !field.name || !translatable.has(field.name));
+}
+
+/**
+ * Whether an entity's content differs by language, as a question of who may act on it in which
+ * language rather than of where its columns are: translated, or kept per language under the
+ * setting with something to keep so. `storesPerLanguage` answers yes for every entity under the
+ * setting, including one whose every field is shared; such an entity holds the same values in
+ * every language, so an operation on it reaches every language. A field-group reference counts:
+ * the group keeps its own translatable values per language under the setting.
+ */
+export function contentDiffersByLanguage(
+  entity:
+    | {
+        localized?: unknown;
+        fields?: readonly { type: string; localized?: boolean }[];
+      }
+    | null
+    | undefined
+): boolean {
+  if (entity?.localized === true) return true;
+  if (!storesPerLanguage(entity)) return false;
+  return (entity?.fields ?? []).some(
+    field =>
+      isFieldLocalized(field as Parameters<typeof isFieldLocalized>[0], true) ||
+      isFieldGroupFieldType(field.type)
+  );
 }
 
 /**
