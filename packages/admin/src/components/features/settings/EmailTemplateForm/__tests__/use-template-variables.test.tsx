@@ -26,6 +26,7 @@ describe("the workbench's variable check", () => {
         declared: [{ name: "customer" }],
         data: { order: { number: "A-1" } },
         isLayoutRow: false,
+        liquid: true,
       })
     );
 
@@ -55,10 +56,33 @@ describe("the workbench's variable check", () => {
         declared: [],
         data: {},
         isLayoutRow: true,
+        liquid: true,
       })
     );
     await waitFor(() =>
       expect(result.current).toEqual({ undeclared: [], missing: [] })
+    );
+  });
+
+  it("reads a kept template as the old editor did, and judges nothing blank", async () => {
+    // A template kept on the previous engine is not the analysis's to parse:
+    // its bare {{names}} are listed as the old editor read them — a filtered
+    // use is invisible to that reading, by design — and nothing is judged
+    // blank, because the old engine's fallbacks are not Liquid's.
+    const { result } = renderHook(() =>
+      useTemplateVariables({
+        sources: ["Total {{ order.total | default: '0' }} and {{ who }}"],
+        declared: [],
+        data: {},
+        isLayoutRow: false,
+        liquid: false,
+      })
+    );
+    await waitFor(() =>
+      expect(result.current).toEqual({
+        undeclared: [{ name: "who", paths: ["who"] }],
+        missing: [],
+      })
     );
   });
 });

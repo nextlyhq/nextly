@@ -7,7 +7,9 @@
  * both bodies. The analysis parses with the engine configured as the
  * server's, which the editor loads on demand; until it has loaded, the
  * variables written as plain `{{ name }}` are listed and nothing is judged
- * blank.
+ * blank. A template kept on the previous engine is never the analysis's to
+ * parse: its plain `{{ name }}` uses are listed as the old editor read them,
+ * and nothing is judged blank.
  */
 import { useEffect, useMemo, useState } from "react";
 
@@ -35,11 +37,14 @@ export function useTemplateVariables({
   declared,
   data,
   isLayoutRow,
+  liquid,
 }: {
   sources: ReadonlyArray<string | undefined>;
   declared: ReadonlyArray<{ name: string }>;
   data: Record<string, unknown>;
   isLayoutRow: boolean;
+  /** Whether the template is on the Liquid engine, rather than kept on the old one. */
+  liquid: boolean;
 }): TemplateVariableCheck {
   const [analysis, setAnalysis] = useState<VariableAnalysis | null>(null);
   useEffect(() => {
@@ -61,8 +66,12 @@ export function useTemplateVariables({
     if (isLayoutRow) supplied.add("content");
     const declaredNames = new Set(declared.map(v => v.name).filter(Boolean));
 
-    const paths = analysis
-      ? analysis.usedVariables(texts).map(use => use.path)
+    // The analysis reads the template as the Liquid engine does; a template
+    // kept on the old one is read as the old editor read it, and nothing is
+    // judged blank.
+    const parsed = liquid && analysis;
+    const paths = parsed
+      ? parsed.usedVariables(texts).map(use => use.path)
       : [...new Set(texts.flatMap(collectVariableNames))];
     const undeclared = new Map<string, string[]>();
     for (const path of paths) {
@@ -71,11 +80,11 @@ export function useTemplateVariables({
       undeclared.set(name, [...(undeclared.get(name) ?? []), path]);
     }
 
-    const missing = analysis
+    const missing = parsed
       ? [
           ...new Set(
             texts.flatMap(text =>
-              analysis.missingValues(text, data, supplied).map(use => use.path)
+              parsed.missingValues(text, data, supplied).map(use => use.path)
             )
           ),
         ]
@@ -88,5 +97,5 @@ export function useTemplateVariables({
       })),
       missing,
     };
-  }, [analysis, key, declared, data, isLayoutRow]);
+  }, [analysis, key, declared, data, isLayoutRow, liquid]);
 }

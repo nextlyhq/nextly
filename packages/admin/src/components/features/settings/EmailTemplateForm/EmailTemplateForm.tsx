@@ -274,6 +274,7 @@ export function EmailTemplateForm({
     declared: variables ?? [],
     data: derived.sampleData,
     isLayoutRow,
+    liquid: !keptOnOldEngine,
   });
   const declareVariable = useCallback(
     (variableName: string) => {
