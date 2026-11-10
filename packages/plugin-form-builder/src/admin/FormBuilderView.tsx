@@ -369,11 +369,15 @@ function FormBuilderViewInner({
       // The host's save. A field it stored is stored like one the builder
       // saved itself, so its type is fixed; the form's unsaved state is the
       // host's to clear, as before.
+      // Pending like the builder's own request, so Save cannot start a second
+      // host save while one is still under way.
+      setIsSaving(true);
       setSaveError(null);
       await saveThroughHost(onSave, saveData, {
         saved: markFieldsSaved,
         failed: showSaveError,
       });
+      setIsSaving(false);
       return;
     }
 

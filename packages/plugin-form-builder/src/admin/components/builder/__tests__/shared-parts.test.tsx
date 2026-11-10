@@ -47,6 +47,7 @@ const TOPIC: AnyFormField = {
     { label: "Sales", value: "sales" },
     { label: "Other", value: "other" },
   ],
+  defaultValue: "sales",
 };
 
 const DETAILS: AnyFormField = {
@@ -400,6 +401,38 @@ describe("the Form Builder on the shared picker and panel", () => {
     expect(await screen.findByText(SAVED_TYPE_REASON)).toBeInTheDocument();
     await open(user, "Landline");
     expect(screen.queryByText(SAVED_TYPE_REASON)).toBeNull();
+  });
+
+  it("starts no second host save while one is under way", async () => {
+    let finish!: () => void;
+    const pending = vi.fn(() => new Promise<void>(r => (finish = r)));
+    const { user } = view({}, [], pending);
+    await save(user);
+    // The action bar's save is held while the host's save is pending.
+    const button = screen.getByRole("button", { name: /sav/i });
+    expect(button).toBeDisabled();
+    await user.click(button);
+    expect(pending).toHaveBeenCalledTimes(1);
+    finish();
+    expect(
+      await screen.findByRole("button", { name: "Save Changes" })
+    ).toBeEnabled();
+  });
+
+  it("drops a choice field's default when its choice is removed", async () => {
+    const { user, saved } = view();
+    await open(user, "Topic");
+    // Sales is the default; remove it.
+    await user.click(
+      screen.getAllByRole("button", { name: "Remove option" })[0]!
+    );
+
+    await save(user);
+    const topic = saved().find(field => field.name === "topic");
+    expect(topic).toMatchObject({
+      options: [{ label: "Other", value: "other" }],
+    });
+    expect(topic).not.toHaveProperty("defaultValue");
   });
 
   it("clears a failed host save's message once a retry succeeds", async () => {

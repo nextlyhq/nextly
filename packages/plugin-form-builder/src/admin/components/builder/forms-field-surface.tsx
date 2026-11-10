@@ -40,7 +40,7 @@ import type { AnyFieldValidation, AnyFormField } from "../../../types";
 import { enforcedValidationRules } from "../../../utils/enforced-validation";
 
 import { ConditionalLogicEditor } from "./ConditionalLogicEditor";
-import { fromPanelField, withFormOnly } from "./panel-field";
+import { fromPanelField, toPanelField, withFormOnly } from "./panel-field";
 
 /**
  * The name a label gives a new field: a key for the submission data, which
@@ -137,10 +137,20 @@ function FormChoices(props: FieldSettingsControlProps): JSX.Element {
   const changeRows = useCallback(
     (next: KitOption[]) => {
       setRows(next);
-      onChange({
-        ...field,
-        options: next.map(({ label, value }) => ({ label, value })),
-      });
+      const options = next.map(({ label, value }) => ({ label, value }));
+      const form = fromPanelField({ ...field, options });
+      onChange(
+        toPanelField(
+          {
+            ...form,
+            defaultValue: defaultAmong(
+              form.defaultValue,
+              options.map(option => option.value)
+            ),
+          },
+          field.id
+        )
+      );
     },
     [field, onChange]
   );
@@ -161,6 +171,21 @@ function FormChoices(props: FieldSettingsControlProps): JSX.Element {
       )}
     </div>
   );
+}
+
+/**
+ * A choice field's default, kept only where its choices still hold it: a
+ * default naming a choice that was removed or renamed is one the form's check
+ * would refuse, so it goes rather than being saved.
+ */
+function defaultAmong(value: unknown, choices: readonly string[]): unknown {
+  if (Array.isArray(value)) {
+    const kept = value.filter(each => choices.includes(each as string));
+    return kept.length > 0 ? kept : undefined;
+  }
+  return typeof value === "string" && !choices.includes(value)
+    ? undefined
+    : value;
 }
 
 /** A number input whose empty value means "not set". */
