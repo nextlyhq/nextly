@@ -382,19 +382,12 @@ export function ComponentFieldEditor({
           Instance options
         </Label>
 
-        <div className="flex items-center justify-between">
-          <div className="space-y-0.5">
-            <Label className="text-sm font-medium">Repeatable</Label>
-            <p className="text-xs text-muted-foreground">
-              Allow multiple instances
-            </p>
-          </div>
-          <Switch
-            aria-label="Repeatable"
-            checked={repeatable || false}
-            onCheckedChange={onRepeatableChange}
-          />
-        </div>
+        <ToggleRow
+          label="Repeatable"
+          help="Allow multiple instances"
+          checked={repeatable || false}
+          onCheckedChange={onRepeatableChange}
+        />
 
         {/* Min/Max Rows (when repeatable) */}
         {repeatable && (
@@ -438,35 +431,21 @@ export function ComponentFieldEditor({
         </Label>
 
         {/* Init Collapsed Toggle */}
-        <div className="flex items-center justify-between">
-          <div className="space-y-0.5">
-            <Label className="text-sm font-medium">Collapsed by default</Label>
-            <p className="text-xs text-muted-foreground">
-              Start with instances collapsed
-            </p>
-          </div>
-          <Switch
-            aria-label="Collapsed by default"
-            checked={initCollapsed || false}
-            onCheckedChange={onInitCollapsedChange}
-          />
-        </div>
+        <ToggleRow
+          label="Collapsed by default"
+          help="Start with instances collapsed"
+          checked={initCollapsed || false}
+          onCheckedChange={onInitCollapsedChange}
+        />
 
         {/* Is Sortable Toggle (when repeatable) */}
         {repeatable && (
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <Label className="text-sm font-medium">Allow reordering</Label>
-              <p className="text-xs text-muted-foreground">
-                Drag to reorder instances
-              </p>
-            </div>
-            <Switch
-              aria-label="Allow reordering"
-              checked={isSortable !== false}
-              onCheckedChange={onIsSortableChange}
-            />
-          </div>
+          <ToggleRow
+            label="Allow reordering"
+            help="Drag to reorder instances"
+            checked={isSortable !== false}
+            onCheckedChange={onIsSortableChange}
+          />
         )}
       </div>
 
@@ -476,6 +455,36 @@ export function ComponentFieldEditor({
         Field groups are reusable sets of fields. Each instance stores its own
         data in a separate table.
       </EditorAlert>
+    </div>
+  );
+}
+
+/**
+ * One on/off setting: its name, a line on what it does, and the switch, which
+ * the name labels so a screen reader announces what it turns on.
+ */
+function ToggleRow({
+  label,
+  help,
+  checked,
+  onCheckedChange,
+}: {
+  label: string;
+  help: string;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}): JSX.Element {
+  return (
+    <div className="flex items-center justify-between">
+      <div className="space-y-0.5">
+        <Label className="text-sm font-medium">{label}</Label>
+        <p className="text-xs text-muted-foreground">{help}</p>
+      </div>
+      <Switch
+        aria-label={label}
+        checked={checked}
+        onCheckedChange={onCheckedChange}
+      />
     </div>
   );
 }

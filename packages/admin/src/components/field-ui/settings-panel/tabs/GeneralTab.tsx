@@ -48,6 +48,41 @@ type Props = {
   children?: ReactNode;
 };
 
+/**
+ * The name a field has after its label is edited. It follows the label while
+ * it is still the one the label gave it, under either the current derivation
+ * or the one before punctuation runs collapsed, compared exactly so a
+ * hand-written name is never taken for a derived one. A saved field's name,
+ * or one the field may not change, never follows, whatever it looks like.
+ */
+function nameAfterRelabel(
+  field: Pick<BuilderField, "name" | "label">,
+  label: string,
+  {
+    saved,
+    nameLocked,
+    deriveName,
+  }: {
+    saved: boolean;
+    nameLocked: boolean;
+    deriveName: (label: string) => string;
+  }
+): string {
+  if (saved || nameLocked) return field.name;
+  const derived =
+    field.name === deriveName(field.label) ||
+    field.name === toSnakeName(field.label, "pre-collapse");
+  return !field.name || derived ? deriveName(label) : field.name;
+}
+
+/** What the name's help line says: why it is fixed, or when it follows. */
+function nameHelpText(saved: boolean, nameFixedReason?: string): string {
+  if (nameFixedReason !== undefined) return nameFixedReason;
+  return saved
+    ? "Its column and API key. Editing the label never changes it."
+    : "Its column and API key. Follows the label until the field is saved.";
+}
+
 export function GeneralTab({
   field,
   readOnly = false,
@@ -60,12 +95,6 @@ export function GeneralTab({
   definingLabel,
   children,
 }: Props): JSX.Element {
-  const isSystem = field.isSystem === true;
-  const nameFixed = nameFixedReason !== undefined;
-  const nameDisabled = readOnly || isSystem || nameFixed;
-  const nameHelpId = useId();
-  const pathId = useId();
-
   const set = <K extends keyof BuilderField>(key: K, value: BuilderField[K]) =>
     onChange({ ...field, [key]: value });
 
@@ -80,28 +109,6 @@ export function GeneralTab({
   const setAdmin = (next: Partial<NonNullable<BuilderField["admin"]>>) =>
     onChange({ ...field, admin: { ...field.admin, ...next } });
 
-  // The name follows the label while it is still the one the label gave it,
-  // under either the current derivation or the one before punctuation runs
-  // collapsed, compared exactly so a hand-written name is never taken for a
-  // derived one. A saved field's name never follows, whatever it looks like.
-  const setLabel = (label: string) => {
-    const derived =
-      field.name === deriveName(field.label) ||
-      field.name === toSnakeName(field.label, "pre-collapse");
-    const follows = !saved && !nameDisabled && (!field.name || derived);
-    onChange({
-      ...field,
-      label,
-      name: follows ? deriveName(label) : field.name,
-    });
-  };
-
-  const nameHelp = nameFixed
-    ? nameFixedReason
-    : saved
-      ? "Its column and API key. Editing the label never changes it."
-      : "Its column and API key. Follows the label until the field is saved.";
-
   return (
     <div className="space-y-4">
       {defining && (
@@ -110,40 +117,15 @@ export function GeneralTab({
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="space-y-1">
-          <Label htmlFor="field-label">Label</Label>
-          <Input
-            id="field-label"
-            value={field.label}
-            disabled={readOnly}
-            onChange={e => setLabel(e.target.value)}
-          />
-          <p className="text-xs text-muted-foreground">
-            What content authors see in the record editor.
-          </p>
-        </div>
-
-        <div className="space-y-1">
-          <Label htmlFor="field-name">Name</Label>
-          <Input
-            id="field-name"
-            value={field.name}
-            disabled={nameDisabled}
-            aria-describedby={apiPath ? `${nameHelpId} ${pathId}` : nameHelpId}
-            onChange={e => set("name", e.target.value)}
-          />
-          <p id={nameHelpId} className="text-xs text-muted-foreground">
-            {nameHelp}
-          </p>
-        </div>
-      </div>
-
-      {apiPath && (
-        <p id={pathId} className="text-xs text-muted-foreground">
-          API path: <code className="text-foreground">{apiPath}</code>
-        </p>
-      )}
+      <LabelAndName
+        field={field}
+        readOnly={readOnly}
+        saved={saved}
+        deriveName={deriveName}
+        nameFixedReason={nameFixedReason}
+        apiPath={apiPath}
+        onChange={onChange}
+      />
 
       <div className="space-y-1">
         <Label htmlFor="field-description">Description</Label>
@@ -188,6 +170,81 @@ export function GeneralTab({
 
       {children}
     </div>
+  );
+}
+
+/** The label, the name it gives, and the path the API returns the field by. */
+function LabelAndName({
+  field,
+  readOnly,
+  saved,
+  deriveName,
+  nameFixedReason,
+  apiPath,
+  onChange,
+}: {
+  field: BuilderField;
+  readOnly: boolean;
+  saved: boolean;
+  deriveName: (label: string) => string;
+  nameFixedReason?: string;
+  apiPath?: string;
+  onChange: (next: BuilderField) => void;
+}): JSX.Element {
+  const nameHelpId = useId();
+  const pathId = useId();
+  // System fields (title, slug) keep their name whatever the surface says.
+  const nameDisabled =
+    readOnly || field.isSystem === true || nameFixedReason !== undefined;
+  const describedBy = apiPath ? `${nameHelpId} ${pathId}` : nameHelpId;
+
+  return (
+    <>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-1">
+          <Label htmlFor="field-label">Label</Label>
+          <Input
+            id="field-label"
+            value={field.label}
+            disabled={readOnly}
+            onChange={e =>
+              onChange({
+                ...field,
+                label: e.target.value,
+                name: nameAfterRelabel(field, e.target.value, {
+                  saved,
+                  nameLocked: nameDisabled,
+                  deriveName,
+                }),
+              })
+            }
+          />
+          <p className="text-xs text-muted-foreground">
+            What content authors see in the record editor.
+          </p>
+        </div>
+
+        <div className="space-y-1">
+          <Label htmlFor="field-name">Name</Label>
+          <Input
+            id="field-name"
+            value={field.name}
+            disabled={nameDisabled}
+            aria-describedby={describedBy}
+            onChange={e => onChange({ ...field, name: e.target.value })}
+          />
+          <p id={nameHelpId} className="text-xs text-muted-foreground">
+            {nameHelpText(saved, nameFixedReason)}
+          </p>
+        </div>
+      </div>
+
+      {apiPath && (
+        <p id={pathId} className="text-xs text-muted-foreground">
+          API path: <code className="text-foreground">{apiPath}</code>
+        </p>
+      )}
+    </>
   );
 }
 

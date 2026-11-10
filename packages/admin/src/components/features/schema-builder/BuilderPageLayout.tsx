@@ -93,54 +93,24 @@ export function BuilderPageLayout({
       />
       {/* The list and, while a field is edited, its settings side by side. */}
       <div className="flex flex-1 items-start">
-        <PageContainer className="flex-1 min-w-0 pb-0">
-          {locked && (
-            <BuilderReadOnlyNotice kind={config.kind} configPath={configPath} />
-          )}
-          {beforeFieldList}
-          <DndContext
-            sensors={builder.sensors}
-            onDragStart={builder.handleDragStart}
-            onDragEnd={onRowDragEnd}
-            accessibility={{
-              announcements: builderAnnouncements(builder.fields),
-            }}
-          >
-            {/* The kind reaches the list so its empty state names what is being
-              built rather than calling every entity a collection. */}
-            <BuilderFieldList
-              kind={config.kind}
-              fields={builder.fields}
-              readOnly={locked}
-              onAddAt={position => onActiveChange({ kind: "picker", position })}
-              onEditField={fieldId => onActiveChange({ kind: "edit", fieldId })}
-              onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
-              onDuplicateField={onDuplicateField}
-              onReorder={() => {
-                // Reorder is driven by onRowDragEnd above; the field state lives
-                // in useFieldBuilder, so there is nothing to notify here.
-              }}
-            />
-          </DndContext>
-        </PageContainer>
-        {active.kind === "edit" && (
-          <BuilderFieldSettings
-            // Keyed by the field, so its tab and any half-typed list entry
-            // start fresh when another field is selected.
-            key={active.fieldId}
-            kind={config.kind}
-            fields={builder.fields}
-            fieldId={active.fieldId}
-            savedFieldIds={savedFieldIds}
-            readOnly={locked}
-            onFieldChange={builder.handleFieldUpdate}
-            onFieldDelete={fieldId => {
-              builder.handleFieldDelete(fieldId);
-              onActiveChange({ kind: "none" });
-            }}
-            onClose={() => onActiveChange({ kind: "none" })}
-          />
-        )}
+        <FieldListRegion
+          config={config}
+          builder={builder}
+          locked={locked}
+          configPath={configPath}
+          beforeFieldList={beforeFieldList}
+          onActiveChange={onActiveChange}
+          onDuplicateField={onDuplicateField}
+          onRowDragEnd={onRowDragEnd}
+        />
+        <EditedFieldSettings
+          active={active}
+          onActiveChange={onActiveChange}
+          config={config}
+          builder={builder}
+          savedFieldIds={savedFieldIds}
+          locked={locked}
+        />
       </div>
 
       <BuilderOverlays
@@ -164,5 +134,106 @@ export function BuilderPageLayout({
         {isSaving ? savingLabel : ""}
       </div>
     </div>
+  );
+}
+
+/**
+ * The settings panel for the field being edited, if one is: docked beside the
+ * list, writing each change straight to the builder, and closing when its
+ * field is deleted.
+ */
+function EditedFieldSettings({
+  active,
+  onActiveChange,
+  config,
+  builder,
+  savedFieldIds,
+  locked,
+}: Pick<
+  Props,
+  | "active"
+  | "onActiveChange"
+  | "config"
+  | "builder"
+  | "savedFieldIds"
+  | "locked"
+>): JSX.Element | null {
+  if (active.kind !== "edit") return null;
+  const close = () => onActiveChange({ kind: "none" });
+  return (
+    <BuilderFieldSettings
+      // Keyed by the field, so its tab and any half-typed list entry start
+      // fresh when another field is selected.
+      key={active.fieldId}
+      kind={config.kind}
+      fields={builder.fields}
+      fieldId={active.fieldId}
+      savedFieldIds={savedFieldIds}
+      readOnly={locked}
+      onFieldChange={builder.handleFieldUpdate}
+      onFieldDelete={fieldId => {
+        builder.handleFieldDelete(fieldId);
+        close();
+      }}
+      onClose={close}
+    />
+  );
+}
+
+/**
+ * The field list and what sits above it: the read-only notice a code-first
+ * entity gets, the page's own region, and the drag context around the list.
+ */
+function FieldListRegion({
+  config,
+  builder,
+  locked,
+  configPath,
+  beforeFieldList,
+  onActiveChange,
+  onDuplicateField,
+  onRowDragEnd,
+}: Pick<
+  Props,
+  | "config"
+  | "builder"
+  | "locked"
+  | "configPath"
+  | "beforeFieldList"
+  | "onActiveChange"
+  | "onDuplicateField"
+  | "onRowDragEnd"
+>): JSX.Element {
+  return (
+    <PageContainer className="flex-1 min-w-0 pb-0">
+      {locked && (
+        <BuilderReadOnlyNotice kind={config.kind} configPath={configPath} />
+      )}
+      {beforeFieldList}
+      <DndContext
+        sensors={builder.sensors}
+        onDragStart={builder.handleDragStart}
+        onDragEnd={onRowDragEnd}
+        accessibility={{
+          announcements: builderAnnouncements(builder.fields),
+        }}
+      >
+        {/* The kind reaches the list so its empty state names what is being
+          built rather than calling every entity a collection. */}
+        <BuilderFieldList
+          kind={config.kind}
+          fields={builder.fields}
+          readOnly={locked}
+          onAddAt={position => onActiveChange({ kind: "picker", position })}
+          onEditField={fieldId => onActiveChange({ kind: "edit", fieldId })}
+          onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
+          onDuplicateField={onDuplicateField}
+          onReorder={() => {
+            // Reorder is driven by onRowDragEnd above; the field state lives
+            // in useFieldBuilder, so there is nothing to notify here.
+          }}
+        />
+      </DndContext>
+    </PageContainer>
   );
 }
