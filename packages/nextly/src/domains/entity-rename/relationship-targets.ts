@@ -37,6 +37,7 @@ interface RegistryRow {
   slug: unknown;
   source: unknown;
   fields: unknown;
+  schemaVersion: unknown;
 }
 
 /** One stored field that names relationship targets, and where it is. */
@@ -149,11 +150,17 @@ async function registryRows(
   for (const table of storedFieldConfigurationTables()) {
     if (!present.has(table)) continue;
     const rows = await tx.select<RegistryRow>(table, {
-      columns: ["id", "slug", "source", "fields"],
+      columns: ["id", "slug", "source", "fields", "schemaVersion"],
     });
     read.push({ table, rows });
   }
   return read;
+}
+
+/** A stored schema version, as a number: 1 for a row that has none, as every schema save reads it. */
+function versionOf(stored: unknown): number {
+  const version = Number(stored);
+  return Number.isInteger(version) && version > 0 ? version : 1;
 }
 
 /** A CONFLICT refusing the rename, naming the fields that stand in its way. */
@@ -220,8 +227,12 @@ export async function refuseUnmovableTargets(
 /**
  * Point every stored relationship target naming `move.from` at `move.to`, on `tx`: in every
  * collection, Single and field group whose stored fields name it, at any depth. Each row changed
- * gets the schema hash of its new fields, so the stored hash keeps describing the stored fields;
- * the tables stay as they were, so nothing else is due to change.
+ * gets the schema hash of its new fields, so the stored hash keeps describing the stored fields,
+ * and its schema version moved on, as every save of its fields moves it: an editor still holding
+ * the schema from before the rename is then refused by the version check every schema save makes,
+ * rather than saving the old target back over the new one. The rename holds the schema lock, so
+ * no save reads or writes a version between this read and this write. The tables stay as they
+ * were, so nothing else is due to change.
  */
 export async function moveRelationshipTargets(
   tx: TransactionContext,
@@ -238,6 +249,9 @@ export async function moveRelationshipTargets(
         {
           fields: JSON.stringify(fields),
           schema_hash: calculateSchemaHash(fields as FieldConfig[]),
+          // A row never versioned reads as version 1, as the schema saves read it.
+          schema_version: versionOf(row.schemaVersion) + 1,
+          updated_at: new Date(),
         },
         { and: [{ column: "id", op: "=", value: row.id }] }
       );

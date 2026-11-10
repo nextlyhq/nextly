@@ -75,6 +75,7 @@ import {
 } from "../../schema/utils/backfill-default";
 import { quoteExpressionSqlDefault } from "../../schema/utils/sql-literal";
 
+import type { CollectionTables } from "./collection-tables";
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
 
 /** A field-group field renamed with no column of its own: its instances move with it. */
@@ -759,11 +760,14 @@ export class DynamicCollectionSchemaService {
    * diff spells them. With `refuse` (the default) the same impossible pairs
    * are refused; a caller only reading what an existing relationship already
    * is passes `false`, as `relationOnDelete` is read for a stored definition.
+   * `targetTables` is the registry's table for each collection, so a key to a renamed target
+   * references the table it kept (see {@link targetTableOf}).
    */
   relationshipForeignKey(
     tableName: string,
     field: FieldDefinition,
-    refuse = true
+    refuse = true,
+    targetTables?: CollectionTables
   ): ForeignKeySpec | null {
     if (field.type !== "relationship" || !field.options?.target) return null;
     // Many-to-one when unstated, as the Builder creates it.
@@ -779,8 +783,7 @@ export class DynamicCollectionSchemaService {
     return {
       name: this.relationshipKeyName(tableName, column),
       columns: [column],
-      // The table the target was created under: a hyphen in its address is an underscore in the table.
-      referencesTable: getTableName(field.options.target),
+      referencesTable: this.targetTableOf(field.options.target, targetTables),
       referencesColumns: ["id"],
       // Through the SQL spelling and back, so an action the mapping does not
       // know falls back exactly as the rendered constraint does.
@@ -801,6 +804,19 @@ export class DynamicCollectionSchemaService {
    */
   private relationshipKeyName(tableName: string, column: string): string {
     return foreignKeyNameForColumns(tableName, [column]);
+  }
+
+  /**
+   * The table a relationship's target is stored in: the one the registry records for it, where
+   * the caller read them, since a renamed collection keeps the table it was created under while
+   * relationships name its new slug. Otherwise the table its slug spells, where every collection
+   * not yet renamed is: a hyphen in its address is an underscore in the table.
+   */
+  private targetTableOf(
+    target: string,
+    targetTables?: CollectionTables
+  ): string {
+    return targetTables?.get(target) ?? getTableName(target);
   }
 
   /**
@@ -1119,6 +1135,8 @@ export class DynamicCollectionSchemaService {
        * stay in lockstep for a UI-created localized collection.
        */
       localized?: boolean;
+      /** The registry's table for each collection, which a relationship's key references. */
+      targetTables?: CollectionTables;
     }
   ): string {
     // Refuse an unusable decimal shape before any of it becomes SQL.
@@ -1222,7 +1240,12 @@ export class DynamicCollectionSchemaService {
         // it: the same description the push pipeline's desired schema reads,
         // so the key a table is created with and the key a later push expects
         // are one key.
-        const fk = this.relationshipForeignKey(tableName, f);
+        const fk = this.relationshipForeignKey(
+          tableName,
+          f,
+          true,
+          _options?.targetTables
+        );
         if (fk !== null) {
           constraints.push(
             `  CONSTRAINT ${this.quoteIdentifier(fk.name)} FOREIGN KEY (${this.quoteIdentifier(fk.columns[0])}) REFERENCES ${this.quoteIdentifier(fk.referencesTable)}(${this.quoteIdentifier(fk.referencesColumns[0])}) ON DELETE ${this.mapOnDeleteAction(fk.onDelete)} ON UPDATE ${this.mapOnUpdateAction(fk.onUpdate)}`
@@ -1554,6 +1577,12 @@ ${allColumnDefs.join(",\n")}
        * caller that can rebuild the table once these statements have run applies it there.
        */
       onSqliteNullability?: (column: string, required: boolean) => void;
+      /**
+       * The registry's table for each collection, which a relationship's key references: a
+       * renamed target keeps the table it was created under. Undefined spells each target's table
+       * from its slug, as before any collection could be renamed.
+       */
+      targetTables?: CollectionTables;
     }
   ): string {
     // The added columns become SQL here too, so the same refusal applies.
@@ -1778,8 +1807,10 @@ ${allColumnDefs.join(",\n")}
         if (this.dialect !== "sqlite") {
           // Add foreign key for non-manyToMany relations
           if (field.type === "relationship" && field.options?.target) {
-            // The table the target was created under: a hyphen in its address is an underscore in the table.
-            const targetTable = getTableName(field.options.target);
+            const targetTable = this.targetTableOf(
+              field.options.target,
+              options?.targetTables
+            );
             const onDelete = this.relationOnDelete(field);
             const onUpdate = this.relationOnUpdate(field);
             statements.push(
@@ -2012,7 +2043,8 @@ ${allColumnDefs.join(",\n")}
         toSnakeCase(field.name),
         previous,
         field,
-        options?.foreignKeysByColumn
+        options?.foreignKeysByColumn,
+        options?.targetTables
       );
       (change.emitAfterColumnWork
         ? fkActionsAfterColumns
@@ -2282,7 +2314,8 @@ ${allColumnDefs.join(",\n")}
     columnName: string,
     oldField: FieldDefinition,
     newField: FieldDefinition,
-    liveForeignKeys?: ReadonlyMap<string, readonly string[]>
+    liveForeignKeys?: ReadonlyMap<string, readonly string[]>,
+    targetTables?: CollectionTables
   ): ReferentialActionChange {
     if (newField.type !== "relationship") return NO_REFERENTIAL_ACTION_CHANGE;
     const target = newField.options?.target;
@@ -2354,8 +2387,7 @@ ${allColumnDefs.join(",\n")}
       tableName,
       constraintName: this.relationshipKeyName(tableName, columnName),
       columnName,
-      // The table the target was created under: a hyphen in its address is an underscore in the table.
-      referencesTable: getTableName(target),
+      referencesTable: this.targetTableOf(target, targetTables),
       referencesColumn: "id",
       fromOnDelete: from.onDelete,
       fromOnUpdate: from.onUpdate,
