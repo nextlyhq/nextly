@@ -4129,8 +4129,6 @@ export class CollectionMutationService extends BaseService {
    * a hook that rewrites the document is judged at the write itself. An entry
    * that is not there, or a collection with no draft/published lifecycle,
    * answers with nothing to report.
-   *
-   * @experimental
    */
   async releasePublishIssues(params: {
     collectionName: string;
@@ -4270,8 +4268,6 @@ export class CollectionMutationService extends BaseService {
    * collection with no draft/published lifecycle, is absent from the answer;
    * so is a collection whose translations lack their status, which cannot be
    * read (`releaseCompanionLacksStatus` reports it).
-   *
-   * @experimental
    */
   async releaseGoingLiveDocuments(params: {
     collectionName: string;
@@ -4413,8 +4409,6 @@ export class CollectionMutationService extends BaseService {
    * release's document-wide write would be refused over, keyed by entry id,
    * read now from the pool in one query: the same rule the write asks under
    * its row lock.
-   *
-   * @experimental
    */
   async releaseHeldDraftLocales(params: {
     collectionName: string;
@@ -11271,8 +11265,6 @@ export class CollectionMutationService extends BaseService {
    * translation table without its per-language status: the precondition a
    * takedown of every language refuses on, read once for the collection.
    * `false` for a collection that has been deleted, whose members are gone.
-   *
-   * @experimental
    */
   async releaseCompanionLacksStatus(params: {
     collectionName: string;

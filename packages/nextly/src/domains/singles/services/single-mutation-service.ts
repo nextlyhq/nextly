@@ -1116,8 +1116,6 @@ export class SingleMutationService extends BaseService {
    * The pending change is found by the rule every read of "the draft" uses
    * (`resolveDraftOverlay`), as the system and in no request language, as the
    * document-wide write carries none.
-   *
-   * @experimental
    */
   async releaseGoingLiveDocument(params: {
     slug: string;
@@ -1196,8 +1194,6 @@ export class SingleMutationService extends BaseService {
    * rule the write asks under its row lock. Answered with the id of the row
    * it was asked of, so a caller can tell the Single's document from one it
    * held before; `null` for a Single with no stored document.
-   *
-   * @experimental
    */
   async releaseHeldDraftLocales(params: {
     slug: string;
@@ -1581,8 +1577,6 @@ export class SingleMutationService extends BaseService {
    * since they may reach outside this process. Answered with the id of the
    * row it was asked of; `null` for a Single with no stored document or no
    * draft/published lifecycle.
-   *
-   * @experimental
    */
   async releasePublishIssues(params: {
     slug: string;
