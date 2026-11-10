@@ -96,6 +96,10 @@ import type {
   TableSpec,
 } from "../pipeline/diff/types";
 import { withForeignKeysLiftedForTypeChanges } from "../pipeline/foreign-key-lift";
+import {
+  columnsByTable,
+  withKeptScopeFields,
+} from "../pipeline/kept-scope-fields";
 import { operationsToJudge } from "../pipeline/moved-to-companion";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 import { conversionForRename } from "../pipeline/rename-conversion";
@@ -393,6 +397,29 @@ function operationTableName(op: Operation): string {
 }
 
 /**
+ * `declared` with the fields a plugin's scope holds back from a type switched
+ * off, kept while `previous` has their columns. Planned from the declared
+ * fields alone, a companion planner dropped a translated kept field's unique
+ * index when its type was switched off, and added its column again when it
+ * was switched on.
+ */
+function withKeptScopeFieldsOf(
+  declared: GenerateArgs,
+  previous: NextlySchemaSnapshot | undefined
+): GenerateArgs {
+  const kept = columnsByTable(previous ?? EMPTY_SNAPSHOT, declared.dialect);
+  return {
+    ...declared,
+    collections: declared.collections.map(entity =>
+      withKeptScopeFields("collection", entity, kept)
+    ),
+    singles: declared.singles.map(entity =>
+      withKeptScopeFields("single", entity, kept)
+    ),
+  };
+}
+
+/**
  * `args` with only the scoped entity among its entities and only its tables'
  * registry rows, so every planner plans for it alone and the entity headers
  * name only it; `args` itself without a scope.
@@ -611,14 +638,18 @@ export async function generateMigration(
   requested: GenerateArgs
 ): Promise<GenerateResult | null> {
   // Scoped, every planner below sees the scoped entity alone.
-  const args = withScopedEntities(requested);
-  const metaDir = resolve(args.migrationsDir, "meta");
+  const scoped = withScopedEntities(requested);
+  const metaDir = resolve(scoped.migrationsDir, "meta");
   // Single clock for the whole run so the main file and its companions share a
   // deterministic base timestamp (companions get a strictly-later one below).
-  const now = args.now ?? new Date();
+  const now = scoped.now ?? new Date();
 
   // 1. Load previous state.
   const previous = await loadLatestSnapshot(metaDir);
+
+  // Taken once, here, so the table diff and every companion planner below
+  // see the same fields (`withKeptScopeFieldsOf`).
+  const args = withKeptScopeFieldsOf(scoped, previous?.data.snapshot);
 
   // 2. Build desired snapshot from config. Localized collections omit their
   //    translatable columns here (they live in the companion `_locales` table).
@@ -633,7 +664,8 @@ export async function generateMigration(
         args.collections,
         args.singles,
         args.components,
-        args.dialect
+        args.dialect,
+        previous?.data.snapshot
       ),
       args.tablesAsTheyStand
     ),
@@ -2801,10 +2833,18 @@ export function buildDesiredSnapshotFromConfig(
   collections: MinimalConfigEntity[],
   singles: MinimalConfigEntity[],
   components: MinimalConfigEntity[],
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /**
+   * The tables as the last migration left them. A field a plugin's scope
+   * holds back from a type switched off keeps its column while these have it
+   * (`kept-scope-fields.ts`). Omitted, nothing held back is kept.
+   */
+  existing?: NextlySchemaSnapshot
 ): NextlySchemaSnapshot {
   const tables: TableSpec[] = [];
-  for (const c of collections) {
+  const kept = columnsByTable(existing ?? { tables: [] }, dialect);
+  for (const entity of collections) {
+    const c = withKeptScopeFields("collection", entity, kept);
     // Why: forward the entity's Draft/Published flag so the snapshot
     // includes the system status column when enabled. Mirrors the same
     // forwarding pushschema-pipeline.ts already does for the diff path.
@@ -2823,7 +2863,8 @@ export function buildDesiredSnapshotFromConfig(
       )
     );
   }
-  for (const c of singles) {
+  for (const entity of singles) {
+    const c = withKeptScopeFields("single", entity, kept);
     // i18n: singles localize identically to collections — the companion is
     // `single_<slug>_locales` (deriveCompanionSpec derives it from the table name).
     // Omit translatable columns from the main table; the companion (planned below)

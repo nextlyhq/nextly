@@ -102,6 +102,10 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * and no product import on their chains is newer than the previous pin: most
  * sat just under the line on chains they already held, and the imports that
  * are newer are test files importing what they test.
+ * The tail mean's pin rose to 1,420 when keeping a switched-off type's plugin
+ * column added two modules to the schema pipeline every heavy file already
+ * loads: 1,385 measured, the heavy files' chains unchanged and no new edge to
+ * make lazy; one test that sat at the heavy line crossed it.
  * Each
  * pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
@@ -109,7 +113,7 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 85, tailMeanModules: 1_383 };
+export const BUDGET = { heavyFiles: 85, tailMeanModules: 1_420 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",
