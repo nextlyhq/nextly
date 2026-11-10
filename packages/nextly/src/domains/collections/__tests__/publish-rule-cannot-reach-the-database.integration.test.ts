@@ -281,6 +281,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         routeAuthorized: false,
         user: BOSS,
+        data: { _overwrite: true },
       });
 
       expect(probe.calls, JSON.stringify(published)).toBeGreaterThan(0);
@@ -298,6 +299,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         routeAuthorized: false,
         user: BOSS,
+        data: { _overwrite: true },
       });
 
       expect(probe.calls).toBeGreaterThan(0);
