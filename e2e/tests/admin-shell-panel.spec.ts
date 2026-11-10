@@ -24,7 +24,9 @@ test("draws a collection reached from the dashboard as a direct load draws it", 
   const panel = page.getByTestId("sub-sidebar");
   await gotoAdmin(page, "/collections/posts");
   await waitForShellAnswers(page);
-  await expect(panel.getByRole("link", { name: "Posts" })).toBeVisible();
+  await expect(
+    panel.getByRole("link", { name: "Posts", exact: true })
+  ).toBeVisible();
   const direct = await mainColumnBox(page);
 
   await gotoAdmin(page, "/");
@@ -40,7 +42,7 @@ test("draws a collection reached from the dashboard as a direct load draws it", 
     .getByRole("navigation")
     .getByRole("button", { name: "Content", exact: true })
     .click();
-  const posts = panel.getByRole("link", { name: "Posts" });
+  const posts = panel.getByRole("link", { name: "Posts", exact: true });
   await expect(posts).toBeVisible();
   expect(await mainColumnBox(page)).toEqual(direct);
 
@@ -52,7 +54,7 @@ test("draws a collection reached from the dashboard as a direct load draws it", 
   expect(await mainColumnBox(page)).toEqual(direct);
 
   // And the panel's other links stay in reach from there.
-  await panel.getByRole("link", { name: "Categories" }).click();
+  await panel.getByRole("link", { name: "Categories", exact: true }).click();
   await page.waitForURL(/\/admin\/collections\/categories/);
   expect(await mainColumnBox(page)).toEqual(direct);
 });
@@ -71,7 +73,7 @@ test("opens the second panel over the main column on a phone", async ({
   await drawer.getByRole("button", { name: "Content" }).click();
   const posts = drawer
     .getByTestId("sub-sidebar")
-    .getByRole("link", { name: "Posts" });
+    .getByRole("link", { name: "Posts", exact: true });
   await expect(posts).toBeVisible();
 
   expect(await mainColumnBox(page)).toEqual(before);
