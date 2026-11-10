@@ -108,6 +108,41 @@ describeEachDialect(
         { overrideAccess: true, ...(localized ? { locale: "en" } : {}) }
       );
       expect(written.success, JSON.stringify(written)).toBe(true);
+      if (localized) {
+        // A second language's value: the one a field leaving translation would archive.
+        const spanish = await singles.update(
+          "hero",
+          { heading: "Guardado", _overwrite: true },
+          { overrideAccess: true, locale: "es" }
+        );
+        expect(spanish.success, JSON.stringify(spanish)).toBe(true);
+      }
+    }
+
+    /**
+     * How many archived values `field` of `hero` has. A table that is not there holds none: the
+     * archive is created by the first write to it.
+     */
+    async function archivedFor(field: string): Promise<number> {
+      if (!(await current.adapter.tableExists("nextly_i18n_archive"))) return 0;
+      const rows = await query<{ n: number | string }>(
+        `SELECT COUNT(*) AS n FROM ${q("nextly_i18n_archive")} WHERE ${q("collection")} = 'hero' AND ${q("field")} = '${field}'`
+      );
+      return Number(rows[0]?.n ?? 0);
+    }
+
+    /** `heading`'s value on the main table and in each language of the companion. */
+    async function storedHeadings(): Promise<{
+      main: unknown[];
+      companion: { locale: string; heading: unknown }[];
+    }> {
+      const main = await query<{ heading: unknown }>(
+        `SELECT ${q("heading")} AS heading FROM ${q("single_hero")}`
+      ).catch(() => []);
+      const companion = await query<{ locale: string; heading: unknown }>(
+        `SELECT ${q("_locale")} AS locale, ${q("heading")} AS heading FROM ${q("single_hero_locales")} ORDER BY ${q("_locale")}`
+      );
+      return { main: main.map(row => row.heading), companion };
     }
 
     /** The Builder's schema save, as the dispatcher makes it. */
@@ -206,6 +241,107 @@ describeEachDialect(
 
     // The rename a save stopped part-way already made on this database: the new column is there and
     // the old one is gone. Saving again finishes recording it; the check must not refuse it.
+    // A translated field renamed as it leaves translation moves storage: its values go to a new
+    // column of the main table. A column of that name already on the main table is in the way of
+    // the move as much as of a RENAME, and the save is refused before anything is written: no
+    // value archived under the new name, none copied into the column in the way.
+    it("refuses a translated field renamed as it leaves translation, onto a column the main table has", async () => {
+      await hero(true);
+      await query(
+        `ALTER TABLE ${q("single_hero")} ADD COLUMN ${q("headline")} TEXT`
+      );
+      const companionBefore = (await storedHeadings()).companion;
+
+      const refused = await refusal(
+        save(
+          [
+            { name: "headline", type: "text" },
+            { name: "body", type: "text" },
+          ],
+          { localized: true }
+        )
+      );
+
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "RENAME_TARGET_TAKEN",
+              message: expect.stringContaining("table 'single_hero' already"),
+            }),
+          ],
+        },
+      });
+      expect(await registeredFieldNames()).toEqual(["heading", "body"]);
+      expect(await archivedFor("headline")).toBe(0);
+      const [leftover] = await query<{ headline: unknown }>(
+        `SELECT ${q("headline")} AS headline FROM ${q("single_hero")}`
+      );
+      expect(leftover?.headline ?? null).toBeNull();
+      expect((await storedHeadings()).companion).toEqual(companionBefore);
+    });
+
+    it("refuses a translated field renamed as it leaves translation, onto a column its companion has, before archiving", async () => {
+      await hero(true);
+      await query(
+        `ALTER TABLE ${q("single_hero_locales")} ADD COLUMN ${q("headline")} TEXT`
+      );
+
+      const refused = await refusal(
+        save(
+          [
+            { name: "headline", type: "text" },
+            { name: "body", type: "text" },
+          ],
+          { localized: true }
+        )
+      );
+
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "RENAME_TARGET_TAKEN",
+              message: expect.stringContaining("single_hero_locales"),
+            }),
+          ],
+        },
+      });
+      expect(await registeredFieldNames()).toEqual(["heading", "body"]);
+      expect(await archivedFor("headline")).toBe(0);
+      expect(await headingRead(true)).toBe("Kept");
+    });
+
+    // MySQL and SQLite compare column names without regard to case, so a column spelled
+    // `HEADLINE` is the column a rename to `headline` would collide with. PostgreSQL keeps the two
+    // apart, and the rename goes through there.
+    it("judges a column in the way by the database's rule for the case of a name", async () => {
+      await hero(false);
+      await query(
+        `ALTER TABLE ${q("single_hero")} ADD COLUMN ${q("HEADLINE")} TEXT`
+      );
+
+      const refused = await refusal(
+        save([
+          { name: "headline", type: "text" },
+          { name: "body", type: "text" },
+        ])
+      );
+
+      if (dialect === "postgresql") {
+        expect(refused).toBeUndefined();
+        expect(await registeredFieldNames()).toEqual(["headline", "body"]);
+        return;
+      }
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [expect.objectContaining({ code: "RENAME_TARGET_TAKEN" })],
+        },
+      });
+      expect(await registeredFieldNames()).toEqual(["heading", "body"]);
+      expect(await headingRead(false)).toBe("Kept");
+    });
+
     it("saves a rename this database already made", async () => {
       await hero(false);
       await query(
