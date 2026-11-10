@@ -137,8 +137,10 @@ export const POST = withErrorHandler(
     }
 
     const service = await getEmailTemplateService();
+    // The checked body, passed as the dispatcher passes its own: a
+    // declaration's description may be absent at the check and is stored so.
     const template = await service.createTemplate(
-      validated,
+      validated as Parameters<typeof service.createTemplate>[0],
       actorFromAuthContext(auth)
     );
 

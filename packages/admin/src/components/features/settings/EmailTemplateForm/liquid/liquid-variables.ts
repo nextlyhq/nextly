@@ -78,11 +78,15 @@ function outputsOf(templates: Template[]): OutputRange[] {
         begin: node.token.begin,
         end: node.token.end,
         hasDefault: defaults.length > 0,
+        // Each argument is a token at runtime; the parsed type does not say
+        // so, so its offsets are read where they are.
         defaultArgs: defaults.flatMap(filter =>
-          (filter.args ?? []).map(arg => ({
-            begin: arg.begin,
-            end: arg.end,
-          }))
+          (filter.args ?? []).flatMap(arg => {
+            const token = arg as { begin?: number; end?: number };
+            return token.begin !== undefined && token.end !== undefined
+              ? [{ begin: token.begin, end: token.end }]
+              : [];
+          })
         ),
       });
     }
@@ -133,9 +137,10 @@ export function variableUses(source: string): VariableUse[] {
       );
       const outputIndex = enclosingOutput(outputs, at);
       const output = outputIndex === -1 ? undefined : outputs[outputIndex];
-      const inDefaultArg = output?.defaultArgs.some(
-        range => range.begin <= at && at < range.end
-      );
+      const inDefaultArg =
+        output?.defaultArgs.some(
+          range => range.begin <= at && at < range.end
+        ) ?? false;
       const steps = variable.segments;
       const literal = steps.every(
         (step): step is string | number =>
@@ -151,7 +156,7 @@ export function variableUses(source: string): VariableUse[] {
         fallback: inDefaultArg,
         at,
         outputIndex: outputIndex === -1 ? null : outputIndex,
-        inDefaultArg: inDefaultArg ?? false,
+        inDefaultArg,
       });
     }
   }
@@ -203,7 +208,11 @@ function judged(pending: PendingUse[], outputs: OutputRange[]): VariableUse[] {
         use.fallback = true;
         continue;
       }
-      use.fallbackSegments = argUses.map(use => use.segments);
+      // Every fallback is a variable here — `alwaysRenders` took the
+      // computed and literal ones — so each carries readable steps.
+      use.fallbackSegments = argUses.flatMap(use =>
+        use.segments !== null ? [use.segments] : []
+      );
     }
   }
   return pending;
