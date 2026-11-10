@@ -409,27 +409,13 @@ async function dropPlanned(
 
   // The kept columns first, so a column that cannot be dropped stops the prune
   // before any table goes. A type's own table stays, with only the column the
-  // site no longer keeps taken from it. SQLite drops neither a column an index
-  // covers nor the index with it, and MySQL no column a functional index names,
-  // so those indexes go first there; PostgreSQL takes them with the column.
-  const droppedColumns: string[] = [];
-  for (const kept of plan.keptColumns) {
-    for (const index of kept.indexes ?? []) {
-      if (dialect === "sqlite") {
-        await args.adapter.executeQuery(
-          `DROP INDEX IF EXISTS ${q}${index}${q}`
-        );
-      } else if (dialect === "mysql") {
-        await args.adapter.executeQuery(
-          `DROP INDEX ${q}${index}${q} ON ${q}${kept.table}${q}`
-        );
-      }
-    }
-    await args.adapter.executeQuery(
-      `ALTER TABLE ${q}${kept.table}${q} DROP COLUMN ${q}${kept.column}${q}`
-    );
-    droppedColumns.push(columnName(kept));
-  }
+  // site no longer keeps taken from it.
+  const droppedColumns = await dropKeptColumns(
+    args.adapter,
+    dialect,
+    q,
+    plan.keptColumns
+  );
 
   const dropped: string[] = [];
   for (const orphan of orphans) {
@@ -476,6 +462,43 @@ async function dropPlanned(
     droppedColumns,
     consented: true,
   };
+}
+
+/**
+ * Drop the kept columns, each covering index first where the dialect needs
+ * it: SQLite drops neither a column an index covers nor the index with it,
+ * and MySQL no column a functional index names; PostgreSQL takes them with
+ * the column. Each index once, though several kept columns share it.
+ */
+async function dropKeptColumns(
+  adapter: RunPruneArgs["adapter"],
+  dialect: string,
+  q: string,
+  keptColumns: readonly KeptColumn[]
+): Promise<string[]> {
+  const indexes = new Map<string, { table: string; index: string }>();
+  for (const kept of keptColumns) {
+    for (const index of kept.indexes ?? []) {
+      indexes.set(`${kept.table}\u0000${index}`, { table: kept.table, index });
+    }
+  }
+  for (const { table, index } of indexes.values()) {
+    if (dialect === "sqlite") {
+      await adapter.executeQuery(`DROP INDEX IF EXISTS ${q}${index}${q}`);
+    } else if (dialect === "mysql") {
+      await adapter.executeQuery(
+        `DROP INDEX ${q}${index}${q} ON ${q}${table}${q}`
+      );
+    }
+  }
+  const dropped: string[] = [];
+  for (const kept of keptColumns) {
+    await adapter.executeQuery(
+      `ALTER TABLE ${q}${kept.table}${q} DROP COLUMN ${q}${kept.column}${q}`
+    );
+    dropped.push(columnName(kept));
+  }
+  return dropped;
 }
 
 /** The select surface of a Drizzle handle the archive count reads through. */

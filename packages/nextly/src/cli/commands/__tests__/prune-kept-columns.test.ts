@@ -248,3 +248,37 @@ describe("runPrune and the columns a migration drops", () => {
     expect((await prune(async () => false)).consented).toBe(false);
   });
 });
+
+describe("runPrune and an index two kept columns share", () => {
+  it("drops the index once, before either column", async () => {
+    const ran: string[] = [];
+    await runPrune({
+      registry: {
+        findOrphanedCollections: async () => [],
+        deleteCollection: async () => {},
+        assertNothingDependsOn: async () => {},
+      } as never,
+      adapter: {
+        getCapabilities: () => ({ dialect: "mysql" }),
+        listTables: async () => [],
+        executeQuery: async (sql: string) => {
+          ran.push(sql);
+          return [];
+        },
+      } as never,
+      lock: work => work(),
+      currentSlugs: ["pages"],
+      approve: async () => true,
+      keptColumns: async () => [
+        { table: "dc_pages", column: "seo", indexes: ["idx_seo_pair"] },
+        { table: "dc_pages", column: "og", indexes: ["idx_seo_pair"] },
+      ],
+    });
+
+    expect(ran).toEqual([
+      "DROP INDEX `idx_seo_pair` ON `dc_pages`",
+      "ALTER TABLE `dc_pages` DROP COLUMN `seo`",
+      "ALTER TABLE `dc_pages` DROP COLUMN `og`",
+    ]);
+  });
+});

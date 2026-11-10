@@ -363,6 +363,34 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       expect((await check(project(["pages"]))).code).toBeUndefined();
     });
 
+    it("still records a translated kept column when what is held back is released", async () => {
+      const translated = { translated: true };
+      expect((await create(project(undefined, translated))).code).toBe(
+        undefined
+      );
+      // `posts` keeps its column on its own table, `pages` in its
+      // translations table.
+      const off = ["posts", "pages"];
+      expect((await create(project(off, translated))).code).toBe(undefined);
+
+      // Only a type's own table is released: a migration never drops a
+      // translations table's column, so its record stays.
+      const before = sqlFiles();
+      expect((await create(project(off, translated), true)).code).toBe(
+        undefined
+      );
+      expect(statements(written(before))).toMatch(
+        /dc_posts[^\n;]*DROP COLUMN[^\n;]*seo_title/i
+      );
+      const meta = join(dir, "migrations", "meta");
+      const latest = readdirSync(meta).sort().at(-1)!;
+      const snapshot = JSON.parse(readFileSync(join(meta, latest), "utf-8"));
+      const pagesTable = snapshot.snapshot.tables.find(
+        (table: { name: string }) => table.name === "dc_pages"
+      );
+      expect(pagesTable.localizedColumns).toContain("seo_title");
+    });
+
     it("never makes the column for a type switched off before its first migration", async () => {
       expect((await create(project(["pages"]))).code).toBeUndefined();
       const sql = written();
