@@ -30,6 +30,7 @@ import {
   EVERY_TRANSLATION,
 } from "../../domains/i18n/locale-selector";
 import { reachesLocalizedFieldGroupIn } from "../../domains/i18n/per-language-fields";
+import { contentDiffersByLanguage } from "../../domains/i18n/per-language-storage";
 import {
   resolveLocaleChain,
   resolveRequestedLocale,
@@ -210,7 +211,9 @@ function storedByLanguage(target: AccessRuleTarget): boolean | undefined {
   }[target.kind];
   const declared = declaredIn?.find(entity => entity.slug === target.slug);
   if (declared === undefined) return undefined;
-  if (declared.localized === true) return true;
+  // Translated, or under `experimental.perLanguageStorage` with a translatable value to keep per
+  // language: one whose every field is shared is the same in every language.
+  if (contentDiffersByLanguage(declared)) return true;
   return (
     target.kind !== "component" &&
     hasLocalizedFieldGroup(declared, content?.fieldGroups ?? [])
