@@ -180,6 +180,7 @@ function applyExtends(
   owners: ReadonlyMap<string, string>
 ): Pick<NextlyServiceConfig, "collections" | "singles" | "fieldGroups"> & {
   leftAlone: LeftAloneExtend[];
+  scopeAdded: Map<string, Map<string, string>>;
 } {
   const r = applyExtendClauses(
     collections,
@@ -194,6 +195,7 @@ function applyExtends(
     singles: r.singles,
     fieldGroups: r.fieldGroups,
     leftAlone: r.leftAlone,
+    scopeAdded: r.scopeAdded,
   };
 }
 
@@ -288,7 +290,7 @@ function applyTransforms(
   >,
   plugins: PluginDefinition[],
   owners: ReadonlyMap<string, string>,
-  leftAlone: readonly LeftAloneExtend[]
+  scopeAdded: ReadonlyMap<string, ReadonlyMap<string, string>>
 ): {
   entities: Pick<
     NextlyServiceConfig,
@@ -315,31 +317,15 @@ function applyTransforms(
   // so a config with no transforms is not re-created on every fold.
   if (contributions.length === 0) return { entities, fieldsAdded: new Map() };
 
-  // The configured types each scope added its fields to: the ones it reaches.
-  // A clause left alone on a type added none of its fields there (the first
-  // that collided is the one recorded), so the whole clause is skipped on that
-  // type; every other clause that added fields there keeps them.
-  const leftAloneKey = (target: string, name: string, owner: string) =>
-    `${target}\u0000${name}\u0000${owner}`;
-  const untouched = new Set(
-    leftAlone.map(left => leftAloneKey(left.target, left.field, left.owner))
-  );
-  const extendedBy = extendersBySlug(
-    plugins,
-    scope =>
-      typesReachedBy(
-        scope,
-        scopeCandidates(
-          entities.collections ?? [],
-          entities.singles ?? [],
-          entities.fieldGroups ?? [],
-          configuredScope(owners),
-          new Set()
-        )
-      ).map(type => type.slug),
-    (slug, names, owner) =>
-      names.some(name => untouched.has(leftAloneKey(slug, name, owner)))
-  );
+  // The fields each plugin added to each type: a slug target's, from its
+  // declaration (a duplicate there refuses the boot), and a scope's, as the
+  // fold recorded each one it added, so a clause left alone gives nothing.
+  const extendedBy = extendersBySlug(plugins);
+  for (const [slug, added] of scopeAdded) {
+    const names = extendedBy.get(slug) ?? new Map<string, string>();
+    for (const [name, owner] of added) names.set(name, owner);
+    extendedBy.set(slug, names);
+  }
   const transformable =
     (kind: TransformableEntity["kind"]) =>
     (entity: unknown): TransformableEntity => {
@@ -416,11 +402,7 @@ function fieldsAddedFrom(
  */
 export function extendersBySlug(
   plugins: PluginDefinition[],
-  reach?: (scope: ContentTypeScope) => readonly string[],
-  // A clause that added nothing to a type after all, such as one a scope left
-  // alone because the type already had a field of one of its names: none of
-  // its fields is recorded as the clause's there, nor over a real owner.
-  skipped?: (slug: string, names: string[], owner: string) => boolean
+  reach?: (scope: ContentTypeScope) => readonly string[]
 ): Map<string, Map<string, string>> {
   const bySlug = new Map<string, Map<string, string>>();
   for (const { target, fields, owner } of flattenExtends(plugins)) {
@@ -434,7 +416,6 @@ export function extendersBySlug(
       return typeof name === "string" ? [name] : [];
     });
     for (const slug of slugs) {
-      if (skipped?.(slug, declared, owner)) continue;
       const names = bySlug.get(slug) ?? new Map<string, string>();
       for (const name of declared) names.set(name, owner);
       bySlug.set(slug, names);
@@ -525,6 +506,69 @@ function scopeCandidates(
 }
 
 /**
+ * One scope clause over the configured types it reaches: each type it adds
+ * its fields to is recorded as the plugin's, each it is left alone on is
+ * listed, and the clause is handed back to defer whole for the Builder's
+ * types when the context defers.
+ */
+function applyScopeClause<
+  C extends Fielded,
+  S extends Fielded,
+  P extends Fielded,
+>(
+  clause: DeferredExtend & { target: ContentTypeScope },
+  types: { cols: C[]; sin: S[]; comp: P[] },
+  context: ScopeContext,
+  leftAlone: LeftAloneExtend[],
+  scopeAdded: Map<string, Map<string, string>>
+): DeferredExtend | undefined {
+  const { target, fields, owner } = clause;
+  const { cols, sin, comp } = types;
+  const candidates = scopeCandidates(
+    cols,
+    sin,
+    comp,
+    context,
+    new Set(clause.configuredSlugs ?? [])
+  );
+  for (const reached of typesReachedBy(target, candidates)) {
+    const before = leftAlone.length;
+    if (reached.kind === "collection") {
+      tryExtend(cols, reached.slug, fields, owner, leftAlone);
+    } else {
+      tryExtend(sin, reached.slug, fields, owner, leftAlone);
+    }
+    // Added, rather than left alone for a field it already had: these fields
+    // are now the plugin's on this type.
+    if (leftAlone.length === before) {
+      recordAdded(scopeAdded, reached.slug, fields, owner);
+    }
+  }
+  if (!context.defer) return undefined;
+  return {
+    target,
+    fields,
+    owner,
+    configuredSlugs: [...cols, ...sin, ...comp].map(e => e.slug),
+  };
+}
+
+/** Records `fields` as `owner`'s on the type `slug`, in `added`. */
+function recordAdded(
+  added: Map<string, Map<string, string>>,
+  slug: string,
+  fields: readonly FieldConfig[],
+  owner: string
+): void {
+  const names = added.get(slug) ?? new Map<string, string>();
+  for (const field of fields) {
+    const name = (field as { name?: unknown }).name;
+    if (typeof name === "string") names.set(name, owner);
+  }
+  added.set(slug, names);
+}
+
+/**
  * Apply a flat list of extend clauses to the three entity arrays (matched by slug
  * across all three). Pure: clones touched arrays. A clause whose target is not
  * found is either thrown (`onUnknown: "throw"`, D12) or collected into `deferred`
@@ -555,6 +599,12 @@ export function applyExtendClauses<
   /** Every clause set aside for the Builder's types, slug or scope, in order. */
   postponed: DeferredExtend[];
   leftAlone: LeftAloneExtend[];
+  /**
+   * The fields each scope clause added to a configured type, by the type's
+   * slug and the field's name, to the plugin that added it: recorded as each
+   * one is added, so a clause left alone records nothing.
+   */
+  scopeAdded: Map<string, Map<string, string>>;
 } {
   const cols = [...(collections ?? [])];
   const sin = [...(singles ?? [])];
@@ -563,32 +613,20 @@ export function applyExtendClauses<
   const scopes: DeferredExtend[] = [];
   const postponed: DeferredExtend[] = [];
   const leftAlone: LeftAloneExtend[] = [];
+  const scopeAdded = new Map<string, Map<string, string>>();
   for (const clause of clauses) {
     const { target, fields, owner } = clause;
     if (typeof target !== "string") {
-      const candidates = scopeCandidates(
-        cols,
-        sin,
-        comp,
+      const kept = applyScopeClause(
+        { ...clause, target },
+        { cols, sin, comp },
         context,
-        new Set(clause.configuredSlugs ?? [])
+        leftAlone,
+        scopeAdded
       );
-      for (const reached of typesReachedBy(target, candidates)) {
-        if (reached.kind === "collection") {
-          tryExtend(cols, reached.slug, fields, owner, leftAlone);
-        } else {
-          tryExtend(sin, reached.slug, fields, owner, leftAlone);
-        }
-      }
-      if (context.defer) {
-        const clause: DeferredExtend = {
-          target,
-          fields,
-          owner,
-          configuredSlugs: [...cols, ...sin, ...comp].map(e => e.slug),
-        };
-        scopes.push(clause);
-        postponed.push(clause);
+      if (kept !== undefined) {
+        scopes.push(kept);
+        postponed.push(kept);
       }
       continue;
     }
@@ -611,6 +649,7 @@ export function applyExtendClauses<
     scopes,
     postponed,
     leftAlone,
+    scopeAdded,
   };
 }
 
@@ -938,10 +977,10 @@ export function applyPluginSchemaContributions(
     owners
   );
 
-  const { leftAlone, ...entities } = extended;
+  const { leftAlone: _leftAlone, scopeAdded, ...entities } = extended;
   return {
     ...config,
-    ...applyTransforms(entities, plugins, owners, leftAlone).entities,
+    ...applyTransforms(entities, plugins, owners, scopeAdded).entities,
   };
 }
 
@@ -981,7 +1020,7 @@ export function applyPluginSchemaContributionsDeferred(
     },
     plugins,
     owners,
-    r.leftAlone
+    r.scopeAdded
   );
   return {
     config: { ...config, ...transformed.entities },

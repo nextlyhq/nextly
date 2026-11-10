@@ -223,6 +223,28 @@ describe("extend with a scope — a clause left alone whole", () => {
   });
 });
 
+describe("extend with a scope — overlapping clauses of one plugin", () => {
+  it("keeps a field the first clause added, when the plugin's second clause collides with it", () => {
+    // @t/seo scopes `seo` onto every collection, then onto collections and
+    // Singles again: on `posts` the second clause meets the first's `seo`.
+    const twice = plugin("@t/seo", {
+      extend: [
+        { target: { every: ["collection"] }, fields: [field("seo")] },
+        { target: EVERY, fields: [field("seo")] },
+      ],
+    });
+    const noop = plugin("@t/noop", {
+      transforms: [{ target: "posts", transform: entity => entity }],
+    });
+    const { fieldsAddedByPlugins } = applyPluginSchemaContributionsDeferred(
+      siteConfig(),
+      [twice, noop]
+    );
+
+    expect(fieldsAddedByPlugins.get("posts")?.get("seo")).toBe("@t/seo");
+  });
+});
+
 describe("extend with a scope — the order clauses apply in", () => {
   it("defers a scope and a later slug target in the plugins' own order", () => {
     // @t/seo's scope comes first, so a Builder type receives it first, as a
