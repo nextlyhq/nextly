@@ -171,11 +171,18 @@ export function registerJobServices(ctx: RegistrationContext): void {
   const declaredJobs = collectJobs(ctx.config, ctx.config.plugins ?? []);
   // Collected eagerly for the same reason: a schedule that cannot run (an
   // invalid cron or time zone, or a job its plugin does not declare) stops the
-  // start that introduced it, naming the plugin.
-  const declaredSchedules = collectSchedules(
-    ctx.config.plugins ?? [],
-    declaredJobs
-  );
+  // start that introduced it, naming the plugin. One in the earlier shape is
+  // mapped with a deprecation notice, or left unexecuted with a notice, and
+  // its handler, when mapped, runs as a job given the plugin's started context.
+  const { schedules: declaredSchedules, jobs: earlierScheduleJobs } =
+    collectSchedules(ctx.config.plugins ?? [], declaredJobs, {
+      notice: message => logger.warn(message),
+      contextOf: async plugin => {
+        // Imported when a handler runs: the registration imports this module.
+        const { getInitializedPluginContext } = await import("../register");
+        return getInitializedPluginContext(plugin);
+      },
+    });
 
   container.registerSingleton<JobsRepository>(
     "jobsRepository",
@@ -292,7 +299,10 @@ export function registerJobServices(ctx: RegistrationContext): void {
     // winner depend on load order and leave the loser silently unrun.
     // With the plugin that declared each, so the registry answers which
     // sweeps a plugin may run as its own.
-    for (const { definition, plugin } of declaredJobs) {
+    for (const { definition, plugin } of [
+      ...declaredJobs,
+      ...earlierScheduleJobs,
+    ]) {
       registry.register(definition, { plugin });
     }
     // The plugins' schedules, swept by every jobs pass, and pruned even when

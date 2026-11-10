@@ -737,6 +737,13 @@ export type { MediaPickerDialogProps } from "@nextlyhq/admin";
 export { usePluginClientConfig } from "@nextlyhq/admin";
 
 /**
+ * @experimental The translator for this plugin's own admin strings, declared
+ * in `contributes.translations`: `t("acme-shop.cart.title")`, read in the
+ * interface language in effect, then English, then the key itself.
+ */
+export { usePluginTranslate } from "@nextlyhq/admin";
+
+/**
  * @experimental Read a route this plugin contributed, from this plugin's own
  * admin components.
  *

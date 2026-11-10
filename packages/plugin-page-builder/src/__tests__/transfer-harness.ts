@@ -207,7 +207,8 @@ export const SOURCE_BREAKPOINTS: BreakpointSet = {
 };
 
 /**
- * A source site: a shared style using a variable under a breakpoint, an image,
+ * A source site: a shared style using a variable under a breakpoint, an edit
+ * of the image's own look, an image,
  * two components (one placing the other), a pattern placing the outer one and
  * a Layout whose header is the outer one.
  */
@@ -229,6 +230,16 @@ export async function sourceSite(t: TestNextly): Promise<SourceSite> {
           styles: { base: { tablet: { color: { $token: "color.brand" } } } },
         },
         { id: "c-unused", slug: "unused", orderIndex: 1, styles: {} },
+        // The site's edit of the image's own look. It stays with this site:
+        // an export never carries it, nor the variable only it uses.
+        {
+          id: "look:core/image:square",
+          slug: "image-square",
+          orderIndex: 2,
+          blockType: "core/image",
+          isDefault: true,
+          styles: { base: { base: { color: { $token: "color.unused" } } } },
+        },
       ],
       breakpoints: SOURCE_BREAKPOINTS,
     },

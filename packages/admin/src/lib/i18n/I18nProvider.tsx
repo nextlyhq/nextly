@@ -106,3 +106,24 @@ export function useT(): <K extends MessageKey>(
     [catalogs, interfaceLanguage]
   );
 }
+
+/**
+ * @experimental The translator a plugin's admin component uses for its own
+ * strings, declared in `contributes.translations`: `t("acme-shop.cart.title")`,
+ * or `t(key, { count: 3 })` for a string with `{count}` in it.
+ *
+ * Read in the interface language in effect, then English, then the key
+ * itself, as the admin's own strings are. The keys are the plugin's, so they
+ * are not checked against the admin's catalog.
+ */
+export function usePluginTranslate(): (
+  key: string,
+  params?: Readonly<Record<string, string | number>>
+) => string {
+  const { interfaceLanguage, catalogs } = useContext(I18nContext);
+  return useCallback(
+    (key: string, params?: Readonly<Record<string, string | number>>) =>
+      translate(catalogs, interfaceLanguage, key, params),
+    [catalogs, interfaceLanguage]
+  );
+}

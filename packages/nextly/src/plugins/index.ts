@@ -105,6 +105,7 @@ export type {
   PluginSchedule,
   ScheduledTask,
   PluginWebhookEventType,
+  PluginTranslations,
   PermissionSlug,
 } from "./contributions";
 
