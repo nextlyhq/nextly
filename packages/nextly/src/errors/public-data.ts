@@ -57,8 +57,6 @@ export type SingleAbsentPublicData = {
  * words: `published` (the record of what went live), `committed` (scheduled
  * or stopped; cancel it first) or `was-scheduled` (cancelled after it was
  * scheduled, so it may have run and is kept).
- *
- * @experimental
  */
 export type ReleaseNotDeletablePublicData = {
   reason: "published" | "committed" | "was-scheduled";
@@ -210,9 +208,24 @@ export type StaleVersionPublicData = {
   historyVersion?: { version: number; locale: string | null };
 };
 
+/**
+ * What an update refused for saying neither which version it was made from
+ * nor that it overwrites tells its caller: the keys that say either, so a
+ * client can be told how to send one. `revsKey` only where the update names
+ * its documents by id, so a version can be given for each.
+ *
+ * @experimental
+ */
+export type VersionRequiredPublicData = {
+  versionKey: string;
+  overwriteKey: string;
+  revsKey?: string;
+};
+
 export type PublicData =
   | ValidationPublicData
   | StaleVersionPublicData
+  | VersionRequiredPublicData
   | SampleContentPublicData
   | RemovedFromCodePublicData
   | NotMigratedPublicData

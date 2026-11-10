@@ -38,17 +38,21 @@
  */
 
 import type { FieldConfig, OverridableDocumentAction } from "nextly/config";
+import { noticeDeprecation } from "nextly/deprecation-notice";
 import type { ComponentType } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import type { DocumentLockGates } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
-import type { PlaceContributionProps } from "@admin/components/shared/target-slot";
+import type {
+  PlaceContributionProps,
+  PlaceTabProps,
+} from "@admin/components/shared/target-slot";
+import { isDevelopmentRuntime } from "@admin/lib/development-runtime";
 
 import {
   componentRegistry,
   CORE_COMPONENT_PREFIX,
-  markModulesSettled,
-  resetSettledModules,
+  markComponentMapComplete,
   writeComponent,
 } from "./component-registry-internal";
 
@@ -273,6 +277,37 @@ export type SidebarSectionProps =
   | PlaceContributionProps<"single.edit">;
 
 /**
+ * @experimental Props passed to a tab a plugin declares at an edit page's
+ * place (`kind: "tab"` at `collection.edit` or `single.edit`): what every
+ * contributed tab receives (the place's `context` and `entry`, and
+ * `setBadge`), and the document's form and lock, on a saved entry, a new one
+ * and a Single alike.
+ *
+ * The tab is drawn inside the document's editor, under the same bar, so Save
+ * and Publish store what it writes through `control` with everything else,
+ * and `useDocumentLocale()` and `useDocumentActions()` answer for the same
+ * document. It stays mounted while another tab is open, so what it holds is
+ * kept across tabs and its count stays current.
+ */
+export type DocumentTabProps = (
+  | PlaceTabProps<"collection.edit">
+  | PlaceTabProps<"single.edit">
+) & {
+  /**
+   * The document form's control, the one its fields write through and a
+   * document view is handed: read values the author typed and has not saved,
+   * and write values the bar's Save and Publish then store.
+   */
+  control: Control<FieldValues>;
+  /**
+   * What holds the document right now, the answer a side panel section is
+   * given: `readOnly` as the fields are held, when the tab takes no edits,
+   * and `actionsDisabled` as a plugin's own writes are held.
+   */
+  documentLock: DocumentLockGates;
+};
+
+/**
  * Props passed to injection point components (BeforeListTable, etc.).
  */
 export interface InjectionPointProps {
@@ -367,10 +402,28 @@ export function registerComponents(
 }
 
 /**
+ * @experimental Register the app's generated component map: every component
+ * the admin resolves by string, imported at once by `nextly generate:types`'s
+ * map, which calls this as it loads.
+ *
+ * Registers them as {@link registerComponents} does, then records that the
+ * map is complete. Nothing else is on its way after it, so a surface waiting
+ * for a component that is still missing draws its "not registered" fallback
+ * rather than loading. For the generated map, not a plugin's own module: a
+ * plugin registers its components with `registerComponents`.
+ */
+export function registerComponentMap(
+  components: Record<ComponentPath, ComponentType<never>>
+): void {
+  registerComponents(components);
+  markComponentMapComplete();
+}
+
+/**
  * Get a component from the registry by its path.
  *
  * Returns undefined if the component is not registered.
- * Logs a warning to help debug misconfiguration.
+ * Logs a warning naming the path, in development, to help debug misconfiguration.
  *
  * @param path - Component path to resolve
  * @returns The registered React component, or undefined if not found
@@ -392,7 +445,10 @@ export function getComponent<P = Record<string, unknown>>(
 
   const component = componentRegistry.get(path);
 
-  if (!component) {
+  // Development only: a missing component is a fault in the app's own map, so
+  // it is the developer who can act on it, and the caller already draws its
+  // fallback for whoever is using the admin.
+  if (!component && isDevelopmentRuntime()) {
     console.warn(
       `[ComponentRegistry] Component not found for path: "${path}". ` +
         `Make sure the plugin is installed and its components are registered. ` +
@@ -481,169 +537,49 @@ export function getRegistrySize(): number {
 }
 
 // ============================================================================
-// Auto-Registration
+// Deprecated self-registration
 // ============================================================================
 
 /**
- * Map of known plugin packages to their auto-registration functions.
- * Plugins can register their own registration logic at runtime via `registerKnownPlugin()`.
- */
-const knownPluginRegistrations: Map<string, () => Promise<void>> = new Map();
-
-/**
- * Module paths auto-registration has already attempted. Per-module (not a single
- * boolean) so a plugin whose components are requested AFTER the first call — e.g.
- * a plugin contributing pages but no collections, loaded once its admin route is
- * visited — still gets imported (D60; fixes the P5 run-once gap). Each module is
- * still attempted at most once, so there is no repeated dynamic-import churn.
- */
-const attemptedModules = new Set<string>();
-
-/**
- * Register a known plugin's auto-registration function.
+ * Hand the admin a function that registers a plugin's components.
  *
- * Called by plugins to register their auto-registration logic.
- * This is called at module load time by plugin packages.
+ * @deprecated Register components with `registerComponents()` in the plugin's
+ * admin module, which the generated component map imports. Removed at the next
+ * major release.
  *
- * @param packagePrefix - The plugin package prefix (e.g., "@nextlyhq/plugin-form-builder")
- * @param registrationFn - Async function that registers the plugin's components
+ * Kept working: the function runs at once, so its components register as soon
+ * as the module calling this is imported, which the generated map does. It
+ * used to wait until a collection naming the plugin's components loaded,
+ * because the admin then imported plugin modules by name at run time; the map
+ * imports every module a plugin's admin names, so nothing waits now.
  *
- * @internal
+ * @param packagePrefix - The plugin's package name, as it was keyed by.
+ * @param registrationFn - Registers the plugin's components.
  */
 export function registerKnownPlugin(
   packagePrefix: string,
   registrationFn: () => Promise<void>
 ): void {
-  knownPluginRegistrations.set(packagePrefix, registrationFn);
-}
-
-/**
- * Dynamic import function for a plugin's admin module.
- * Returns the module if the plugin is installed, or undefined if not.
- *
- * @param modulePath - The full module path (e.g., "@nextlyhq/plugin-form-builder/admin")
- * @returns The imported module or undefined
- */
-async function tryDynamicImport(
-  modulePath: string
-): Promise<Record<string, unknown> | undefined> {
-  try {
-    // Use indirect dynamic import via Function constructor to prevent
-    // bundler (Webpack/Turbopack) static analysis warnings.
-    // This is intentional: plugin modules are optional and resolved at runtime.
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const importModule = new Function("m", "return import(m)") as (
-      m: string
-    ) => Promise<Record<string, unknown>>;
-    return await importModule(modulePath);
-  } catch {
-    // Package not installed or import failed - this is expected for optional plugins
-    return undefined;
-  }
-}
-
-/**
- * Auto-register components for plugins used by collections.
- *
- * Scans collection component paths and automatically loads plugin admin modules
- * to register their components. This eliminates the need for manual registration.
- *
- * For official Nextly plugins, this function will:
- * 1. Check if plugin has already self-registered via `registerKnownPlugin()`
- * 2. If not, dynamically import the plugin's admin module to trigger registration
- *
- * @param componentPaths - Array of component paths found in collection configs
- *
- * @example
- * ```typescript
- * // Called internally by admin when collections are loaded
- * const paths = collections.flatMap(c => [
- *   c.admin?.components?.views?.Edit?.Component,
- *   c.admin?.components?.BeforeListTable,
- * ].filter(Boolean));
- *
- * await autoRegisterPluginComponents(paths);
- * ```
- */
-export async function autoRegisterPluginComponents(
-  componentPaths: string[]
-): Promise<void> {
-  // Extract the unique, not-yet-attempted module paths from the component paths
-  // e.g., "@nextlyhq/plugin-form-builder/admin#FormBuilderView" -> "@nextlyhq/plugin-form-builder/admin"
-  const modulePaths = new Set<string>();
-  for (const path of componentPaths) {
-    if (!path) continue;
-
-    const hashIndex = path.indexOf("#");
-    if (hashIndex === -1) continue;
-
-    const modulePath = path.substring(0, hashIndex);
-    if (attemptedModules.has(modulePath)) continue; // attempt each module once
-    attemptedModules.add(modulePath);
-    modulePaths.add(modulePath);
-  }
-
-  if (modulePaths.size === 0) {
-    return; // nothing new to register
-  }
-
-  // Extract package prefixes for checking known registrations
-  const getPackagePrefix = (modulePath: string): string => {
-    const parts = modulePath.split("/");
-    if (parts[0].startsWith("@")) {
-      return `${parts[0]}/${parts[1]}`;
-    }
-    return parts[0];
-  };
-
-  const registrationPromises: Promise<void>[] = [];
-
-  for (const modulePath of modulePaths) {
-    const packagePrefix = getPackagePrefix(modulePath);
-
-    // First check if the plugin has already self-registered
-    const registrationFn = knownPluginRegistrations.get(packagePrefix);
-
-    if (registrationFn) {
-      // Plugin has registered its own registration function
-      registrationPromises.push(
-        registrationFn().catch(error => {
-          console.warn(
-            `[ComponentRegistry] Failed to auto-register plugin "${packagePrefix}":`,
-            error
-          );
-        })
-      );
-    } else {
-      // Try to dynamically import the plugin's admin module
-      // The import will trigger the plugin's self-registration side effect
-      registrationPromises.push(
-        tryDynamicImport(modulePath).then(module => {
-          if (module) {
-            console.log(
-              `[ComponentRegistry] Auto-loaded plugin module: ${modulePath}`
-            );
-          }
-        })
-      );
-    }
-  }
-
-  // Every attempt ends here, either way, so a surface waiting on one of these
-  // modules learns whether its component arrived or never will.
-  await Promise.all(registrationPromises).finally(() => {
-    markModulesSettled(modulePaths);
+  noticeDeprecation(
+    {
+      surface: "`registerKnownPlugin()`",
+      replacement: "`registerComponents()`",
+      message:
+        "`registerKnownPlugin()` is deprecated and will be removed at the " +
+        "next major release. Register your components with " +
+        "`registerComponents()` in your plugin's admin module: the generated " +
+        "component map imports it.",
+    },
+    // The browser's console: a plugin author reads it in their devtools.
+    message => console.warn(message)
+  );
+  // Run inside a promise, so a function that throws before it returns one is
+  // named as one that rejects is: the generated map imports this module with
+  // the admin's, and a throw escaping here would stop the admin loading.
+  new Promise<void>(resolve => resolve(registrationFn())).catch(error => {
+    console.warn(
+      `[ComponentRegistry] Failed to register plugin "${packagePrefix}":`,
+      error
+    );
   });
-}
-
-/**
- * Reset the auto-registration state.
- *
- * Primarily used for testing.
- *
- * @internal
- */
-export function resetAutoRegistration(): void {
-  attemptedModules.clear();
-  resetSettledModules();
 }

@@ -60,6 +60,10 @@ import { addressableFields } from "../../../shared/addressable-fields";
 import type { EntryWriteContext } from "../../../shared/lib/entry-validation";
 import type { LocalizedFieldRef } from "../../i18n/companion-join";
 import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
+import {
   buildCompanionSchema,
   type CompanionSchema,
 } from "../../i18n/runtime/companion-io";
@@ -668,7 +672,7 @@ function groupKeptPerLanguage(
 ): boolean {
   return depth === 0
     ? companionFieldOf(entity, group.name) !== undefined
-    : entity.localized && group.localized === true;
+    : entity.storedPerLanguage && group.localized === true;
 }
 
 /**
@@ -754,6 +758,12 @@ interface StoredEntity {
   readonly localized: boolean;
   /** Whether it has a draft/published status, kept per language as well. */
   readonly status: boolean;
+  /**
+   * Whether its translatable values are kept per language: when it is translated, or for every
+   * entity under `experimental.perLanguageStorage`. Where a value is read from; `localized` stays
+   * whether its drafts are kept per language.
+   */
+  readonly storedPerLanguage: boolean;
 }
 
 /**
@@ -789,6 +799,7 @@ async function storedEntity(
       tableName: single.tableName,
       localized: single.localized === true,
       status: (single as { status?: unknown }).status === true,
+      storedPerLanguage: storesPerLanguage(single),
     };
   }
   const collection = await records(target.collection);
@@ -803,6 +814,7 @@ async function storedEntity(
     tableName: collectionTableName(collection, target.collection),
     localized: (collection as { localized?: unknown }).localized === true,
     status: (collection as { status?: unknown }).status === true,
+    storedPerLanguage: storesPerLanguage(collection),
   };
 }
 
@@ -848,13 +860,16 @@ function companionFieldOf(
  * `null` for an entity that keeps nothing per language.
  */
 function companionOf(entity: StoredEntity): CompanionSchema | null {
-  if (!entity.localized) return null;
+  // Where its translatable values are kept: per language when it is translated, or for every
+  // entity under `experimental.perLanguageStorage`.
+  if (!entity.storedPerLanguage) return null;
   return buildCompanionSchema({
     slug: entity.slug,
     tableName: entity.tableName,
     fields: entity.fields as unknown as { name: string; type: string }[],
     dialect: getService("adapter").dialect,
-    status: entity.status,
+    // A `_status` of each language only where each language publishes on its own.
+    status: publishesPerLanguage(entity),
   });
 }
 
@@ -1306,27 +1321,30 @@ export function expectStoredValue(
  * is recorded, and {@link refuseUnlessWhole} refuses the write for it once
  * every hook has run, even where a later hook put the value back. Every other
  * write runs the pass alone, exactly as before.
+ *
+ * The pass's own answer, if it gives one (the stored provenance a write's
+ * later gates read), comes back out to the caller unchanged.
  */
-export async function fieldAccessPass(
+export async function fieldAccessPass<T>(
   context: Record<string, unknown> | undefined,
   document: ExpectedDocument,
   data: Record<string, unknown>,
-  pass: () => Promise<void>
-): Promise<void> {
+  pass: () => Promise<T>
+): Promise<T> {
   const whole = wholeWriteFor(context, document);
   if (whole === undefined) {
-    await pass();
-    return;
+    return await pass();
   }
   const before = new Map(
     Object.entries(data).map(([name, value]) => [name, JSON.stringify(value)])
   );
-  await pass();
+  const kept = await pass();
   for (const [name, value] of before) {
     if (!(name in data) || JSON.stringify(data[name]) !== value) {
       whole.cut.push(name);
     }
   }
+  return kept;
 }
 
 /**

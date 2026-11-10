@@ -87,7 +87,10 @@ export const CORE_ADMIN_PLACES = Object.freeze({
       "rowAction",
       "bulkAction",
     ] as const),
-    builtIns: Object.freeze({}),
+    // The list page's own header, and the list itself.
+    builtIns: Object.freeze({
+      block: Object.freeze(["toolbar", "table"] as const),
+    }),
   }),
   "collection.edit": Object.freeze({
     page: "a collection entry's edit page",
@@ -126,7 +129,8 @@ export const CORE_ADMIN_PLACES = Object.freeze({
   account: Object.freeze({
     page: "the signed-in admin's account page",
     accepts: Object.freeze(["block", "tab"] as const),
-    builtIns: Object.freeze({}),
+    // The page's own card: the person's name, avatar and email.
+    builtIns: Object.freeze({ block: Object.freeze(["profile"] as const) }),
   }),
   login: Object.freeze({
     page: "the login page",

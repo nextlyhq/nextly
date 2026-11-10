@@ -38,8 +38,10 @@ import {
 // The DI-bound `applyDesiredSchema` from pipeline/index.ts throws on
 // MySQL because it has no caller-supplied URL. Once F8 PR 2/3 collapses
 // the two paths, this can collapse back to a single import.
-import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
-import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
+import {
+  mainTableFields,
+  storesPerLanguage,
+} from "../../domains/i18n/per-language-storage";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -50,6 +52,11 @@ import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanu
 import { ClackTerminalPromptDispatcher } from "../../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
 import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
 import { noopPreRenameExecutor } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
+import {
+  recordFieldsOnto,
+  registryRows,
+  type RegistryFieldsRow,
+} from "../../domains/schema/pipeline/recorded-fields";
 import {
   mergeRegisteredCollectionsSafely,
   mergeRegisteredSafely,
@@ -95,31 +102,13 @@ import {
   databaseCatalogUnreadable,
   schemaSyncInProduction,
 } from "../errors/areas/commands";
+import type { CliError } from "../errors/cli-error";
 import type { CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
 import type { LoadConfigResult } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
 
 import type { ResolvedDevOptions } from "./db-sync";
-
-/**
- * The fields whose columns belong on an entity's main table: every one, or for an entity whose
- * translatable values live in its companion (`storesPerLanguage`), its shared ones only, so a
- * column top-up never puts a translatable column back on the main table.
- */
-function mainTableFields<F extends { name?: string; type: string }>(
-  entity: { localized?: unknown },
-  fields: F[]
-): F[] {
-  if (!storesPerLanguage(entity)) return fields;
-  const translatable = new Set(
-    resolveLocalizedFieldNames(
-      fields as Parameters<typeof resolveLocalizedFieldNames>[0],
-      true
-    )
-  );
-  return fields.filter(field => !field.name || !translatable.has(field.name));
-}
 
 // ============================================================================
 // Core Table Creation
@@ -462,58 +451,54 @@ export async function ensureCoreTables(
   }
 }
 
-// ============================================================================
-// Collection Schema Auto-Sync (Push Mode)
-// ============================================================================
+/**
+ * What a sync does in production, where it never pushes schema: it refuses, naming them, when its
+ * registry step found collections created or updated, and otherwise goes on without a push
+ * (undefined). The one decision of it: the real sync acts on it, and its dry run names it.
+ */
+export function productionSyncRefusal(
+  sync: Pick<CollectionSyncResultWithValidation["sync"], "created" | "updated">
+): CliError | undefined {
+  const pendingCollections = [...sync.created, ...sync.updated];
+  return pendingCollections.length > 0
+    ? schemaSyncInProduction(pendingCollections)
+    : undefined;
+}
 
 /**
- * Perform auto-sync of schema changes to database
+ * The schema a sync pushes: every collection and Single the configuration declares, merged with
+ * what the Schema Builder registered (collections, Singles and components), leaving out what was
+ * removed from code. Also the schema registry holding each declared table's runtime schema, for
+ * the rest of the run to address them.
  *
- * This implements the "push mode" synchronization where schema changes
- * are applied directly to the database without creating migration files.
- *
- * Only runs in development mode (NODE_ENV !== 'production').
+ * The one builder of it: the real sync pushes this schema, and its dry run previews the push of
+ * this same schema. Reads the registry and changes nothing.
  */
-export async function performAutoSync(
+export async function desiredSchemaForSync(
   config: LoadConfigResult["config"],
-  adapter: CLIDatabaseAdapter,
-  syncResult: CollectionSyncResultWithValidation,
-  options: ResolvedDevOptions,
-  context: CommandContext
-): Promise<void> {
-  const { logger } = context;
-
-  // F8 PR 1: --force is no longer load-bearing. Pre-pipeline, --force
-  // routed through SchemaPushService.syncSchema and controlled drop+
-  // recreate behavior. The new pipeline owns destructive-op handling
-  // via the Classifier + PromptDispatcher: ambiguous renames trigger
-  // confirmations, real drops require explicit prompts. The flag is
-  // kept on the CLI surface for backward compatibility but emits a
-  // deprecation warning so users know it has no effect today.
-  if (options.force) {
-    logger.warn(
-      "[schema] --force has no effect with the new pipeline. " +
-        "Destructive ops are handled by interactive prompts; non-interactive " +
-        "runs use NEXTLY_ACCEPT_DATA_LOSS=1 instead."
-    );
-  }
-
-  // Production guard: never auto-apply schema in production. Users must
-  // explicitly run `nextly migrate:create` + `nextly migrate`.
-  if (process.env.NODE_ENV === "production") {
-    const pendingCollections = [
-      ...syncResult.sync.created,
-      ...syncResult.sync.updated,
-    ];
-
-    if (pendingCollections.length > 0) {
-      exitWithError(logger, schemaSyncInProduction(pendingCollections));
-    }
-    return;
-  }
-
-  const start = Date.now();
-  const drizzleAdapter = adapter as unknown as DrizzleAdapter;
+  drizzleAdapter: DrizzleAdapter,
+  logger: CommandContext["logger"],
+  {
+    registriesPresent = true,
+    recordedCollections = [],
+  }: {
+    /**
+     * False for a database whose core tables a sync has yet to create: its registries will hold
+     * nothing, so nothing registered is merged in.
+     */
+    registriesPresent?: boolean;
+    /**
+     * The collections' registry rows as they were before the collection sync replaced them: what
+     * each field was, which on SQLite is all that tells a relationship switched between one
+     * related entry and many. Absent, nothing is switched there, as before.
+     */
+    recordedCollections?: readonly RegistryFieldsRow[];
+  } = {}
+): Promise<{
+  desired: DesiredSchema;
+  desiredCollections: Record<string, DesiredCollection>;
+  schemaRegistry: SchemaRegistry;
+}> {
   const dialect = drizzleAdapter.getCapabilities().dialect;
 
   // Build a SchemaRegistry with static + dynamic tables. Even though the
@@ -647,29 +632,105 @@ export async function performAutoSync(
     collections: await mergeRegisteredCollectionsSafely(
       desiredCollections,
       async () =>
-        withoutRemovedFromCode(
-          await registry.getAllCollections(),
-          declaredCollections
-        ),
+        registriesPresent
+          ? withoutRemovedFromCode(
+              await registry.getAllCollections(),
+              declaredCollections
+            )
+          : [],
       logger
     ),
     singles: await mergeRegisteredSafely(
       desiredSingles,
       async () =>
-        withoutRemovedFromCode(
-          await singleRegistry.getAllSingles(),
-          declaredSingles
-        ),
+        registriesPresent
+          ? withoutRemovedFromCode(
+              await singleRegistry.getAllSingles(),
+              declaredSingles
+            )
+          : [],
       (row, base) => ({ ...base, status: row.status === true }),
       logger
     ),
     components: await mergeRegisteredSafely(
       {},
-      () => componentRegistry.getAllComponents(),
+      async () =>
+        registriesPresent ? componentRegistry.getAllComponents() : [],
       (_row, base) => base,
       logger
     ),
   };
+  // What each field was before this sync. The Singles' rows are read now: their sync runs after
+  // this apply.
+  recordFieldsOnto(desired.collections, recordedCollections);
+  recordFieldsOnto(
+    desired.singles,
+    await registryRows(() => singleRegistry.getAllSingles(), {
+      kind: "singles",
+      tableExists: name => drizzleAdapter.tableExists(name),
+    })
+  );
+
+  return { desired, desiredCollections, schemaRegistry };
+}
+
+// ============================================================================
+// Collection Schema Auto-Sync (Push Mode)
+// ============================================================================
+
+/**
+ * Perform auto-sync of schema changes to database
+ *
+ * This implements the "push mode" synchronization where schema changes
+ * are applied directly to the database without creating migration files.
+ *
+ * Only runs in development mode (NODE_ENV !== 'production').
+ */
+export async function performAutoSync(
+  config: LoadConfigResult["config"],
+  adapter: CLIDatabaseAdapter,
+  syncResult: CollectionSyncResultWithValidation,
+  options: ResolvedDevOptions,
+  context: CommandContext,
+  /**
+   * The collections' registry rows as they were before the collection sync replaced them, for
+   * the push to read what each field was (see `desiredSchemaForSync`).
+   */
+  recordedCollections: readonly RegistryFieldsRow[] = []
+): Promise<void> {
+  const { logger } = context;
+
+  // F8 PR 1: --force is no longer load-bearing. Pre-pipeline, --force
+  // routed through SchemaPushService.syncSchema and controlled drop+
+  // recreate behavior. The new pipeline owns destructive-op handling
+  // via the Classifier + PromptDispatcher: ambiguous renames trigger
+  // confirmations, real drops require explicit prompts. The flag is
+  // kept on the CLI surface for backward compatibility but emits a
+  // deprecation warning so users know it has no effect today.
+  if (options.force) {
+    logger.warn(
+      "[schema] --force has no effect with the new pipeline. " +
+        "Destructive ops are handled by interactive prompts; non-interactive " +
+        "runs use NEXTLY_ACCEPT_DATA_LOSS=1 instead."
+    );
+  }
+
+  // Production guard: never auto-apply schema in production. Users must
+  // explicitly run `nextly migrate:create` + `nextly migrate`.
+  if (process.env.NODE_ENV === "production") {
+    const refusal = productionSyncRefusal(syncResult.sync);
+    if (refusal !== undefined) exitWithError(logger, refusal);
+    return;
+  }
+
+  const start = Date.now();
+  const drizzleAdapter = adapter as unknown as DrizzleAdapter;
+  const dialect = drizzleAdapter.getCapabilities().dialect;
+
+  const { desired, desiredCollections, schemaRegistry } =
+    await desiredSchemaForSync(config, drizzleAdapter, logger, {
+      recordedCollections,
+    });
 
   // Per-call factory so MySQL `databaseName` flows into PushSchemaPipeline.
   // Mirrors the pattern in init/reload-config.ts. The DI-bound entry point

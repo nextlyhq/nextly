@@ -5,11 +5,7 @@ import type {
   PluginListFilterDeclaration,
   PublishedContentSource,
 } from "nextly/config";
-import type {
-  FieldStoragePrimitive,
-  FieldSurface,
-  FieldTypeCategory,
-} from "nextly/field-catalog";
+import type { PluginFieldTypeMeta } from "nextly/field-catalog";
 // The widget as the workspace payload serves it, a type only.
 import type { PublishedWidget } from "nextly/widget-result";
 
@@ -255,18 +251,7 @@ export interface PluginMetadata {
    * the type opted into let each surface offer only the types meant for it
    * (see pluginFieldTypeCatalogEntries).
    */
-  fieldTypes?: Array<{
-    type: string;
-    component: string;
-    /** The primitive this type persists as; decides binding compatibility. */
-    storage: FieldStoragePrimitive;
-    layout?: "takeover";
-    label?: string;
-    description?: string;
-    icon?: string;
-    category?: FieldTypeCategory;
-    surfaces?: readonly FieldSurface[];
-  }>;
+  fieldTypes?: PluginFieldTypeMeta[];
 }
 
 export interface AdminBranding {
@@ -284,7 +269,10 @@ export interface AdminBranding {
   logoText?: string;
   favicon?: string;
   colors?: ResolvedBrandingColors;
-  /** Runtime toggle for builder-related navigation visibility. */
+  /**
+   * Whether the server offers the schema builder: never in production, and
+   * elsewhere unless `admin.branding.showBuilder` is false.
+   */
   showBuilder?: boolean;
 
   /**

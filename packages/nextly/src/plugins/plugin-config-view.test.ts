@@ -16,6 +16,7 @@ import type { NextlyServiceConfig } from "../di/register";
 import { container } from "../di/container";
 import { resolveUploadPolicy } from "../services/upload-validation/upload-policy";
 
+import { withWithheldConfig } from "./plugin-config-view";
 import { createPluginContext } from "./plugin-context";
 
 afterEach(() => {
@@ -148,5 +149,28 @@ describe("ctx.config", () => {
       appName: "Acme",
     });
     expect(view.email).not.toHaveProperty("providerConfig");
+  });
+});
+
+// The boot and the CLI both rebuild the config from a setup transformer's result through
+// `withWithheldConfig`, and both publish the per-language storage choice from what it returns.
+// The choice is not a key a transformer may rewrite, so a plugin cannot move the site's storage
+// layout, and the boot and the CLI read the same choice: the app's own.
+describe("a setup transformer's result", () => {
+  it("cannot change the per-language storage choice", () => {
+    const app = { perLanguageStorage: false, collections: [] };
+    const transformed = {
+      perLanguageStorage: true,
+      experimental: { perLanguageStorage: true },
+      collections: [],
+    };
+
+    const rebuilt = withWithheldConfig(app, transformed) as {
+      perLanguageStorage?: unknown;
+      experimental?: unknown;
+    };
+
+    expect(rebuilt.perLanguageStorage).toBe(false);
+    expect(rebuilt.experimental).toBeUndefined();
   });
 });

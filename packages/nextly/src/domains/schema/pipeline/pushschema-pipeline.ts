@@ -59,6 +59,7 @@ import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
+import { relationSwitches } from "./companion-shape-switches";
 import { withoutCopyOnlyRebuilds, type LiveTable } from "./copy-only-rebuilds";
 import {
   canEmitWithoutDrizzleKit,
@@ -89,6 +90,10 @@ import {
   stripKitDropsOfLiveUniqueConstraints,
 } from "./filter-unsafe-statements";
 import { indexRestoreStatements } from "./index-restore";
+import {
+  companionsHoldingBack,
+  withKeptScopeFieldsIn,
+} from "./kept-scope-fields";
 import { kitRouteConstraintStatements } from "./kit-route-constraints";
 import {
   desiredUniqueColumns,
@@ -129,10 +134,16 @@ import type {
   RenameCandidate,
   RenameDetector,
 } from "./pushschema-pipeline-interfaces";
+import { withRecordedShapes } from "./recorded-shapes";
 import { builtByFor } from "./registered-collections";
 import { refuseNotNullOverNulls } from "./required-column-gate";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
 import { withRetainedSizesColumn } from "./retained-core-columns";
+import {
+  refuseSeveralReferencesForOne,
+  refuseSwitchesWithRename,
+  refuseTargetSwitchesOverValues,
+} from "./several-references-refusal";
 import {
   sqliteRebuiltTables,
   untrackedConstraintCounts,
@@ -142,6 +153,7 @@ import {
 import { withCapturedStdout } from "./stdout-capture";
 import type { DesiredSchema } from "./types";
 import { uniqueColumnLookup } from "./unique-columns";
+import { currentWithheldScopeFields } from "./withheld-scope-fields";
 
 // F5 PR 4: produces a copy of `desired` where any field targeted by a
 // make_optional resolution has its `required` flag flipped to false (or
@@ -673,7 +685,7 @@ export class PushSchemaPipeline {
     // snapshot the diff compares and the Drizzle tables drizzle-kit turns into DDL — and resolving
     // inside either leaves the other on the raw fields, so a table would converge and then report a
     // type change against itself on every following diff.
-    const desired = args.desired;
+    let desired = args.desired;
     // Merged HERE rather than at each call site. `apply` has many callers —
     // HMR, the collection/single/component dispatchers, the dev server, the
     // DI registration — and adding extensions at each would miss some: a UI
@@ -718,9 +730,13 @@ export class PushSchemaPipeline {
     // Without the fingerprint, editing only a schema hook leaves `desired`
     // byte-identical and the push is skipped, so the hook's change never
     // reaches the database and nothing reports that it did not.
+    // And on what plugins' scopes hold back from switched-off types: a type
+    // switched on again, or its plugin removed, leaves `desired` as it was
+    // while its kept column is no longer kept (`kept-scope-fields.ts`).
     const cacheKey = {
       desired,
       extensions: extensions?.fingerprint ?? null,
+      withheld: currentWithheldScopeFields(),
     };
     const cachedSnapshot = getCachedSnapshot();
     if (cachedSnapshot !== undefined && dequal(cacheKey, cachedSnapshot)) {
@@ -781,6 +797,29 @@ export class PushSchemaPipeline {
             ? (cached as NextlySchemaSnapshot)
             : await introspectLiveSnapshot(db, dialect, managedTableNames);
       }
+      // A field a plugin's scope holds back from a type switched off keeps
+      // its column while the database has it: added back here, before
+      // anything reads the desired state, so neither the diff nor the tables
+      // handed to drizzle-kit plans its drop (`kept-scope-fields.ts`).
+      // A translated one keeps its column in the type's translations table,
+      // read here for the types something is held back from only: turning
+      // translation off then brings the column back to the main table.
+      const companions = companionsHoldingBack(desired);
+      const keptFrom =
+        companions.length === 0
+          ? liveSnapshot
+          : {
+              tables: [
+                ...liveSnapshot.tables,
+                ...(
+                  await (
+                    this.testHooks._introspectSnapshotOverride ??
+                    introspectLiveSnapshot
+                  )(db, dialect, companions)
+                ).tables,
+              ],
+            };
+      desired = withKeptScopeFieldsIn(desired, keptFrom, dialect);
 
       // 🔴 Contained, and its failure means "declare NEITHER registry".
       //
@@ -802,7 +841,23 @@ export class PushSchemaPipeline {
       const { snapshot: snapshotBeforeRenames, fieldGroupTypeColumns } =
         buildDesiredSnapshot({ desired, dialect, liveSnapshot, extensions });
 
-      const allOperations = diffSnapshots(liveSnapshot, snapshotBeforeRenames);
+      // The live columns given the shape each relation's recorded field stored: a switch the
+      // column's type does not show is planned from it (`withRecordedShapes`).
+      //
+      // A translated relation's switch, planned on its companion from the same rule, joins the
+      // operations here, so the confirmation, the refusals and the apply read one set, as the
+      // preview does (`relationSwitches`).
+      const liveWithShapes = withRecordedShapes(liveSnapshot, desired);
+      const diffed = diffSnapshots(liveWithShapes, snapshotBeforeRenames);
+      const switches = await relationSwitches({
+        db,
+        dialect,
+        desired,
+        live: liveSnapshot,
+        desiredSnapshot: snapshotBeforeRenames,
+        planned: diffed,
+      });
+      const allOperations = [...diffed, ...switches.ops];
 
       // A UI save owns only the entity being edited. An operation targeting a code-first or
       // plugin-owned table is dropped here, BEFORE anything reads the operation set, because those
@@ -952,6 +1007,32 @@ export class PushSchemaPipeline {
         dispatchResult,
         resolvedOps
       );
+      // A relationship switched to or from naming several target collections, while a row holds a
+      // value no conversion can carry across; then one switched from many related entries to one,
+      // while a row holds several.
+      // A translated relation's companion is among these (`relationSwitches`), its rows counted
+      // with the main tables'.
+      // A relation renamed and switched at once: the rename carries its values to the new name as
+      // they are, which the switch's conversion, planned for one name, never reaches.
+      refuseSwitchesWithRename({
+        desired: args.desired,
+        operations: resolvedOps,
+        previous: liveWithShapes,
+        next: snapshotBeforeRenames,
+      });
+      await refuseTargetSwitchesOverValues({
+        db: args.db,
+        dialect: args.dialect,
+        desired: args.desired,
+        operations: resolvedOps,
+      });
+      await refuseSeveralReferencesForOne({
+        db: args.db,
+        dialect: args.dialect,
+        desired: args.desired,
+        live: { tables: [...liveSnapshot.tables, ...switches.tables] },
+        operations: resolvedOps,
+      });
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       //

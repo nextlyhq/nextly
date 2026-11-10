@@ -143,6 +143,7 @@ export default function FieldGroupBuilderEditPage({
     setSettings,
     isInitialized,
     unsavedCount,
+    savedFieldIds,
     pinFields,
     pinSettings,
   } = useBuilderEntityState({
@@ -296,6 +297,7 @@ export default function FieldGroupBuilderEditPage({
       locked={isLocked}
       configPath={fieldGroup?.configPath}
       unsavedCount={unsavedCount}
+      savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
       onSettingsChange={setSettings}

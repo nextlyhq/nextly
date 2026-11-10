@@ -66,6 +66,7 @@ import {
   functionsDefinedBy,
   type DeletionFacts,
 } from "../../domains/schema/migrate/file-deletions";
+import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
 import {
   marksNoTransaction,
   splitSqlStatements,
@@ -98,11 +99,9 @@ import {
   SnapshotFileError,
   verifyMigrationHash,
 } from "../../domains/schema/migrate-create/snapshot-io";
+import { describeOp } from "../../domains/schema/pipeline/diff/describe-operation";
 import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
-import type {
-  NextlySchemaSnapshot,
-  Operation,
-} from "../../domains/schema/pipeline/diff/types";
+import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import { renderedType } from "../../domains/schema/pipeline/sql-templates/create-table-body";
 import { siblingClashesErrorFor } from "../../domains/schema/sibling-fields";
 import { validateCrossFile } from "../../domains/schema/ui-schema/cross-file";
@@ -124,7 +123,6 @@ import {
   exitWithError,
 } from "../errors";
 import {
-  builderSnapshotMissing,
   migrationFileEdited,
   migrationSnapshotInvalid,
   migrationSnapshotMissing,
@@ -141,8 +139,11 @@ import {
 } from "../utils/command-prerequisites";
 import {
   discoverMigrationGroups,
+  type DeclaredNames,
   getSortedBaseNames,
-  isBuilderWrittenMigration,
+  oldBuilderFileLine,
+  partialBuilderFileLine,
+  readMigrationFolder,
   selectVariant,
 } from "../utils/migration-discovery";
 
@@ -271,12 +272,17 @@ export async function runMigrateCheck(
     manifest,
   });
 
-  const desiredSnapshot = buildDesiredSnapshotFromConfig(
-    merged.collections,
-    merged.singles,
-    merged.components,
-    dialect
-  );
+  // Built once the latest snapshot is read, as `migrate:create` builds it:
+  // a field a plugin holds back from a type switched off keeps its column
+  // while that snapshot has it.
+  const desiredSnapshot = (existing: NextlySchemaSnapshot) =>
+    buildDesiredSnapshotFromConfig(
+      merged.collections,
+      merged.singles,
+      merged.components,
+      dialect,
+      existing
+    );
 
   // The app stream's extension schema, compiled exactly as `migrate:create`
   // compiles it. Without it every table an app declared through
@@ -289,11 +295,18 @@ export async function runMigrateCheck(
     logger: { warn: m => logger.warn(m) },
   });
 
+  // Read as `nextly migrate` reads the folder.
+  const declared = await declaredNamesOf({
+    ...configResult,
+    projectRoot: cwd,
+  });
+
   await runChecks({
     migrationsDir,
     desiredSnapshot,
     appStream,
     dialect,
+    declared,
     // Each entity with its settings, as `migrate:create` records them.
     entities: withBuilderSettingsAll(merged, manifest),
     logger,
@@ -311,8 +324,14 @@ export async function runMigrateCheck(
  */
 export async function runChecks(args: {
   migrationsDir: string;
-  /** What the entities alone describe; the extension schema is `appStream`. */
-  desiredSnapshot: NextlySchemaSnapshot;
+  /**
+   * What the entities alone describe; the extension schema is `appStream`.
+   * Or how to build it from the latest snapshot's tables, which keep the
+   * columns of fields a plugin holds back from a type switched off.
+   */
+  desiredSnapshot:
+    | NextlySchemaSnapshot
+    | ((existing: NextlySchemaSnapshot) => NextlySchemaSnapshot);
   /** The app stream's extension schema. Omitted, there is none. */
   appStream?: AppStreamTables;
   /**
@@ -320,6 +339,8 @@ export async function runChecks(args: {
    * check is skipped.
    */
   dialect?: SupportedDialect;
+  /** What the declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
   /**
    * The declared entities with their settings, compared with the newest
    * snapshot's settings record. Omitted, settings are not checked.
@@ -340,6 +361,13 @@ export async function runChecks(args: {
   } catch {
     sqlFiles = [];
   }
+  sqlFiles = await withoutOldBuilderFiles(
+    sqlFiles,
+    migrationsDir,
+    args.dialect,
+    args.declared,
+    logger
+  );
 
   let snapshotFiles: string[];
   try {
@@ -375,18 +403,6 @@ export async function runChecks(args: {
       throw err;
     }
     if (!result.ok && result.expected === undefined) {
-      // A Builder save writes no snapshot. Its remedy is the file
-      // `migrate:create` writes for the change, which `nextly migrate` also
-      // asks for before it refuses to apply this one.
-      if (isBuilderWrittenMigration(sqlName.replace(/\.sql$/, ""))) {
-        return exitWithError(
-          logger,
-          builderSnapshotMissing(
-            "`nextly migrate:check` found a Schema Builder migration file with no snapshot, which `nextly migrate` does not apply.",
-            [sqlName]
-          )
-        );
-      }
       return exitWithError(logger, migrationSnapshotMissing(sqlName, metaDir));
     }
     if (!result.ok) {
@@ -415,7 +431,7 @@ export async function runChecks(args: {
   // again.
   if (args.dialect !== undefined) {
     reportStatements(
-      await judgeStatements(migrationsDir, args.dialect),
+      await judgeStatements(migrationsDir, args.dialect, args.declared),
       logger
     );
   }
@@ -430,10 +446,14 @@ export async function runChecks(args: {
   let latest: Awaited<ReturnType<typeof loadLatestSnapshot>>;
   try {
     latest = await loadLatestSnapshot(metaDir);
+    const existing = latest?.data.snapshot ?? EMPTY_SNAPSHOT;
     const stream = appStreamSnapshots({
-      previous: latest?.data.snapshot ?? EMPTY_SNAPSHOT,
+      previous: existing,
       previousContributions: latest?.data.contributions ?? {},
-      desired: args.desiredSnapshot,
+      desired:
+        typeof args.desiredSnapshot === "function"
+          ? args.desiredSnapshot(existing)
+          : args.desiredSnapshot,
       tables: args.appStream ?? NO_APP_STREAM_TABLES,
     });
     previousSnapshot = stream.previous;
@@ -488,6 +508,31 @@ export async function runChecks(args: {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/**
+ * `sqlFiles` as every reader of the folder reads them: an old Builder file is
+ * named and checked no further, and a file with only part of its signature is
+ * named with what it lacks and checked as any migration. Classifying reads
+ * statements, so without a dialect no file is set aside.
+ */
+async function withoutOldBuilderFiles(
+  sqlFiles: string[],
+  migrationsDir: string,
+  dialect: SupportedDialect | undefined,
+  declared: DeclaredNames | undefined,
+  logger: CommandContext["logger"]
+): Promise<string[]> {
+  if (dialect === undefined) return sqlFiles;
+  const folder = await readMigrationFolder(migrationsDir, dialect, declared);
+  const ignored = new Set(folder.oldBuilderFiles.map(f => f.file));
+  for (const file of folder.oldBuilderFiles) {
+    logger.info(oldBuilderFileLine(file));
+  }
+  for (const file of folder.partialBuilderFiles) {
+    logger.warn(partialBuilderFileLine(file));
+  }
+  return sqlFiles.filter(f => !ignored.has(f));
+}
 
 /**
  * Check 6: settings changed with no migration for them, as the error the
@@ -554,7 +599,8 @@ function reportStatements(
  */
 export async function judgeStatements(
   migrationsDir: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  declared?: DeclaredNames
 ): Promise<{
   outsideTransaction: string[];
   refused: { file: string; message: string }[];
@@ -571,7 +617,11 @@ export async function judgeStatements(
     section: "UP" | "DOWN";
     deletions: Deletion[];
   }[] = [];
-  const groups = await discoverMigrationGroups(migrationsDir);
+  const groups = await discoverMigrationGroups(
+    migrationsDir,
+    dialect,
+    declared
+  );
   const metaDir = resolve(migrationsDir, "meta");
   // The schema before the file being read: nothing before the first file,
   // then the snapshot paired with the file before it (undefined when that
@@ -713,52 +763,6 @@ async function pairedSnapshot(
     return parseSnapshotFile(content, name).snapshot;
   } catch {
     return undefined;
-  }
-}
-
-/**
- * Render an Operation as a short human-readable summary for the
- * SCHEMA_DRIFT error output. Mirrors the apply pipeline's logging
- * style for consistency.
- */
-function describeOp(op: Operation): string {
-  switch (op.type) {
-    case "add_table":
-      return `add_table ${op.table.name}`;
-    case "drop_table":
-      return `drop_table ${op.tableName}`;
-    case "rename_table":
-      return `rename_table ${op.fromName} -> ${op.toName}`;
-    case "add_column":
-      return `add_column ${op.tableName}.${op.column.name} (${op.column.type})`;
-    case "drop_column":
-      return `drop_column ${op.tableName}.${op.columnName}`;
-    case "rename_column":
-      return `rename_column ${op.tableName}.${op.fromColumn} -> ${op.toColumn}`;
-    case "change_column_type":
-      return `change_column_type ${op.tableName}.${op.columnName} (${op.fromType} -> ${op.toType})`;
-    case "change_column_nullable":
-      return `change_column_nullable ${op.tableName}.${op.columnName} (${op.fromNullable} -> ${op.toNullable})`;
-    case "change_column_default":
-      return `change_column_default ${op.tableName}.${op.columnName}`;
-    case "add_index":
-      return `add_index ${op.index.name} on ${op.tableName}`;
-    case "drop_index":
-      return `drop_index ${op.index.name} on ${op.tableName}`;
-    case "add_check":
-      return `add_check ${op.check.name} on ${op.tableName}`;
-    case "drop_check":
-      return `drop_check ${op.check.name} on ${op.tableName}`;
-    case "add_foreign_key":
-      return `add_foreign_key ${op.foreignKey.name} on ${op.tableName}`;
-    case "drop_foreign_key":
-      return `drop_foreign_key ${op.foreignKey.name} on ${op.tableName}`;
-    case "change_foreign_key_action":
-      return (
-        `change_foreign_key_action ${op.tableName}.${op.columnName} ` +
-        `(ON DELETE ${op.fromOnDelete} -> ${op.toOnDelete}, ` +
-        `ON UPDATE ${op.fromOnUpdate} -> ${op.toOnUpdate})`
-      );
   }
 }
 

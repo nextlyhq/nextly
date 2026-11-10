@@ -615,8 +615,19 @@ export { Bleed, PageShell, SHELL_MEASURE } from "./components/page-shell";
  * entirely by props, so a page declares what it is instead of a foreign file
  * deriving it from the URL. No first-party plugin has exercised it yet.
  */
-export { PageHeader } from "./components/page-header";
+export { PageHeader, PageTab, PageTabs } from "./components/page-header";
 /** @experimental */
-export type { PageHeaderProps } from "./components/page-header";
+export type {
+  PageHeaderProps,
+  PageTabProps,
+  PageTabsProps,
+} from "./components/page-header";
+/**
+ * @experimental A page's frame by its type (list, form, editor, workspace):
+ * the page says what it is, and the frame decides its width and gutter.
+ */
+export { PageFrame } from "./components/page-frame";
+/** @experimental */
+export type { PageFrameProps, PageType } from "./components/page-frame";
 /** @experimental */
 export type { BleedProps, PageShellProps } from "./components/page-shell";

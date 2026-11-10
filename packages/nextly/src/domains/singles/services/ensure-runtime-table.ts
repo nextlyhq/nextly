@@ -114,7 +114,10 @@ function shapeSignature(
   meta: SingleRuntimeTableMeta,
   fields: { name: string; type: string; localized?: boolean }[]
 ): string {
-  const shape = `${storesPerLanguage(meta)}:${meta.status === true}`;
+  // Where the values live, whether each language publishes on its own (the companion's `_status`,
+  // which a translation toggle under `experimental.perLanguageStorage` changes alone), and the
+  // main table's own `status`.
+  const shape = `${storesPerLanguage(meta)}:${publishesPerLanguage(meta)}:${meta.status === true}`;
   return meta.schemaVersion !== undefined
     ? `v${meta.schemaVersion}:${shape}`
     : `f${JSON.stringify(fields)}:${shape}`;

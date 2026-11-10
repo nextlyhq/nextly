@@ -40,7 +40,7 @@ vendored version if that happens. The workflows under `.github/` still use
 `jq` freely — GitHub's runners ship it, and that is not a contributor's
 machine.
 
-`FALLOW_AUDIT_BASE` is pinned to `origin/main` in `.claude/settings.json`. Left unset, the audit takes its base from the merge-base with the branch's UPSTREAM, which is the remote tracking branch — stale on any branch whose local commits are not pushed, and after a rebase that means the diff carries every commit `main` gained since. Measured here: 319 changed files and a `fail` verdict on a branch whose actual diff was nine commits. Every pull request in this repo targets `main`, so naming it removes the guesswork.
+`FALLOW_AUDIT_BASE` is pinned to `origin/dev` in `.claude/settings.json`. Left unset, the audit takes its base from the merge-base with the branch's UPSTREAM, which is the remote tracking branch — stale on any branch whose local commits are not pushed, and after a rebase that means the diff carries every commit `dev` gained since. Measured here: 319 changed files and a `fail` verdict on a branch whose actual diff was nine commits. Every pull request in this repo targets `dev` (promoted to `main` daily), so naming it removes the guesswork; a branch cut from `main` passes its own `--base`.
 
 The audit keeps a copy of the base, about 230 MB here, in the system temporary directory (`TMPDIR`, else `/tmp`), one per checkout it audits, and reuses it while that checkout lives; its results for a base are also cached in the checkout's own `.fallow/`. fallow reclaims a snapshot whose checkout is gone only after `audit.cacheMaxAgeDays`, 30 days by default, which a worktree per pull request outruns: on a 4.9 GB tmpfs `/tmp`, eighteen filled it, shell writes failed, and the snapshot being written was cut short, so that run's verdict could not be trusted. `pnpm worktree remove` deletes the removed checkout's snapshot and `pnpm worktree sweep` deletes any whose checkout is gone (the `working-in-worktrees` skill). If `/tmp` fills anyway, run `df -h /tmp` and `pnpm worktree sweep`, then run the audit again, since a verdict from a truncated snapshot is not one.
 
@@ -53,7 +53,7 @@ For non-skill agents, treat the task map below as the local onboarding source: r
 | delete an "unused" export or file                                 | `fallow dead-code --trace <file>:<export>`                                           |
 | prove a TypeScript symbol's exact consumers before refactoring    | `fallow dead-code --type-aware --symbol-impact <file>:<export-or-class.method>`      |
 | delete an "unused" dependency                                     | `fallow dead-code --trace-dependency <name>`                                         |
-| commit or open a PR                                               | `pnpm fallow:audit` (`fallow audit --base origin/main`)                              |
+| commit or open a PR                                               | `pnpm fallow:audit` (`fallow audit --base origin/dev`)                               |
 | prioritize refactoring                                            | `fallow health --hotspots --targets`                                                 |
 | ask who owns code                                                 | `fallow health --ownership`                                                          |
 | check untested-but-reachable code                                 | `fallow health --coverage-gaps`                                                      |

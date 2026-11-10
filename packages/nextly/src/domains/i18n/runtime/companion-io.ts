@@ -60,6 +60,7 @@ import type {
   I18nTransitionKind,
   TransitionStateStore,
 } from "../migration/transition-state";
+import { storesPerLanguage } from "../per-language-storage";
 
 import { buildCompanionRuntimeTable } from "./companion-registration";
 import { encodeStamp } from "./companion-stamp-column";
@@ -681,7 +682,9 @@ export async function refuseCompanionColumnsThatCannotHold(
     config
   )) {
     for (const entity of group) {
-      if (!entity.slug || entity.localized !== true) continue;
+      // Every entity kept per language: a translated one, or any under
+      // `experimental.perLanguageStorage`, whose translatable fields live in its companion too.
+      if (!entity.slug || !storesPerLanguage(entity)) continue;
       const tableName = resolveTableName(entity);
       const live = await liveCompanionColumns(adapter, tableName);
       if (live.length === 0) continue;

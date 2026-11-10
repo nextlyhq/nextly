@@ -98,7 +98,6 @@ describe("teardownEntityComponentData failure handling", () => {
       teardownEntityComponentData({
         adapter: adapter as never,
         parentTable: "dc_posts",
-        maxDepth: 3,
       })
     ).rejects.toMatchObject({
       logContext: expect.objectContaining({

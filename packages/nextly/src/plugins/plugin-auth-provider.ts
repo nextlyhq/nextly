@@ -19,6 +19,11 @@ import {
 } from "../auth/plugin-auth-api";
 import { NextlyError } from "../errors/nextly-error";
 
+import {
+  bootNameOf,
+  NO_PLUGIN_GRANTS,
+  type PluginGrants,
+} from "./plugin-consent";
 import type { PluginDefinition } from "./plugin-context";
 import { pluginAdminSlug } from "./plugin-slug";
 
@@ -81,15 +86,22 @@ export function getPluginAuthApi(): PluginAuthApi {
 
 /**
  * `ctx.auth` for one plugin: the shared instance, with `completeLogin` held to
- * what the plugin declared.
+ * what the boot granted it.
  *
  * Finishing a login mints a session for whatever account the plugin names,
  * so it is a reach an operator must be able to see before installing the
  * plugin. Two rules make it one:
  *
- * - The plugin must declare `capabilities.auth.login`. Without it, any
- *   installed plugin could sign anyone in from any route it mounts, and the
- *   manifest review would show nothing.
+ * - The boot must have granted the plugin the login capability. `grants` is
+ *   the verdict decided once, when the boot resolved the plugin list, from
+ *   the manifest as it stood and the app's `auth.loginPlugins` listing. The
+ *   live definition is NOT read here: `init` runs as a method on it, so a
+ *   plugin that booted without the capability could flip its own flag on and
+ *   then call. `ctx.db.raw` is held to its grant the same way.
+ * - The grant check answers to the name the boot resolved, snapshotted here
+ *   beside the prefix, not to `plugin.name` reread at call time: the same
+ *   method call could rename an unlisted plugin onto a listed one and borrow
+ *   its grant. The snapshot and the verdict travel together.
  * - The strategy name must be the plugin's own slug, a colon, and a name for
  *   the method. The audit rows record the strategy, and it travels in the
  *   pending token through a second factor, so this is what says WHICH plugin
@@ -98,11 +110,19 @@ export function getPluginAuthApi(): PluginAuthApi {
  *   back on. A bare `slug:` names the plugin but no method, so a plugin with
  *   two ways in could not be told apart on the rows; it is refused too.
  *
- * Built per context and cheap: the shared instance is looked up on each call,
- * so a config reload that rebuilds it is picked up.
+ * A context built outside a boot holds no verdict (`NO_PLUGIN_GRANTS`), so it
+ * holds no grant either. Built per context and cheap: the shared instance is
+ * looked up on each call, so a config reload that rebuilds it is picked up.
  */
-export function getPluginAuthApiFor(plugin: PluginDefinition): PluginAuthApi {
-  const prefix = `${pluginAdminSlug(plugin.name)}:`;
+export function getPluginAuthApiFor(
+  plugin: PluginDefinition,
+  grants: PluginGrants = NO_PLUGIN_GRANTS
+): PluginAuthApi {
+  // The boot-time name, recorded when the grants were decided: `init`
+  // mutates the definition in place, so a name read from it at call time
+  // would be whatever the plugin made it.
+  const pluginName = bootNameOf(plugin);
+  const prefix = `${pluginAdminSlug(pluginName)}:`;
   return {
     currentUser: request => getPluginAuthApi().currentUser(request),
     verifyCsrf: request => getPluginAuthApi().verifyCsrf(request),
@@ -112,12 +132,12 @@ export function getPluginAuthApiFor(plugin: PluginDefinition): PluginAuthApi {
       // Programming errors in the plugin, not login outcomes, so they throw
       // where the author sees them rather than redirecting a person to a
       // generic failure.
-      if (plugin.capabilities?.auth?.login !== true) {
+      if (!grants.login.includes(pluginName)) {
         throw NextlyError.forbidden({
           logContext: {
             reason: "plugin-login-undeclared",
-            plugin: plugin.name,
-            hint: "declare capabilities.auth.login to call ctx.auth.completeLogin",
+            plugin: pluginName,
+            hint: "declare capabilities.auth.login and be listed in auth.loginPlugins to call ctx.auth.completeLogin",
           },
         });
       }
@@ -138,7 +158,7 @@ export function getPluginAuthApiFor(plugin: PluginDefinition): PluginAuthApi {
               message: `A plugin's strategy name must be "${prefix}" followed by a name for the method.`,
             },
           ],
-          logContext: { plugin: plugin.name },
+          logContext: { plugin: pluginName },
         });
       }
       return getPluginAuthApi().completeLogin(userId, opts);

@@ -27,6 +27,7 @@ import {
   KITCHEN_SINK_SLUG,
   KITCHEN_SINK_TITLE,
 } from "../seed/kitchen-sink";
+import { seedSampleForms, type SampleFormsStore } from "../seed/sample-forms";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLAYGROUND_DIR = path.resolve(HERE, "..");
@@ -66,6 +67,8 @@ export interface SeedResult {
   mediaUploaded: number;
   blockPagesCreated: number;
   demoPagesCreated: number;
+  formsCreated: number;
+  submissionsCreated: number;
 }
 
 const EMPTY_RESULT: SeedResult = {
@@ -77,6 +80,8 @@ const EMPTY_RESULT: SeedResult = {
   mediaUploaded: 0,
   blockPagesCreated: 0,
   demoPagesCreated: 0,
+  formsCreated: 0,
+  submissionsCreated: 0,
 };
 
 async function loadSeedData(): Promise<SeedData> {
@@ -338,6 +343,29 @@ async function seedDemoSite(nextly: DemoStore): Promise<{ created: number }> {
   });
 }
 
+/**
+ * The sample forms and submissions (`seed/sample-forms`), offered on every run
+ * for the reason the kitchen-sink page is: forms are keyed on slugs nothing
+ * else writes, and submissions go only to a form that has none, so an
+ * author's own test submissions are never doubled.
+ */
+async function seedForms(
+  nextly: SampleFormsStore & {
+    media: {
+      upload(args: {
+        file: { data: Buffer; name: string; mimetype: string; size: number };
+      }): Promise<{ id: unknown }>;
+    };
+  }
+) {
+  return seedSampleForms(nextly, async file => {
+    const media = await nextly.media.upload({
+      file: { ...file, size: file.data.length },
+    });
+    return String(media.id);
+  });
+}
+
 export async function seedForce(): Promise<SeedResult> {
   const nextly = await getNextly({ config });
   const data = await loadSeedData();
@@ -381,6 +409,10 @@ export async function seedForce(): Promise<SeedResult> {
   const demo = await seedDemoSite(nextly);
   result.demoPagesCreated = demo.created;
 
+  const forms = await seedForms(nextly);
+  result.formsCreated = forms.formsCreated;
+  result.submissionsCreated = forms.submissionsCreated;
+
   return result;
 }
 
@@ -405,15 +437,24 @@ export async function seedIfEmpty(): Promise<SeedResult> {
      */
     const blockPages = await seedBlockPages(nextly);
     const demo = await seedDemoSite(nextly);
+    const forms = await seedForms(nextly);
     return {
       ...EMPTY_RESULT,
       skipped: true,
       reason: "users-exist",
       blockPagesCreated: blockPages.created,
       demoPagesCreated: demo.created,
+      formsCreated: forms.formsCreated,
+      submissionsCreated: forms.submissionsCreated,
     };
   }
   return seedForce();
+}
+
+/** The skip message's note on sample forms, empty when none were added. */
+function sampleFormsNote(result: SeedResult): string {
+  if (result.formsCreated + result.submissionsCreated === 0) return "";
+  return `, added ${result.formsCreated} sample forms and ${result.submissionsCreated} submissions`;
 }
 
 // CLI entry: `pnpm db:seed` runs seedIfEmpty. Wrapped in an async IIFE
@@ -430,7 +471,8 @@ if (isCliEntry(import.meta.url)) {
             (result.blockPagesCreated > 0
               ? `, added ${result.blockPagesCreated} block page`
               : "") +
-            (result.demoPagesCreated > 0 ? ", added the welcome page" : "")
+            (result.demoPagesCreated > 0 ? ", added the welcome page" : "") +
+            sampleFormsNote(result)
         );
       } else {
         console.log(
@@ -438,7 +480,9 @@ if (isCliEntry(import.meta.url)) {
             `${result.postsCreated} posts, ${result.categoriesCreated} categories, ` +
             `${result.tagsCreated} tags, ${result.mediaUploaded} media, ` +
             `${result.blockPagesCreated} block pages, ` +
-            `${result.demoPagesCreated} welcome page`
+            `${result.demoPagesCreated} welcome page, ` +
+            `${result.formsCreated} sample forms, ` +
+            `${result.submissionsCreated} sample submissions`
         );
       }
       process.exit(0);

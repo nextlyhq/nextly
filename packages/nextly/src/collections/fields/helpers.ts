@@ -300,7 +300,7 @@ export const icon = <
  * // Integer with range
  * number({ name: 'quantity', min: 0, max: 100, step: 1 })
  *
- * // Exact decimal price (integer is the default and truncates fractions)
+ * // Exact decimal price (integer is the default and refuses a fraction)
  * number({ name: 'amount', min: 0, dbType: 'decimal', scale: 2 })
  * ```
  */

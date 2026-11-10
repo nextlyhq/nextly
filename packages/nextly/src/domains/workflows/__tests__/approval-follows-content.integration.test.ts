@@ -131,7 +131,8 @@ const app = (): TestNextly => {
 };
 
 /**
- * Boots Posts (translated, with a shared `code`, and a shared `legalNote` only rita may not read)
+ * Boots Posts (translated, with a shared `code`, a shared `legalNote` only rita may not read, and a
+ * translated `regional` a read in Spanish withholds)
  * on `postsWorkflow`, Briefs on `checked` with a secret only bob may not read, and Memos on
  * `handover`; Briefs and Memos keep few versions.
  */
@@ -173,6 +174,12 @@ async function boot(
             localized: false,
             access: { read: ({ user }) => user?.id !== "rita" },
           }),
+          // Withheld by the language a read is in, not by who reads it.
+          text({
+            name: "regional",
+            localized: true,
+            access: { read: ({ locale }) => locale !== "es" },
+          }),
         ],
       }),
       defineCollection({
@@ -210,7 +217,11 @@ async function boot(
 const handlerOf = (n: TestNextly) =>
   n.getService("collectionsHandler") as CollectionsHandler;
 
-/** Saves `data` as an editor's ordinary save: as `userId` when given, else trusted code. */
+/**
+ * Saves `data` as an editor's ordinary save: as `userId` when given, else trusted code. It says it
+ * replaces whatever is stored (`_overwrite`), as a save that read no version must, and a refused
+ * save fails the test rather than leaving the document as it was.
+ */
 async function save(
   slug: string,
   entryId: string,
@@ -221,7 +232,7 @@ async function save(
     keyId?: string;
   } = {}
 ): Promise<void> {
-  await handlerOf(app()).updateEntry(
+  const result = await handlerOf(app()).updateEntry(
     {
       collectionName: slug,
       entryId,
@@ -232,8 +243,11 @@ async function save(
         ? { actor: { type: "apiKey" as const, id: options.keyId } }
         : {}),
     },
-    data
+    { ...data, _overwrite: true }
   );
+  if (!result.success) {
+    throw new Error(`save refused: ${result.statusCode} ${result.message}`);
+  }
 }
 
 /** Takes `name` on one part, as a caller that just read it. */
@@ -581,6 +595,44 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("a translated field a read rule withholds in one language", () => {
+      it("judges a language's changes as a read in that language does, refusing what a Spanish read withholds", async () => {
+        await boot(dialect);
+        const n = app();
+        const uma = await person(n, "uma", [["sign-off", "posts"]]);
+        const post = await entry(n, "posts");
+        await save("posts", post, { regional: "solo en" }, { locale: "en" });
+        await save("posts", post, { regional: "solo es" }, { locale: "es" });
+        for (const part of ["en", "es"]) {
+          await seedState(n, partOf("posts", post, part), "legal", {
+            enteredBy: "alice",
+            definitionHash: HASH,
+          });
+        }
+
+        // A Spanish read withholds `regional` from everyone, so no one may approve Spanish's change.
+        await expect(
+          take("posts", post, "es", "clear", uma)
+        ).rejects.toMatchObject({
+          code: "FORBIDDEN",
+          publicData: {
+            reason: "field-hidden",
+            fields: ["regional"],
+            approvers: [],
+          },
+        });
+        expect(await stateOf(app(), partOf("posts", post, "es"))).toMatchObject(
+          { stage: "legal", approval: null }
+        );
+
+        // An English read shows it, so English's change is hers to approve.
+        await take("posts", post, "en", "clear", uma);
+        expect(
+          (await stateOf(app(), partOf("posts", post, "en")))?.approval
+        ).toMatchObject({ by: "uma" });
+      });
+    });
+
     describe("a step out of a publishable stage", () => {
       it("withdraws the approval on a step back that changes no content, keeping the approved version pinned", async () => {
         await boot(dialect);
@@ -599,58 +651,68 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    describe("a deploy that changes the definition", () => {
-      it("withdraws approvals given under the earlier definition and moves the part to the stage named for them, from which it can be approved again", async () => {
-        const first = await boot(dialect);
-        await person(first, "dave", [["update", "posts"]]);
-        const { bob, post } = await approvedPost();
-        clearServices();
+    // A deploy is simulated by booting again on the first boot's adapter, and the test harness
+    // releases the database a server-backed boot provisioned when the next boot starts: only
+    // SQLite keeps one database across the two boots. The sweep these cases cover reads and writes
+    // through the adapter, the same on every dialect.
+    (dialect === "sqlite" ? describe : describe.skip)(
+      "a deploy that changes the definition",
+      () => {
+        it("withdraws approvals given under the earlier definition and moves the part to the stage named for them, from which it can be approved again", async () => {
+          const first = await boot(dialect);
+          await person(first, "dave", [["update", "posts"]]);
+          const { bob, post } = await approvedPost();
+          clearServices();
 
-        const changed = editorialWithIntake(false);
-        await boot(dialect, { postsWorkflow: changed, adapter: first.adapter });
+          const changed = editorialWithIntake(false);
+          await boot(dialect, {
+            postsWorkflow: changed,
+            adapter: first.adapter,
+          });
 
-        const newHash = workflowDefinitionHash(changed);
-        expect(newHash).not.toBe(HASH);
-        expect(await stateOf(app(), partOf("posts", post, "en"))).toMatchObject(
-          {
+          const newHash = workflowDefinitionHash(changed);
+          expect(newHash).not.toBe(HASH);
+          expect(
+            await stateOf(app(), partOf("posts", post, "en"))
+          ).toMatchObject({
             stage: "intake",
             approval: null,
             definitionHash: newHash,
-          }
-        );
-        const [withdrawn] = await withdrawals("posts", post);
-        expect(withdrawn).toMatchObject({
-          actorKind: "system",
-          fromState: "cleared",
-          toState: "intake",
-          definitionHash: newHash,
+          });
+          const [withdrawn] = await withdrawals("posts", post);
+          expect(withdrawn).toMatchObject({
+            actorKind: "system",
+            fromState: "cleared",
+            toState: "intake",
+            definitionHash: newHash,
+          });
+
+          const dave: WorkflowCaller = { kind: "user", userId: "dave" };
+          await take("posts", post, "en", "start", dave);
+          await take("posts", post, "en", "send", dave);
+          await take("posts", post, "en", "clear", bob);
+          expect(
+            (await stateOf(app(), partOf("posts", post, "en")))?.approval
+          ).toMatchObject({ by: "bob" });
         });
 
-        const dave: WorkflowCaller = { kind: "user", userId: "dave" };
-        await take("posts", post, "en", "start", dave);
-        await take("posts", post, "en", "send", dave);
-        await take("posts", post, "en", "clear", bob);
-        expect(
-          (await stateOf(app(), partOf("posts", post, "en")))?.approval
-        ).toMatchObject({ by: "bob" });
-      });
+        it("keeps approvals given under the earlier definition when the new one keeps them", async () => {
+          const first = await boot(dialect);
+          const { post, approved } = await approvedPost();
+          clearServices();
 
-      it("keeps approvals given under the earlier definition when the new one keeps them", async () => {
-        const first = await boot(dialect);
-        const { post, approved } = await approvedPost();
-        clearServices();
+          await boot(dialect, {
+            postsWorkflow: editorialWithIntake(true),
+            adapter: first.adapter,
+          });
 
-        await boot(dialect, {
-          postsWorkflow: editorialWithIntake(true),
-          adapter: first.adapter,
+          expect(
+            await stateOf(app(), partOf("posts", post, "en"))
+          ).toMatchObject({ stage: "cleared", approval: approved.approval });
+          expect(await withdrawals("posts", post)).toEqual([]);
         });
-
-        expect(await stateOf(app(), partOf("posts", post, "en"))).toMatchObject(
-          { stage: "cleared", approval: approved.approval }
-        );
-        expect(await withdrawals("posts", post)).toEqual([]);
-      });
-    });
+      }
+    );
 
     describe("an approval of a field the reviewer cannot read", () => {
       it("is refused while a changed field is hidden from the reviewer, naming who could approve, and allowed once that field is as last approved", async () => {

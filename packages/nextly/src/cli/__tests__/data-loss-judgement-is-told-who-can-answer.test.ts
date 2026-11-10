@@ -88,7 +88,8 @@ function configResult() {
     config: {
       collections: [],
       plugins: [],
-      db: { migrationsDir: seen.migrationsDir },
+      // A sanitized config always names its definition file; none is there.
+      db: { migrationsDir: seen.migrationsDir, uiSchemaFile: "ui-schema.json" },
     },
     appConfig: { collections: [], plugins: [], db: {} },
     projectRoot: seen.migrationsDir,
@@ -107,9 +108,20 @@ vi.mock(
       findOrphanedCollections() {
         return Promise.resolve([{ slug: "nw_old", tableName: "dc_nw_old" }]);
       }
+      // No type keeps a column for a switched-off plugin field.
+      getAllCollections() {
+        return Promise.resolve([]);
+      }
     },
   })
 );
+vi.mock("../../domains/singles/services/single-registry-service", () => ({
+  SingleRegistryService: class {
+    getAllSingles() {
+      return Promise.resolve([]);
+    }
+  },
+}));
 vi.mock(
   "../../domains/field-groups/services/register-field-group-schemas",
   () => ({ registerComponentSchemas: () => Promise.resolve() })
@@ -124,6 +136,10 @@ vi.mock("../../domains/schema/events/schema-events-repository", () => ({
     // No migration's removal is recorded.
     listFileRemovals() {
       return Promise.resolve([]);
+    }
+    // No old Schema Builder file is marked.
+    currentOldBuilderMarks() {
+      return Promise.resolve(new Map());
     }
   },
 }));

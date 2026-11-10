@@ -26,6 +26,7 @@ import {
   buildRetentionRunner,
   retentionPoliciesFrom,
 } from "../domains/retention/passes";
+import type { BuilderSaveSetup } from "../domains/schema/builder-save/collection-save";
 import {
   draftSplitResponseFields,
   schemaDraftSplit,
@@ -289,6 +290,13 @@ export class CollectionsHandler {
       this.fileManager,
       this.collectionService
     );
+    // A save through this handler writes where every Builder save writes:
+    // the app's definition file and migrations folder, as registered at boot.
+    if (container.has("builderSaveSetup")) {
+      this.metadataService.setBuilderSave(
+        container.get<BuilderSaveSetup>("builderSaveSetup")
+      );
+    }
 
     const fieldGroupDataService = container.has("fieldGroupDataService")
       ? container.get<FieldGroupDataService>("fieldGroupDataService")
@@ -414,8 +422,6 @@ export class CollectionsHandler {
    * refused with by validation and field rules, judged without writing — on
    * the instance that serves
    * collection writes, so the judgement is the one the write would make.
-   *
-   * @experimental
    */
   async releasePublishIssues(params: {
     collectionName: string;
@@ -454,8 +460,6 @@ export class CollectionsHandler {
   /**
    * Each of these entries as a release would put it live, read as stored. See
    * the mutation service.
-   *
-   * @experimental
    */
   async releaseGoingLiveDocuments(params: {
     collectionName: string;
@@ -468,8 +472,6 @@ export class CollectionsHandler {
    * Whether a release's document-wide write of this collection would meet a
    * translation table without its per-language status. See the mutation
    * service.
-   *
-   * @experimental
    */
   async releaseCompanionLacksStatus(params: {
     collectionName: string;
@@ -480,8 +482,6 @@ export class CollectionsHandler {
   /**
    * The languages whose unreleased work a release's document-wide write of
    * these entries would be refused over.
-   *
-   * @experimental
    */
   async releaseHeldDraftLocales(params: {
     collectionName: string;

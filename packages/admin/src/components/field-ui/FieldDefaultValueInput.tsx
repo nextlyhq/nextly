@@ -25,11 +25,21 @@ function uncollidedSentinel(values: ReadonlySet<string>): string {
   return sentinel;
 }
 
+/**
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
+ */
 export interface FieldDefaultOption {
   label: string;
   value: string;
 }
 
+/**
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
+ */
 export interface FieldDefaultValueInputProps {
   /**
    * The field type whose default is being edited. Drives the control:
@@ -53,6 +63,10 @@ export interface FieldDefaultValueInputProps {
  * Every surface that lets a field declare a default renders this, so a
  * checkbox default is always the same true/false choice and a select default
  * is always a choice among the field's own options.
+ *
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
  */
 export function FieldDefaultValueInput({
   fieldType,

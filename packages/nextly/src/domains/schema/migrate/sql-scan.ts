@@ -63,6 +63,16 @@ export type SqlSegment =
        * standard_conforming_strings) — so where the string ends does too.
        */
       ambiguousBackslash: boolean;
+      /**
+       * The value the server reads, only when this scan reads it exactly;
+       * undefined otherwise, so a reader comparing it fails closed. It is
+       * undefined for an unterminated string, for MySQL's `"..."` (a name
+       * under ANSI_QUOTES), and for a string holding a backslash on any
+       * dialect but SQLite: an escape there (MySQL, `E'...'`) or a server
+       * setting (standard_conforming_strings) decides what it means, and
+       * this scan decodes neither.
+       */
+      text: string | undefined;
       unterminated: boolean;
     }
   | {
@@ -282,6 +292,10 @@ function stringAt(
   }
   const end = Math.min(i, text.length);
   const escapeString = start !== quoteAt;
+  const exact =
+    closed &&
+    !(dialect === "mysql" && quote === '"') &&
+    (dialect === "sqlite" || !content.includes("\\"));
   return {
     kind: "string",
     start,
@@ -291,6 +305,7 @@ function stringAt(
     ambiguousBackslash:
       settingDecidesBackslash(dialect, escapeString) &&
       text.slice(quoteAt + 1, end).includes(`\\${quote}`),
+    text: exact ? content : undefined,
     unterminated: !closed,
   };
 }

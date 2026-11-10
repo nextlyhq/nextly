@@ -111,6 +111,7 @@ vi.mock(
   })
 );
 
+import { useDocumentValues } from "../document-values";
 import { EntryForm } from "../EntryForm";
 
 function Providers({ children }: { children: ReactNode }): ReactElement {
@@ -156,6 +157,12 @@ function component(path: string, testId: string): string {
   )) as never);
   return path;
 }
+/** A plugin's block showing the title as it is typed. */
+const LIVE = "@acme/a/admin#LiveTitle";
+registerComponent(LIVE, (() => {
+  const values = useDocumentValues(["title"]);
+  return <output data-testid="live-title">{String(values?.title)}</output>;
+}) as never);
 const TOP = component("@acme/a/admin#Top", "top-block");
 const MIDDLE = component("@acme/a/admin#Middle", "middle-block");
 const BOTTOM = component("@acme/a/admin#Bottom", "bottom-block");
@@ -439,5 +446,38 @@ describe("the edit page's place in the entry editor", () => {
 
     expect(screen.queryByTestId("plugin-section")).toBeNull();
     expect(screen.getByRole("region", { name: "Status" })).toBeInTheDocument();
+  });
+});
+
+describe("a plugin's block reading the document as it is typed", () => {
+  const live = {
+    "collection.edit": {
+      block: [
+        { builtIn: "document-bar" },
+        { builtIn: "editor" },
+        block("acme-a.live", LIVE),
+      ],
+    },
+  } as AdminContributionsMeta;
+
+  it("reads the title typed on an entry's edit page, before any save", async () => {
+    meta.contributions = live;
+    renderEditor();
+    expect(screen.getByTestId("live-title")).toHaveTextContent("Hello world");
+
+    await userEvent.type(screen.getByLabelText("Title"), " again");
+    expect(screen.getByTestId("live-title")).toHaveTextContent(
+      "Hello world again"
+    );
+  });
+
+  it("reads the title typed while the entry is being created", async () => {
+    meta.contributions = live;
+    render(<EntryForm collection={posts} mode="create" />, {
+      wrapper: Providers,
+    });
+
+    await userEvent.type(screen.getByLabelText("Title"), "New post");
+    expect(screen.getByTestId("live-title")).toHaveTextContent("New post");
   });
 });

@@ -23,6 +23,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { FORM_SUBMISSION_TEMPLATE } from "../../emails/starter-messages";
 import type {
   AnyFormField,
   FormFieldTypeId,
@@ -169,6 +170,9 @@ export function createNotification(): FormNotification {
     to: "",
     cc: [],
     bcc: [],
+    // The team's starter message, so a new notification sends as soon as it
+    // has an address, rather than starting without one and never sending.
+    templateSlug: FORM_SUBMISSION_TEMPLATE,
   };
 }
 

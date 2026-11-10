@@ -22,6 +22,10 @@ import {
   readI18nTransitionState,
 } from "../../../domains/i18n/migration/transition-state";
 import { MetaService } from "../../../domains/meta/services/meta-service";
+import { publishWithheldScopeFields } from "../../../domains/schema/pipeline/withheld-scope-fields";
+import type { NextlyServiceConfig } from "../../../di/register";
+import type { PluginDefinition } from "../../../plugins/plugin-context";
+import { applyPluginSchemaContributionsDeferred } from "../../../plugins/schema/apply-contributions";
 import {
   getConfiguredTestDialects,
   type TestDialect,
@@ -118,6 +122,41 @@ function configs(slug: string) {
   };
 }
 
+/**
+ * `config` with a plugin adding a translated `seo` to every collection, the
+ * slugs `except` names switched off, folded as `loadConfig` folds it: the
+ * fold publishes what it holds back.
+ */
+function withSeo(
+  config: LoadConfigResult["config"],
+  except?: string[]
+): LoadConfigResult["config"] {
+  const plugin: PluginDefinition = {
+    name: "@t/seo",
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    contributes: {
+      extend: [
+        {
+          target: {
+            every: ["collection"],
+            ...(except === undefined ? {} : { except }),
+          },
+          fields: [{ ...text({ name: "seo" }), localized: true }],
+        },
+      ],
+    },
+  };
+  const folded = applyPluginSchemaContributionsDeferred(
+    { ...config, plugins: [plugin] } as unknown as NextlyServiceConfig,
+    [plugin]
+  );
+  return {
+    ...config,
+    collections: folded.config.collections,
+  } as LoadConfigResult["config"];
+}
+
 describe.each(getConfiguredTestDialects())(
   "localization turned off and on again (%s)",
   (dialect: TestDialect) => {
@@ -187,6 +226,34 @@ describe.each(getConfiguredTestDialects())(
         `SELECT ${q("title")} FROM ${main} WHERE ${q("id")} = 'row1'`
       );
       expect(after).toEqual([{ title: "Edited after the disable" }]);
+    });
+
+    it("copies a held-back field's values back with the rest when localization is turned off", async () => {
+      const slug = "lockeep";
+      const { off, on } = configs(slug);
+      const q = (name: string) => quote(dialect, name);
+      const main = q(`dc_${slug}`);
+      try {
+        await runSync(dialect, withSeo(off));
+        await target?.adapter.executeQuery(
+          `INSERT INTO ${main} (${q("id")}, ${q("slug")}, ${q("title")}, ${q("seo")}) VALUES ('row1', 'r1', 'Title', 'Kept')`
+        );
+        await runSync(dialect, withSeo(on));
+        // Edited while translated: the value is the translations table's now.
+        await target?.adapter.executeQuery(
+          `UPDATE ${q(`dc_${slug}_locales`)} SET ${q("seo")} = 'Edited in English' WHERE ${q("_locale")} = 'en'`
+        );
+        // The plugin's field switched off for the type, then its translation.
+        await runSync(dialect, withSeo(on, [slug]));
+        await runSync(dialect, withSeo(off, [slug]));
+
+        const restored = await target?.adapter.executeQuery<{ seo: string }>(
+          `SELECT ${q("seo")} AS seo FROM ${main} WHERE ${q("id")} = 'row1'`
+        );
+        expect(restored).toEqual([{ seo: "Edited in English" }]);
+      } finally {
+        publishWithheldScopeFields(new Map());
+      }
     });
 
     it("recovers an install whose earlier disable copied nothing back", async () => {

@@ -7,7 +7,7 @@
  *
  * Type definitions and the pure sanitization step live in
  * `src/shared/types/config.ts`. This file keeps the validation logic
- * (duplicate slugs, component nesting depth, user-field constraints)
+ * (duplicate slugs, field groups placed in a cycle, user-field constraints)
  * and re-exports the types for backwards compatibility.
  *
  * @module collections/config/define-config
@@ -36,16 +36,12 @@ import {
   directComponentFields,
   type DirectField,
 } from "../../domains/field-groups/direct-component-fields";
-import {
-  extractFieldGroupReferences,
-  isFieldGroupFieldType,
-} from "../../domains/field-groups/storage/field-group-field-type";
+import { assertNoFieldGroupCycleInCode } from "../../domains/field-groups/field-group-cycles";
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { assertConfiguredPublicAddresses } from "../../domains/public-addresses/distinct-public-addresses";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { workflowAttachmentsOf } from "../../domains/workflows/attachments";
 import { NextlyError } from "../../errors";
-import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../field-groups/config/validate-field-group";
 import type {
   DeclaredWidgetsRecord,
   WidgetsOfPlugins,
@@ -87,48 +83,6 @@ export { sanitizeConfig } from "../../shared/types/config";
 // ============================================================
 
 /**
- * Collects all component slugs referenced by component fields in a fields array.
- * Recursively traverses array and group fields to find nested component references.
- */
-function collectComponentRefs(
-  fields: {
-    type?: string;
-    component?: string;
-    fieldGroup?: string;
-    components?: string[];
-    fieldGroups?: string[];
-    fields?: unknown[];
-  }[],
-  refs: string[]
-): void {
-  for (const field of fields) {
-    if (isFieldGroupFieldType(field.type)) {
-      const { single, many } = extractFieldGroupReferences(field);
-      if (single) refs.push(single);
-      if (many) {
-        for (const slug of many) {
-          refs.push(slug);
-        }
-      }
-    }
-    // Recurse into array/group fields
-    if (Array.isArray(field.fields)) {
-      collectComponentRefs(
-        field.fields as {
-          type?: string;
-          component?: string;
-          fieldGroup?: string;
-          components?: string[];
-          fieldGroups?: string[];
-          fields?: unknown[];
-        }[],
-        refs
-      );
-    }
-  }
-}
-
-/**
  * Names each component field placed directly in a component's fields. Its value is not stored
  * there and a write carrying one is refused, so the config says so when it is defined. A warning
  * rather than a refusal, so a config already shipped with the placement still boots.
@@ -147,114 +101,6 @@ function warnComponentsPlacedInComponents(
   }
 }
 
-/**
- * Validates that component nesting has no circular references and
- * does not exceed the maximum nesting depth.
- *
- * Uses DFS cycle detection and longest-path calculation on the
- * component dependency graph.
- *
- * @throws Error if circular references or excessive nesting depth detected
- */
-function validateComponentNesting(
-  components: { slug: string; fields: unknown[] }[]
-): void {
-  // All slugs are collected FIRST. Components may be defined in any order,
-  // and an edge filtered against a partially built set is dropped for good —
-  // the later re-filter only re-filtered the survivors, so a group declared
-  // before the group it references lost its edge and the cycle went unseen.
-  const slugSet = new Set<string>();
-  for (const comp of components) {
-    slugSet.add(comp.slug.toLowerCase());
-  }
-
-  // Build adjacency list: component slug -> slugs it references, keeping only
-  // refs to known component slugs.
-  const graph = new Map<string, string[]>();
-  for (const comp of components) {
-    const slug = comp.slug.toLowerCase();
-    const refs: string[] = [];
-    collectComponentRefs(
-      comp.fields as {
-        type?: string;
-        component?: string;
-        components?: string[];
-        fields?: unknown[];
-      }[],
-      refs
-    );
-    graph.set(
-      slug,
-      refs.filter(r => slugSet.has(r.toLowerCase())).map(r => r.toLowerCase())
-    );
-  }
-
-  // DFS to detect cycles
-  const visited = new Set<string>();
-  const inStack = new Set<string>();
-
-  function detectCycle(slug: string, path: string[]): string[] | null {
-    if (inStack.has(slug)) {
-      return [...path, slug]; // Cycle found
-    }
-    if (visited.has(slug)) return null;
-
-    visited.add(slug);
-    inStack.add(slug);
-
-    for (const ref of graph.get(slug) ?? []) {
-      const cycle = detectCycle(ref, [...path, slug]);
-      if (cycle) return cycle;
-    }
-
-    inStack.delete(slug);
-    return null;
-  }
-
-  for (const slug of graph.keys()) {
-    if (!visited.has(slug)) {
-      const cycle = detectCycle(slug, []);
-      if (cycle) {
-        // Format: a → b → c → a
-        const cycleStr = cycle.join(" → ");
-        throw new Error(
-          `Circular component reference detected: ${cycleStr}. ` +
-            `Components cannot reference each other in a cycle.`
-        );
-      }
-    }
-  }
-
-  // Check max nesting depth (longest path in DAG)
-  const depthCache = new Map<string, number>();
-
-  function getMaxDepth(slug: string): number {
-    if (depthCache.has(slug)) return depthCache.get(slug)!;
-
-    const refs = graph.get(slug) ?? [];
-    let maxChildDepth = 0;
-
-    for (const ref of refs) {
-      maxChildDepth = Math.max(maxChildDepth, getMaxDepth(ref));
-    }
-
-    const depth = 1 + maxChildDepth;
-    depthCache.set(slug, depth);
-    return depth;
-  }
-
-  for (const slug of graph.keys()) {
-    const depth = getMaxDepth(slug);
-    if (depth > MAX_FIELD_GROUP_NESTING_DEPTH) {
-      throw new Error(
-        `Component nesting depth exceeds maximum of ${MAX_FIELD_GROUP_NESTING_DEPTH} levels ` +
-          `(component '${slug}' has a nesting chain ${depth} levels deep). ` +
-          `Simplify the component structure to reduce nesting.`
-      );
-    }
-  }
-}
-
 // ============================================================
 // defineConfig Function
 // ============================================================
@@ -263,7 +109,7 @@ function validateComponentNesting(
  * Validate a raw Nextly configuration.
  *
  * Runs slug uniqueness checks across collections/singles/components,
- * component nesting depth + cycle detection, and user-field constraints.
+ * field groups placed in a cycle (at any depth), and user-field constraints.
  * Returns nothing — throws on validation failure.
  */
 function validateNextlyConfig(config: NextlyConfig): void {
@@ -376,7 +222,7 @@ function validateNextlyConfig(config: NextlyConfig): void {
   }
 
   if (components.length > 0) {
-    validateComponentNesting(components);
+    assertNoFieldGroupCycleInCode(components);
     warnComponentsPlacedInComponents(components);
   }
 
@@ -474,7 +320,7 @@ function findLocalizedEntitySlug(config: NextlyConfig): string | null {
  * - Checks for duplicate collection slugs
  * - Checks for duplicate single slugs
  * - Checks for slug conflicts between collections and singles
- * - Checks for component nesting depth and circular references
+ * - Refuses field groups placed in a cycle; nesting has no depth limit
  * - Validates user-field constraints
  *
  * **Defaults Applied (via sanitizeConfig):**
