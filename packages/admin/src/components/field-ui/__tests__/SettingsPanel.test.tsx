@@ -409,7 +409,107 @@ describe("FieldSettingsPanel", () => {
     expect(onChange.mock.lastCall?.[0]).not.toHaveProperty("blocks");
   });
 
-  it("a test plugin's field type", () => {
+  it("a test plugin's field type", async () => {
+    const user = userEvent.setup();
+    branding.current = {
+      plugins: [
+        {
+          name: "rating-plugin",
+          enabled: true,
+          fieldTypes: [
+            {
+              type: "star-rating",
+              component: "rating-plugin/StarRating",
+              storage: "number",
+              label: "Star rating",
+              settings: [
+                { key: "max", label: "Most stars", control: "number" },
+                {
+                  key: "caption",
+                  label: "Caption",
+                  control: "text",
+                  help: "Shown under the stars.",
+                },
+                {
+                  key: "shape",
+                  label: "Shape",
+                  control: "select",
+                  tab: "display",
+                  options: [
+                    { label: "Star", value: "star" },
+                    { label: "Heart", value: "heart" },
+                  ],
+                },
+                {
+                  key: "half",
+                  label: "Half stars",
+                  control: "boolean",
+                  tab: "advanced",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    try {
+      let current: BuilderField = {
+        id: "f-rating",
+        name: "rating",
+        label: "Rating",
+        type: "star-rating",
+        pluginOptions: { shape: "star" },
+      };
+      render(
+        <Host
+          initial={current}
+          onChange={next => {
+            current = next;
+          }}
+        />
+      );
+
+      // The settings the type declares for General come first, as its own.
+      const general = screen.getByRole("tabpanel");
+      const own = within(general).getByRole("group", {
+        name: "Star rating settings",
+      });
+      expect(
+        own.compareDocumentPosition(within(general).getByLabelText(/^Label$/)) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+      expect(screen.queryByText(/has no settings of its own/)).toBeNull();
+      expect(within(own).getByLabelText("Caption")).toHaveAccessibleDescription(
+        "Shown under the stars."
+      );
+
+      // Each one is kept in the field's own options, under its key.
+      await user.type(within(own).getByLabelText("Most stars"), "5");
+      await user.type(within(own).getByLabelText("Caption"), "Rate it");
+      expect(current.pluginOptions).toMatchObject({
+        max: 5,
+        caption: "Rate it",
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Display" }));
+      await user.click(screen.getByRole("combobox", { name: "Shape" }));
+      await user.click(await screen.findByRole("option", { name: "Heart" }));
+      expect(current.pluginOptions?.shape).toBe("heart");
+
+      await user.click(screen.getByRole("tab", { name: "Advanced" }));
+      await user.click(screen.getByRole("switch", { name: "Half stars" }));
+      expect(current.pluginOptions?.half).toBe(true);
+
+      // Emptying a box removes the setting rather than storing an empty value.
+      await user.click(screen.getByRole("tab", { name: "General" }));
+      await user.clear(screen.getByLabelText("Caption"));
+      expect(current.pluginOptions).not.toHaveProperty("caption");
+    } finally {
+      branding.current = {};
+    }
+  });
+
+  it("a test plugin's field type that declares no settings", () => {
     branding.current = {
       plugins: [
         {

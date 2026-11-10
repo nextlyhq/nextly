@@ -9,6 +9,7 @@ import type {
   FieldStoragePrimitive,
   FieldSurface,
   FieldTypeCategory,
+  PluginFieldTypeSetting,
 } from "nextly/field-catalog";
 // The widget as the workspace payload serves it, a type only.
 import type { PublishedWidget } from "nextly/widget-result";
@@ -266,6 +267,8 @@ export interface PluginMetadata {
     icon?: string;
     category?: FieldTypeCategory;
     surfaces?: readonly FieldSurface[];
+    /** The type's own settings, drawn in the settings panel; checked at boot. */
+    settings?: readonly PluginFieldTypeSetting[];
   }>;
 }
 

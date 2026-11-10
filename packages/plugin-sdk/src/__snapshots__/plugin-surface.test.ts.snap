@@ -561,6 +561,8 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginFieldInstance (type)",
   "PluginFieldIssue (type)",
   "PluginFieldType (type)",
+  "PluginFieldTypeSetting (type)",
+  "PluginFieldTypeSettingBase (type)",
   "PluginFieldValidateArgs (type)",
   "PluginFieldValidationResult (type)",
   "PluginFieldWrite (type)",
