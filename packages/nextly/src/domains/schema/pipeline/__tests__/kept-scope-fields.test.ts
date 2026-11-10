@@ -117,6 +117,48 @@ describe("keptScopeFields", () => {
     expect(kept[0]).toMatchObject({ name: "seo", type: "text" });
   });
 
+  it("reads the column's type from the translations table when it is there", () => {
+    // Both declarations translated; the translations table's column is text.
+    hold(
+      { ...number({ name: "seo" }), localized: true },
+      { ...text({ name: "seo" }), localized: true }
+    );
+
+    const kept = keptScopeFields(
+      "collection",
+      pages,
+      live({ dc_pages: ["title"], dc_pages_locales: ["seo"] })
+    );
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toMatchObject({ type: "text" });
+  });
+
+  it("never takes a shared declaration for a column only the translations table has", () => {
+    // Nothing states the column's type, as a migration snapshot's record of
+    // a translations table does not.
+    hold(
+      { ...number({ name: "seo" }), localized: false },
+      { ...text({ name: "seo" }), localized: true }
+    );
+    const snapshot = columnsByTable(
+      {
+        tables: [
+          {
+            name: "dc_pages",
+            columns: [{ name: "title", type: "text", nullable: true }],
+            indexes: [],
+            localizedColumns: ["seo"],
+          },
+        ],
+      } as never,
+      "sqlite"
+    );
+
+    const kept = keptScopeFields("collection", pages, snapshot);
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toMatchObject({ type: "text" });
+  });
+
   it("keeps the first of two declarations when the column matches neither", () => {
     hold(text({ name: "seo" }), text({ name: "SEO", required: true }));
 

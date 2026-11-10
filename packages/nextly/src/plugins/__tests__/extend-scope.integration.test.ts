@@ -22,6 +22,7 @@ import {
   defineCollection,
   defineConfig,
   defineSingle,
+  number,
   text,
 } from "../../config";
 import { createAdapter } from "../../database/factory";
@@ -354,7 +355,7 @@ describe.each(getConfiguredTestDialects())(
       expect((await read())?.seo_title).toBe("Kept");
     }, 240_000);
 
-    it("keeps a translated type's values, hidden, while it is switched off in development", async () => {
+    it("keeps a translated type's values, hidden, while it is switched off in development, its translation turned off meanwhile", async () => {
       database = await openDatabase(dialect);
       const adapter = database.adapter;
       vi.stubEnv("NODE_ENV", "development");
@@ -411,6 +412,194 @@ describe.each(getConfiguredTestDialects())(
       configWith(site, [translatedSeo()]);
       await reloadNextlyConfig();
       expect((await read())?.seo_title).toBe("Kept");
+
+      // Switched off again, and then the type stops being translated: its
+      // translated values go back to its own table, the held-back one with
+      // the rest, so switching it on again finds its value there.
+      configWith(site, [translatedSeo(["es_pages"])]);
+      await reloadNextlyConfig();
+      const untranslated = {
+        collections: [
+          posts,
+          defineCollection({
+            slug: "es_pages",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+        localization,
+      };
+      configWith(untranslated, [translatedSeo(["es_pages"])]);
+      await reloadNextlyConfig();
+      expect((await read())?.title).toBe("Saved");
+      configWith(untranslated, [translatedSeo()]);
+      await reloadNextlyConfig();
+      expect((await read())?.seo_title).toBe("Kept");
+    }, 240_000);
+
+    it("restores a type's own translated values beside its held-back ones, and never over its own", async () => {
+      database = await openDatabase(dialect);
+      const adapter = database.adapter;
+      vi.stubEnv("NODE_ENV", "development");
+      const localization = { locales: ["en", "es"], defaultLocale: "en" };
+      const translatedSeo = (except?: string[]): PluginDefinition => ({
+        ...seoPlugin,
+        contributes: {
+          extend: [
+            {
+              target: {
+                every: ["collection"],
+                ...(except === undefined ? {} : { except }),
+              },
+              fields: [{ ...text({ name: "seo_title" }), localized: true }],
+            },
+          ],
+        },
+      });
+      // A type whose one translated field loses its flag when translation is
+      // turned off, and one that comes to declare a shared field stored in
+      // the held-back field's column.
+      const scores = (translated: boolean) =>
+        defineCollection({
+          slug: "es_scores",
+          localized: translated,
+          fields: [
+            translated
+              ? { ...number({ name: "rank" }), localized: true }
+              : number({ name: "rank" }),
+          ],
+        });
+      const notes = (translated: boolean, ownSeo: boolean) =>
+        defineCollection({
+          slug: "es_notes",
+          localized: translated,
+          fields: [
+            { ...text({ name: "body" }), localized: translated },
+            ...(ownSeo
+              ? [{ ...text({ name: "seoTitle" }), localized: false }]
+              : []),
+          ],
+        });
+      const site = (translated: boolean, ownSeo: boolean) => ({
+        collections: [posts, scores(translated), notes(translated, ownSeo)],
+        localization,
+      });
+      current = await createTestNextly({
+        adapter: adapter as never,
+        ...site(true, false),
+        plugins: [translatedSeo()],
+      });
+      configWith(site(true, false), [translatedSeo()]);
+      await reloadNextlyConfig();
+      const write = async (collection: string, data: object) =>
+        (
+          (
+            await current!.nextly.create({
+              collection: collection as never,
+              data: data as never,
+            })
+          ).item as { id: string }
+        ).id;
+      const scoreId = await write("es_scores", { rank: 5, seo_title: "S" });
+      const noteId = await write("es_notes", { body: "B", seo_title: "N" });
+
+      const off = translatedSeo(["es_scores", "es_notes"]);
+      configWith(site(true, false), [off]);
+      await reloadNextlyConfig();
+      configWith(site(true, true), [off]);
+      await reloadNextlyConfig();
+      await current.nextly.update({
+        collection: "es_notes" as never,
+        id: noteId,
+        data: { seoTitle: "Own", _overwrite: true } as never,
+      } as never);
+
+      configWith(site(false, true), [off]);
+      await reloadNextlyConfig();
+      const read = async (collection: string, id: string) =>
+        (await current?.nextly.findByID({
+          collection: collection as never,
+          id,
+        } as never)) as Record<string, unknown> | null;
+      expect((await read("es_scores", scoreId))?.rank).toBe(5);
+      expect((await read("es_notes", noteId))?.seoTitle).toBe("Own");
+    }, 240_000);
+
+    it("restores a held-back field's values from the declaration that made its translated column", async () => {
+      database = await openDatabase(dialect);
+      const adapter = database.adapter;
+      vi.stubEnv("NODE_ENV", "development");
+      const localization = { locales: ["en", "es"], defaultLocale: "en" };
+      // Two plugins declare `seo_title`: one as a shared number, off for
+      // every type here from the start, and one as translated text, whose
+      // column the type has.
+      const shared: PluginDefinition = {
+        ...seoPlugin,
+        name: "@t/seo-shared",
+        contributes: {
+          extend: [
+            {
+              target: {
+                every: ["collection"],
+                except: ["es_posts", "es_tags"],
+              },
+              fields: [{ ...number({ name: "seo_title" }), localized: false }],
+            },
+          ],
+        },
+      };
+      const translated = (except?: string[]): PluginDefinition => ({
+        ...seoPlugin,
+        contributes: {
+          extend: [
+            {
+              target: {
+                every: ["collection"],
+                ...(except === undefined ? {} : { except }),
+              },
+              fields: [{ ...text({ name: "seo_title" }), localized: true }],
+            },
+          ],
+        },
+      });
+      const tags = (localized: boolean) =>
+        defineCollection({
+          slug: "es_tags",
+          localized,
+          fields: [
+            localized
+              ? { ...text({ name: "label" }), localized: true }
+              : text({ name: "label" }),
+          ],
+        });
+      const site = (localized: boolean) => ({
+        collections: [posts, tags(localized)],
+        localization,
+      });
+      current = await createTestNextly({
+        adapter: adapter as never,
+        ...site(true),
+        plugins: [shared, translated()],
+      });
+      configWith(site(true), [shared, translated()]);
+      await reloadNextlyConfig();
+      const created = await current.nextly.create({
+        collection: "es_tags" as never,
+        data: { label: "L", seo_title: "T" } as never,
+      });
+      const id = (created.item as { id: string }).id;
+
+      // Off for the type, then its translation turned off, then on again.
+      configWith(site(true), [shared, translated(["es_tags"])]);
+      await reloadNextlyConfig();
+      configWith(site(false), [shared, translated(["es_tags"])]);
+      await reloadNextlyConfig();
+      configWith(site(false), [shared, translated()]);
+      await reloadNextlyConfig();
+      const read = (await current.nextly.findByID({
+        collection: "es_tags" as never,
+        id,
+      } as never)) as Record<string, unknown> | null;
+      expect(read?.seo_title).toBe("T");
     }, 240_000);
 
     it("keeps a Builder type's column and values, hidden, while it is switched off in development", async () => {
