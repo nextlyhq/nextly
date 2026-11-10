@@ -2,10 +2,13 @@
  * The sample forms seed, against an in-memory store that answers the same
  * Direct API shapes the playground's Nextly does.
  *
- * What separates a correct seed from a plausible broken one is that a re-run
- * adds nothing and that a form which already has submissions (an author's own)
- * gets none of the samples. A seed that only checks the form's slug would pass
- * a first-run test and double every submission on the next boot.
+ * What separates a correct seed from a plausible broken one is that it writes
+ * submissions only to a form it created in that run: a re-run adds nothing, a
+ * contributor's own form with a sample's slug gets no sample rows (even with
+ * no submissions of its own), and a run that loses the race to create a form
+ * adds nothing to it. A seed that checked for existing submissions instead
+ * would pass a first-run test and fill a contributor's empty form with fake
+ * answers.
  */
 import { describe, expect, it } from "vitest";
 
@@ -22,6 +25,7 @@ type Row = Record<string, unknown> & { id: string };
 /** A store keeping rows per collection and filtering by one equals clause. */
 function memoryStore() {
   const rows = new Map<string, Row[]>();
+  const calls: Array<[string, string, string]> = [];
   let next = 1;
   const store: SampleFormsStore = {
     async find({ collection, where, limit }) {
@@ -35,9 +39,36 @@ function memoryStore() {
       };
     },
     async create({ collection, data }) {
-      const row = { ...data, id: `id-${next++}` };
+      // A form's slug is unique, as the forms collection declares it.
+      if (
+        collection === FORMS_COLLECTION &&
+        (rows.get(collection) ?? []).some(r => r.slug === data.slug)
+      ) {
+        throw Object.assign(new Error("Duplicate."), { code: "DUPLICATE" });
+      }
+      const row = { ...data, id: `id-${next++}`, _rev: 1 };
       rows.set(collection, [...(rows.get(collection) ?? []), row]);
-      return { item: { id: row.id } };
+      calls.push([
+        "create",
+        collection,
+        typeof data.status === "string" ? data.status : "",
+      ]);
+      return { item: { id: row.id, _rev: row._rev } };
+    },
+    async update({ collection, id, data }) {
+      const row = (rows.get(collection) ?? []).find(r => r.id === id);
+      if (!row) throw new Error(`No ${collection} ${id}`);
+      // Every update names the version it changes, as the Direct API requires.
+      if (data._rev !== row._rev) {
+        throw Object.assign(new Error("Stale."), { code: "CONFLICT" });
+      }
+      Object.assign(row, { ...data, _rev: Number(row._rev) + 1 });
+      calls.push([
+        "update",
+        collection,
+        typeof data.status === "string" ? data.status : "",
+      ]);
+      return { item: row };
     },
   };
   const uploads: string[] = [];
@@ -45,7 +76,7 @@ function memoryStore() {
     uploads.push(file.name);
     return `media-${uploads.length}`;
   };
-  return { store, upload, rows, uploads };
+  return { store, upload, rows, uploads, calls };
 }
 
 const NOW = new Date("2026-11-10T12:00:00Z");
@@ -93,16 +124,12 @@ describe("seedSampleForms", () => {
     }).toEqual(before);
   });
 
-  it("leaves a form that already has submissions alone", async () => {
+  it("leaves a contributor's own form with a sample's slug untouched", async () => {
     const { store, upload, rows } = memoryStore();
-    // An author made the contact form and submitted it once by hand.
+    // A contributor made their own empty `contact` form, with other fields.
     const contact = await store.create({
       collection: FORMS_COLLECTION,
-      data: { slug: "contact", name: "Contact us" },
-    });
-    await store.create({
-      collection: SUBMISSIONS_COLLECTION,
-      data: { form: contact.item.id, data: { full_name: "Author" } },
+      data: { slug: "contact", name: "My contact form" },
     });
 
     await seedSampleForms(store, upload, NOW);
@@ -110,11 +137,64 @@ describe("seedSampleForms", () => {
     const contactRows = (rows.get(SUBMISSIONS_COLLECTION) ?? []).filter(
       s => s.form === contact.item.id
     );
-    expect(contactRows).toHaveLength(1);
-    // The author's form is reused, not duplicated.
-    expect(
-      (rows.get(FORMS_COLLECTION) ?? []).filter(f => f.slug === "contact")
-    ).toHaveLength(1);
+    expect(contactRows).toEqual([]);
+    const forms = (rows.get(FORMS_COLLECTION) ?? []).filter(
+      f => f.slug === "contact"
+    );
+    expect(forms.map(f => f.name)).toEqual(["My contact form"]);
+  });
+
+  it("adds nothing to a form another run created first", async () => {
+    const { store, upload, rows } = memoryStore();
+    // Another run creates `contact` between this run's find and its create.
+    const racing: SampleFormsStore = {
+      ...store,
+      async find(args) {
+        const answer = await store.find(args);
+        if (args.collection === FORMS_COLLECTION) {
+          await store
+            .create({
+              collection: FORMS_COLLECTION,
+              data: { slug: args.where.slug.equals, name: "Other run" },
+            })
+            .catch(() => undefined);
+        }
+        return answer;
+      },
+    };
+
+    const result = await seedSampleForms(racing, upload, NOW);
+
+    expect(result).toEqual({ formsCreated: 0, submissionsCreated: 0 });
+    expect(rows.get(SUBMISSIONS_COLLECTION) ?? []).toEqual([]);
+  });
+
+  it("closes the closed form after it was live, as an author would", async () => {
+    const { store, upload, calls } = memoryStore();
+    await seedSampleForms(store, upload, NOW);
+
+    const closed = SAMPLE_FORMS.filter(f => f.status === "closed");
+    expect(closed.length).toBeGreaterThan(0);
+    const formCalls = calls.filter(c => c[1] === FORMS_COLLECTION);
+    expect(formCalls.filter(c => c[0] === "update")).toEqual(
+      closed.map(() => ["update", FORMS_COLLECTION, "closed"])
+    );
+    // Never created closed: a form created closed has no first-published time.
+    expect(formCalls.some(c => c[0] === "create" && c[2] === "closed")).toBe(
+      false
+    );
+  });
+
+  it("names a message on every enabled notification, so each can send", () => {
+    const enabled = SAMPLE_FORMS.flatMap(f => f.notifications).filter(
+      n => n.enabled
+    );
+    expect(enabled.length).toBeGreaterThan(0);
+    for (const n of enabled) {
+      expect(n.templateSlug, n.id).toBe(
+        n.recipientType === "field" ? "forms-confirmation" : "forms-submission"
+      );
+    }
   });
 
   it("gives the job applications real uploaded CVs", async () => {

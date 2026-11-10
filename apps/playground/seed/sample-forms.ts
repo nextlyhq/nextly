@@ -24,11 +24,29 @@
  * own content. Addresses use the reserved `example.com` and `.test` domains, so
  * a notification that does go out reaches nobody.
  *
- * ## Idempotent
+ * ## Idempotent, and never touches a form it did not make
  *
- * A form is matched by its slug and created only when missing. Submissions are
- * added only to a form that has none, so an author's own test submissions are
- * never doubled and a re-run adds nothing.
+ * A form is matched by its slug and created only when missing, and its sample
+ * submissions are written only by the run that created it:
+ *
+ * - a form that already exists, whoever made it, is left exactly as it is, so
+ *   a contributor's own `contact` form never receives sample rows;
+ * - two runs that overlap (the dev wrapper's boot and a manual `db:seed`) race
+ *   on the form's unique slug, and only the one whose create wins writes the
+ *   submissions, so the samples are never doubled.
+ *
+ * A run stopped part-way leaves its form with some of its samples, and later
+ * runs leave that form alone. Delete the form (or run `pnpm db:reset`) to seed
+ * it again.
+ *
+ * ## The notifications send
+ *
+ * Each enabled notification names the form builder's starter message for its
+ * kind ("Form submission" for the team, "Form confirmation" for the visitor),
+ * which the plugin registers in Settings › Email, so the samples' emails render
+ * on a fresh playground. A closed form is created live and then closed, as an
+ * author would close it, so it has a first-published time and the site shows
+ * its closed message rather than hiding it as never published.
  *
  * @module seed/sample-forms
  */
@@ -47,8 +65,21 @@ export interface SampleFormsStore {
   create(args: {
     collection: string;
     data: Record<string, unknown>;
-  }): Promise<{ item: { id?: unknown } }>;
+  }): Promise<{ item: { id?: unknown; _rev?: unknown } }>;
+  update(args: {
+    collection: string;
+    id: string;
+    data: Record<string, unknown>;
+  }): Promise<unknown>;
 }
+
+/**
+ * The form builder's starter messages, by slug. Written here rather than
+ * imported because the plugin does not export them; the slugs are the
+ * plugin's published template identifiers.
+ */
+const TEAM_MESSAGE = "forms-submission";
+const VISITOR_MESSAGE = "forms-confirmation";
 
 /** Uploads one file to the Media library and returns its id. */
 export type UploadFile = (file: {
@@ -145,6 +176,7 @@ export const SAMPLE_FORMS = [
         name: "Team inbox",
         enabled: true,
         recipientType: "static",
+        templateSlug: TEAM_MESSAGE,
         to: "hello@acme.test",
         cc: [],
         bcc: [],
@@ -155,6 +187,7 @@ export const SAMPLE_FORMS = [
         name: "Sales leads",
         enabled: true,
         recipientType: "static",
+        templateSlug: TEAM_MESSAGE,
         to: "sales@acme.test",
         cc: [],
         bcc: [],
@@ -166,6 +199,7 @@ export const SAMPLE_FORMS = [
         name: "Thank-you to visitor",
         enabled: false,
         recipientType: "field",
+        templateSlug: VISITOR_MESSAGE,
         to: "{{email}}",
         cc: [],
         bcc: [],
@@ -254,8 +288,9 @@ export const SAMPLE_FORMS = [
     ],
     settings: {
       submitButtonText: "Apply",
-      confirmationType: "redirect",
-      redirectUrl: "/careers/thanks",
+      confirmationType: "message",
+      successMessage:
+        "Thanks for applying. We read every application and will reply within two weeks.",
       allowMultipleSubmissions: false,
       honeypotEnabled: true,
     },
@@ -265,6 +300,7 @@ export const SAMPLE_FORMS = [
         name: "Hiring team",
         enabled: true,
         recipientType: "static",
+        templateSlug: TEAM_MESSAGE,
         to: "jobs@acme.test",
         cc: [],
         bcc: ["hr-archive@acme.test"],
@@ -275,6 +311,7 @@ export const SAMPLE_FORMS = [
         name: "Engineering lead",
         enabled: true,
         recipientType: "static",
+        templateSlug: TEAM_MESSAGE,
         to: "eng-lead@acme.test",
         cc: [],
         bcc: [],
@@ -373,6 +410,7 @@ export const SAMPLE_FORMS = [
         name: "Confirmation to attendee",
         enabled: true,
         recipientType: "field",
+        templateSlug: VISITOR_MESSAGE,
         to: "{{email}}",
         cc: [],
         bcc: [],
@@ -382,6 +420,7 @@ export const SAMPLE_FORMS = [
         name: "Access needs to organisers",
         enabled: true,
         recipientType: "static",
+        templateSlug: TEAM_MESSAGE,
         to: "events@acme.test",
         cc: [],
         bcc: [],
@@ -659,24 +698,15 @@ export async function seedSampleForms(
       where: { slug: { equals: form.slug } },
       limit: 1,
     });
-    let formId = found.items[0]?.id;
-    if (formId === undefined) {
-      const created = await store.create({
-        collection: FORMS_COLLECTION,
-        data: structuredClone(form),
-      });
-      formId = created.item.id;
-      result.formsCreated++;
-    }
+    // Already there, whoever made it: left exactly as it is.
+    if (found.items.length > 0) continue;
 
-    const plan = sampleSubmissions(form.slug);
-    if (plan.length === 0) continue;
-    const existing = await store.find({
-      collection: SUBMISSIONS_COLLECTION,
-      where: { form: { equals: formId } },
-      limit: 1,
-    });
-    if (existing.meta.total > 0) continue;
+    const formId = await createForm(store, form);
+    // Another run made it first, between the find and the create.
+    if (formId === undefined) continue;
+    result.formsCreated++;
+
+    if (sampleSubmissions(form.slug).length === 0) continue;
 
     const cvIds =
       form.slug === "job-application" ? await uploadCvs(upload) : [];
@@ -700,6 +730,54 @@ export async function seedSampleForms(
     }
   }
   return result;
+}
+
+/**
+ * Create one sample form and return its id, or undefined when another run
+ * created it first (its slug is unique, so the loser's create is refused as a
+ * duplicate). A closed form is created live and then closed, so it carries the
+ * first-published time a form closed by its author has.
+ */
+async function createForm(
+  store: SampleFormsStore,
+  form: (typeof SAMPLE_FORMS)[number]
+): Promise<string | undefined> {
+  const closed = form.status === "closed";
+  let id: string;
+  let rev: unknown;
+  try {
+    const created = await store.create({
+      collection: FORMS_COLLECTION,
+      data: {
+        ...structuredClone(form),
+        status: closed ? "published" : form.status,
+      },
+    });
+    id = String(created.item.id);
+    rev = created.item._rev;
+  } catch (error) {
+    if (isDuplicate(error)) return undefined;
+    throw error;
+  }
+  if (closed) {
+    await store.update({
+      collection: FORMS_COLLECTION,
+      id,
+      // The version just created, as every update names the version it
+      // changes, so it cannot overwrite an edit made in between.
+      data: { status: "closed", _rev: rev },
+    });
+  }
+  return id;
+}
+
+/** Whether a create was refused because the row is already there. */
+function isDuplicate(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "DUPLICATE"
+  );
 }
 
 async function uploadCvs(upload: UploadFile): Promise<string[]> {
