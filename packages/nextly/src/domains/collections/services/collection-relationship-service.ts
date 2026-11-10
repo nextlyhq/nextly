@@ -17,6 +17,7 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
 import { NextlyError } from "../../../errors/nextly-error";
+import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import {
   convertTimestampsToCamelCase,
   keysToCamelCase,
@@ -73,7 +74,11 @@ import {
   type LiveFieldGroupReadPass,
 } from "../../field-groups/live-read-access";
 import { passwordReachOf } from "../../field-groups/password-reach";
-import { populateCompanionFields } from "../../i18n/companion-join";
+import {
+  fillCompanionFields,
+  populateCompanionFields,
+  selectRowsWithCompanion,
+} from "../../i18n/companion-join";
 import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
 import {
   NO_DECISIONS,
@@ -383,6 +388,20 @@ function resolveNestedTarget(
  * "access" reads better at those call sites than the full noun.
  */
 type RelatedRowAccess = RelatedRowReadContext;
+
+/**
+ * The languages a related row is read in: every language the surrounding read falls back
+ * through, else the one it resolved to, else none.
+ */
+function targetLocaleChain(access: RelatedRowAccess): readonly string[] | null {
+  return access.localeChain ?? (access.locale ? [access.locale] : null);
+}
+
+/** A target's translations, read in the same statement as its rows, in the chain they were read in. */
+interface TargetTranslations {
+  rows: Record<string, unknown>[];
+  localeChain: readonly string[];
+}
 
 /**
  * Whether this expansion may see a target's UNPUBLISHED rows.
@@ -1996,13 +2015,13 @@ export class CollectionRelationshipService extends BaseService {
                 access
               )
           );
-    const entries = (await (
-      match === undefined
-        ? this.db.select().from(schema)
-        : this.db
-            .select({ ...getColumns(schema), [RULE_MATCH]: match })
-            .from(schema)
-    ).where(inArray(schema.id, ids))) as Record<string, unknown>[];
+    const { entries, translations } = await this.selectTargetRows(
+      targetCollection,
+      schema,
+      ids,
+      match,
+      access
+    );
 
     const matching = new Set<Record<string, unknown>>();
     const fetched = entries.map(entry => {
@@ -2059,13 +2078,68 @@ export class CollectionRelationshipService extends BaseService {
       targetCollection,
       rows,
       statusFilter,
-      access
+      access,
+      translations
     );
     // Redaction runs before any caller derives a label from a row: a label
     // copies a field's value under another key, so one taken from an unredacted
     // row survives the redaction of its own source field.
     await this.redactRelatedRows(targetCollection, rows, access);
     return rows;
+  }
+
+  /**
+   * The target's rows for `ids`, with each row's rule match when the read rule answered a filter,
+   * and their translations in the same statement when the target keeps its translatable values in
+   * a companion that is there to join to: one round trip where reading them after the rows took
+   * two. A target with no companion, a system entity, or a read with no language reads its rows
+   * alone, and its translations, if any, are filled after.
+   */
+  private async selectTargetRows(
+    targetCollection: string,
+    schema: DynamicSchema,
+    ids: unknown[],
+    match: SQL<number> | undefined,
+    access: RelatedRowAccess
+  ): Promise<{
+    entries: Record<string, unknown>[];
+    translations: TargetTranslations | null;
+  }> {
+    const projection =
+      match === undefined
+        ? undefined
+        : { ...getColumns(schema), [RULE_MATCH]: match };
+    const where = inArray(schema.id, ids);
+    const localeChain = targetLocaleChain(access);
+    const companion =
+      localeChain && !isSystemEntity(targetCollection)
+        ? await this.resolveTargetCompanion(targetCollection, access)
+        : null;
+    if (
+      localeChain &&
+      companion &&
+      (await resolveCompanionSchemaReadiness(this.adapter, companion)) ===
+        "ready"
+    ) {
+      const joined = await selectRowsWithCompanion({
+        db: this.db,
+        mainTable: schema,
+        projection,
+        where,
+        companionTable: companion.table,
+        localeChain: [...localeChain],
+      });
+      return {
+        entries: joined.rows,
+        translations: { rows: joined.companionRows, localeChain },
+      };
+    }
+    const entries = (await (
+      projection === undefined
+        ? this.db.select().from(schema)
+        : this.db.select(projection).from(schema)
+    ).where(where)) as Record<string, unknown>[];
+    return { entries, translations: null };
   }
 
   /**
@@ -2077,10 +2151,11 @@ export class CollectionRelationshipService extends BaseService {
     targetCollection: string,
     rows: Record<string, unknown>[],
     statusFilter: StatusFilter | null,
-    access: RelatedRowAccess
+    access: RelatedRowAccess,
+    // The translations the rows were read with, when they came in the same statement.
+    translations: TargetTranslations | null = null
   ): Promise<void> {
-    const localeChain =
-      access.localeChain ?? (access.locale ? [access.locale] : null);
+    const localeChain = targetLocaleChain(access);
     if (!localeChain || rows.length === 0 || isSystemEntity(targetCollection)) {
       return;
     }
@@ -2089,6 +2164,17 @@ export class CollectionRelationshipService extends BaseService {
       access
     );
     if (!companion) return;
+    if (translations) {
+      fillCompanionFields({
+        rows,
+        companionRows: translations.rows,
+        localizedFields: companion.localizedFields,
+        localeChain: [...translations.localeChain],
+        statusValues:
+          companion.hasStatus && statusFilter ? statusFilter.values : undefined,
+      });
+      return;
+    }
     await populateCompanionFields({
       db: this.db as never,
       companionTable: companion.table,
@@ -2119,8 +2205,7 @@ export class CollectionRelationshipService extends BaseService {
   ): Promise<SQL<number> | undefined> {
     // Every language the surrounding read falls back through, as a direct
     // read of the target is judged in; else the one it resolved to.
-    const localeChain =
-      access.localeChain ?? (access.locale ? [access.locale] : null);
+    const localeChain = targetLocaleChain(access);
     const companion = localeChain
       ? await this.resolveTargetCompanion(targetCollection, access)
       : null;
@@ -2336,16 +2421,26 @@ export class CollectionRelationshipService extends BaseService {
    * The verdict this expansion already holds for the target, or `decide`'s,
    * kept for the rest of the expansion. Pending verdicts are kept too, so
    * fields fetched concurrently share one question rather than each asking.
+   * A verdict that fails is not kept, so the next ask decides again rather
+   * than repeating the failure for the rest of the expansion.
    */
   private memoizedVerdict(
     access: RelatedRowAccess,
     targetCollection: string,
     decide: () => Promise<FilteredRead>
   ): Promise<FilteredRead> {
-    const cached = access.targetVerdicts?.get(targetCollection);
+    const verdicts = access.targetVerdicts;
+    const cached = verdicts?.get(targetCollection);
     if (cached) return cached;
     const pending = decide();
-    access.targetVerdicts?.set(targetCollection, pending);
+    if (verdicts) {
+      verdicts.set(targetCollection, pending);
+      pending.catch(() => {
+        if (verdicts.get(targetCollection) === pending) {
+          verdicts.delete(targetCollection);
+        }
+      });
+    }
     return pending;
   }
 
@@ -2956,6 +3051,9 @@ export class CollectionRelationshipService extends BaseService {
         }
       }
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with related entries missing from the map.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.error(
         `Failed to batch fetch entries for ${targetCollection}`,
         { error: error }
@@ -3048,6 +3146,9 @@ export class CollectionRelationshipService extends BaseService {
         );
       }
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with every source relating to nothing.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.error("Failed to batch fetch manyToMany relations", {
         error: error,
       });
@@ -3319,6 +3420,9 @@ export class CollectionRelationshipService extends BaseService {
           }
         }
       } catch (error) {
+        // A rule that could not run never answered: the request ends with
+        // that, not with the relation left unexpanded.
+        rethrowIfRuleCouldNotRun(error);
         // If expansion fails, keep the original value
         this.logger.error(`Failed to expand relation ${field.name}`, {
           error: error,
@@ -4562,7 +4666,10 @@ export class CollectionRelationshipService extends BaseService {
       // not refuse the whole parent read, and the caller learns no more than a
       // reference pointing at nothing would tell them.
       return readable ?? null;
-    } catch {
+    } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with a reference that reads as pointing at nothing.
+      rethrowIfRuleCouldNotRun(error);
       return null;
     }
   }
@@ -4762,6 +4869,9 @@ export class CollectionRelationshipService extends BaseService {
         access
       );
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with a relationship that reads as empty.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.error("Failed to fetch many-to-many relations", {
         error: error,
       });
