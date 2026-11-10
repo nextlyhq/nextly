@@ -169,12 +169,22 @@ export function cardRowStyle(h: number): CSSProperties {
   return { gridRow: `span ${h} / span ${h}` };
 }
 
-/** The widths the card menu offers wherever a widget's bounds allow them: the common fractions. */
-const COMMON_WIDTHS: readonly number[] = [3, 4, 6, 8, 12];
+/**
+ * The widths the dashboard names, in columns of twelve: 25%, 33%, 50%, 66%, 75% and 100% of the
+ * row. They are offered wherever a widget's bounds allow them.
+ */
+const NAMED_WIDTHS: ReadonlyMap<number, string> = new Map([
+  [3, "25%"],
+  [4, "33%"],
+  [6, "50%"],
+  [8, "66%"],
+  [9, "75%"],
+  [12, "100%"],
+]);
 
 /**
- * The widths a card may be resized to, narrowest first: each common width that lies within the
- * widget's bounds, the bounds' own ends (so a widget whose minimum is 5 is offered 5), the
+ * The widths a card may be resized to, narrowest first: each named width that lies within the
+ * widget's bounds, the bounds' own ends (so a widget bounded 5 to 5 is still offered 5), the
  * widget's declared default (so a card can always go back to the width its author chose), and
  * the width it is drawn at (so one of the choices is always the checked one).
  */
@@ -182,7 +192,7 @@ export function widthChoices(
   bounds: WidgetSizeBounds,
   drawn?: number
 ): number[] {
-  const within = COMMON_WIDTHS.filter(
+  const within = [...NAMED_WIDTHS.keys()].filter(
     w => w >= bounds.min.w && w <= bounds.max.w
   );
   const ends = [bounds.min.w, bounds.default.w, bounds.max.w];
@@ -214,39 +224,26 @@ export function columnsName(w: number): string {
 }
 
 /**
- * The widths that are an exact share of the row, as the dashboard's design names them: ⅓, ½,
- * Full. A reader thinks of a card as half the row, not as six of twelve columns, so the card
- * menu leads with the share and gives the column count beneath it.
+ * A width as a share of the row, in whole percent: a named width by its name ("50%", "66%"), any
+ * other column count by its own share rounded ("5 columns" is "42%"). A reader thinks of a card
+ * as half the row, not as six of twelve columns.
  */
-const WIDTH_SHARES: ReadonlyMap<number, { glyph: string; name: string }> =
-  new Map([
-    [3, { glyph: "¼", name: "Quarter width" }],
-    [4, { glyph: "⅓", name: "Third width" }],
-    [6, { glyph: "½", name: "Half width" }],
-    [8, { glyph: "⅔", name: "Two thirds width" }],
-    [9, { glyph: "¾", name: "Three quarters width" }],
-    [12, { glyph: "Full", name: "Full width" }],
-  ]);
+export function widthPercent(w: number): string {
+  return NAMED_WIDTHS.get(w) ?? `${Math.round((w / 12) * 100)}%`;
+}
 
 /**
- * A width as the card menu offers it: the share of the row where it is an exact one ("½"), with
- * its columns as the detail beneath, or the columns alone ("5 columns"). `spoken` is the whole
- * name a screen reader hears, "Half width, 6 columns".
+ * A width as the card menu offers it: its share of the row ("50%"), with its columns as the
+ * detail beneath for whoever lays out by the grid. `spoken` is the whole name a screen reader
+ * hears, "50% width".
  */
 export function widthChoiceName(w: number): {
   label: string;
   detail?: string;
   spoken: string;
 } {
-  const share = WIDTH_SHARES.get(w);
-  if (share === undefined) {
-    return { label: columnsName(w), spoken: columnsName(w) };
-  }
-  return {
-    label: share.glyph,
-    detail: columnsName(w),
-    spoken: `${share.name}, ${columnsName(w)}`,
-  };
+  const percent = widthPercent(w);
+  return { label: percent, detail: columnsName(w), spoken: `${percent} width` };
 }
 
 /** A height as the card menu says it: "4 rows". Never one: no card is under two rows high. */
@@ -254,7 +251,7 @@ export function rowsName(h: number): string {
   return `${h} rows`;
 }
 
-/** A whole size as a sentence says it: "6 columns by 4 rows". */
+/** A whole size as a sentence says it: "50% wide by 4 rows". */
 export function sizeName(size: GridSize): string {
-  return `${columnsName(size.w)} by ${rowsName(size.h)}`;
+  return `${widthPercent(size.w)} wide by ${rowsName(size.h)}`;
 }

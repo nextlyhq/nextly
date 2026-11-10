@@ -240,9 +240,7 @@ describe("a change in the quick popover", () => {
     const { resize } = draw(CORE_WIDGET_ID.note);
     const { user, popover } = await openFromTitle("Note");
     await user.click(within(popover).getByRole("combobox", { name: "Width" }));
-    await user.click(
-      screen.getByRole("option", { name: "Full width, 12 columns" })
-    );
+    await user.click(screen.getByRole("option", { name: "100% width" }));
     expect(resize.mock.calls[0]?.[0]).toEqual({
       w: 12,
       h: 3,

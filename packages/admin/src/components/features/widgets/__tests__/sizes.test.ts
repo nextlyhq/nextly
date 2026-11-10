@@ -246,11 +246,11 @@ describe("rows, gaps and a card's height", () => {
 });
 
 describe("the sizes the card menu offers", () => {
-  it("offers the common widths within the bounds, and the bounds' own ends", () => {
+  it("offers the named widths within the bounds, and the bounds' own ends", () => {
     expect(
       widthChoices(bounds({ w: 3, h: 2 }, { w: 6, h: 3 }, { w: 12, h: 3 }))
-    ).toEqual([3, 4, 6, 8, 12]);
-    // A minimum of 5 is offered though it is no common step; 3 and 4 lie below it.
+    ).toEqual([3, 4, 6, 8, 9, 12]);
+    // A minimum of 5 is offered though it is no named width; 3 and 4 lie below it.
     expect(
       widthChoices(bounds({ w: 5, h: 2 }, { w: 6, h: 3 }, { w: 9, h: 3 }))
     ).toEqual([5, 6, 8, 9]);
@@ -260,15 +260,15 @@ describe("the sizes the card menu offers", () => {
   });
 
   it("offers the widget's declared default and the width the card is drawn at", () => {
-    // 🔴 A default of 5 in bounds of 3 to 12 is no common step: without it the card starts at a
+    // 🔴 A default of 5 in bounds of 3 to 12 is no named width: without it the card starts at a
     // width no choice names, nothing is checked, and once moved it cannot go back to 5.
     expect(
       widthChoices(bounds({ w: 3, h: 2 }, { w: 5, h: 3 }, { w: 12, h: 3 }))
-    ).toEqual([3, 4, 5, 6, 8, 12]);
+    ).toEqual([3, 4, 5, 6, 8, 9, 12]);
     // A card drawn at 7 (stored so, within the bounds) has its width among the choices too.
     expect(
       widthChoices(bounds({ w: 3, h: 2 }, { w: 6, h: 3 }, { w: 12, h: 3 }), 7)
-    ).toEqual([3, 4, 6, 7, 8, 12]);
+    ).toEqual([3, 4, 6, 7, 8, 9, 12]);
     // The must-differ half: a drawn width outside the bounds is not offered.
     expect(
       widthChoices(bounds({ w: 4, h: 2 }, { w: 6, h: 3 }, { w: 8, h: 3 }), 12)
@@ -303,41 +303,54 @@ describe("the sizes the card menu offers", () => {
     expect(Math.min(...heightChoices(range))).toBe(2);
   });
 
-  it("names a size in columns and rows", () => {
+  it("names a size by its share of the row and its rows", () => {
     expect(columnsName(1)).toBe("1 column");
     expect(columnsName(6)).toBe("6 columns");
     expect(rowsName(4)).toBe("4 rows");
-    expect(sizeName({ w: 6, h: 4 })).toBe("6 columns by 4 rows");
+    expect(sizeName({ w: 6, h: 4 })).toBe("50% wide by 4 rows");
+    // A width that is no named one is said by its own share, rounded.
+    expect(sizeName({ w: 5, h: 3 })).toBe("42% wide by 3 rows");
   });
 
-  it("offers a width that is an exact share of the row by its share, its columns beneath", () => {
-    // The design's ⅓, ½ and Full, with the column count as the detail; the whole name is what a
-    // screen reader hears. Every exact share of twelve that the menu can offer, and none other.
+  it("offers a named width by its percent, its columns beneath", () => {
+    // The label is the share of the row, the column count the detail; the whole name is what a
+    // screen reader hears.
     expect(widthChoiceName(6)).toEqual({
-      label: "½",
+      label: "50%",
       detail: "6 columns",
-      spoken: "Half width, 6 columns",
+      spoken: "50% width",
     });
     expect(widthChoiceName(12)).toEqual({
-      label: "Full",
+      label: "100%",
       detail: "12 columns",
-      spoken: "Full width, 12 columns",
+      spoken: "100% width",
     });
     expect([3, 4, 8, 9].map(w => widthChoiceName(w).label)).toEqual([
-      "¼",
-      "⅓",
-      "⅔",
-      "¾",
+      "25%",
+      "33%",
+      "66%",
+      "75%",
     ]);
   });
 
-  it("offers any other width by its columns alone", () => {
-    // The must-differ half: 5 and 7 are no share of the row, so no glyph is invented for them.
-    for (const w of [1, 2, 5, 7, 10, 11]) {
-      expect(widthChoiceName(w)).toEqual({
-        label: columnsName(w),
-        spoken: columnsName(w),
-      });
-    }
+  it("offers any other width by its own share of the row, rounded, its columns beneath", () => {
+    // The must-differ half: 5 and 7 are no named width, so their percent is worked out from the
+    // columns rather than looked up.
+    expect(widthChoiceName(5)).toEqual({
+      label: "42%",
+      detail: "5 columns",
+      spoken: "42% width",
+    });
+    expect(widthChoiceName(1)).toEqual({
+      label: "8%",
+      detail: "1 column",
+      spoken: "8% width",
+    });
+    expect([2, 7, 10, 11].map(w => widthChoiceName(w).label)).toEqual([
+      "17%",
+      "58%",
+      "83%",
+      "92%",
+    ]);
   });
 });

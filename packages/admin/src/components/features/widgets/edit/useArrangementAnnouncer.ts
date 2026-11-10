@@ -23,7 +23,7 @@ import type { GridAnnouncer } from "../useGridAnnouncer";
  */
 export interface ArrangementAnnouncer {
   moved: (title: string, from: number, to: number, count: number) => void;
-  /** A card was resized, by its size's name ("6 columns by 4 rows"). */
+  /** A card was resized, by its size's name ("50% wide by 4 rows"). */
   size: (title: string, sizeName: string) => void;
   removed: (title: string) => void;
   restored: (title: string) => void;
