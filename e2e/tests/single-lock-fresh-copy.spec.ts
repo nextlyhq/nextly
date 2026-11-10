@@ -106,7 +106,11 @@ test.describe(
       entryId = single.id;
       const { siteName } = single;
       const stored = await page.request.patch(SINGLE_API, {
-        data: { tagline: before, siteName: siteName || "Nextly" },
+        data: {
+          tagline: before,
+          siteName: siteName || "Nextly",
+          _overwrite: true,
+        },
       });
       expect(stored.ok(), await stored.text()).toBe(true);
     });
@@ -207,7 +211,7 @@ test.describe(
         ).toBeVisible({ timeout: 30_000 });
         // Saved outside A's form: what B is kept from is the point here.
         const stored = await page.request.patch(SINGLE_API, {
-          data: { tagline: saved },
+          data: { tagline: saved, _overwrite: true },
         });
         expect(stored.ok(), await stored.text()).toBe(true);
 

@@ -155,7 +155,8 @@ describe("the entry form's place in the Single editor", () => {
     renderEditor();
 
     const drawn = screen.getByTestId("form-block");
-    expect(drawn.nextElementSibling).toBe(fields());
+    // The block stands in the wrapper that keeps its own form's submit its own.
+    expect(drawn.parentElement?.nextElementSibling).toBe(fields());
     expect(JSON.parse(drawn.textContent ?? "")).toEqual({
       userId: SIGNED_IN,
       kind: "single",

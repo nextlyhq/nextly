@@ -364,7 +364,7 @@ test.describe("exit test 2: only a placed header's exposed fields, with page-edi
 
     const refused = await author.context.request.patch(
       `${COMPONENTS}/${seeded.componentId}`,
-      { headers, data: { content: redesigned } }
+      { headers, data: { content: redesigned, _overwrite: true } }
     );
     expect(refused.status(), await refused.text()).toBe(403);
     const component = await storedComponent(admin, seeded.componentId);
@@ -393,6 +393,7 @@ test.describe("exit test 2: only a placed header's exposed fields, with page-edi
               },
             ],
           },
+          _overwrite: true,
         },
       }
     );

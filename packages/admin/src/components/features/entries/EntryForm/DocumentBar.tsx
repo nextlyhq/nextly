@@ -28,8 +28,8 @@ import { useState } from "react";
 import { useFormContext } from "react-hook-form";
 
 import { useHistoryAddress } from "@admin/components/features/versions/history-address";
+import { LazyVersionHistorySheet } from "@admin/components/features/versions/LazyVersionHistorySheet";
 import { useVersionActions } from "@admin/components/features/versions/version-actions";
-import { VersionHistorySheet } from "@admin/components/features/versions/VersionHistorySheet";
 import {
   Globe,
   History,
@@ -746,7 +746,7 @@ function DocumentBarHistory({
   const canUpdateDocument = useCan(`update-${props.collectionSlug}`);
   const busy = props.documentLocked === true || props.isSubmitting === true;
   return (
-    <VersionHistorySheet
+    <LazyVersionHistorySheet
       open={open}
       onOpenChange={onOpenChange}
       scope={

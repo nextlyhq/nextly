@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../errors/nextly-error";
 import {
+  adapterForReads,
+  readsOnTransaction,
+} from "../shared/lib/read-transaction-scope";
+import {
   resolveServiceOpts as resolve,
   type ServiceOpts,
   wrapCollectionsForPlugin as wrap,
@@ -667,5 +671,223 @@ describe("the transactional writes take ServiceOpts, as the plain writes do", ()
 
     expect(outcome).toMatchObject({ message: "work failed" });
     expect(order).toEqual(["service write failed"]);
+  });
+});
+
+describe("getCollectionInTransaction", () => {
+  // The adapter a service reads through, which the read scope swaps for a
+  // view of it reading on the transaction while the transaction is open in
+  // the flow.
+  const ADAPTER = { transactionOpenInFlow: () => true };
+  const TX = { adapterTransaction: true };
+  const RECORD = { id: "c1", name: "events", label: "Event", status: true };
+
+  /** A service whose `getCollection` says whether it read on `TX`. */
+  function mockRegistry() {
+    const reads: { name: unknown; onTransaction: boolean }[] = [];
+    const m = {
+      withTransaction: vi.fn(async (work: (tx: unknown) => Promise<unknown>) =>
+        work(TX)
+      ),
+      getCollection: vi.fn(async (name: string) => {
+        reads.push({
+          name,
+          onTransaction: readsOnTransaction(adapterForReads(ADAPTER as never)),
+        });
+        if (name !== "events") {
+          throw NextlyError.notFound({ logContext: { collectionName: name } });
+        }
+        return RECORD;
+      }),
+    };
+    return { m, reads };
+  }
+
+  it("answers what getCollection answers, read on the transaction's connection", async () => {
+    const { m, reads } = mockRegistry();
+    const facade = wrapCollectionsForPlugin(m as never);
+
+    const inside = await facade.withTransaction(tx =>
+      facade.getCollectionInTransaction(tx, "events")
+    );
+    const pooled = await facade.getCollection("events", {});
+
+    expect(inside).toEqual(pooled);
+    expect(inside).toEqual(RECORD);
+    // The control is the pooled read: the same service, outside the scope,
+    // reads on the pool.
+    expect(reads).toEqual([
+      { name: "events", onTransaction: true },
+      { name: "events", onTransaction: false },
+    ]);
+  });
+
+  it("refuses a collection there is no record of as getCollection does", async () => {
+    const { m } = mockRegistry();
+    const facade = wrapCollectionsForPlugin(m as never);
+
+    const refused = await facade
+      .withTransaction(tx => facade.getCollectionInTransaction(tx, "gone"))
+      .catch((error: unknown) => error);
+
+    expect(NextlyError.isNotFound(refused)).toBe(true);
+  });
+
+  it("refuses a settled token before reading anything", async () => {
+    const { m } = mockRegistry();
+    const facade = wrapCollectionsForPlugin(m as never);
+    let kept: unknown;
+    await facade.withTransaction(async tx => {
+      kept = tx;
+    });
+
+    const refused = await facade
+      .getCollectionInTransaction(kept as never, "events")
+      .catch((error: unknown) => error);
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "plugin-transaction-finished" },
+    });
+    expect(m.getCollection).not.toHaveBeenCalled();
+  });
+
+  it("refuses a value withTransaction never handed out", async () => {
+    const { m } = mockRegistry();
+    const facade = wrapCollectionsForPlugin(m as never);
+
+    const refused = await facade
+      .getCollectionInTransaction(TX as never, "events")
+      .catch((error: unknown) => error);
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "plugin-transaction-token-unknown" },
+    });
+    expect(m.getCollection).not.toHaveBeenCalled();
+  });
+});
+
+describe("listEntriesInTransaction", () => {
+  // The adapter a service reads through, which the read scope swaps for a
+  // view of it reading on the transaction while the transaction is open in
+  // the flow.
+  const ADAPTER = { transactionOpenInFlow: () => true };
+  // The adapter's transaction, with the transaction-bound handle a role
+  // lookup on it is handed.
+  const TX_HANDLE = { transactionHandle: true };
+  const TX = { adapterTransaction: true, getDrizzle: () => TX_HANDLE };
+  const PAGE = {
+    data: [{ id: "e1", slug: "launch" }],
+    pagination: { total: 1, limit: 10, offset: 0, hasMore: false },
+  };
+
+  /** A service whose `listEntries` says whether it read on `TX`. */
+  function mockEntries() {
+    const reads: { onTransaction: boolean }[] = [];
+    const m = {
+      withTransaction: vi.fn(async (work: (tx: unknown) => Promise<unknown>) =>
+        work(TX)
+      ),
+      listEntries: vi.fn(async () => {
+        reads.push({
+          onTransaction: readsOnTransaction(adapterForReads(ADAPTER as never)),
+        });
+        return PAGE;
+      }),
+    };
+    return { m, reads };
+  }
+
+  const options = {
+    where: { id: { in: ["e1", "e2"] } },
+    pagination: { limit: 2 },
+    select: { id: true, slug: true },
+    depth: 0,
+  };
+
+  it("answers what listEntries answers, with the same arguments, read on the transaction's connection", async () => {
+    const { m, reads } = mockEntries();
+    const facade = wrapCollectionsForPlugin(m as never);
+
+    const inside = await facade.withTransaction(tx =>
+      facade.listEntriesInTransaction(tx, "events", options)
+    );
+    const pooled = await facade.listEntries("events", options);
+
+    expect(inside).toEqual(pooled);
+    expect(inside).toEqual(PAGE);
+    // The service is handed exactly what the pooled read hands it: the
+    // collection, the options and the same system context.
+    expect(m.listEntries.mock.calls[0]).toEqual(m.listEntries.mock.calls[1]);
+    expect(m.listEntries.mock.calls[0]).toEqual([
+      "events",
+      options,
+      SYSTEM_CTX,
+    ]);
+    // The control is the pooled read: the same service, outside the scope,
+    // reads on the pool.
+    expect(reads).toEqual([{ onTransaction: true }, { onTransaction: false }]);
+  });
+
+  it("judges a caller as listEntries does, reading its roles on the transaction", async () => {
+    const { m } = mockEntries();
+    const listRoleSlugs = vi.fn(async () => ["editor"]);
+    const facade = wrap(m as never, { listRoleSlugs });
+    const user = { as: "user", user: { id: "u1", email: "u@x" } } as const;
+
+    await facade.withTransaction(tx =>
+      facade.listEntriesInTransaction(tx, "events", options, user)
+    );
+    await facade.listEntries("events", options, user);
+
+    const [inside, pooled] = m.listEntries.mock.calls.map(
+      call => (call as unknown[])[2]
+    );
+    expect(inside).toEqual(pooled);
+    expect(inside).toMatchObject({
+      overrideAccess: false,
+      user: { id: "u1", roles: ["editor"] },
+    });
+    // On the transaction's handle inside it; on the pool outside, the
+    // control.
+    expect(listRoleSlugs.mock.calls).toEqual([
+      ["u1", TX_HANDLE],
+      ["u1", undefined],
+    ]);
+  });
+
+  it("refuses a settled token before reading anything", async () => {
+    const { m } = mockEntries();
+    const facade = wrapCollectionsForPlugin(m as never);
+    let kept: unknown;
+    await facade.withTransaction(async tx => {
+      kept = tx;
+    });
+
+    const refused = await facade
+      .listEntriesInTransaction(kept as never, "events", options)
+      .catch((error: unknown) => error);
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "plugin-transaction-finished" },
+    });
+    expect(m.listEntries).not.toHaveBeenCalled();
+  });
+
+  it("refuses a value withTransaction never handed out", async () => {
+    const { m } = mockEntries();
+    const facade = wrapCollectionsForPlugin(m as never);
+
+    const refused = await facade
+      .listEntriesInTransaction(TX as never, "events", options)
+      .catch((error: unknown) => error);
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "plugin-transaction-token-unknown" },
+    });
+    expect(m.listEntries).not.toHaveBeenCalled();
   });
 });

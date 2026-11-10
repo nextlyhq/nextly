@@ -40,6 +40,8 @@ describe.each(getConfiguredTestDialects())(
       current = await createTestNextly({
         dialect,
         plugins: [pageBuilder()],
+        // The route serves what visitors may read, so visitors may read pages.
+        seedPublic: true,
         collections: [
           defineCollection({
             slug: POSTS,

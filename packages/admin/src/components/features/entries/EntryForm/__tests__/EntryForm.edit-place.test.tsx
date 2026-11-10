@@ -252,12 +252,16 @@ describe("the edit page's place in the entry editor", () => {
     const top = screen.getByTestId("top-block");
     const middle = screen.getByTestId("middle-block");
     const bottom = screen.getByTestId("bottom-block");
-    expect(frame().firstElementChild).toBe(top);
-    expect(top.nextElementSibling).toBe(screen.getByTestId("document-bar"));
+    // Each contribution stands in its own isolating wrapper, which the
+    // frame holds where the server put the contribution.
+    expect(frame().firstElementChild).toBe(top.parentElement);
+    expect(top.parentElement?.nextElementSibling).toBe(
+      screen.getByTestId("document-bar")
+    );
     // The banners belong to the bar, so a block after the bar follows them.
     expect(precedes(screen.getByText("lock banner"), middle)).toBe(true);
     expect(precedes(middle, row())).toBe(true);
-    expect(frame().lastElementChild).toBe(bottom);
+    expect(frame().lastElementChild).toBe(bottom.parentElement);
   });
 
   it("tells a block which entry the page shows, and hands it the entry", () => {
@@ -295,7 +299,7 @@ describe("the edit page's place in the entry editor", () => {
 
     expect(screen.queryByLabelText("Body")).toBeNull();
     expect(frame().lastElementChild).toBe(
-      screen.getByTestId("replacement-editor")
+      screen.getByTestId("replacement-editor").parentElement
     );
     expect(frame().firstElementChild).toBe(screen.getByTestId("document-bar"));
     expect(screen.getByText("lock banner")).toBeInTheDocument();

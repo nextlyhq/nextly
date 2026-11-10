@@ -152,6 +152,16 @@ outside React, with the same session handling and token. Where
 `writePluginRoute` rejects with the parsed error. Use it when you need the reason
 at the moment you await, such as to show it beside the field that was refused.
 
+A write through `usePluginRouteMutation` refreshes the reads it names in
+`invalidates`, in the same tab: a list your page reads with `usePluginRoute` shows
+the change as soon as the write succeeds. `writePluginRoute` refreshes nothing.
+Neither reaches another browser tab. Each tab keeps its own copy of what it read,
+so a list open in another tab of the admin still shows what it read before the
+write. Reloading that tab reads it again. Opening the page again reads it again
+only once its copy is older than the read's `staleTime`, five minutes by default,
+since the admin doesn't re-read on switching tabs. Pass `staleTime: 0` to
+`usePluginRoute` for a read that is fetched afresh each time its page opens.
+
 On a public route, `csrf: true` also checks the origin of a write no session
 authenticates, without asking it for a token; only such a write that sends an
 `Authorization: Bearer` token is exempt. A write a session authenticates is
@@ -307,8 +317,13 @@ signature before reading anything in it:
 ```ts
 import { definePlugin, standardWebhooks } from "@nextlyhq/plugin-sdk";
 
+// Your own record of the delivery ids already handled.
+declare function seen(deliveryId: string): Promise<boolean>;
+
 definePlugin({
   name: "@acme/nextly-plugin-orders",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.0",
   // ...
   contributes: {
     routes: [

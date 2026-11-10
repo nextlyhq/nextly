@@ -189,8 +189,12 @@ describe("the edit page's place in the Single editor", () => {
     renderEditor();
 
     const top = screen.getByTestId("top-block");
-    expect(frame().firstElementChild).toBe(top);
-    expect(top.nextElementSibling).toBe(screen.getByTestId("document-bar"));
+    // Each contribution stands in its own isolating wrapper, which the
+    // frame holds where the server put the contribution.
+    expect(frame().firstElementChild).toBe(top.parentElement);
+    expect(top.parentElement?.nextElementSibling).toBe(
+      screen.getByTestId("document-bar")
+    );
     expect(JSON.parse(top.textContent ?? "")).toEqual(TOLD);
   });
 

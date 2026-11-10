@@ -32,7 +32,7 @@ import {
   historyRetentionFrom,
 } from "@admin/components/features/versions/history-enabled";
 import { PREVIOUS_VERSION } from "@admin/components/features/versions/version-search-params";
-import { versionsHref } from "@admin/components/features/versions/VersionComparePage";
+import { versionsHref } from "@admin/components/features/versions/versions-href";
 import {
   mayRecordRecovery,
   useViewedVersion,
@@ -76,7 +76,7 @@ import { TranslationPanes } from "../TranslationMode/TranslationPanes";
 import { useTranslationSource } from "../TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "../useEntryLocaleContext";
 
-import { useDocumentPlace } from "./document-place";
+import { useDocumentPanelParts, useDocumentPlace } from "./document-place";
 import type { ContributedAction } from "./DocumentActionBar";
 import {
   DocumentActionsHost,
@@ -118,6 +118,7 @@ import { EntryFormProvider } from "./EntryFormProvider";
 import { EntryFormSidebar } from "./EntryFormSidebar";
 import { EntryMetaStrip } from "./EntryMetaStrip";
 import { FormErrorSummary } from "./FormErrorSummary";
+import { PanelSectionsAboveForm } from "./panels";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import { readerStatusWrite, statusWritesHeld } from "./reader-status-write";
 import type { RecoveryPointState } from "./SaveStateIndicator";
@@ -863,7 +864,12 @@ export function EntryForm({
   // The quick-edit and quick-create modals save only with the update or
   // create permission their mode needs: those modals open from a related
   // field, not through the route guard the full editor sits behind.
-  const canDelete = useCan(`delete-${collectionSlug}`);
+  // A collection whose entries are deleted through an action of their own
+  // (`admin.disableDelete`) is offered no Delete of its own here, unless a
+  // plugin replaces that Delete with its action (below): the server refuses
+  // the plain delete.
+  const mayDelete = useCan(`delete-${collectionSlug}`);
+  const canDelete = mayDelete && collection.admin?.disableDelete !== true;
   // The modals send no language, so the server writes the default one: a
   // create is answered so already, and an update by its own cell.
   const canCreate = useCan(`create-${collectionSlug}`);
@@ -1136,6 +1142,15 @@ export function EntryForm({
     onOwnChange: expectOwnChange,
     locale,
   });
+  // The side panel's sections in the order the server placed them, with the
+  // sections plugins declared at this page's place among them, and what each
+  // is handed: the place's context and entry, with the document's handles.
+  const { panelOrder, sectionsAboveForm, placedSectionProps } =
+    useDocumentPanelParts(
+      documentPlace,
+      panel.mode === "sheet",
+      pluginSurfaces.sectionProps
+    );
 
   const documentActionsInput: DocumentActionBindingsInput = {
     mode,
@@ -1163,7 +1178,12 @@ export function EntryForm({
     ...storingHandlers(handleSubmit),
     onCancel: handleCancel,
     // No handler, no Delete: the action bar draws no action it cannot run.
-    ...(canDelete ? { onDelete: handleDelete } : {}),
+    // A plugin's replacement keeps the row (and its permission and holds),
+    // so it needs the built-in Delete to replace.
+    ...(canDelete ||
+    (mayDelete && pluginSurfaces.actionOverrides.delete?.kind === "replaced")
+      ? { onDelete: handleDelete }
+      : {}),
     onDiscardWorkingDraft: handleDiscardWorkingDraft,
   };
 
@@ -1211,6 +1231,8 @@ export function EntryForm({
         collectionSlug={collection.name}
         isCreateMode={mode === "create"}
         {...contextDocumentStatus}
+        // The fields, so a field inside a repeater's row has an address.
+        fields={getCollectionFields(collection)}
       >
         <EntryFormProvider
           form={form}
@@ -1378,6 +1400,9 @@ export function EntryForm({
                   collectionSlug={collection.name}
                   isCreateMode={mode === "create"}
                   {...contextDocumentStatus}
+                  // The fields, so a field inside a repeater's row has an
+                  // address the Page Builder and other views open it by.
+                  fields={getCollectionFields(collection)}
                   // Only where a takeover can happen. The embedded branch renders
                   // the whole body in a modal and hides nothing, so a panel there
                   // would offer a second copy of fields already on screen.
@@ -1580,6 +1605,18 @@ export function EntryForm({
                                     panelCarriesId={panelDocked}
                                     documentId={entry?.id}
                                   />
+                                  {/* A plugin's section that asks to be met
+                                    first, above the fields on a phone rather
+                                    than in the sheet. */}
+                                  {mode === "edit" ? (
+                                    <PanelSectionsAboveForm
+                                      sections={sectionsAboveForm}
+                                      className={DOCUMENT_COLUMN_INSET}
+                                      {...(placedSectionProps === undefined
+                                        ? {}
+                                        : { placedSectionProps })}
+                                    />
+                                  ) : null}
 
                                   {/* The language panel, inline: the exact
                         complement of the docked panel, shown wherever that
@@ -1683,7 +1720,6 @@ export function EntryForm({
                                   onClose={panel.hide}
                                 >
                                   <EntryFormSidebar
-                                    place={documentPlace}
                                     mode={mode}
                                     entry={entry}
                                     hasStatus={hasStatus}
@@ -1714,6 +1750,9 @@ export function EntryForm({
                                     // A reader may still open the other languages.
                                     navigationDisabled={navigationHeld}
                                     pluginSections={pluginSurfaces.sections}
+                                    {...(panelOrder === undefined
+                                      ? {}
+                                      : { panelOrder })}
                                     {...(pluginSurfaces.sectionProps ===
                                     undefined
                                       ? {}
@@ -1721,6 +1760,9 @@ export function EntryForm({
                                           pluginSectionProps:
                                             pluginSurfaces.sectionProps,
                                         })}
+                                    {...(placedSectionProps === undefined
+                                      ? {}
+                                      : { placedSectionProps })}
                                   />
                                 </DocumentSidePanel>
                               ) : null}

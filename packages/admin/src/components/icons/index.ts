@@ -190,6 +190,7 @@ export {
   Type, // useFields: text
   Underline, // Rich text editor
   Undo, // Rich text editor
+  Unlink, // Plugin menu: the icon @nextlyhq/plugin-page-builder declares for Bindings to fix
   Upload,
   User, // useFields: user
   UserPlus,

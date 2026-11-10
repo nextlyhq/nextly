@@ -20,7 +20,12 @@
  * @module visibility-conditions
  */
 import { isEmptyBoundValue, type BindingFieldShape } from "./binding-rules";
-import type { BlockDocument, BlockNode } from "./document";
+import type {
+  BlockDocument,
+  BlockNode,
+  Condition,
+  NodeVisibility,
+} from "./document";
 import { withHeldSeverity } from "./held-findings";
 import { describeValue, pointer } from "./issue-text";
 import {
@@ -35,6 +40,7 @@ import {
   type ListFields,
   type ListFieldSource,
 } from "./list-query";
+import type { NamedQuerySource } from "./named-query";
 import { isPlainRecord } from "./plain-record";
 import { conditionGatesOf, isConditionGated } from "./visibility";
 
@@ -1006,6 +1012,13 @@ export interface ConditionJudgement {
   /** How many nodes to visit at most, as the rest of validation is bounded. */
   readonly maxNodes?: number;
   readonly registry?: ConditionRegistry;
+  /**
+   * The site's named queries, for a block whose conditions read a row of a
+   * list whose source is one: judged against the fields its rows declare,
+   * or the public fields of the collection they are entries of. Absent,
+   * such a condition is judged by its operator alone.
+   */
+  readonly namedQueries?: NamedQuerySource;
 }
 
 /** One finding, before its severity is decided. */
@@ -1042,6 +1055,12 @@ export interface ConditionScope {
   readonly source: ConditionSource;
   /** `null` when the page has no such record; `undefined` when not known. */
   readonly collection: string | null | undefined;
+  /**
+   * The named query whose rows the item is, for a block in the per-entry
+   * slot of a list whose source is one: its rows' fields are what the
+   * block's conditions read.
+   */
+  readonly query?: string;
 }
 
 /**
@@ -1092,10 +1111,7 @@ function nodeProblems(
     sourceProblem(scope.source, registry) ??
     (scope.collection === null ? missingSource(scope.source) : undefined);
   if (whole !== undefined) return [{ problem: whole, identity: "" }];
-  const fields =
-    typeof scope.collection === "string"
-      ? judgement.fields?.fieldsOf(scope.collection)
-      : undefined;
+  const fields = scopeFields(scope, judgement);
   return groups.flat().flatMap(stored => {
     const judged = judgeCondition(stored, fields, registry);
     if (judged === undefined || !isProblem(judged)) return [];
@@ -1105,6 +1121,34 @@ function nodeProblems(
     const identity = `${stored.field}\u0000${op}\u0000${valueIdentity(stored.value)}`;
     return [{ problem: judged, identity }];
   });
+}
+
+/**
+ * The fields a scope's conditions read, where the judgement can say: its
+ * collection's, or, for a named query's row, the fields the query's rows
+ * declare, or those of the collection they are entries of. The same rows
+ * the list's item bindings are checked against, so a condition and a
+ * binding on one row agree on what it holds.
+ */
+function scopeFields(
+  scope: ConditionScope,
+  judgement: ConditionJudgement
+): ListFields | undefined {
+  if (typeof scope.collection === "string") {
+    return judgement.fields?.fieldsOf(scope.collection);
+  }
+  if (scope.query === undefined) return undefined;
+  const declaration = judgement.namedQueries?.declarationOf(scope.query);
+  if (declaration === undefined) return undefined;
+  const rows = declaration.rows;
+  if ("collection" in rows) return judgement.fields?.fieldsOf(rows.collection);
+  // A schema of its own: every field it declares is one a row carries, and
+  // one a visitor reads, since the reader projected the row to it.
+  return {
+    label: declaration.label,
+    declared: new Set(rows.fields.map(field => field.name)),
+    readable: rows.fields,
+  };
 }
 
 /** The findings about one gated node's conditions, judged at save. */
@@ -1156,9 +1200,13 @@ export function conditionScopeIn(
   if (node.type !== COLLECTION_LIST_TYPE || slot !== LIST_ENTRY_SLOT) {
     return scope;
   }
+  const { query } = readListQuery(node.props);
   return {
     source: "item",
-    collection: readListQuery(node.props).query.collection,
+    collection: query.collection,
+    // A custom source's rows are its query's, whatever collection they are
+    // entries of, so the item is read by that query.
+    ...(query.namedQuery === undefined ? {} : { query: query.namedQuery.name }),
   };
 }
 
@@ -1254,6 +1302,39 @@ export function conditionIssues(
 }
 
 /**
+ * A node's visibility with its conditions replaced: the groups given, or
+ * none when they restrict nobody, by the rule that gates a node: `undefined`,
+ * no groups, or a group with no conditions, which always holds and so lets
+ * everyone through. Everything else the visibility holds, such as which
+ * devices show the block, is kept. `undefined` when nothing is left
+ * to store, so a block shown everywhere to everyone stores no visibility.
+ * The one writer, for the editor and the API alike.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export function withConditions(
+  visibility: NodeVisibility | undefined,
+  conditions: readonly (readonly Condition[])[] | undefined
+): NodeVisibility | undefined {
+  // A visibility nothing can read, a string or a list, is replaced whole:
+  // none of it can be kept.
+  const { conditions: _old, ...rest } = isPlainRecord(visibility)
+    ? visibility
+    : {};
+  // Asked of the gate itself, so what is stored is what restricts.
+  const restricts =
+    conditions !== undefined &&
+    isConditionGated({ visibility: { conditions } });
+  const kept = !restricts
+    ? rest
+    : {
+        ...rest,
+        conditions: conditions.map(group => group.map(c => ({ ...c }))),
+      };
+  return Object.keys(kept).length === 0 ? undefined : kept;
+}
+
+/**
  * What a forest's conditions read of the page's entry, so a route reads the
  * entry once for its bindings and its conditions alike.
  *
@@ -1266,28 +1347,35 @@ export interface ConditionDemand {
   readonly entryFields: ReadonlySet<string>;
   /**
    * Whether an entry-scoped condition orders a value, which may compare days
-   * and so needs the site's time zone.
+   * and so needs the site's time zone. Derived from {@link orderedFields}.
    */
   readonly ordersValues: boolean;
+  /**
+   * The fields entry-scoped conditions order by. Only a date one compares
+   * days, so a reader that knows the fields' shapes asks for the zone only
+   * when one of these is a date. Always set by `conditionDemand`; optional
+   * so a demand built by hand without it still type-checks, and read as
+   * none when absent.
+   */
+  readonly orderedFields?: ReadonlySet<string>;
 }
 
-/** The fields and orderings one entry-scoped node's conditions read. */
+/** The fields one entry-scoped node's conditions read, and those they order by. */
 function demandOf(
   node: Readonly<Record<string, unknown>>,
-  fields: Set<string>
-): boolean {
+  fields: Set<string>,
+  ordered: Set<string>
+): void {
   // Every gate's fields: the block's own and those of the placements it was
   // expanded from, since each is judged against the same entry.
   const storedConditions = conditionGatesOf(node.visibility).flatMap(gate =>
     isPlainRecord(gate) ? (readGroups(gate.conditions)?.flat() ?? []) : []
   );
-  let orders = false;
   for (const stored of storedConditions) {
     fields.add(stored.field);
     const op = conditionOp(stored.op);
-    if (op === "greater_than" || op === "less_than") orders = true;
+    if (op === "greater_than" || op === "less_than") ordered.add(stored.field);
   }
-  return orders;
 }
 
 /**
@@ -1303,8 +1391,8 @@ export function conditionDemand(
   maxNodes: number = Number.MAX_SAFE_INTEGER
 ): ConditionDemand {
   const entryFields = new Set<string>();
+  const orderedFields = new Set<string>();
   let any = false;
-  let ordersValues = false;
   let left = maxNodes;
   const page: ConditionScope = { source: "entry", collection: undefined };
   const stack: ConditionVisit[] = [];
@@ -1321,11 +1409,16 @@ export function conditionDemand(
     if (!isPlainRecord(node)) continue;
     if (isConditionGated(node)) {
       any = true;
-      if (scope.source === "entry" && demandOf(node, entryFields)) {
-        ordersValues = true;
+      if (scope.source === "entry") {
+        demandOf(node, entryFields, orderedFields);
       }
     }
     stack.push(...childVisits(node, "", scope));
   }
-  return { any, entryFields, ordersValues };
+  return {
+    any,
+    entryFields,
+    ordersValues: orderedFields.size > 0,
+    orderedFields,
+  };
 }

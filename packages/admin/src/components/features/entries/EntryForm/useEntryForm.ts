@@ -118,6 +118,11 @@ export interface EntryFormCollection extends RemovedFromCodeMark {
   /** Admin configuration including preview settings */
   admin?: {
     preview?: EntryFormPreviewConfig;
+    /**
+     * Whether the collection's entries are deleted through an action of their
+     * own, which a plugin draws: the editor then offers no Delete of its own.
+     */
+    disableDelete?: boolean;
   };
   /**
    * Whether the collection has the Draft/Published status feature enabled.

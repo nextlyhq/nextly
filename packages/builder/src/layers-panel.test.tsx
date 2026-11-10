@@ -27,6 +27,7 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 
+import { PreviewedEntryProvider } from "./previewed-entry";
 import {
   clearBlocks,
   hasBlock,
@@ -835,5 +836,70 @@ describe("a collection list's regions in Layers", () => {
     // The region row is its own row still, and still selects the list.
     fireEvent.click(screen.getByRole("treeitem", { name: /When empty/ }));
     await waitFor(() => expect(editorRef?.selectedId).toBe("list"));
+  });
+});
+
+describe("an Entry content block's row", () => {
+  const collection = (fields: readonly { name: string; label: string }[]) => ({
+    slug: "posts",
+    singular: "post",
+    plural: "Posts",
+    blocksFields: fields,
+    fieldLabel: (name: string) =>
+      fields.find(each => each.name === name)?.label ?? `Words for ${name}`,
+    entryHref: (id: string) => `/admin/collections/posts/${id}`,
+  });
+
+  function template(): BlockDocument {
+    return {
+      formatVersion: 1,
+      kind: "template",
+      nodes: [
+        node("ec", "core/entry-content", { props: { field: "body" } }),
+        node("loose", "core/heading", { name: "Footnote" }),
+      ],
+    } as BlockDocument;
+  }
+
+  it("names the field it draws, and no problem while the collection has it", () => {
+    register();
+    render(
+      <PreviewedEntryProvider
+        value={{ kind: "none", reason: "empty" }}
+        collection={collection([{ name: "body", label: "Body" }])}
+      >
+        <Host document={template()} />
+      </PreviewedEntryProvider>
+    );
+    const row = window.document.querySelector(
+      '[data-nx-layer="ec"]'
+    )?.parentElement;
+    expect(row?.querySelector(".nx-layer-row__tag")?.textContent).toBe("Body");
+    expect(row?.querySelector("[data-problem]")).toBeNull();
+    // The control: the heading's row names no field.
+    const other = window.document.querySelector(
+      '[data-nx-layer="loose"]'
+    )?.parentElement;
+    expect(other?.querySelector(".nx-layer-row__tag")).toBeNull();
+  });
+
+  it("marks a problem, in words, where the collection no longer has the field", () => {
+    register();
+    render(
+      <PreviewedEntryProvider
+        value={{ kind: "none", reason: "empty" }}
+        collection={collection([{ name: "sidebar", label: "Sidebar" }])}
+      >
+        <Host document={template()} />
+      </PreviewedEntryProvider>
+    );
+    const row = window.document.querySelector(
+      '[data-nx-layer="ec"]'
+    )?.parentElement;
+    const problem = row?.querySelector("[data-problem]");
+    expect(problem?.textContent).toBe(
+      "Words for body no longer exists in this collection"
+    );
+    expect(row?.querySelector(".nx-layer-row__tag")).toBeNull();
   });
 });

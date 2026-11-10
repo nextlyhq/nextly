@@ -41,6 +41,7 @@ import { formsChangedBy } from "../component-cycle-guard";
 import { siteBreakpoints } from "../site-style";
 
 import { storedFormsFor } from "./added-undefined-ids";
+import { newBindingIssues } from "./binding-judgement";
 import {
   compositionIssues,
   documentOf,
@@ -52,6 +53,7 @@ import { blocksOptionsOf, DEFAULT_ACCEPTED_KINDS } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
 import { newBreakpointIssues } from "./breakpoint-reference-judgement";
 import { newClassReferenceIssues } from "./class-reference-judgement";
+import { newEntryContentIssues } from "./entry-content-judgement";
 import {
   judgesLayersLocks,
   layersLockIssues,
@@ -110,9 +112,14 @@ export const BLOCKS_FIELD_COMPONENT =
 /**
  * `read`, asked at most once: every caller shares the first call's answer,
  * so the checks judging one write see one read. Nothing when there is no
- * `read`.
+ * `read`. Exported for the same checks made again inside the write's
+ * transaction (`composition-rejudge`), which share their reads the same way.
  */
-function onceAsked<T>(
+export function onceAsked<T>(read: () => Promise<T>): () => Promise<T>;
+export function onceAsked<T>(
+  read: (() => Promise<T>) | undefined
+): (() => Promise<T>) | undefined;
+export function onceAsked<T>(
   read: (() => Promise<T>) | undefined
 ): (() => Promise<T>) | undefined {
   if (read === undefined) return undefined;
@@ -300,20 +307,58 @@ export function blocksFieldType(
       // And the fields each collection list names, against the schema and
       // what visitors may read, on any write the server can read them for.
       const listFields = composition?.()?.listFields;
+      // And what its bindings read, against each source's declared fields.
+      const bindingShapes = composition?.()?.bindingShapes;
       const lists = async (): Promise<readonly PluginFieldIssue[]> => {
-        if (emptied || listFields === undefined || args.write === undefined) {
-          return [];
-        }
+        if (emptied || args.write === undefined) return [];
+        const maxNodes = composition?.()?.limits.maxNodes;
+        const namedQueries = composition?.()?.namedQueries;
+        // Where templates are stored, so a template's lists and bindings are
+        // judged against the collection it draws.
+        const templates = composition?.()?.templates;
+        const bound =
+          bindingShapes === undefined
+            ? []
+            : await newBindingIssues(value, args, label, {
+                shapesOf: bindingShapes,
+                storedForms,
+                ...(templates === undefined ? {} : { templates }),
+                ...(maxNodes === undefined ? {} : { maxNodes }),
+                // A list's item bindings, against its query's rows.
+                ...(namedQueries === undefined ? {} : { namedQueries }),
+                onUnjudged: bindings =>
+                  composition?.()?.onBindingsUnjudged?.({
+                    field: args.path,
+                    ...documentOf(args.write),
+                    bindings,
+                  }),
+              });
+        if (listFields === undefined) return bound;
         const site = {
           fieldsOf: listFields,
           storedForms,
-          maxNodes: composition?.()?.limits.maxNodes,
+          maxNodes,
+          ...(namedQueries === undefined ? {} : { namedQueries }),
+          ...(templates === undefined ? {} : { templates }),
         };
         // And the fields its blocks' visibility conditions check, judged the
         // same way, since a condition the page could not check hides its block.
+        const entryBlocksFields = composition?.()?.entryBlocksFields;
         return [
           ...(await newListQueryIssues(value, args, label, site)),
           ...(await newConditionIssues(value, args, label, site)),
+          ...bound,
+          // And the field a template's Entry content block draws, against
+          // the collection the template draws, and where the document is
+          // stored, since only a template may hold one.
+          ...(await newEntryContentIssues(value, args, label, {
+            storedForms,
+            ...(templates === undefined ? {} : { templates }),
+            ...(entryBlocksFields === undefined
+              ? {}
+              : { blocksFieldsOf: entryBlocksFields }),
+            ...(site.maxNodes === undefined ? {} : { maxNodes: site.maxNodes }),
+          })),
         ];
       };
       const classes = async (): Promise<readonly PluginFieldIssue[]> => {
@@ -347,7 +392,9 @@ export function blocksFieldType(
         if (
           args.write === undefined ||
           emptied ||
-          (definitions === undefined && listFields === undefined)
+          (definitions === undefined &&
+            listFields === undefined &&
+            bindingShapes === undefined)
         ) {
           return verdict;
         }

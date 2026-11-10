@@ -116,6 +116,83 @@ describe("validating bindings against the sources' schema", () => {
     expect(bindingCodes(shapeOnly)).toEqual([[], [], []]);
   });
 
+  it("refuses an image bound to plain text, and an image fallback that is neither an image address nor a media id", () => {
+    const imageFields: BindingSchemaSource = {
+      fieldsOf: ref =>
+        "collection" in ref && ref.collection === "posts"
+          ? [
+              { name: "title", type: "text" },
+              { name: "cover", type: "upload", relationTo: "media" },
+              { name: "photoUrl", type: "url" },
+            ]
+          : undefined,
+    };
+    const imageBoundTo = (id: string, path: string, fallback?: unknown) => ({
+      id,
+      type: "core/image",
+      version: 1,
+      props: {},
+      bindings: {
+        mediaId: {
+          $bind: path,
+          ...(fallback === undefined ? {} : { fallback }),
+        },
+      },
+    });
+    const images: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        imageBoundTo("text", "title"),
+        imageBoundTo("script", "cover", "javascript:alert(1)"),
+        imageBoundTo("data", "photoUrl", "data:image/png;base64,AAAA"),
+        imageBoundTo("other-host", "cover", "//elsewhere.example/a.png"),
+        // Neither a string address nor a string id: a number is no fallback.
+        imageBoundTo("number", "cover", 42),
+        // CONTROLS: an image address and a media library id are image
+        // fallbacks, as they are the image prop's own values.
+        imageBoundTo("media-id", "cover", "media-1"),
+        imageBoundTo("address", "photoUrl", "https://cdn.example/a.png"),
+        imageBoundTo("site-path", "cover", "/media/a.png"),
+      ],
+    } as unknown as BlockDocument;
+    const imageContext: ValidationContext = {
+      ...context,
+      bindingSchema: imageFields,
+      definitions: {
+        get: type =>
+          type === "core/image"
+            ? { version: 1, props: { mediaId: { type: "media" } } }
+            : undefined,
+      },
+    };
+    const issues = validate(images, imageContext);
+    const codesAt = (index: number) =>
+      issues
+        .filter(issue => issue.path.startsWith(`/nodes/${String(index)}/`))
+        .map(issue => issue.code);
+    expect(images.nodes.map((_node, index) => codesAt(index))).toEqual([
+      ["binding-type-misfit"],
+      ["binding-fallback-invalid"],
+      ["binding-fallback-invalid"],
+      ["binding-fallback-invalid"],
+      ["binding-fallback-invalid"],
+      [],
+      [],
+      [],
+    ]);
+    // The refusal names both kinds of fallback an image takes.
+    const refused = issues.find(
+      issue =>
+        issue.path.startsWith("/nodes/1/") &&
+        issue.code === "binding-fallback-invalid"
+    );
+    expect(refused?.message).toContain(
+      "neither an image address (https://, http:// or a path on the site) nor a media library image"
+    );
+    expect(refused?.message).not.toContain("can't be a fallback");
+  });
+
   it("reports every binding code under the validator's own table", () => {
     for (const [code, description] of Object.entries(BINDING_ISSUE_CODES)) {
       expect(ISSUE_CODES).toHaveProperty(code, description);

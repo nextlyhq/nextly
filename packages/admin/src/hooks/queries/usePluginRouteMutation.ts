@@ -296,6 +296,9 @@ interface PluginWrite<TBody> {
  * `keepalive` asks for a write that outlives the page: sent so the browser
  * finishes it after the page is hidden or closed, while its body fits the
  * 64 KB browsers allow such a request, and as an ordinary request otherwise.
+ *
+ * `signal` aborts the request: a caller that no longer wants the answer
+ * stops it, rather than leaving it to run to an answer nobody reads.
  */
 export function writePluginRoute<TResult extends object | null>({
   plugin,
@@ -304,15 +307,18 @@ export function writePluginRoute<TResult extends object | null>({
   method = "POST",
   body,
   keepalive,
+  signal,
 }: Pick<PluginRouteWrite, "plugin" | "path" | "method" | "mount"> & {
   body?: unknown;
   keepalive?: boolean;
+  signal?: AbortSignal;
 }): Promise<TResult | undefined> {
   return sendTo<TResult>(
     method,
     pluginRouteFullPath(plugin, path, mount),
     body,
-    keepalive
+    keepalive,
+    signal
   );
 }
 
@@ -320,7 +326,8 @@ async function sendTo<TResult>(
   method: PluginRouteMethod,
   route: string,
   body: unknown,
-  keepalive?: boolean
+  keepalive?: boolean,
+  signal?: AbortSignal
 ): Promise<TResult | undefined> {
   const token = await csrfTokenForWrite();
   // Left off when no token could be had: an empty header reads as a token
@@ -328,6 +335,7 @@ async function sendTo<TResult>(
   const options = {
     ...(token === "" ? {} : { headers: { "x-csrf-token": token } }),
     ...keepaliveOptions(body, keepalive),
+    ...(signal === undefined ? {} : { signal }),
   };
   const senders: Record<PluginRouteMethod, () => Promise<TResult | undefined>> =
     {

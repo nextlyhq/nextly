@@ -36,6 +36,11 @@
       "import": "./dist/canvas/index.js",
       "default": "./dist/canvas/index.js"
     },
+    "./site": {
+      "types": "./dist/site/index.d.ts",
+      "import": "./dist/site/index.js",
+      "default": "./dist/site/index.js"
+    },
     "./styles/editor.css": "./dist/styles/editor.css"
   },
   "files": [
@@ -54,7 +59,7 @@
     "@nextlyhq/blocks-engine": "workspace:*",
     "@nextlyhq/blocks-react": "workspace:*",
     "css-tree": "^2.3.1",
-    "isomorphic-dompurify": "^2"
+    "parse5": "^8.0.0"
   },
   "peerDependencies": {
     "@nextlyhq/admin": "workspace:*",

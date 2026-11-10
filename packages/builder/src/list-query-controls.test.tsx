@@ -698,6 +698,25 @@ describe("a fallen-back sort's Choose a field", () => {
     expect(editor.apply).not.toHaveBeenCalled();
   });
 
+  it("answers an ask made as the list is selected, when React runs its effects twice", async () => {
+    register();
+    const editor = editorFor({ collection: "posts", sort: "-rating" });
+    render(
+      <React.StrictMode>
+        <InspectorPanel
+          editor={{ ...editor, sortFieldAsked: { id: "list", seq: 1 } }}
+          contentServices={{
+            listLoopCollections: vi.fn(async () => COLLECTIONS),
+          }}
+        />
+      </React.StrictMode>
+    );
+    const first = await screen.findByRole("button", {
+      name: /^Sort 1 of 1, by/,
+    });
+    await waitFor(() => expect(document.activeElement).toBe(first));
+  });
+
   it("asks nothing of a list it was not pressed for", async () => {
     register();
     const editor = editorFor({ collection: "posts", sort: "-rating" });

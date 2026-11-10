@@ -352,6 +352,7 @@ describe.each(getConfiguredTestDialects())(
             collectionPluralLabel: "Articles",
             field: "body",
             title: "Alpha article",
+            rev: "1",
           },
           {
             id: alphaPageId,
@@ -361,6 +362,7 @@ describe.each(getConfiguredTestDialects())(
             field: "content",
             title: "Alpha page",
             status: "published",
+            rev: "1",
           },
         ]);
         expect(answer.meta.total).toBe(2);
