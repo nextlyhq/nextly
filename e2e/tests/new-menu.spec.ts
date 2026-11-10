@@ -96,8 +96,9 @@ test("on a 390 px phone, the button stays on screen and the menu widens nothing,
   await trigger.click();
   const menu = page.getByRole("dialog", { name: "Create" });
   await expect(menu).toBeVisible();
-  // The control: the long name reached the menu.
-  await expect(menu.getByRole("option").first()).toHaveText(LONG_NAME);
+  // The control: the long name reached the menu. Every type now shares that
+  // singular label, so each option also carries its telling-apart label.
+  await expect(menu.getByRole("option").first()).toContainText(LONG_NAME);
   const menuBox = await menu.boundingBox();
   expect(menuBox).not.toBeNull();
   expect(menuBox!.x).toBeGreaterThanOrEqual(0);
