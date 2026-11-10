@@ -10,7 +10,9 @@
  *
  * Each surface's own spec scans it alone (`dashboard-gallery`, `dashboard-customise`,
  * `dashboard-header`). This one walks them as one reader does, so a defect that shows only once
- * two are on screen together, or only on the way from one to the next, is found here.
+ * two are on screen together, or only on the way from one to the next, is found here. The header
+ * bell's count is held to AA in `notification-bell`, on the dev server: a production build, which
+ * this suite runs on, hides the bell with the Schema Builder.
  *
  * Each test returns the reader to the default dashboard when it ends.
  *
@@ -680,41 +682,7 @@ for (const theme of ["light", "dark"] as Theme[]) {
 }
 
 for (const theme of ["light", "dark"] as Theme[]) {
-  test(`a notification count and Team activity's initials pass axe (${theme})`, async ({
-    page,
-  }) => {
-    // More than nine unread changes, so the bell's badge says "9+": axe holds two characters to
-    // the full ratio and sets a one-character count aside.
-    await page.route("**/admin/api/schema/journal**", async route => {
-      try {
-        const at = new Date().toISOString();
-        await route.fulfill({
-          json: {
-            hasMore: false,
-            rows: Array.from({ length: 12 }, (_, index) => ({
-              id: `journal-${index}`,
-              source: "ui",
-              status: "success",
-              scope: { kind: "global" },
-              summary: { added: 1, removed: 0, renamed: 0, changed: 0 },
-              startedAt: at,
-              endedAt: at,
-              durationMs: 1,
-              errorCode: null,
-              errorMessage: null,
-            })),
-          },
-        });
-      } catch {
-        // The page closed while answering.
-      }
-    });
-    await page.addInitScript(() =>
-      localStorage.setItem(
-        "nextly:journal:lastSeen",
-        "2000-01-01T00:00:00.000Z"
-      )
-    );
+  test(`Team activity's initials pass axe (${theme})`, async ({ page }) => {
     // Something recent to list, so the initials are drawn at all.
     const tag = `${theme}-${Date.now()}`;
     await createEntry(page.request, "posts", {
@@ -723,7 +691,6 @@ for (const theme of ["light", "dark"] as Theme[]) {
     });
 
     await dashboardAtRest(page, theme);
-    await expect(page.getByTestId("notification-bell-badge")).toHaveText("9+");
     // The row for the entry just written, so the header's own avatar can't stand in.
     await expect(
       page
@@ -732,7 +699,7 @@ for (const theme of ["light", "dark"] as Theme[]) {
         .locator('[data-slot="avatar-fallback"]')
         .first()
     ).toBeVisible();
-    await scan(page, "the bell's count and Team activity's initials");
+    await scan(page, "Team activity's initials");
   });
 }
 
