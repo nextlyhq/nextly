@@ -120,32 +120,32 @@ function DashboardChrome({ children }: DashboardLayoutProps) {
               the builder). Otherwise the menu button is in the top bar, so a
               phone gets the one bar every other width gets. */}
           {hidden.has("header") && (
-          <div className="lg:hidden flex h-14 shrink-0 items-center justify-between  border-b border-border px-4 bg-background z-30">
-            <div className="flex items-center gap-3 justify-between w-full flex-row-reverse">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="-ml-2 h-9 w-9 text-foreground"
-                onClick={() => setIsMobileMenuOpen(true)}
-              >
-                <Menu className="h-5 w-5" />
-                <span className="sr-only">Open the navigation menu</span>
-              </Button>
-              <div className="flex items-center gap-2">
-                <ThemeAwareLogo
-                  alt={branding?.logoText ?? "Logo"}
-                  className="h-5 w-auto object-contain"
-                />
-                {!branding?.logoUrl &&
-                  !branding?.logoUrlLight &&
-                  !branding?.logoUrlDark && (
-                    <span className="text-sm font-semibold tracking-tight text-foreground">
-                      {branding?.logoText ?? "Nextly"}
-                    </span>
-                  )}
+            <div className="lg:hidden flex h-14 shrink-0 items-center justify-between  border-b border-border px-4 bg-background z-30">
+              <div className="flex items-center gap-3 justify-between w-full flex-row-reverse">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="-ml-2 h-9 w-9 text-foreground"
+                  onClick={() => setIsMobileMenuOpen(true)}
+                >
+                  <Menu className="h-5 w-5" />
+                  <span className="sr-only">Open the navigation menu</span>
+                </Button>
+                <div className="flex items-center gap-2">
+                  <ThemeAwareLogo
+                    alt={branding?.logoText ?? "Logo"}
+                    className="h-5 w-auto object-contain"
+                  />
+                  {!branding?.logoUrl &&
+                    !branding?.logoUrlLight &&
+                    !branding?.logoUrlDark && (
+                      <span className="text-sm font-semibold tracking-tight text-foreground">
+                        {branding?.logoText ?? "Nextly"}
+                      </span>
+                    )}
+                </div>
               </div>
             </div>
-          </div>
           )}
 
           <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -175,9 +175,7 @@ function DashboardChrome({ children }: DashboardLayoutProps) {
               style={{ paddingInlineEnd: reservedInlineEnd }}
             >
               {!hidden.has("header") && (
-                <DashboardHeader
-                  onOpenMenu={() => setIsMobileMenuOpen(true)}
-                />
+                <DashboardHeader onOpenMenu={() => setIsMobileMenuOpen(true)} />
               )}
               {/* Named container so content responds to the panel width
                   (viewport minus sidebar), not the viewport. */}

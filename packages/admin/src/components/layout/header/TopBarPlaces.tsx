@@ -18,16 +18,12 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
-  useLayoutEffect,
   useMemo,
   useState,
   type JSX,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-
-import { useMountRegistry } from "../lib/mount-registry";
 
 /** The bar's two places: its left part and its right part. */
 export type TopBarPlaceName = "start" | "end";
@@ -36,9 +32,6 @@ interface TopBarPlacesValue {
   /** The bar's element for each place, once the bar has mounted. */
   targets: Readonly<Record<TopBarPlaceName, HTMLElement | null>>;
   setTarget: (name: TopBarPlaceName, element: HTMLElement | null) => void;
-  /** The places something is drawn into right now, one entry per drawer. */
-  filled: readonly TopBarPlaceName[];
-  register: (name: TopBarPlaceName) => () => void;
 }
 
 const TopBarPlacesContext = createContext<TopBarPlacesValue | null>(null);
@@ -62,32 +55,13 @@ export function TopBarPlacesProvider({
       ),
     []
   );
-  const { entries, register: add } = useMountRegistry<{
-    name: TopBarPlaceName;
-  }>();
-  // A fresh object per drawer, so two drawers in one place are two entries.
-  const register = useCallback(
-    (name: TopBarPlaceName) => add({ name }),
-    [add]
-  );
-  const filled = useMemo(() => entries.map(entry => entry.name), [entries]);
-  const value = useMemo(
-    () => ({ targets, setTarget, filled, register }),
-    [targets, setTarget, filled, register]
-  );
+  const value = useMemo(() => ({ targets, setTarget }), [targets, setTarget]);
   return (
     <TopBarPlacesContext.Provider value={value}>
       {children}
     </TopBarPlacesContext.Provider>
   );
 }
-
-/**
- * A layout effect on the client, so a place is filled, and the bar knows it,
- * before the first paint; a passive one where there is no DOM.
- */
-const useRegistrationEffect =
-  typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 /**
  * Draw `children` into the bar's `name` place for as long as this is mounted.
@@ -101,8 +75,6 @@ export function TopBarPlace({
   children: ReactNode;
 }): JSX.Element | null {
   const places = useContext(TopBarPlacesContext);
-  const register = places?.register;
-  useRegistrationEffect(() => register?.(name), [register, name]);
   if (places === null) return <>{children}</>;
   const target = places.targets[name];
   // The bar sets its places while it mounts, in the same commit as the page,
@@ -125,12 +97,6 @@ export function TopBarPlaceTarget({
     [setTarget, name]
   );
   return <div ref={ref} data-top-bar-place={name} className={className} />;
-}
-
-/** Whether the page on screen draws anything into the bar's places. */
-export function useTopBarPlacesFilled(): boolean {
-  const places = useContext(TopBarPlacesContext);
-  return (places?.filled.length ?? 0) > 0;
 }
 
 /** Whether the shell's bar is there to be drawn into. */

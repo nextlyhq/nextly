@@ -1,10 +1,6 @@
 import type { JSX } from "react";
 
-import {
-  Menu,
-  PanelLeftClose,
-  PanelLeftOpen,
-} from "@admin/components/icons";
+import { Menu, PanelLeftClose, PanelLeftOpen } from "@admin/components/icons";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { cn } from "@admin/lib/utils";
