@@ -77,16 +77,12 @@ async function registered(
     const registry = container.get<CollectionRegistryService>(
       "collectionRegistryService"
     );
-    return ((await registry.getCollectionBySlug(type.slug)) ?? undefined) as
-      | TypeRecord
-      | undefined;
+    return (await registry.getCollectionBySlug(type.slug)) ?? undefined;
   }
   const registry = container.get<SingleRegistryService>(
     "singleRegistryService"
   );
-  return ((await registry.getSingleBySlug(type.slug)) ?? undefined) as
-    | TypeRecord
-    | undefined;
+  return (await registry.getSingleBySlug(type.slug)) ?? undefined;
 }
 
 /**

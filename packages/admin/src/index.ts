@@ -424,6 +424,7 @@ export type {
   FieldSettingsField,
   FieldSettingsPanelProps,
   FieldSettingsSurface,
+  FieldSettingsConditionsProps,
   FieldSettingsSurfaceControlProps,
   FieldSettingsTab,
   FieldTypeSettings,

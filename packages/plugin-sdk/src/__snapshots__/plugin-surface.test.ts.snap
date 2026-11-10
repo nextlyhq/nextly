@@ -83,6 +83,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "FieldPickerChoice (type)",
   "FieldPickerConfig (type)",
   "FieldPickerProps (type)",
+  "FieldSettingsConditionsProps (type)",
   "FieldSettingsControlProps (type)",
   "FieldSettingsField (type)",
   "FieldSettingsPanel (value)",

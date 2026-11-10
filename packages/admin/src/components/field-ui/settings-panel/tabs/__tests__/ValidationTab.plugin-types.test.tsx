@@ -31,7 +31,13 @@ const field = (type: string): BuilderField =>
 describe("ValidationTab, plugin-contributed field types", () => {
   it("offers text rules to a plugin type stored as text", () => {
     withPluginType("acme-colour", "text");
-    render(<ValidationTab field={field("acme-colour")} onChange={() => {}} />);
+    render(
+      <ValidationTab
+        surface="entries"
+        field={field("acme-colour")}
+        onChange={() => {}}
+      />
+    );
 
     expect(screen.getByLabelText("Min length")).toBeInTheDocument();
     expect(screen.getByLabelText("Max length")).toBeInTheDocument();
@@ -43,7 +49,13 @@ describe("ValidationTab, plugin-contributed field types", () => {
 
   it("offers numeric rules to a plugin type stored as a number", () => {
     withPluginType("acme-rating", "number");
-    render(<ValidationTab field={field("acme-rating")} onChange={() => {}} />);
+    render(
+      <ValidationTab
+        surface="entries"
+        field={field("acme-rating")}
+        onChange={() => {}}
+      />
+    );
 
     expect(screen.getByLabelText("Min")).toBeInTheDocument();
     expect(screen.getByLabelText("Max")).toBeInTheDocument();
@@ -52,7 +64,13 @@ describe("ValidationTab, plugin-contributed field types", () => {
 
   it("offers only universal rules to a type no plugin claims", () => {
     branding.current = { plugins: [] };
-    render(<ValidationTab field={field("acme-unknown")} onChange={() => {}} />);
+    render(
+      <ValidationTab
+        surface="entries"
+        field={field("acme-unknown")}
+        onChange={() => {}}
+      />
+    );
 
     // Population before verdict: the tab rendered something, so the absences
     // below are facts about the markup rather than about an empty render.
@@ -66,7 +84,13 @@ describe("ValidationTab, plugin-contributed field types", () => {
     // A length is a count of things. Leaving step and min unset let `2.7` and
     // `-5` be typed into a persisted schema.
     withPluginType("acme-colour", "text");
-    render(<ValidationTab field={field("acme-colour")} onChange={() => {}} />);
+    render(
+      <ValidationTab
+        surface="entries"
+        field={field("acme-colour")}
+        onChange={() => {}}
+      />
+    );
 
     const minLength = screen.getByLabelText("Min length");
     expect(minLength).toHaveAttribute("step", "1");
@@ -75,7 +99,13 @@ describe("ValidationTab, plugin-contributed field types", () => {
 
   it("leaves a numeric bound unconstrained, since a value may be negative or fractional", () => {
     withPluginType("acme-rating", "number");
-    render(<ValidationTab field={field("acme-rating")} onChange={() => {}} />);
+    render(
+      <ValidationTab
+        surface="entries"
+        field={field("acme-rating")}
+        onChange={() => {}}
+      />
+    );
 
     const min = screen.getByLabelText("Min");
     expect(min).not.toHaveAttribute("step");
@@ -85,10 +115,18 @@ describe("ValidationTab, plugin-contributed field types", () => {
   it("gives each control a unique id so two open editors cannot collide", () => {
     withPluginType("acme-colour", "text");
     const { container: a } = render(
-      <ValidationTab field={field("acme-colour")} onChange={() => {}} />
+      <ValidationTab
+        surface="entries"
+        field={field("acme-colour")}
+        onChange={() => {}}
+      />
     );
     const { container: b } = render(
-      <ValidationTab field={field("acme-colour")} onChange={() => {}} />
+      <ValidationTab
+        surface="entries"
+        field={field("acme-colour")}
+        onChange={() => {}}
+      />
     );
 
     const ids = (root: HTMLElement) =>

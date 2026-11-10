@@ -101,6 +101,7 @@ import type { NoticesService } from "../domains/notices/notices-service";
 import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import type { PreviewConfig } from "../domains/preview/route-config";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
+import { assertConfiguredPublicAddresses } from "../domains/public-addresses/distinct-public-addresses";
 import type { ReleasesService } from "../domains/releases/services/releases-service";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
@@ -290,7 +291,6 @@ import type {
   PasswordHasher,
   UserService,
 } from "../services/users/user-service";
-import { assertConfiguredPublicAddresses } from "../domains/public-addresses/distinct-public-addresses";
 import { assertConfiguredAddresses } from "../shared/address-rule";
 import {
   isProductionRuntime,

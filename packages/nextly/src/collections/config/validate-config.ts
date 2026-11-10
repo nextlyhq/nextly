@@ -29,6 +29,7 @@ import {
   COLLECTION_ID_TYPES,
 } from "../../domains/collections/services/collection-db-options";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
+import { publicAddressErrors } from "../../domains/public-addresses/public-address-template";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import {
   isManagedIndexName,
@@ -61,7 +62,6 @@ import {
   validateFieldBasicsShared,
   validateSiblingFieldsShared,
 } from "../../shared/base-validator";
-import { publicAddressErrors } from "../../domains/public-addresses/public-address-template";
 import { isPlainObject } from "../../shared/lib/plain-copy";
 import {
   RESERVED_SLUGS,
