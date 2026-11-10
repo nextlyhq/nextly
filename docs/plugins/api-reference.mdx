@@ -901,8 +901,8 @@ content `content`, the entry form names its fields `fields`, and the login page
 names the sign-in form `form`. A plugin that replaces the login page's `form`
 takes over sign-in for the site.
 
-**On a phone.** Where a collection entry's editor is too narrow to keep the
-side panel beside the fields, the panel opens only when asked for. A side
+**On a phone.** Where an edit page is too narrow to keep the side panel
+beside the fields, the panel opens only when asked for. A side
 panel section declared with `narrow: "above-form"` (`@experimental`) is drawn
 there under the title, above the fields, and left out of the panel, so an
 author meets it without opening the panel. Without it, the section stays in
@@ -930,7 +930,13 @@ own error boundary; a contributed tab follows the page's own content, which
 stays as it was when no tab is sent. On an edit page the tabs head the field
 column, and the document bar and the side panel stay whichever tab is open.
 The side panel draws contributed sections among its own, each under its
-label. The entry list offers a collection's row actions in each row's menu,
+label, and a section whose component draws nothing for a document leaves no
+heading behind. A section's component receives `SidebarSectionProps`
+(`@experimental`, from `@nextlyhq/plugin-sdk/admin`): the place's `context`
+and `entry`, as every contributed component does, and on a collection entry's
+page also the document's handles a `panelSections` section is given
+(`collectionSlug`, `entryId`, `documentLock`, `mayWrite`,
+`documentChanged`). The entry list offers a collection's row actions in each row's menu,
 after its own, on the rows whose `visibleWhen` holds. Columns, bulk actions,
 and blocks at the entry list and the dashboard arrive as data and are not
 drawn yet.

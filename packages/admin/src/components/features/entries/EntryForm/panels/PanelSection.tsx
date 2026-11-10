@@ -12,7 +12,7 @@
  * @module components/features/entries/EntryForm/panels/PanelSection
  */
 
-import type { JSX, ReactNode } from "react";
+import type { JSX, ReactNode, SyntheticEvent } from "react";
 import { useId } from "react";
 
 import { cn } from "@admin/lib/utils";
@@ -23,6 +23,8 @@ export function PanelSection({
   collapsesWhenEmpty = false,
   focusTarget,
   flush = false,
+  onSubmit,
+  onReset,
   children,
 }: {
   title: string;
@@ -46,6 +48,13 @@ export function PanelSection({
    * own, so it lines up with the title and the fields it sits above.
    */
   flush?: boolean;
+  /**
+   * Handed to the section element: for a plugin's section, whose own form's
+   * submit and reset are kept from reaching the document's form.
+   */
+  onSubmit?: (event: SyntheticEvent) => void;
+  /** Handed to the section element, as `onSubmit` is. */
+  onReset?: (event: SyntheticEvent) => void;
   children: ReactNode;
 }): JSX.Element {
   const headingId = useId();
@@ -66,6 +75,8 @@ export function PanelSection({
         collapsesWhenEmpty && "has-[>[data-panel-section-body]:empty]:hidden"
       )}
       {...focusable}
+      {...(onSubmit === undefined ? {} : { onSubmit })}
+      {...(onReset === undefined ? {} : { onReset })}
     >
       <h3
         id={headingId}

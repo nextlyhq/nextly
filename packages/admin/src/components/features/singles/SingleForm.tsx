@@ -31,8 +31,8 @@ import { z } from "zod";
 import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFromLanguageScope";
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
 import {
+  sidebarSectionProps,
   useDocumentPlace,
-  type DocumentPlace,
 } from "@admin/components/features/entries/EntryForm/document-place";
 import type { ContributedAction } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
 import {
@@ -68,6 +68,7 @@ import { EntryFormPlace } from "@admin/components/features/entries/EntryForm/Ent
 import { EntryFormSidebar } from "@admin/components/features/entries/EntryForm/EntryFormSidebar";
 import { EntryMetaStrip } from "@admin/components/features/entries/EntryForm/EntryMetaStrip";
 import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
+import { PanelSectionsAboveForm } from "@admin/components/features/entries/EntryForm/panels";
 import {
   readerStatusWrite,
   statusWritesHeld,
@@ -135,6 +136,7 @@ import {
   ViewedVersionBody,
   versionAwareToolbarSlots,
 } from "@admin/components/features/versions/viewed-version-host";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useDiscardSingleWorkingDraft } from "@admin/hooks/queries/useDiscardSingleWorkingDraft";
 import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
@@ -157,6 +159,12 @@ import {
   holdsPlaceholders,
   withoutPlaceholders,
 } from "@admin/lib/form/stored-references";
+import type { SidebarSectionProps } from "@admin/lib/plugins/component-registry";
+import {
+  placePanelParts,
+  placedPanelOrder,
+  type PanelOrderEntry,
+} from "@admin/lib/plugins/document-surfaces";
 import { cn } from "@admin/lib/utils";
 import { singleApi } from "@admin/services/singleApi";
 import type { SingleAdminOptions } from "@admin/types/entities";
@@ -559,7 +567,8 @@ function SingleFormRail({
   locale,
   onLocaleChange,
   panel,
-  place,
+  panelOrder,
+  placedSectionProps,
 }: {
   actionsDisabled: boolean;
   navigationDisabled: boolean;
@@ -574,8 +583,10 @@ function SingleFormRail({
   locale?: string;
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   panel: Pick<ReturnType<typeof useDocumentPanel>, "mode" | "shown" | "hide">;
-  /** The edit page's place, whose side panel sections the panel draws. */
-  place: DocumentPlace;
+  /** The panel's sections in the order the server placed them. */
+  panelOrder: PanelOrderEntry[] | undefined;
+  /** What each section plugins declared at the Single's page is handed. */
+  placedSectionProps: SidebarSectionProps | undefined;
 }) {
   const documentId = entry?.id === undefined ? "" : String(entry.id);
   return (
@@ -585,8 +596,9 @@ function SingleFormRail({
       onClose={panel.hide}
     >
       <EntryFormSidebar
-        place={place}
         mode="edit"
+        {...(panelOrder === undefined ? {} : { panelOrder })}
+        {...(placedSectionProps === undefined ? {} : { placedSectionProps })}
         entry={entry}
         hasStatus={hasStatus}
         {...(documentStatus === undefined ? {} : { documentStatus })}
@@ -1500,6 +1512,24 @@ export function SingleForm({
     { kind: "single", single: schema.slug },
     document
   );
+  // The panel's sections in the order the server placed them, with the side
+  // panel sections plugins declared at the Single's page among them, by the
+  // rule every place part follows. On a phone the panel is a sheet opened
+  // only from the document's menu, so a section declared to sit above the
+  // form there moves above the fields, as on a collection entry's page.
+  const { contributions } = useBranding();
+  const { panel: panelOrder, aboveForm: sectionsAboveForm } = useMemo(
+    () =>
+      placePanelParts(
+        placedPanelOrder(contributions, documentPlace.place, documentPlace),
+        panel.mode === "sheet"
+      ),
+    [contributions, documentPlace, panel.mode]
+  );
+  const placedSectionProps = useMemo(
+    () => sidebarSectionProps(documentPlace),
+    [documentPlace]
+  );
 
   const localeCtx = useEntryLocaleContext({
     locale,
@@ -1888,6 +1918,16 @@ export function SingleForm({
                                     panelCarriesId={panel.docked}
                                     documentId={document.id}
                                   />
+                                  {/* A plugin's section that asks to be met
+                                    first, above the fields on a phone rather
+                                    than in the sheet. */}
+                                  <PanelSectionsAboveForm
+                                    sections={sectionsAboveForm}
+                                    className={DOCUMENT_COLUMN_INSET}
+                                    {...(placedSectionProps === undefined
+                                      ? {}
+                                      : { placedSectionProps })}
+                                  />
 
                                   {/* The language panel, inline: the exact complement
                               of the rail, shown where the rail is not. */}
@@ -1944,7 +1984,8 @@ export function SingleForm({
                                 documentStatus={editedStatus}
                                 singleSlug={schema.slug}
                                 panel={panel}
-                                place={documentPlace}
+                                panelOrder={panelOrder}
+                                placedSectionProps={placedSectionProps}
                                 {...(locale === undefined ? {} : { locale })}
                                 {...(switchLocale === undefined
                                   ? {}

@@ -62,8 +62,8 @@ import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
 import { versionForLanguage } from "@admin/lib/document-version";
 import {
-  panelOrderFor,
   placePanelParts,
+  placedPanelOrder,
 } from "@admin/lib/plugins/document-surfaces";
 import { cn } from "@admin/lib/utils";
 import { entryApi } from "@admin/services/entryApi";
@@ -81,7 +81,7 @@ import { TranslationPanes } from "../TranslationMode/TranslationPanes";
 import { useTranslationSource } from "../TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "../useEntryLocaleContext";
 
-import { useDocumentPlace } from "./document-place";
+import { sidebarSectionProps, useDocumentPlace } from "./document-place";
 import type { ContributedAction } from "./DocumentActionBar";
 import {
   DocumentActionsHost,
@@ -1148,8 +1148,9 @@ export function EntryForm({
     locale,
   });
   // The panel's sections in the order the server placed them, with the side
-  // panel sections plugins declared for this collection's entries among them,
-  // each judged on the entry as this reader's read returned it.
+  // panel sections plugins declared at this page's place among them, each
+  // judged by the rule every place part follows, on the entry as this
+  // reader's read returned it.
   const { contributions } = useBranding();
   // On a phone the panel is a sheet opened only from the document's menu, so
   // a section declared to sit above the form there moves out of the panel
@@ -1157,10 +1158,16 @@ export function EntryForm({
   const { panel: panelOrder, aboveForm: sectionsAboveForm } = useMemo(
     () =>
       placePanelParts(
-        panelOrderFor(contributions, collection.name, entry),
+        placedPanelOrder(contributions, documentPlace.place, documentPlace),
         panel.mode === "sheet"
       ),
-    [contributions, collection.name, entry, panel.mode]
+    [contributions, documentPlace, panel.mode]
+  );
+  // What each placed section is handed: the place's context and entry, with
+  // the document's own handles.
+  const placedSectionProps = useMemo(
+    () => sidebarSectionProps(documentPlace, pluginSurfaces.sectionProps),
+    [documentPlace, pluginSurfaces.sectionProps]
   );
 
   const documentActionsInput: DocumentActionBindingsInput = {
@@ -1623,13 +1630,9 @@ export function EntryForm({
                                     <PanelSectionsAboveForm
                                       sections={sectionsAboveForm}
                                       className={DOCUMENT_COLUMN_INSET}
-                                      {...(pluginSurfaces.sectionProps ===
-                                      undefined
+                                      {...(placedSectionProps === undefined
                                         ? {}
-                                        : {
-                                            pluginSectionProps:
-                                              pluginSurfaces.sectionProps,
-                                          })}
+                                        : { placedSectionProps })}
                                     />
                                   ) : null}
 
@@ -1735,7 +1738,6 @@ export function EntryForm({
                                   onClose={panel.hide}
                                 >
                                   <EntryFormSidebar
-                                    place={documentPlace}
                                     mode={mode}
                                     entry={entry}
                                     hasStatus={hasStatus}
@@ -1776,6 +1778,9 @@ export function EntryForm({
                                           pluginSectionProps:
                                             pluginSurfaces.sectionProps,
                                         })}
+                                    {...(placedSectionProps === undefined
+                                      ? {}
+                                      : { placedSectionProps })}
                                   />
                                 </DocumentSidePanel>
                               ) : null}

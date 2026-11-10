@@ -20,13 +20,23 @@ import type { ReactNode, SyntheticEvent } from "react";
 
 const stop = (event: SyntheticEvent) => event.stopPropagation();
 
+/**
+ * The handlers that keep a contribution's `submit` and `reset` to itself, for
+ * an element that already frames one (a side panel section) and so needs no
+ * wrapper of its own.
+ */
+export const containedContributionEvents: {
+  onSubmit: (event: SyntheticEvent) => void;
+  onReset: (event: SyntheticEvent) => void;
+} = { onSubmit: stop, onReset: stop };
+
 export function IsolatedContribution({
   children,
 }: {
   children: ReactNode;
 }): ReactNode {
   return (
-    <div className="contents" onSubmit={stop} onReset={stop}>
+    <div className="contents" {...containedContributionEvents}>
       {children}
     </div>
   );

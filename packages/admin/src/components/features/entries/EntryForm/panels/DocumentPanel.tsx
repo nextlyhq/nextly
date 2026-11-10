@@ -5,10 +5,15 @@ import type React from "react";
 
 import { Clock, Hash } from "@admin/components/icons";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { containedContributionEvents } from "@admin/components/shared/target-slot/IsolatedContribution";
+import { PlaceContributionFallback } from "@admin/components/shared/target-slot/PlaceContributionFallback";
 import { Skeleton } from "@admin/components/ui";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import type { DocumentPanelSectionProps } from "@admin/lib/plugins/component-registry";
+import type {
+  DocumentPanelSectionProps,
+  SidebarSectionProps,
+} from "@admin/lib/plugins/component-registry";
 import type {
   PanelOrderEntry,
   PlacedPanelSection,
@@ -31,9 +36,9 @@ import { StatusSection, type PanelDocumentStatus } from "./StatusSection";
 // adds for the collection. Each section decides
 // whether it applies and draws nothing where it does not, so a document
 // without a lifecycle or languages reads the sections it has, in that order.
-// A side panel section a plugin declares at the `collection.edit` place is
-// drawn where the server placed it among the built-in four (`panelOrder`),
-// and a built-in it replaces is not drawn.
+// A side panel section a plugin declares at an edit page's place is drawn
+// where the server placed it among the built-in four (`panelOrder`, from
+// `placedPanelOrder`), and a built-in it replaces is not drawn.
 
 export { pillStateFromForm, PILL_LABEL, type PillState } from "./pill-state";
 
@@ -77,11 +82,17 @@ export interface DocumentPanelProps {
   pluginSectionProps?: DocumentPanelSectionProps;
   /**
    * The panel's sections in the order the server placed them, with the side
-   * panel sections plugins declared at the `collection.edit` place among
-   * them (`panelOrderFor`). Absent, the built-in sections are drawn in their
+   * panel sections plugins declared at the page's place among them
+   * (`placedPanelOrder`). Absent, the built-in sections are drawn in their
    * usual order.
    */
   panelOrder?: readonly PanelOrderEntry[];
+  /**
+   * What each placed section is handed: the place's context and entry, and on
+   * a collection entry's page the document's handles too. Absent, placed
+   * sections are handed `pluginSectionProps`; with neither, none is drawn.
+   */
+  placedSectionProps?: SidebarSectionProps | DocumentPanelSectionProps;
 }
 
 /** The built-in sections, in the order drawn when nothing places them. */
@@ -106,6 +117,7 @@ export function DocumentPanel({
   pluginSections = [],
   pluginSectionProps,
   panelOrder = BUILT_IN_ORDER,
+  placedSectionProps = pluginSectionProps,
 }: DocumentPanelProps): React.ReactElement | null {
   // Nothing to say until the document exists.
   if (mode === "create") return null;
@@ -164,11 +176,11 @@ export function DocumentPanel({
           <Fragment key={`built-in:${part.name}`}>
             {builtIn(part.name)}
           </Fragment>
-        ) : pluginSectionProps === undefined ? null : (
+        ) : placedSectionProps === undefined ? null : (
           <PlacedSection
             key={`placed:${part.id}`}
             part={part}
-            props={pluginSectionProps}
+            props={placedSectionProps}
           />
         )
       )}
@@ -207,7 +219,9 @@ export function DocumentPanel({
  * A section a plugin placed: the panel's own frame, the plugin's body. It
  * applies to some documents and not others, so it leaves no heading behind
  * where its component draws nothing. `flush` draws it above the fields
- * rather than in the panel.
+ * rather than in the panel. Like every contributed component, its body is
+ * kept to itself (a form of its own does not submit the document's) and one
+ * that cannot be found says so under the heading.
  */
 function PlacedSection({
   part,
@@ -215,12 +229,23 @@ function PlacedSection({
   flush = false,
 }: {
   part: PlacedPanelSection;
-  props: DocumentPanelSectionProps;
+  props: SidebarSectionProps | DocumentPanelSectionProps;
   flush?: boolean;
 }): React.ReactElement {
   return (
-    <PanelSection title={part.title} collapsesWhenEmpty flush={flush}>
-      <PluginSlot path={part.component} props={props} />
+    <PanelSection
+      title={part.title}
+      collapsesWhenEmpty
+      flush={flush}
+      // Kept on the section itself, with no wrapper inside it, so a body that
+      // draws nothing still leaves the section empty to collapse.
+      {...containedContributionEvents}
+    >
+      <PluginSlot
+        path={part.component}
+        props={props}
+        fallback={<PlaceContributionFallback />}
+      />
     </PanelSection>
   );
 }
@@ -234,14 +259,17 @@ function PlacedSection({
 export function PanelSectionsAboveForm({
   sections,
   pluginSectionProps,
+  placedSectionProps = pluginSectionProps,
   className,
 }: {
   sections: readonly PlacedPanelSection[];
-  /** What each section is handed. Absent, none is drawn. */
+  /** What each section is handed, where `placedSectionProps` is not given. */
   pluginSectionProps?: DocumentPanelSectionProps;
+  /** What each section is handed. Absent with the above, none is drawn. */
+  placedSectionProps?: SidebarSectionProps | DocumentPanelSectionProps;
   className?: string;
 }): React.ReactElement | null {
-  if (sections.length === 0 || pluginSectionProps === undefined) return null;
+  if (sections.length === 0 || placedSectionProps === undefined) return null;
   return (
     <div
       className={cn("flex flex-col", className)}
@@ -251,7 +279,7 @@ export function PanelSectionsAboveForm({
         <PlacedSection
           key={`placed:${part.id}`}
           part={part}
-          props={pluginSectionProps}
+          props={placedSectionProps}
           flush
         />
       ))}
