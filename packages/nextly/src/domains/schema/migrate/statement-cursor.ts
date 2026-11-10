@@ -68,6 +68,20 @@ export class StatementCursor {
   }
 
   /**
+   * Consumes one or more names separated by commas (`name()` each), or
+   * returns undefined when one of them is not a plain name.
+   */
+  names(): string[] | undefined {
+    const names: string[] = [];
+    do {
+      const name = this.name();
+      if (name === undefined) return undefined;
+      names.push(name);
+    } while (this.accept(","));
+    return names;
+  }
+
+  /**
    * Consumes a name with exactly one qualifier (`s.t`, `"s"."t"`) and returns
    * both parts lower-cased, or undefined, consuming nothing, when the next
    * tokens are not one. Which schema the qualifier names is the caller's to

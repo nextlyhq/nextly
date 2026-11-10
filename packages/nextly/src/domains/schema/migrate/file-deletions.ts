@@ -426,22 +426,11 @@ function readDropTables(
   tokens: readonly Token[]
 ): Step[] {
   cursor.acceptCondition();
-  const tables = readNames(cursor);
+  const tables = cursor.names();
   if (tables === undefined) return [unread(tokens)];
   if (!cursor.accept("CASCADE")) cursor.accept("RESTRICT");
   if (!cursor.done()) return [unread(tokens)];
   return tables.map(table => ({ kind: "drop", table }));
-}
-
-/** A comma-separated list of plain names; undefined when one is not plain. */
-function readNames(cursor: StatementCursor): string[] | undefined {
-  const names: string[] = [];
-  do {
-    const name = cursor.name();
-    if (name === undefined) return undefined;
-    names.push(name);
-  } while (cursor.accept(","));
-  return names;
 }
 
 /**
@@ -1041,7 +1030,7 @@ function readAddedKey(
   // MySQL may name the key's index before its columns.
   if (!clause.isWord("(")) clause.name();
   if (!clause.accept("(")) return undefined;
-  const columns = readNames(clause);
+  const columns = clause.names();
   if (columns === undefined || !clause.accept(")")) return undefined;
   return readReferences(clause, table, columns);
 }
@@ -1442,7 +1431,7 @@ function readCopyColumns(
   columns: readonly TwinColumn[]
 ): string[] | undefined {
   if (!cursor.accept("(")) return columns.map(column => column.name);
-  const names = readNames(cursor);
+  const names = cursor.names();
   return names !== undefined && cursor.accept(")") ? names : undefined;
 }
 

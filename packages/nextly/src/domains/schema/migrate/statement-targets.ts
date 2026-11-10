@@ -17,17 +17,6 @@ import {
   type StatementToken,
 } from "./statement-cursor";
 
-/** One or more names separated by commas, or undefined if any is not a name. */
-function nameList(cursor: StatementCursor): string[] | undefined {
-  const names: string[] = [];
-  do {
-    const name = cursor.name();
-    if (name === undefined) return undefined;
-    names.push(name);
-  } while (cursor.accept(","));
-  return names;
-}
-
 /** The one table a statement names next, as a list, or undefined. */
 function oneTable(cursor: StatementCursor): string[] | undefined {
   const name = cursor.name();
@@ -90,7 +79,7 @@ export function tablesChangedIn(
   }
   if (cursor.accept("DROP", "TABLE")) {
     cursor.acceptCondition();
-    return nameList(cursor);
+    return cursor.names();
   }
   if (cursor.accept("DROP", "INDEX")) {
     // Only MySQL's form names the table; elsewhere the index alone is named.
@@ -118,7 +107,7 @@ export function indexesDroppedBy(
   if (!cursor.accept("DROP", "INDEX")) return undefined;
   cursor.accept("CONCURRENTLY");
   cursor.acceptCondition();
-  const names = nameList(cursor);
+  const names = cursor.names();
   cursor.accept("RESTRICT");
   return names !== undefined && cursor.done() ? names : undefined;
 }
@@ -152,7 +141,7 @@ export function tablesDroppedBy(
   const cursor = cursorOf(statement, dialect);
   if (!cursor.accept("DROP", "TABLE")) return undefined;
   cursor.acceptCondition();
-  return nameList(cursor);
+  return cursor.names();
 }
 
 /** A registry row a statement writes: the registry table and the row's slug. */
@@ -264,7 +253,7 @@ function insertedRow(cursor: StatementCursor): RegistryRowWrite | undefined {
  * end of its VALUES, or undefined when the row is not one read here.
  */
 function insertedSlug(cursor: StatementCursor): string | undefined {
-  const columns = nameList(cursor);
+  const columns = cursor.names();
   if (columns === undefined || !cursor.accept(")")) return undefined;
   if (!cursor.accept("VALUES", "(")) return undefined;
   const values = parenthesised(cursor);
@@ -367,7 +356,7 @@ function createsArchive(cursor: StatementCursor): boolean {
 /** An INSERT … SELECT into the archive, read after INSERT INTO. */
 function archiveInsert(cursor: StatementCursor): ArchiveWrite | undefined {
   if (cursor.name() !== ARCHIVE_TABLE || !cursor.accept("(")) return undefined;
-  const columns = nameList(cursor);
+  const columns = cursor.names();
   if (columns === undefined || !cursor.accept(")")) return undefined;
   if (!cursor.accept("SELECT")) return undefined;
   const rest = cursor.rest();
