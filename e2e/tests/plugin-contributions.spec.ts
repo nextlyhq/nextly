@@ -1,9 +1,9 @@
 /**
  * A plugin extends a page, in a browser: the playground's contributions
  * fixture adds a block, a tab and a side panel section to a Post's edit page,
- * and a column, a row action and a bulk action to Posts' list. Each draws its
- * own component, in light and in dark, readable and axe-clean, and never the
- * place's fallback. A block behind a permission reaches only a reader who
+ * and a block, a column, a row action and a bulk action to Posts' list. Each
+ * draws its own component, in light and in dark, readable and axe-clean, and
+ * never the place's fallback. A block behind a permission reaches only a reader who
  * holds it, decided by the server: the workspace answer leaves it out. A
  * replacement takes the built-in editor's place on the one collection it is
  * scoped to, and on no other. The page keeps its own parts around them.
@@ -173,14 +173,15 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
     // E5: the page keeps its own parts around them.
     await expect(page.getByTestId("document-bar")).toBeVisible();
     const sections = await panelSections(page);
-    // The panel's own sections in their own order, and the fixture's
-    // straight after Details, where it was placed.
+    // Every one of the panel's own sections a post draws, in its own order:
+    // a post has a status and is not localized, so Status, Publishing and
+    // Details, with no Language. And the fixture's straight after Details,
+    // where it was placed.
     const own = ["Status", "Publishing", "Language", "Details"];
-    const drawnOwn = sections.filter(name => own.includes(name));
-    expect(drawnOwn, sections.join(", ")).toEqual(
-      own.filter(name => drawnOwn.includes(name))
-    );
-    expect(drawnOwn).toContain("Details");
+    expect(
+      sections.filter(name => own.includes(name)),
+      sections.join(", ")
+    ).toEqual(["Status", "Publishing", "Details"]);
     expect(sections[sections.indexOf("Details") + 1]).toBe("Fixture");
     const tabs = page.getByRole("tablist");
     const tabNames = (await tabs.getByRole("tab").allTextContents()).map(name =>
@@ -207,6 +208,22 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
     await expect(
       table.getByRole("columnheader", { name: "Fixture", exact: true })
     ).toBeVisible();
+    // The list's block, placed before the list itself: above the table.
+    const block = region(page, "Fixture block");
+    await expect(block).toContainText("Fixture block, drawn by");
+    const tableElement = await table.elementHandle();
+    expect(
+      await block.evaluate(
+        (node, after) =>
+          Boolean(
+            after &&
+              node.compareDocumentPosition(after) &
+                Node.DOCUMENT_POSITION_FOLLOWING
+          ),
+        tableElement
+      )
+    ).toBe(true);
+    await expectReadable(page, block);
     // The cell reads its own row: the draft's cell shows the draft's title.
     const cell = region(rowOf(page, DRAFT_TITLE), "Fixture cell");
     await expect(cell).toHaveText(DRAFT_TITLE);
@@ -219,31 +236,65 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
     );
 
     await expectNoAxeViolations(page, {
-      include: "[aria-label='Fixture cell']",
+      include: "[aria-label='Fixture cell'], [aria-label='Fixture block']",
     });
   });
 }
 
-test("the row action opens its component with the post it was chosen on", async ({
+for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
+  test(`the row action opens its component with the post it was chosen on (${theme})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoAdmin(page, "/collections/posts", theme);
+
+    await rowOf(page, DRAFT_TITLE)
+      .getByRole("button", { name: "Row actions" })
+      .click();
+    await page.getByRole("menuitem", { name: "Fixture: inspect" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Fixture: inspect" });
+    const action = region(dialog, "Fixture action");
+    await expect(action).toHaveText(
+      new RegExp(`^Fixture action on posts/${draftId}\\s*Close$`)
+    );
+    await expectReadable(page, action.getByRole("paragraph"));
+    await expectNoAxeViolations(page, {
+      include: "[aria-label='Fixture action']",
+    });
+    await action.getByRole("button", { name: "Close" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(rowOf(page, DRAFT_TITLE)).toBeVisible();
+  });
+}
+
+test("the bulk action opens its component with every post selected", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await gotoAdmin(page, "/collections/posts");
 
-  await rowOf(page, DRAFT_TITLE)
-    .getByRole("button", { name: "Row actions" })
+  for (const title of [DRAFT_TITLE, PUBLISHED_TITLE]) {
+    await rowOf(page, title)
+      .getByRole("checkbox", { name: "Select row" })
+      .check();
+  }
+  await page
+    .getByRole("region", { name: "Bulk actions" })
+    .getByRole("button", { name: "Fixture: inspect selected" })
     .click();
-  await page.getByRole("menuitem", { name: "Fixture: inspect" }).click();
 
-  const dialog = page.getByRole("dialog", { name: "Fixture: inspect" });
-  await expect(region(dialog, "Fixture action")).toHaveText(
-    new RegExp(`^Fixture action on posts/${draftId}\\s*Close$`)
-  );
-  await region(dialog, "Fixture action")
-    .getByRole("button", { name: "Close" })
-    .click();
+  const dialog = page.getByRole("dialog", {
+    name: "Fixture: inspect selected",
+  });
+  const action = region(dialog, "Fixture action");
+  await expect(action).toContainText("Fixture action on ");
+  const said = await action.innerText();
+  // Both rows, by collection and id, whichever order they were taken in.
+  expect(said).toContain(`posts/${draftId}`);
+  expect(said).toContain(`posts/${publishedId}`);
+  await action.getByRole("button", { name: "Close" }).click();
   await expect(dialog).toBeHidden();
-  await expect(rowOf(page, DRAFT_TITLE)).toBeVisible();
 });
 
 test("a block behind a permission is drawn for a viewer who holds it and not for one who does not", async ({
@@ -284,17 +335,28 @@ test("a block behind a permission is drawn for a viewer who holds it and not for
   }
 });
 
-test("a plugin's replacement takes the built-in editor's place on its collection's edit page, and leaves every other collection's alone", async ({
-  page,
-}) => {
-  await gotoAdmin(page, `/collections/contribution-stories/${storyId}`);
-  await expect(region(page, "Fixture replacement")).toContainText(
-    `Fixture replacement of the editor, for ${storyId}`
-  );
-  // Instead of the editor, not beside it: none of the story's fields.
-  await expect(page.getByLabel("Summary", { exact: true })).toHaveCount(0);
+for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
+  test(`a plugin's replacement takes the built-in editor's place on its collection's edit page, and leaves every other collection's alone (${theme})`, async ({
+    page,
+  }) => {
+    await gotoAdmin(
+      page,
+      `/collections/contribution-stories/${storyId}`,
+      theme
+    );
+    const replacement = region(page, "Fixture replacement");
+    await expect(replacement).toContainText(
+      `Fixture replacement of the editor, for ${storyId}`
+    );
+    // Instead of the editor, not beside it: none of the story's fields.
+    await expect(page.getByLabel("Summary", { exact: true })).toHaveCount(0);
+    await expectReadable(page, replacement);
+    await expectNoAxeViolations(page, {
+      include: "[aria-label='Fixture replacement']",
+    });
 
-  await gotoAdmin(page, `/collections/posts/${draftId}`);
-  await expect(page.getByLabel("Excerpt", { exact: true })).toBeVisible();
-  await expect(region(page, "Fixture replacement")).toHaveCount(0);
-});
+    await gotoAdmin(page, `/collections/posts/${draftId}`, theme);
+    await expect(page.getByLabel("Excerpt", { exact: true })).toBeVisible();
+    await expect(region(page, "Fixture replacement")).toHaveCount(0);
+  });
+}

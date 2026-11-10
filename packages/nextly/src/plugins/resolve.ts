@@ -205,28 +205,47 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
 
 /**
  * Refuse a plugin event declared under a prefix core reserves, or outside the
- * plugin's own namespace — the two names the per-plugin bus refuses to emit.
+ * plugin's own namespace — the two names the per-plugin bus refuses to emit —
+ * and one whose `durable` flag is not a boolean.
  */
 function assertPluginEventNames(plugins: PluginDefinition[]): void {
   for (const plugin of plugins) {
     if (plugin.enabled === false) continue;
     for (const event of plugin.contributes?.events ?? []) {
-      if (isReservedEventName(event.name)) {
-        throw resolutionError(
-          "plugin-event-name-reserved",
-          `Plugin "${plugin.name}" declares the event "${event.name}", whose prefix core reserves for its own events.`,
-          { plugin: plugin.name, event: event.name }
-        );
-      }
-      if (!isInPluginNamespace(plugin.name, event.name)) {
-        const prefix = `${pluginAdminSlug(plugin.name)}.`;
-        throw resolutionError(
-          "plugin-event-outside-namespace",
-          `Plugin "${plugin.name}" declares the event "${event.name}", which must start with "${prefix}".`,
-          { plugin: plugin.name, event: event.name, expectedPrefix: prefix }
-        );
-      }
+      assertPluginEvent(plugin.name, event);
     }
+  }
+}
+
+/** One declared event's checks, for `assertPluginEventNames`. */
+function assertPluginEvent(
+  pluginName: string,
+  event: { name: string; durable?: unknown }
+): void {
+  if (isReservedEventName(event.name)) {
+    throw resolutionError(
+      "plugin-event-name-reserved",
+      `Plugin "${pluginName}" declares the event "${event.name}", whose prefix core reserves for its own events.`,
+      { plugin: pluginName, event: event.name }
+    );
+  }
+  if (!isInPluginNamespace(pluginName, event.name)) {
+    const prefix = `${pluginAdminSlug(pluginName)}.`;
+    throw resolutionError(
+      "plugin-event-outside-namespace",
+      `Plugin "${pluginName}" declares the event "${event.name}", which must start with "${prefix}".`,
+      { plugin: pluginName, event: event.name, expectedPrefix: prefix }
+    );
+  }
+  // `true` or `false` only: anything else reads as durable to one check and
+  // not to another, and whether an event survives a restart is not a question
+  // two readers may answer differently.
+  if (event.durable !== undefined && typeof event.durable !== "boolean") {
+    throw resolutionError(
+      "plugin-event-durable-invalid",
+      `Plugin "${pluginName}" declares the event "${event.name}" with durable set to something other than true or false.`,
+      { plugin: pluginName, event: event.name }
+    );
   }
 }
 

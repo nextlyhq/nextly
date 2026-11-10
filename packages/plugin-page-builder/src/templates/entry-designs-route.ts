@@ -85,7 +85,6 @@ import {
   type TemplateGuardSetup,
 } from "./template-guard";
 
-
 /**
  * The filter the Direct API's `find` takes, as the plugin SDK's own handle
  * types it: derived from the SDK's surface rather than imported from core.
@@ -172,9 +171,7 @@ const ENTRY_DESIGNS_QUERY: z.ZodType<
   );
 
 /** The route's query, read from `url`, or a validation error naming it. */
-export function parseEntryDesignsQuery(
-  url: string | URL
-): EntryDesignsQuery {
+export function parseEntryDesignsQuery(url: string | URL): EntryDesignsQuery {
   return parseRouteQuery(
     url,
     Object.values(ENTRY_DESIGNS_PARAMS),

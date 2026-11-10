@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { listedFiles } from "../../../../../scripts/tsc-cli.mjs";
 
+import { contributionsForReader } from "../admin-contributions-offer";
 import { buildPluginAdminMeta, type PluginAdminMeta } from "../admin-meta";
 import type { PluginDefinition } from "../plugin-context";
 import {
@@ -1258,5 +1259,127 @@ describe("the map's entries: each component with who declared it and what it is 
         widget: "acme/shared",
       },
     ]);
+  });
+});
+
+describe("parity with the contributions a reader is sent", () => {
+  // Each contribution to an admin place is drawn by resolving its component's
+  // path through the registry, and the map is the only importer of the module
+  // behind it. So every path the admin can be sent must be one the map
+  // collects, for one of each kind, a row and bulk action's opened dialog
+  // among them.
+  const p = {
+    name: "@acme/places",
+    version: "1.0.0",
+    nextly: "*",
+    contributes: {
+      admin: {
+        contributions: [
+          {
+            id: "acme-places.block",
+            kind: "block",
+            place: "dashboard",
+            component: "@acme/places/admin#Block",
+          },
+          {
+            // A default export: a path with no `#`, as the map reads it.
+            id: "acme-places.banner",
+            kind: "block",
+            place: "dashboard",
+            component: "@acme/places/admin/banner",
+          },
+          {
+            id: "acme-places.tab",
+            kind: "tab",
+            place: "settings",
+            label: "Places",
+            component: "@acme/places/admin#Tab",
+          },
+          {
+            id: "acme-places.section",
+            kind: "sidebarSection",
+            place: "collection.edit",
+            label: "Places",
+            component: "@acme/places/admin#Section",
+          },
+          {
+            id: "acme-places.cell",
+            kind: "column",
+            place: "collection.list",
+            label: "Places",
+            component: "@acme/places/admin#Cell",
+          },
+          {
+            id: "acme-places.row",
+            kind: "rowAction",
+            place: "collection.list",
+            label: "Places",
+            action: { open: "@acme/places/admin#RowDialog" },
+          },
+          {
+            id: "acme-places.bulk",
+            kind: "bulkAction",
+            place: "collection.list",
+            label: "Places",
+            action: { open: "@acme/places/admin#BulkDialog" },
+          },
+        ],
+      },
+    },
+  } as unknown as PluginDefinition;
+
+  /**
+   * Every string in what a reader is sent that names one of this plugin's
+   * modules, whatever key holds it: each component path here, with an export
+   * after `#` or none for a default export, is under the plugin's own module
+   * prefix, and nothing else it sends is (ids are `acme-places.*`, labels are
+   * words). Found by that rather than by the keys or the path grammar the
+   * collector reads, so a contribution kind that later names its component
+   * under a new key, or in a form the collector skips, shows up here and fails
+   * the check below.
+   */
+  const MODULE_PREFIX = "@acme/places/";
+  function sentPaths(sent: unknown): string[] {
+    if (typeof sent === "string") {
+      return sent.startsWith(MODULE_PREFIX) ? [sent] : [];
+    }
+    if (Array.isArray(sent)) return sent.flatMap(sentPaths);
+    if (sent === null || typeof sent !== "object") return [];
+    return Object.values(sent).flatMap(sentPaths);
+  }
+
+  it("collects the component of every contribution a reader is sent", async () => {
+    const sent = await contributionsForReader(
+      [p],
+      { holds: () => true, mayFilter: async () => true, collections: [] },
+      "workspace"
+    );
+    const paths = sentPaths(sent);
+
+    // Positive control: without it the loop below passes on an empty probe.
+    expect([...new Set(paths)].sort()).toEqual([
+      "@acme/places/admin#Block",
+      "@acme/places/admin#BulkDialog",
+      "@acme/places/admin#Cell",
+      "@acme/places/admin#RowDialog",
+      "@acme/places/admin#Section",
+      "@acme/places/admin#Tab",
+      "@acme/places/admin/banner",
+    ]);
+    const collected = new Set(collectAdminComponentPaths(p));
+    for (const path of paths) {
+      expect(collected.has(path)).toBe(true);
+    }
+  });
+
+  it("registers each in the generated map, as contributions", () => {
+    const code = buildComponentImportMap([p]);
+    expect(code).toContain('import * as _p0 from "@acme/places/admin";');
+    expect(code).toContain('"@acme/places/admin#RowDialog": _p0.RowDialog');
+    // The default export registers under its path as declared.
+    expect(componentImportMapPaths([p])).toContain("@acme/places/admin/banner");
+    expect(
+      componentImportMapEntries([p]).every(each => each.use === "contribution")
+    ).toBe(true);
   });
 });

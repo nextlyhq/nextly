@@ -19,8 +19,8 @@ import type {
   UserPermissionsResponse,
 } from "@admin/types/permissions";
 
-/** What the workspace answers: whether the builder runs, which decides whether the bell is offered. */
-const workspace = vi.hoisted(() => ({ showBuilder: true }));
+/** What the workspace answers: whether a plugin hides the bell, which decides whether it is offered. */
+const workspace = vi.hoisted(() => ({ hideBell: false }));
 
 const server = vi.hoisted(() => ({
   asked: [] as string[],
@@ -51,6 +51,8 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
       }
       if (route === "/me/capabilities") return EVERYTHING;
       if (route === "/schema/journal") return { rows: [], hasMore: false };
+      // The bell counts the reader's own unread notices.
+      if (route === "/notices/count") return { total: 0 };
       throw new Error(`unexpected request ${path}`);
     },
   },
@@ -62,9 +64,20 @@ vi.mock("@admin/hooks/useLocaleParam", () => ({
   useLocaleParam: () => undefined,
 }));
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
-  // The workspace answer is in; it offers the bell where the builder runs.
+  // The workspace answer is in; it offers the bell unless a plugin hides it.
   useBranding: () =>
-    ({ plugins: [], showBuilder: workspace.showBuilder }) as AdminBranding,
+    ({
+      plugins: workspace.hideBell
+        ? [
+            {
+              name: "@acme/p",
+              collections: [],
+              header: { hide: ["notifications"] },
+            },
+          ]
+        : [],
+      showBuilder: true,
+    }) as AdminBranding,
   useBrandingStatus: () => ({
     isPending: false,
     isUnavailable: false,
@@ -85,7 +98,7 @@ import { DashboardHeader } from "./DashboardHeader";
 
 afterEach(() => {
   server.asked.length = 0;
-  workspace.showBuilder = true;
+  workspace.hideBell = false;
 });
 
 describe("DashboardHeader on a cold load", () => {
@@ -109,7 +122,7 @@ describe("DashboardHeader on a cold load", () => {
 
     // The bell is the reader's (a super-admin), so it shows once the answer is in.
     expect(
-      await screen.findByRole("button", { name: "Recent schema changes" })
+      await screen.findByRole("button", { name: "Notifications" })
     ).toBeInTheDocument();
     await waitFor(() => expect(client.isFetching()).toBe(0));
 
@@ -119,8 +132,8 @@ describe("DashboardHeader on a cold load", () => {
   });
 
   it("asks for no permissions where no control waits on them", async () => {
-    // The builder is off, so the bell is not offered, and no plugin adds a control.
-    workspace.showBuilder = false;
+    // A plugin hides the bell, and no plugin adds a control.
+    workspace.hideBell = true;
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
