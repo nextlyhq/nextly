@@ -17,6 +17,36 @@
 export { definePlugin } from "nextly";
 
 /**
+ * @experimental The page-metadata contract, for the one plugin that works out
+ * every page's head. Intended to become stable once `@nextlyhq/plugin-seo`
+ * has exercised it.
+ *
+ * A plugin provides it by declaring the `"page-metadata"` capability and
+ * contributing its resolver as the `pageMetadata` service:
+ *
+ * ```ts
+ * definePlugin({
+ *   provides: ["page-metadata"],
+ *   contributes: { services: { pageMetadata: () => resolver } },
+ * });
+ * ```
+ *
+ * The route helpers then ask it for every page they serve, with no wiring in
+ * the route, and turn its `PageMetadataAnswer` into the page's head. Its
+ * `tags` name what the answer depends on, so a change to them refreshes every
+ * page. Boot refuses a second provider, and a provider without the service.
+ * Type-only, so importing it pulls no runtime into the plugin.
+ */
+export type {
+  PageMetadataAnswer,
+  PageMetadataImage,
+  PageMetadataInput,
+  PageMetadataResolver,
+  PageMetadataSource,
+  PageMetadataValues,
+} from "nextly/runtime";
+
+/**
  * @experimental `defineWidget` — declares a dashboard widget once: its
  * settings, its data, its size and how it draws. A widget drawn by its own
  * component is handed `WidgetProps<typeof widget>`; the types are here and in
