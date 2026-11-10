@@ -124,7 +124,9 @@ export function BulkActionBar({
     <div
       role="region"
       aria-label="Bulk actions"
-      className="flex items-center justify-between gap-3 rounded-md border border-border bg-primary/[0.07] px-4 py-2.5"
+      // Wrapping at every width: the actions, the plugins' among them, are
+      // more than a narrow bar holds on one line.
+      className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-primary/[0.07] px-4 py-2.5"
     >
       {/* Selection info */}
       <span className="text-sm font-medium text-foreground">
@@ -132,7 +134,7 @@ export function BulkActionBar({
       </span>
 
       {/* Actions */}
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           variant="ghost"
           size="sm"

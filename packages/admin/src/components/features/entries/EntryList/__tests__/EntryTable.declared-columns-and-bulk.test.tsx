@@ -196,7 +196,10 @@ describe("the entry table's declared columns, beside the row", () => {
       ),
     });
 
-    await user.click(screen.getByRole("button", { name: "Menu item for p2" }));
+    // The table and the narrow screens' cards both draw the cell: the first.
+    await user.click(
+      screen.getAllByRole("button", { name: "Menu item for p2" })[0]!
+    );
     expect(pressed).toHaveBeenCalledWith("p2");
     expect(window.location.pathname).toBe("/admin/collections/posts");
   });

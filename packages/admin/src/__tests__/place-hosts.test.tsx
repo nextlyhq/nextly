@@ -490,3 +490,28 @@ describe("every core place's host", () => {
     });
   }
 });
+
+describe("the entry list's place", () => {
+  it("lays out its own parts and a contributed block as one column, spaced by one gap", async () => {
+    contributeEveryKind("collection.list");
+    PLACE_HOSTS["collection.list"].render();
+
+    const table = await screen.findByRole("table", { name: "Entries table" });
+    const block = (await screen.findAllByTestId("fixture-block"))[0]!;
+    const heading = screen.getByRole("heading", { level: 1 });
+    const place = block.closest(".gap-8");
+    expect(place?.className).toContain("flex-col");
+
+    // The part of the place each sits in: its child of the place's column.
+    const partOf = (element: Element): Element => {
+      let node = element;
+      while (node.parentElement !== place) node = node.parentElement!;
+      return node;
+    };
+    const parts = [heading, block, table].map(partOf);
+    // Three parts, not one: the gap stands between each.
+    expect(new Set(parts).size).toBe(3);
+    // The gap is the only space: the header keeps no margin of its own.
+    expect(parts[0]!.className).not.toMatch(/\bmb-/);
+  });
+});
