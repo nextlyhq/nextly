@@ -101,8 +101,13 @@ const EVERY_TYPE: AnyFormField[] = [
   },
   { ...common, type: "time", defaultValue: "09:00" },
   { ...common, type: "hidden", defaultValue: "website" },
-  // A plugin's type: only the base properties, which must survive too.
-  { ...common, type: "star-rating", defaultValue: 4 },
+  // A plugin's type: the base properties and its declared settings.
+  {
+    ...common,
+    type: "star-rating",
+    defaultValue: 4,
+    pluginOptions: { max: 5, shape: "heart" },
+  } as AnyFormField,
 ];
 
 describe("a form field in the panel and back", () => {
@@ -208,5 +213,30 @@ describe("the panel's spelling of a form's settings", () => {
       ...EVERY_TYPE[9],
       accept: "application/pdf",
     });
+  });
+
+  it("keeps a plugin type's declared settings the panel changes", () => {
+    const rating = toPanelField(EVERY_TYPE[13]!, "f-13");
+    // The panel's declared-settings controls write beside the form-only bag.
+    const next = fromPanelField({
+      ...rating,
+      pluginOptions: { ...rating.pluginOptions, max: 10 },
+    });
+    expect(next).toMatchObject({ pluginOptions: { max: 10, shape: "heart" } });
+    expect(
+      (next as { pluginOptions?: Record<string, unknown> }).pluginOptions
+    ).not.toHaveProperty("form");
+  });
+
+  it("stores a several-choice dropdown's default as a list", () => {
+    const select = toPanelField(EVERY_TYPE[6]!, "f-6");
+    // The panel's default editor picks one value.
+    expect(fromPanelField({ ...select, defaultValue: "two" })).toMatchObject({
+      defaultValue: ["two"],
+    });
+    // A one-choice dropdown keeps the one value.
+    expect(
+      fromPanelField({ ...select, hasMany: false, defaultValue: "two" })
+    ).toMatchObject({ defaultValue: "two" });
   });
 });

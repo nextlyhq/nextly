@@ -45,17 +45,21 @@ import { fromPanelField, withFormOnly } from "./panel-field";
 /**
  * The name a label gives a new field: a key for the submission data, which
  * must start with a letter and hold only letters, digits and underscores.
- * "Full name" becomes `full_name`; a label with no letters gives none, and the
- * host falls back to a name from the type.
+ * "Full name" becomes `full_name`. A label with none of those letters (one in
+ * Japanese, say) still gives a name, `field`, which the host makes unique on
+ * the form: the picker adds nothing without a name, so an empty one would
+ * refuse the label outright.
  */
 export function formFieldName(label: string): string {
-  return label
+  const name = label
     .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
+    // The accents NFKD splits off ("é" becomes "e" and a combining mark).
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^[^a-z]+/, "")
     .replace(/_+$/, "");
+  return name || (label.trim() ? "field" : "");
 }
 
 /** The form field a control edits, and how it writes a change back. */

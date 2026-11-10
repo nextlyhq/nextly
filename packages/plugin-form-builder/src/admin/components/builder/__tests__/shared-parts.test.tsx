@@ -232,6 +232,49 @@ describe("the Form Builder on the shared picker and panel", () => {
     expect(screen.queryByText(SAVED_TYPE_REASON)).toBeNull();
   });
 
+  it("treats a field added under a deleted saved field's name as new", async () => {
+    const { user } = view();
+    await user.click(screen.getByRole("button", { name: "Actions for Email" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+
+    await user.click(await screen.findByRole("button", { name: "Add field" }));
+    const picker = screen.getByRole("dialog");
+    await user.type(
+      within(picker).getByRole("combobox", { name: "Search field types" }),
+      "phone{Enter}"
+    );
+    await user.type(
+      within(picker).getByRole("textbox", { name: "Label" }),
+      "Email"
+    );
+    await user.click(within(picker).getByRole("button", { name: "Add field" }));
+    // The stored form's "email" is gone; this one is new, its type its own.
+    expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("email");
+    expect(screen.queryByText(SAVED_TYPE_REASON)).toBeNull();
+  });
+
+  it("adds a field whose label has none of a name's letters", async () => {
+    const { user, saved } = view();
+    await user.click(await screen.findByRole("button", { name: "Add field" }));
+    const picker = screen.getByRole("dialog");
+    await user.type(
+      within(picker).getByRole("combobox", { name: "Search field types" }),
+      "phone{Enter}"
+    );
+    await user.type(
+      within(picker).getByRole("textbox", { name: "Label" }),
+      "電話番号"
+    );
+    await user.click(within(picker).getByRole("button", { name: "Add field" }));
+
+    await save(user);
+    expect(saved()[3]).toMatchObject({
+      type: "phone",
+      name: "field",
+      label: "電話番号",
+    });
+  });
+
   it("refuses to delete a field another field's condition refers to", async () => {
     const { user } = view();
     await user.click(screen.getByRole("button", { name: "Actions for Topic" }));

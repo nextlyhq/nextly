@@ -429,6 +429,14 @@ export function FormBuilderProvider({
   const deleteField = useCallback(
     (fieldName: string) => {
       setFieldsState(prev => prev.filter(f => f.name !== fieldName));
+      // The name no longer stands for a stored field: a new field given it
+      // later is a new field, with its type and name still its own to choose.
+      setSavedFieldNames(prev => {
+        if (!prev.has(fieldName)) return prev;
+        const next = new Set(prev);
+        next.delete(fieldName);
+        return next;
+      });
       if (selectedFieldId === fieldName) {
         setSelectedFieldId(null);
       }

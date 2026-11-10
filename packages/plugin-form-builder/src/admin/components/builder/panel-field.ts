@@ -6,8 +6,10 @@
  * message `validation.message`, a dropdown's multiple choice `hasMany`) and
  * has no place for the rest (a text area's rows, a file's accepted types, a
  * field's show-or-hide logic). The settings it has a place for are moved
- * across; everything else travels unchanged in `pluginOptions`, where the
- * forms surface's own controls read and write it. So a field the panel did
+ * across; everything else travels unchanged in `pluginOptions.form`, where
+ * the forms surface's own controls read and write it. A plugin field type's
+ * declared settings are the panel's other `pluginOptions` keys, and are kept
+ * on the form field as its own `pluginOptions`. So a field the panel did
  * not change comes back exactly as it went in, and nothing a form stores is
  * lost by being edited.
  *
@@ -78,9 +80,10 @@ export function toPanelField(
     defaultValue,
     ...rest
   } = field;
-  const { options, allowMultiple, ...own } = rest as Bag & {
+  const { options, allowMultiple, pluginOptions, ...own } = rest as Bag & {
     options?: Array<{ label: string; value: string }>;
     allowMultiple?: boolean;
+    pluginOptions?: Bag;
   };
   const {
     errorMessage,
@@ -132,7 +135,9 @@ export function toPanelField(
       pattern,
       message: errorMessage,
     }),
-    pluginOptions: { [FORM_ONLY]: formOnly },
+    // The plugin's declared settings beside the form-only ones, where the
+    // panel's declared-settings controls read and write them.
+    pluginOptions: { ...pluginOptions, [FORM_ONLY]: formOnly },
   };
 }
 
@@ -144,6 +149,7 @@ export function formOnlyOf(field: FieldSettingsField): FormOnly {
 
 /** The form field the panel's field describes. */
 export function fromPanelField(field: FieldSettingsField): AnyFormField {
+  const { [FORM_ONLY]: _formOnly, ...declared } = field.pluginOptions ?? {};
   const {
     validation: validationRest,
     admin: adminRest,
@@ -183,11 +189,29 @@ export function fromPanelField(field: FieldSettingsField): AnyFormField {
       required: panelValidation.required,
       options: field.options?.map(({ label, value }) => ({ label, value })),
       allowMultiple: field.hasMany,
-      defaultValue: field.defaultValue ?? formDefault,
+      defaultValue: formDefaultValue(field, formDefault),
       validation,
       admin,
+      pluginOptions: Object.keys(declared).length > 0 ? declared : undefined,
     }),
   };
+}
+
+/**
+ * The default the form stores. The panel's default editor picks one value, so
+ * where a dropdown takes several, the value it picks becomes a list of one:
+ * the form checks a several-choice answer, its default included, as a list.
+ * A list the panel could not show is kept until the panel sets another.
+ */
+function formDefaultValue(
+  field: FieldSettingsField,
+  formDefault: unknown
+): unknown {
+  const picked = field.defaultValue;
+  if (picked === undefined || picked === null) return formDefault;
+  return field.hasMany === true && typeof picked === "string"
+    ? [picked]
+    : picked;
 }
 
 /**
