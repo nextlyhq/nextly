@@ -128,7 +128,7 @@ export type {
  * @public Published from the package root (`nextly`), for an app annotating its own values with
  * them; nothing inside the package needs to import them.
  */
-export type { Locale, LocaleOption } from "./locales";
+export type { FallbackLocaleOption, Locale, LocaleOption } from "./locales";
 
 export type {
   FindEmailProvidersArgs,
