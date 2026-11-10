@@ -47,6 +47,7 @@ import {
   ACCEPT_DATA_LOSS_ENV,
   judgeDataLoss,
 } from "../../domains/schema/migrate/data-loss-consent";
+import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../../domains/schema/pipeline/pg-visible-relation";
@@ -340,12 +341,20 @@ async function previewMigrateFresh(
             adapter as unknown as DrizzleAdapter,
             dbValidation.dialect
           );
-    const migrationsDir = resolve(
-      options.cwd ?? process.cwd(),
-      configResult.config.db.migrationsDir
-    );
+    const cwd = options.cwd ?? process.cwd();
+    const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
+    // The files listed are the ones the real run's `nextly migrate` runs:
+    // read for this dialect and the declared schema, which leaves old Schema
+    // Builder files out.
     const migrations = getSortedBaseNames(
-      await discoverMigrationGroups(migrationsDir)
+      await discoverMigrationGroups(
+        migrationsDir,
+        dbValidation.dialect,
+        await declaredNamesOf(
+          { ...configResult, projectRoot: cwd },
+          { orNone: true }
+        )
+      )
     );
     reportDryRun(logger, {
       changes: [
