@@ -378,6 +378,35 @@ export interface LoadedBuilderEntities {
 }
 
 /**
+ * Every row of a registry table, with `localized` and `source` where the
+ * registry has them. Each is dropped only when the registry has no such
+ * column, so an older registry still yields its entities rather than none;
+ * any other failure is not a missing column and is thrown.
+ */
+async function readRegistryRows(
+  adapter: DrizzleAdapter,
+  table: string,
+  columns: string
+): Promise<DynamicTableRow[]> {
+  const tries = [", localized, source", ", localized", ", source", ""];
+  for (const [at, extra] of tries.entries()) {
+    try {
+      return await adapter.executeQuery<DynamicTableRow>(
+        `SELECT ${columns}${extra} FROM ${table}`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const missingColumn =
+        /localized|source|no such column|does not exist|unknown column/i.test(
+          msg
+        );
+      if (!missingColumn || at === tries.length - 1) throw err;
+    }
+  }
+  return [];
+}
+
+/**
  * Load full Builder entities (slug + physical table name + parsed fields +
  * status) from the three `dynamic_*` registry tables. Used by the boot
  * reconciler (P8) to merge + materialize plugin contributions onto UI-Builder
@@ -395,29 +424,8 @@ export async function loadBuilderEntities(
     const columns = hasStatusColumn
       ? "slug, table_name, fields, status"
       : "slug, table_name, fields";
-    // `localized` and `source` are asked for, and each dropped only when the
-    // registry has no such column, so an older registry still yields its
-    // entities rather than none. Any other failure is not a missing column.
-    const readRows = async (): Promise<DynamicTableRow[]> => {
-      const tries = [", localized, source", ", localized", ", source", ""];
-      for (const [at, extra] of tries.entries()) {
-        try {
-          return await adapter.executeQuery<DynamicTableRow>(
-            `SELECT ${columns}${extra} FROM ${table}`
-          );
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          const missingColumn =
-            /localized|source|no such column|does not exist|unknown column/i.test(
-              msg
-            );
-          if (!missingColumn || at === tries.length - 1) throw err;
-        }
-      }
-      return [];
-    };
     try {
-      const rows = await readRows();
+      const rows = await readRegistryRows(adapter, table, columns);
       const out: LoadedBuilderEntity[] = [];
       for (const row of rows) {
         try {
