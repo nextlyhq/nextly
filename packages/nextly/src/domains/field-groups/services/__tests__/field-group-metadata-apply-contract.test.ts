@@ -103,6 +103,8 @@ const INPUT: CreateFieldGroupInput = {
 function registryDouble() {
   return {
     getAllComponents: vi.fn().mockResolvedValue([]),
+    // No field group stored, so a save's cycle check finds nothing to close a cycle with.
+    getAllFieldLists: vi.fn().mockResolvedValue([]),
     registerComponent: vi.fn(async (row: unknown) => row),
   };
 }
@@ -499,6 +501,8 @@ function registryWithGroup(args: {
   };
   return {
     getAllComponents: vi.fn().mockResolvedValue([]),
+    // No other field group stored, so a save's cycle check finds nothing to close a cycle with.
+    getAllFieldLists: vi.fn().mockResolvedValue([]),
     registerComponent: vi.fn(async (row: unknown) => row),
     getComponentForWrite: vi.fn().mockResolvedValue(record),
     updateComponent: vi.fn(async () => record),
@@ -1104,6 +1108,8 @@ describe("an update whose row write fails after the tables moved", () => {
     return {
       record,
       getAllComponents: vi.fn().mockResolvedValue([]),
+      // No other field group stored, so a save's cycle check finds nothing to close a cycle with.
+      getAllFieldLists: vi.fn().mockResolvedValue([]),
       registerComponent: vi.fn(async (row: unknown) => row),
       getComponentForWrite: vi.fn().mockResolvedValue(record),
       // Fails the real write and accepts the narrow status mark that follows it, which is the whole
