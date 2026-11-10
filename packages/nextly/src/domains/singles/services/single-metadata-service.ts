@@ -604,6 +604,18 @@ export class SingleMetadataService {
     }
     const tableName = current?.tableName ?? callerTableName;
 
+    // Before anything is dropped, inside the same exclusion as the drops: a
+    // declared key into its tables or another owner's element on them refuses
+    // the delete by name, and so does either that cannot be read. Asked of a
+    // Single whose row is already gone too, since its tables may remain.
+    if (tableName) {
+      await this.registry.assertNothingDependsOn({
+        slug,
+        tableName,
+        fields: current?.fields ?? [],
+      });
+    }
+
     const adapter = this.adapter;
     if (tableName && adapter) {
       await this.dropSingleStorage(slug, tableName, adapter);

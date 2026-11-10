@@ -5,8 +5,9 @@ import type { ExtensionSchemaRecord } from "../../schema/ownership/dependent-ele
 
 import {
   assertNothingDependsOn,
+  fieldsPlacing,
   fieldsPointingAt,
-  findCollectionDependents,
+  findEntityDependents,
   readFieldOwners,
   type DependentsAdapter,
   type DependentsSources,
@@ -94,6 +95,32 @@ describe("fieldsPointingAt", () => {
     expect(fieldsPointingAt(fields, "tags")).toEqual(["sections.meta.topic"]);
   });
 
+  it("looks through a group with no name, naming its fields at the level they are stored", () => {
+    const fields = [
+      {
+        type: "group",
+        label: "Layout",
+        fields: [
+          { name: "tag", type: "relationship", relationTo: "tags" },
+          {
+            name: "meta",
+            type: "group",
+            fields: [
+              {
+                type: "group",
+                fields: [
+                  { name: "topic", type: "relationship", relationTo: "tags" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    expect(fieldsPointingAt(fields, "tags")).toEqual(["tag", "meta.topic"]);
+  });
+
   it("reads no target on a field that holds no reference, nor nested fields under a type that nests none", () => {
     const fields = [
       { name: "picker", type: "select", relationTo: "tags" },
@@ -108,7 +135,7 @@ describe("fieldsPointingAt", () => {
   });
 });
 
-describe("findCollectionDependents", () => {
+describe("findEntityDependents", () => {
   const posts: FieldOwner = {
     entityType: "collection",
     entitySlug: "posts",
@@ -123,10 +150,10 @@ describe("findCollectionDependents", () => {
     };
 
     await expect(
-      findCollectionDependents([TAGS], sources({ owners: [self] }))
+      findEntityDependents([TAGS], sources({ owners: [self] }))
     ).resolves.toEqual(new Map());
     await expect(
-      findCollectionDependents(
+      findEntityDependents(
         [TAGS, { slug: "posts", tables: ["dc_posts"] }],
         sources({ owners: [self, posts] })
       )
@@ -151,9 +178,9 @@ describe("findCollectionDependents", () => {
     };
 
     await expect(
-      findCollectionDependents([unnamed], sources({ owners: [single] }))
+      findEntityDependents([unnamed], sources({ owners: [single] }))
     ).resolves.toEqual(new Map());
-    const found = await findCollectionDependents(
+    const found = await findEntityDependents(
       [named],
       sources({ owners: [pointsAtTags] })
     );
@@ -166,7 +193,7 @@ describe("findCollectionDependents", () => {
     // Only a collection goes with the set: a Single sharing the slug stays.
     const single: FieldOwner = { ...posts, entityType: "single" };
 
-    const found = await findCollectionDependents(
+    const found = await findEntityDependents(
       [TAGS, { slug: "posts", tables: ["dc_posts"] }],
       sources({ owners: [single] })
     );
@@ -217,7 +244,7 @@ describe("findCollectionDependents", () => {
       ]),
     });
 
-    const found = await findCollectionDependents([TAGS], sources({ schema }));
+    const found = await findEntityDependents([TAGS], sources({ schema }));
 
     expect(found.get("tags")?.foreignKeys).toEqual([
       {
@@ -256,7 +283,7 @@ describe("findCollectionDependents", () => {
     });
 
     await expect(
-      findCollectionDependents([TAGS], sources({ schema }))
+      findEntityDependents([TAGS], sources({ schema }))
     ).resolves.toEqual(new Map());
   });
 
@@ -279,7 +306,7 @@ describe("findCollectionDependents", () => {
       ]),
     });
 
-    const found = await findCollectionDependents(
+    const found = await findEntityDependents(
       [TAGS],
       sources({
         schema,
@@ -318,7 +345,7 @@ describe("findCollectionDependents", () => {
 
   it("names every record it could not read, and counts none of them as empty", async () => {
     const refusal = await refusalOf(
-      findCollectionDependents(
+      findEntityDependents(
         [TAGS],
         sources({
           owners: new Error("registry gone"),
@@ -335,7 +362,7 @@ describe("findCollectionDependents", () => {
 
   it("refuses when only the recorded rows cannot be read", async () => {
     const refusal = await refusalOf(
-      findCollectionDependents(
+      findEntityDependents(
         [TAGS],
         sources({ recorded: new Error("owners table damaged") })
       )
@@ -449,5 +476,219 @@ describe("readFieldOwners", () => {
     await expect(
       readFieldOwners(adapter, { fieldGroupRegistryName: registryName })
     ).rejects.toThrow("permission denied");
+  });
+});
+
+describe("a field group's and a Single's dependents", () => {
+  const SEO = {
+    kind: "fieldGroup" as const,
+    slug: "seo",
+    tables: ["comp_seo", "comp_seo_locales"],
+  };
+  const HOME = {
+    kind: "single" as const,
+    slug: "home",
+    tables: ["single_home", "single_home_locales"],
+  };
+  /** A collection placing SEO at the top, and inside a repeater and a group, beside a relationship to a collection called "seo". */
+  const pages: FieldOwner = {
+    entityType: "collection",
+    entitySlug: "pages",
+    fields: [
+      { name: "meta", type: "component", component: "seo" },
+      {
+        name: "blocks",
+        type: "repeater",
+        fields: [
+          {
+            name: "hero",
+            type: "group",
+            fields: [
+              {
+                name: "either",
+                type: "component",
+                components: ["card", "seo"],
+              },
+            ],
+          },
+        ],
+      },
+      { name: "related", type: "relationship", relationTo: "seo" },
+    ],
+  };
+
+  it("finds every field that places a field group, at any depth, and no relationship to a collection of its slug", () => {
+    expect(fieldsPlacing(pages.fields, "seo")).toEqual([
+      "meta",
+      "blocks.hero.either",
+    ]);
+    expect(fieldsPointingAt(pages.fields, "seo")).toEqual(["related"]);
+  });
+
+  it("matches a field group's placements, and a collection's relationships, each only against its own kind", async () => {
+    const asFieldGroup = await findEntityDependents(
+      [SEO],
+      sources({ owners: [pages] })
+    );
+    const asCollection = await findEntityDependents(
+      [{ slug: "seo", tables: ["dc_seo"] }],
+      sources({ owners: [pages] })
+    );
+
+    expect(asFieldGroup.get("seo")?.fields).toEqual([
+      { entityType: "collection", entitySlug: "pages", fieldPath: "meta" },
+      {
+        entityType: "collection",
+        entitySlug: "pages",
+        fieldPath: "blocks.hero.either",
+      },
+    ]);
+    expect(asCollection.get("seo")?.fields).toEqual([
+      { entityType: "collection", entitySlug: "pages", fieldPath: "related" },
+    ]);
+  });
+
+  it("does not count a host deleted in the same operation, but counts a Single of the same slug that stays", async () => {
+    await expect(
+      findEntityDependents(
+        [SEO, { slug: "pages", tables: ["dc_pages"] }],
+        sources({ owners: [pages] })
+      )
+    ).resolves.toEqual(new Map());
+
+    const found = await findEntityDependents(
+      [SEO, { slug: "pages", tables: ["dc_pages"] }],
+      sources({ owners: [{ ...pages, entityType: "single" }] })
+    );
+    expect(found.get("seo")?.fields.map(field => field.entityType)).toEqual([
+      "single",
+      "single",
+    ]);
+  });
+
+  it("does not count a field group deleted with the one it places", async () => {
+    const card: FieldOwner = {
+      entityType: "fieldGroup",
+      entitySlug: "card",
+      fields: [{ name: "seo", type: "fieldGroup", fieldGroup: "seo" }],
+    };
+
+    await expect(
+      findEntityDependents(
+        [SEO, { kind: "fieldGroup", slug: "card", tables: ["comp_card"] }],
+        sources({ owners: [card] })
+      )
+    ).resolves.toEqual(new Map());
+    const alone = await findEntityDependents(
+      [SEO],
+      sources({ owners: [card] })
+    );
+    expect(alone.get("seo")?.fields).toEqual([
+      { entityType: "fieldGroup", entitySlug: "card", fieldPath: "seo" },
+    ]);
+  });
+
+  it("names no field for a Single, and finds a declared key into its tables", async () => {
+    const pointing: FieldOwner = {
+      entityType: "collection",
+      entitySlug: "pages",
+      fields: [{ name: "home", type: "relationship", relationTo: "home" }],
+    };
+    const schema = schemaWith({
+      specs: [
+        {
+          name: "plg__links",
+          columns: [],
+          foreignKeys: [
+            {
+              name: "fk_links_home",
+              columns: ["home_id"],
+              referencesTable: "single_home",
+              referencesColumns: ["id"],
+              onDelete: "no action",
+              onUpdate: "no action",
+            },
+          ],
+        },
+      ],
+      owners: new Map([["plg__links", { kind: "plugin", id: "plg" }]]),
+    });
+
+    const found = await findEntityDependents(
+      [HOME],
+      sources({ owners: [pointing], schema })
+    );
+
+    expect(found.get("home")).toEqual({
+      kind: "single",
+      fields: [],
+      foreignKeys: [
+        {
+          owner: { kind: "plugin", id: "plg" },
+          table: "plg__links",
+          name: "fk_links_home",
+          referencesTable: "single_home",
+        },
+      ],
+      elements: [],
+    });
+  });
+
+  it("says what places a field group and how to proceed", async () => {
+    const refusal = await refusalOf(
+      assertNothingDependsOn([SEO], sources({ owners: [pages] }))
+    );
+
+    expect(refusal.code).toBe("CONFLICT");
+    expect(refusal.publicMessage).toBe(
+      `"seo" cannot be deleted while other schema depends on it. Fields that place it: pages.meta, pages.blocks.hero.either. Remove those fields, or have them place another field group, then delete "seo".`
+    );
+    expect(refusal.logContext).toMatchObject({
+      reason: "field-group-has-dependents",
+    });
+  });
+
+  it("says how to proceed for a collection's and a field group's fields together", async () => {
+    const refusal = await refusalOf(
+      assertNothingDependsOn(
+        [SEO, { slug: "seo_pages", tables: ["dc_seo_pages"] }],
+        sources({
+          owners: [
+            pages,
+            {
+              entityType: "single",
+              entitySlug: "home",
+              fields: [
+                { name: "list", type: "relationship", relationTo: "seo_pages" },
+              ],
+            },
+          ],
+        })
+      )
+    );
+
+    expect(refusal.publicMessage).toBe(
+      `Nothing was deleted, because other schema depends on "seo" and "seo_pages". "seo": Fields that place it: pages.meta, pages.blocks.hero.either. "seo_pages": Fields that point at it: the Single home.list. Remove those fields, or point them at another collection, or have them place another field group, then try again.`
+    );
+    expect(refusal.logContext).toMatchObject({
+      reason: "entity-has-dependents",
+    });
+  });
+
+  it("refuses a Single whose records cannot be read, and logs it as a Single's", async () => {
+    const refusal = await refusalOf(
+      findEntityDependents(
+        [HOME],
+        sources({ recorded: new Error("owners table damaged") })
+      )
+    );
+
+    expect(refusal.code).toBe("SERVICE_UNAVAILABLE");
+    expect(refusal.publicMessage).toBe(
+      `"home" was not deleted, because the record of columns, indexes, foreign keys and checks other owners added to its tables could not be read, so whether anything depends on it is unknown. Nothing was removed. Fix the cause in the server log and try again.`
+    );
+    expect(refusal.logContext).toMatchObject({
+      reason: "single-dependents-unreadable",
+    });
   });
 });
