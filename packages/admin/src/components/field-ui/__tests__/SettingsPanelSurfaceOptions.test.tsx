@@ -5,7 +5,7 @@
 // way; the Schema Builder sets none of these and must see no change.
 import userEvent from "@testing-library/user-event";
 import { useState, type JSX } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
@@ -17,11 +17,17 @@ import {
   type FieldSettingsSurface,
 } from "../settings-panel";
 
+// The plugin list a test sets; none by default.
+const branding = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
+afterEach(() => {
+  branding.current = {};
+});
+
 vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
   ...(await importOriginal<
     typeof import("@admin/context/providers/BrandingProvider")
   >()),
-  useBranding: () => ({}),
+  useBranding: () => branding.current,
   // The plugin list still pending: a type the panel does not know as built in
   // would read "Loading", which is what the surface-only types used to do.
   useBrandingStatus: () => ({
@@ -237,5 +243,49 @@ describe("the forms and user-fields surfaces' built-in types", () => {
       <Host initial={field("url")} surface={{ ...entries, surface: "users" }} />
     );
     expect(screen.queryByText(/loading this type/i)).toBeNull();
+  });
+});
+
+describe("a plugin that reuses a surface's built-in id", () => {
+  // A plugin's `url`, stored as a number and offered on both surfaces: on
+  // forms the built-in URL wins it, on entries the plugin's type is the field.
+  const acmeUrl = {
+    plugins: [
+      {
+        name: "acme",
+        enabled: true,
+        fieldTypes: [
+          {
+            type: "url",
+            component: "acme/Url",
+            storage: "number",
+            surfaces: ["entries", "forms"],
+            label: "Acme URL",
+          },
+        ],
+      },
+    ],
+  };
+
+  it("keeps the surface's own rules and placeholder where it builds the type in", async () => {
+    branding.current = acmeUrl;
+    render(
+      <Host initial={field("url")} surface={{ ...entries, surface: "forms" }} />
+    );
+    await openTab("Validation");
+    expect(screen.getByLabelText("Pattern")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Min", { exact: true })).toBeNull();
+    await openTab("Display");
+    expect(screen.getByLabelText("Placeholder")).toBeInTheDocument();
+  });
+
+  it("follows the plugin's storage and offers no built-in placeholder elsewhere", async () => {
+    branding.current = acmeUrl;
+    render(<Host initial={field("url")} surface={entries} />);
+    await openTab("Validation");
+    expect(screen.getByLabelText("Min", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Pattern")).toBeNull();
+    await openTab("Display");
+    expect(screen.queryByLabelText("Placeholder")).toBeNull();
   });
 });

@@ -179,6 +179,7 @@ export function FieldSettingsPanel({
           <TabsContent value="validation">
             <div className="space-y-4">
               <ValidationTab
+                surface={surface.surface}
                 field={field}
                 readOnly={readOnly}
                 onChange={onChange}
@@ -189,6 +190,7 @@ export function FieldSettingsPanel({
           </TabsContent>
           <TabsContent value="display">
             <DisplayTab
+              surface={surface.surface}
               field={field}
               readOnly={readOnly}
               onChange={onChange}

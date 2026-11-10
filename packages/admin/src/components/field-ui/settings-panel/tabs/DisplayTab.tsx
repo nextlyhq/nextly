@@ -7,11 +7,15 @@
 // sidebar position would be stored and never drawn. Width is in General, with
 // the settings every field has.
 import { Input, Label, Switch } from "@nextlyhq/ui";
+import type { FieldSurface } from "nextly/field-catalog";
 import type { JSX, ReactNode } from "react";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
+import { isSurfaceBuiltInType } from "@admin/lib/builder/field-type-label";
 
 type Props = {
+  /** The surface the panel is on, which decides who owns a type's id. */
+  surface: FieldSurface;
   field: BuilderField;
   readOnly?: boolean;
   onChange: (next: BuilderField) => void;
@@ -33,12 +37,26 @@ const TYPES_WITH_PLACEHOLDER = new Set([
   "password",
   "number",
   "code",
-  // The forms and user-fields surfaces' own text-like inputs.
-  "url",
-  "phone",
 ]);
 
+/**
+ * The text-like inputs some surfaces build in (forms and user fields). They
+ * show a placeholder only where the surface builds them in: elsewhere the same
+ * id is a plugin's, whose own settings decide what it has.
+ */
+const SURFACE_TYPES_WITH_PLACEHOLDER = new Set(["url", "phone"]);
+
+/** Whether the field's input on this surface shows a placeholder. */
+function hasPlaceholder(surface: FieldSurface, type: string): boolean {
+  if (TYPES_WITH_PLACEHOLDER.has(type)) return true;
+  return (
+    SURFACE_TYPES_WITH_PLACEHOLDER.has(type) &&
+    isSurfaceBuiltInType(surface, type)
+  );
+}
+
 export function DisplayTab({
+  surface,
   field,
   readOnly = false,
   onChange,
@@ -51,7 +69,7 @@ export function DisplayTab({
 
   return (
     <div className="space-y-4">
-      {TYPES_WITH_PLACEHOLDER.has(field.type) && (
+      {hasPlaceholder(surface, field.type) && (
         <div className="space-y-1">
           <Label htmlFor="field-placeholder">Placeholder</Label>
           <Input

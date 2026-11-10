@@ -12,7 +12,7 @@ import {
   useBranding,
   useBrandingStatus,
 } from "@admin/context/providers/BrandingProvider";
-import { surfaceCatalog } from "@admin/lib/builder/field-type-label";
+import { isSurfaceBuiltInType } from "@admin/lib/builder/field-type-label";
 import { pluginFieldTypeSettings } from "@admin/lib/builder/plugin-field-type-entries";
 
 import { coreFieldTypeSettings } from "./core-type-settings";
@@ -51,7 +51,7 @@ export function useFieldTypeSettings(
   if (own) return { status: "known", settings: own };
   const core = coreFieldTypeSettings(type);
   if (core) return { status: "known", settings: core };
-  if (surfaceCatalog(surface.surface).some(entry => entry.type === type))
+  if (isSurfaceBuiltInType(surface.surface, type))
     return { status: "known", settings: {} };
   if (fromPlugin) return { status: "known", settings: fromPlugin };
   if (isPending) return { status: "loading" };

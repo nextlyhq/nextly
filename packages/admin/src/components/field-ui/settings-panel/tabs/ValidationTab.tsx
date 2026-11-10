@@ -10,12 +10,14 @@
 // registry, and mapping the builder's own storage.
 import {
   validationRulesForFieldType,
+  type FieldSurface,
   type FieldValidationRule,
 } from "nextly/field-catalog";
 import type { JSX } from "react";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { isSurfaceBuiltInType } from "@admin/lib/builder/field-type-label";
 import { pluginFieldTypeStorage } from "@admin/lib/builder/plugin-field-type-entries";
 
 import {
@@ -24,6 +26,8 @@ import {
 } from "../../ValidationRulesEditor";
 
 type Props = {
+  /** The surface the panel is on, which decides who owns a type's id. */
+  surface: FieldSurface;
   field: BuilderField;
   readOnly?: boolean;
   onChange: (next: BuilderField) => void;
@@ -35,6 +39,7 @@ type Props = {
 };
 
 export function ValidationTab({
+  surface,
   field,
   readOnly = false,
   onChange,
@@ -46,9 +51,13 @@ export function ValidationTab({
   // This surface stores the rules under the names core uses, so the kit's
   // values pass through unmapped. The form builder does not, and maps at its
   // own call site rather than here.
+  // A type this surface builds in answers from its own storage, even when a
+  // plugin declares the same id for another surface.
   const coreAllowed = validationRulesForFieldType(
     field.type,
-    pluginFieldTypeStorage(branding.plugins, field.type)
+    isSurfaceBuiltInType(surface, field.type)
+      ? undefined
+      : pluginFieldTypeStorage(branding.plugins, field.type)
   );
   // Narrowed, never widened: a surface can only take away rules core allows,
   // so a rule the type cannot hold is never offered whatever it returns.
