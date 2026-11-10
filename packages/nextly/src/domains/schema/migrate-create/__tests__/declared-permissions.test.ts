@@ -337,3 +337,64 @@ describe("permissionsForRun", () => {
     ).toEqual({ record: undefined, changes: [] });
   });
 });
+
+// The host app and a plugin are different owners whatever the plugin is called, and a permission
+// is its action and resource, which two different pairs can spell with the same slug.
+describe("owners and identities", () => {
+  it("compares the app's own permissions apart from a plugin named app", () => {
+    const before = record([
+      custom("app", "export", "reports"),
+      custom("app", "sync", "jobs", { source: "plugin" }),
+    ]);
+    const after = record([
+      custom("app", "export", "reports"),
+      custom("app", "archive", "reports"),
+      custom("app", "sync", "jobs", { source: "plugin" }),
+    ]);
+    expect(permissionChanges(before, after)).toEqual([
+      {
+        kind: "owner",
+        owner: "app",
+        added: ["archive-reports"],
+        removed: [],
+      },
+    ]);
+  });
+
+  it("names a permission whose action and resource changed under the same slug", () => {
+    const before = record([custom(formBuilder, "export-data", "reports")]);
+    const after = record([custom(formBuilder, "export", "data-reports")]);
+    expect(Object.keys(before.plugins[formBuilder])).toEqual(
+      Object.keys(after.plugins[formBuilder])
+    );
+    expect(permissionChanges(before, after)).toEqual([
+      {
+        kind: "owner",
+        owner: formBuilder,
+        added: ["export-data-reports"],
+        removed: ["export-data-reports"],
+      },
+    ]);
+  });
+
+  it.each(["__proto__", "constructor", "toString"])(
+    "records a plugin named %s like any other",
+    name => {
+      const named = record([custom(name, "export", "reports")]);
+      expect(Object.keys(named.plugins)).toEqual([name]);
+      expect(Object.keys(named.plugins[name])).toEqual(["export-reports"]);
+    }
+  );
+
+  it("carries a saved collection named __proto__ forward as an entity of its own", () => {
+    const run = permissionsForRun({
+      given: undefined,
+      latest: record([]),
+      scope: { kind: "collection", slug: "__proto__", present: true },
+    });
+    expect(Object.keys(run.record?.collections ?? {}).sort()).toEqual([
+      "__proto__",
+      "posts",
+    ]);
+  });
+});

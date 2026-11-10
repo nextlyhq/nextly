@@ -472,11 +472,21 @@ export async function runMigrateCreate(
     appStream,
     nothing,
   } = inputs;
+  // Every permission the config declares, by owner, which every snapshot records; a plugin
+  // release that only adds or removes one is a migration of its own. Read before the empty-schema
+  // check: an app with no table yet may still declare permissions, which travel as a migration.
+  const permissions = declaredPermissionsOf(configResult.config, {
+    collections,
+    singles,
+  });
+  const declaresPermissions =
+    Object.keys(permissions.app).length > 0 ||
+    Object.keys(permissions.plugins).length > 0;
   // A project with no tables has no translated field to record, and says so as any recording run
   // with nothing to record does, rather than suggesting --blank, which --record-snapshot refuses.
   if (nothing && options.recordSnapshot === true)
     nothingToRecord(logger, options.dryRun);
-  if (nothing) {
+  if (nothing && !declaresPermissions) {
     logger.warn(
       "No collections, singles, components, or extension tables defined in config."
     );
@@ -505,12 +515,7 @@ export async function runMigrateCreate(
       components,
       metadataUpserts,
       previousMetadataUpserts,
-      // Every permission the config declares, by owner, which every snapshot records; a plugin
-      // release that only adds or removes one is a migration of its own.
-      permissions: declaredPermissionsOf(configResult.config, {
-        collections,
-        singles,
-      }),
+      permissions,
       nonInteractive,
       autoAcceptRenames: options.acceptRenames === true,
       recordSnapshot: options.recordSnapshot === true,

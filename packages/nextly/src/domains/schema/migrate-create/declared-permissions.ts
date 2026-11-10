@@ -159,14 +159,17 @@ export function permissionRecordOf(
         ];
       })
     );
-  const plugins: Record<string, CollectedPermission[]> = {};
+  // A Map, so a plugin named after an object's own members (`__proto__`, `constructor`) is a
+  // plugin like any other; `Object.fromEntries` then writes each as an own key.
+  const plugins = new Map<string, CollectedPermission[]>();
   for (const p of custom) {
-    if (p.source === "plugin") (plugins[p.owner] ??= []).push(p);
+    if (p.source !== "plugin") continue;
+    plugins.set(p.owner, [...(plugins.get(p.owner) ?? []), p]);
   }
   return {
     app: bySlug(custom.filter(p => p.source === "app")),
     plugins: Object.fromEntries(
-      Object.entries(plugins).map(([owner, list]) => [owner, bySlug(list)])
+      [...plugins].map(([owner, list]) => [owner, bySlug(list)])
     ),
     collections: entityRecord("collection"),
     singles: entityRecord("single"),
@@ -194,14 +197,40 @@ export function declaredPermissionsOf(
   });
 }
 
-/** The app's and each plugin's permissions, by owner: the ones a change names. */
-function ownersOf(record: PermissionRecord): Map<string, OwnerPermissions> {
-  const owners = new Map<string, OwnerPermissions>();
-  if (Object.keys(record.app).length > 0) owners.set(APP_OWNER, record.app);
-  for (const [owner, permissions] of Object.entries(record.plugins)) {
-    owners.set(owner, permissions);
+/** One owner a change can name: the app itself, or a plugin by name. */
+interface Owner {
+  name: string;
+  permissions: OwnerPermissions;
+}
+
+/**
+ * The app's and each plugin's permissions, keyed by kind as well as name, so the app and a plugin
+ * that happens to be called `app` are two owners.
+ */
+function ownersOf(record: PermissionRecord): Map<string, Owner> {
+  const owners = new Map<string, Owner>();
+  if (Object.keys(record.app).length > 0) {
+    owners.set(`app\u0000`, { name: APP_OWNER, permissions: record.app });
+  }
+  for (const [name, permissions] of Object.entries(record.plugins)) {
+    owners.set(`plugin\u0000${name}`, { name, permissions });
   }
   return owners;
+}
+
+/**
+ * The slugs in `now` that `was` lacks, a permission being its action and resource: a slug both
+ * hold for a different pair (`export-data` on `reports`, then `export` on `data-reports`) is a
+ * different permission, so it is in both what was added and what was removed.
+ */
+function missingFrom(was: OwnerPermissions, now: OwnerPermissions): string[] {
+  return Object.entries(now)
+    .filter(([slug, p]) => {
+      const before = Object.hasOwn(was, slug) ? was[slug] : undefined;
+      return before === undefined || identity(before) !== identity(p);
+    })
+    .map(([slug]) => slug)
+    .sort();
 }
 
 /**
@@ -224,26 +253,20 @@ export function permissionChanges(
   // Every snapshot from now on records them, so the first one over an earlier snapshot is a change
   // of its own, whoever declares them: the entities' built-in permissions are recorded too.
   if (previous === undefined) return [{ kind: "recorded" }];
-  const before = previous === null ? new Map() : ownersOf(previous);
-  return order([...new Set([...before.keys(), ...after.keys()])]).flatMap(
-    owner => {
-      const was = Object.keys(before.get(owner) ?? {});
-      const now = Object.keys(after.get(owner) ?? {});
-      const added = now.filter(slug => !was.includes(slug)).sort();
-      const removed = was.filter(slug => !now.includes(slug)).sort();
-      return added.length + removed.length === 0
-        ? []
-        : [{ kind: "owner" as const, owner, added, removed }];
-    }
-  );
-}
-
-/** The app first, then each plugin by name. */
-function order(owners: string[]): string[] {
-  return [
-    ...owners.filter(owner => owner === APP_OWNER),
-    ...owners.filter(owner => owner !== APP_OWNER).sort(),
-  ];
+  const before =
+    previous === null ? new Map<string, Owner>() : ownersOf(previous);
+  // The app first (its key sorts before any plugin's), then each plugin by name.
+  const keys = [...new Set([...before.keys(), ...after.keys()])].sort();
+  return keys.flatMap(key => {
+    const was = before.get(key);
+    const now = after.get(key);
+    const name = (now ?? was)?.name ?? "";
+    const added = missingFrom(was?.permissions ?? {}, now?.permissions ?? {});
+    const removed = missingFrom(now?.permissions ?? {}, was?.permissions ?? {});
+    return added.length + removed.length === 0
+      ? []
+      : [{ kind: "owner" as const, owner: name, added, removed }];
+  });
 }
 
 /**
@@ -282,22 +305,38 @@ export function permissionsForRun(run: {
     return { record: run.latest, changes: [] };
   }
   const key = scope.kind === "collection" ? "collections" : "singles";
-  const entities = { ...run.latest[key] };
-  if (!scope.present || isSystemResource(scope.slug)) {
-    delete entities[scope.slug];
-  } else {
-    // A workflow's permissions are kept as recorded: a save names no workflow.
-    const workflow = Object.fromEntries(
-      Object.entries(entities[scope.slug] ?? {}).filter(
-        ([, p]) => p.group === WORKFLOW_PERMISSION_GROUP
-      )
-    );
-    entities[scope.slug] = {
-      ...bySlug(builtInEntityPermissions(scope.kind, scope.slug)),
-      ...workflow,
-    };
-  }
-  return { record: { ...run.latest, [key]: entities }, changes: [] };
+  // Rebuilt from entries rather than assigned by key, so an entity slug such as `__proto__` is an
+  // entry like any other and never the object's prototype.
+  const others = Object.entries(run.latest[key]).filter(
+    ([slug]) => slug !== scope.slug
+  );
+  const recordedNow = Object.hasOwn(run.latest[key], scope.slug)
+    ? run.latest[key][scope.slug]
+    : {};
+  const saved: [string, OwnerPermissions][] =
+    !scope.present || isSystemResource(scope.slug)
+      ? []
+      : [
+          [
+            scope.slug,
+            {
+              ...bySlug(builtInEntityPermissions(scope.kind, scope.slug)),
+              // A workflow's permissions are kept as recorded: a save names no workflow.
+              ...Object.fromEntries(
+                Object.entries(recordedNow).filter(
+                  ([, p]) => p.group === WORKFLOW_PERMISSION_GROUP
+                )
+              ),
+            },
+          ],
+        ];
+  return {
+    record: {
+      ...run.latest,
+      [key]: Object.fromEntries([...others, ...saved]),
+    },
+    changes: [],
+  };
 }
 
 /** `@nextlyhq/plugin-form-builder: + export-submissions, - archive-submissions`. */
