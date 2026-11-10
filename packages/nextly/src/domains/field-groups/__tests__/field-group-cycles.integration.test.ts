@@ -314,6 +314,37 @@ for (const dialect of getConfiguredTestDialects()) {
       );
     });
 
+    it("refuses a start whose plugin adds a new cycle to field groups already in a stored one", async () => {
+      await start();
+      await create("a");
+      await create("b", "a");
+      // Stored as a save made before the rule left it: `a → b → a`.
+      const registry = (instance as TestNextly).getService(
+        "fieldGroupRegistryService"
+      );
+      await registry.updateComponent("a", {
+        fields: codeFieldGroup("a", "b").fields,
+      });
+      // The plugin also places `a` inside itself.
+      const extender: PluginDefinition = {
+        name: "@t/self-extender",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: {
+          extend: [
+            {
+              target: "a",
+              fields: [{ name: "self", type: "component", component: "a" }],
+            },
+          ],
+        },
+      };
+
+      expect(await thrownBy(start([], undefined, [extender]))).toEqual(
+        cycleRefusal("a → a")
+      );
+    });
+
     it("names a cycle the Builder stored before such a cycle was refused, starts, and refuses its next save", async () => {
       await start();
       await create("ping");

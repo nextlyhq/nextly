@@ -188,6 +188,52 @@ describe("judgeFieldGroupCyclesAtStart", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("refuses a new cycle a plugin's extension adds to field groups already in a stored cycle", () => {
+    const warn = vi.fn();
+    const issue = refusal(() =>
+      judgeFieldGroupCyclesAtStart({
+        code: [],
+        // Stored as `a → b → a`; the start's extension also places `a` in itself.
+        registered: [
+          {
+            slug: "a",
+            fields: [
+              { name: "b", type: "component", component: "b" },
+              { name: "self", type: "component", component: "a" },
+            ],
+          },
+          places("b", "a"),
+        ],
+        stored: [places("a", "b"), places("b", "a")],
+        warn,
+      })
+    );
+    expect(issue.message).toContain("a → a");
+  });
+
+  it("refuses a new cycle an extension closes beside a stored one through the same field group", () => {
+    const issue = refusal(() =>
+      judgeFieldGroupCyclesAtStart({
+        code: [],
+        // Stored: `a → b → a`, and `c` placing `a`. The extension makes `a` place `c` too.
+        registered: [
+          {
+            slug: "a",
+            fields: [
+              { name: "b", type: "component", component: "b" },
+              { name: "c", type: "component", component: "c" },
+            ],
+          },
+          places("b", "a"),
+          places("c", "a"),
+        ],
+        stored: [places("a", "b"), places("b", "a"), places("c", "a")],
+        warn: vi.fn(),
+      })
+    );
+    expect(issue.message).toContain("a → c → a");
+  });
+
   it("judges the code's definition where a slug is both", () => {
     const warn = vi.fn();
     judgeFieldGroupCyclesAtStart({

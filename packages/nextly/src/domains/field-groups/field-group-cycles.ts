@@ -57,29 +57,38 @@ function placementGraph(definitions: readonly FieldGroupDefinition[]): {
   return { edges, written };
 }
 
+/** Each field group's placements of others, by lower-cased slug. */
+type Placements = ReadonlyMap<string, readonly string[]>;
+
+/** The slugs from `from` down the search to `node`, `from` first. */
+function wayBack(
+  parent: ReadonlyMap<string, string>,
+  from: string,
+  node: string
+): string[] {
+  const back: string[] = [];
+  for (let at = node; at !== from; at = parent.get(at) ?? from) back.push(at);
+  return [from, ...back.reverse()];
+}
+
 /**
- * A cycle through `slug`, as the slugs from it back to it (`["a", "b", "a"]`; `["a", "a"]` for a
- * field group placed directly in itself), or null when `slug` is in none. The shortest such cycle,
- * found breadth first, so the one named is the plainest to break.
+ * The shortest way along placements from `from` to a placement of `to`, as the slugs along it,
+ * `from` first and `to` last, or null when nothing on the way places `to`. With `to` the same as
+ * `from` it is the shortest cycle through it (`["a", "b", "a"]`; `["a", "a"]` for a field group
+ * placed directly in itself). Found breadth first, so the cycle named is the plainest to break.
  */
-function cycleThrough(
-  edges: ReadonlyMap<string, readonly string[]>,
-  slug: string
+function shortestWay(
+  edges: Placements,
+  from: string,
+  to: string
 ): string[] | null {
   const parent = new Map<string, string>();
-  const queue: string[] = [slug];
+  const queue: string[] = [from];
   for (let head = 0; head < queue.length; head++) {
     const node = queue[head];
     for (const next of edges.get(node) ?? []) {
-      if (next === slug) {
-        // Walked back from the field group that places `slug` to the one `slug` places first.
-        const back: string[] = [];
-        for (let at = node; at !== slug; at = parent.get(at) ?? slug) {
-          back.push(at);
-        }
-        return [slug, ...back.reverse(), slug];
-      }
-      if (!parent.has(next)) {
+      if (next === to) return [...wayBack(parent, from, node), to];
+      if (next !== from && !parent.has(next)) {
         parent.set(next, node);
         queue.push(next);
       }
@@ -88,14 +97,26 @@ function cycleThrough(
   return null;
 }
 
+/** The cycle the placement of `to` in `from` closes, or null when it closes none. */
+function cycleClosedBy(
+  edges: Placements,
+  from: string,
+  to: string
+): string[] | null {
+  if (to === from) return [from, from];
+  const way = shortestWay(edges, to, from);
+  return way === null ? null : [from, ...way];
+}
+
 /** The cycle `slug` takes part in among `definitions`, named with each slug as written, or null. */
 function fieldGroupCycleThrough(
   definitions: readonly FieldGroupDefinition[],
   slug: string
 ): string[] | null {
   const { edges, written } = placementGraph(definitions);
-  const cycle = cycleThrough(edges, slug.toLowerCase());
-  return cycle === null ? null : cycle.map(key => written.get(key) ?? key);
+  const key = slug.toLowerCase();
+  const cycle = shortestWay(edges, key, key);
+  return cycle === null ? null : cycle.map(k => written.get(k) ?? k);
 }
 
 function describeCycle(cycle: readonly string[]): string {
@@ -126,7 +147,7 @@ export function assertNoFieldGroupCycleInCode(
 ): void {
   const { edges, written } = placementGraph(definitions);
   for (const key of edges.keys()) {
-    const cycle = cycleThrough(edges, key);
+    const cycle = shortestWay(edges, key, key);
     if (cycle !== null) {
       throw cycleRefusal(
         cycle.map(k => written.get(k) ?? k),
@@ -136,14 +157,67 @@ export function assertNoFieldGroupCycleInCode(
   }
 }
 
+/** Slugs as their definitions write them. */
+type Named = (cycle: readonly string[]) => string[];
+
+/** Refuse a cycle that takes in a field group defined in code. */
+function refuseCodeCycles(
+  edges: Placements,
+  codeKeys: ReadonlySet<string>,
+  named: Named
+): void {
+  for (const key of codeKeys) {
+    const cycle = shortestWay(edges, key, key);
+    if (cycle !== null) throw cycleRefusal(named(cycle), "fieldGroups");
+  }
+}
+
+/**
+ * Refuse a cycle closed by a placement the start adds to the stored field groups (one in `edges`
+ * but not in `before`): code written at start, whatever cycles the stored ones already hold.
+ */
+function refuseAddedCycles(
+  edges: Placements,
+  before: Placements,
+  named: Named
+): void {
+  for (const [from, targets] of edges) {
+    const stored = new Set(before.get(from) ?? []);
+    for (const to of targets.filter(target => !stored.has(target))) {
+      const cycle = cycleClosedBy(edges, from, to);
+      if (cycle !== null) throw cycleRefusal(named(cycle), "fieldGroups");
+    }
+  }
+}
+
+/** Name, once each, the cycles left: made only of placements the Builder stored earlier. */
+function warnStoredCycles(
+  edges: Placements,
+  named: Named,
+  warn: (message: string) => void
+): void {
+  const reported = new Set<string>();
+  for (const key of edges.keys()) {
+    if (reported.has(key)) continue;
+    const cycle = shortestWay(edges, key, key);
+    if (cycle === null) continue;
+    for (const member of cycle) reported.add(member);
+    warn(
+      `Field groups place each other in a cycle: ${describeCycle(named(cycle))}. ` +
+        `They were saved before such a cycle was refused. The next save of any of them is ` +
+        `refused until one stops placing the next.`
+    );
+  }
+}
+
 /**
  * Judge the field groups an application starts with: the ones its code defines together with the
- * Builder's. A cycle taking in a code field group is refused, since code is written at start. A
- * cycle among Builder field groups alone was written by earlier saves, so it is named through
- * `warn`, once per cycle, and the start goes on; unless the stored field groups hold no such cycle
- * and the start's own additions to them close it (a plugin extending a Builder field group), which
- * is code written at start like any other and refused. Where a slug is both, the code's definition
- * is the one judged, as it is the one the application uses.
+ * Builder's. A cycle taking in a code field group is refused, since code is written at start. So
+ * is any cycle a placement the start adds to a stored field group closes (a plugin extending a
+ * Builder field group), even where the stored field groups already hold another cycle. A cycle
+ * made only of placements the Builder stored was written by earlier saves, so it is named through
+ * `warn`, once per cycle, and the start goes on. Where a slug is both, the code's definition is
+ * the one judged, as it is the one the application uses.
  */
 export function judgeFieldGroupCyclesAtStart(args: {
   code: readonly FieldGroupDefinition[];
@@ -154,35 +228,22 @@ export function judgeFieldGroupCyclesAtStart(args: {
   warn: (message: string) => void;
 }): void {
   const codeKeys = new Set(args.code.map(({ slug }) => slug.toLowerCase()));
-  const definitions = [
-    ...args.registered.filter(({ slug }) => !codeKeys.has(slug.toLowerCase())),
+  const withCode = (builder: readonly FieldGroupDefinition[]) => [
+    ...builder.filter(({ slug }) => !codeKeys.has(slug.toLowerCase())),
     ...args.code,
   ];
-  const { edges, written } = placementGraph(definitions);
-  const named = (cycle: string[]) => cycle.map(k => written.get(k) ?? k);
+  const { edges, written } = placementGraph(withCode(args.registered));
+  const named: Named = cycle => cycle.map(k => written.get(k) ?? k);
 
-  for (const key of codeKeys) {
-    const cycle = cycleThrough(edges, key);
-    if (cycle !== null) throw cycleRefusal(named(cycle), "fieldGroups");
-  }
-
-  const storedEdges =
-    args.stored === undefined ? edges : placementGraph(args.stored).edges;
-  const reported = new Set<string>();
-  for (const key of edges.keys()) {
-    if (reported.has(key)) continue;
-    const cycle = cycleThrough(edges, key);
-    if (cycle === null) continue;
-    if (cycleThrough(storedEdges, key) === null) {
-      throw cycleRefusal(named(cycle), "fieldGroups");
-    }
-    for (const member of cycle) reported.add(member);
-    args.warn(
-      `Field groups place each other in a cycle: ${describeCycle(named(cycle))}. ` +
-        `They were saved before such a cycle was refused. The next save of any of them is ` +
-        `refused until one stops placing the next.`
+  refuseCodeCycles(edges, codeKeys, named);
+  if (args.stored !== undefined) {
+    refuseAddedCycles(
+      edges,
+      placementGraph(withCode(args.stored)).edges,
+      named
     );
   }
+  warnStoredCycles(edges, named, args.warn);
 }
 
 /**
