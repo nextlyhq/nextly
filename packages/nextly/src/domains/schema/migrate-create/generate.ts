@@ -224,6 +224,12 @@ export interface MinimalConfigEntity {
 export interface GenerateArgs {
   /** Slug-cased migration name (CLI's --name=<value>). */
   name: string;
+  /**
+   * Keep nothing a plugin's scope holds back from a type switched off: the
+   * migration drops the columns those fields kept. Set by `nextly prune` on a
+   * site that keeps migration files, once the data-loss consent agrees.
+   */
+  releaseHeldBack?: boolean;
   dialect: SupportedDialect;
   /** Absolute path to the `migrations/` directory. */
   migrationsDir: string;
@@ -407,6 +413,7 @@ function withKeptScopeFieldsOf(
   declared: GenerateArgs,
   previous: NextlySchemaSnapshot | undefined
 ): GenerateArgs {
+  if (declared.releaseHeldBack === true) return declared;
   const kept = columnsByTable(previous ?? EMPTY_SNAPSHOT, declared.dialect);
   return {
     ...declared,
@@ -665,7 +672,7 @@ export async function generateMigration(
         args.singles,
         args.components,
         args.dialect,
-        previous?.data.snapshot
+        args.releaseHeldBack === true ? undefined : previous?.data.snapshot
       ),
       args.tablesAsTheyStand
     ),

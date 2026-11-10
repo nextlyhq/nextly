@@ -44,6 +44,7 @@ import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/
 import { nextlyI18nArchiveTables } from "../../schemas/nextly-i18n-archive";
 import { UNKNOWN_ARCHIVE_KIND } from "../../schemas/nextly-i18n-archive/ddl";
 import { reportDryRun } from "../dry-run";
+import type { KeptColumn } from "./prune-kept-columns";
 import { exitWithError } from "../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
@@ -78,6 +79,12 @@ export interface PruneResult {
   planned: Deletion[];
   /** Under `--dry-run`, why a real prune would refuse before its first drop. */
   refusal?: string;
+  /**
+   * The columns a plugin's scope keeps on types switched off, as
+   * `table.column`, and those the prune dropped (`prune-kept-columns.ts`).
+   */
+  keptColumns: string[];
+  droppedColumns: string[];
 }
 
 interface RunPruneArgs {
@@ -104,6 +111,12 @@ interface RunPruneArgs {
    * translations go with it, uncounted.
    */
   countArchived?: (slug: string) => Promise<number | undefined>;
+  /**
+   * The columns a plugin's scope keeps on types the site switched off, which
+   * the prune drops with the rest it lists. Absent, none: a site that keeps
+   * migration files drops them through a migration instead.
+   */
+  keptColumns?: () => Promise<KeptColumn[]>;
   /**
    * The extension schema the configuration declares, compiled with the
    * orphans' tables in it: their entities are no longer configured, so a
@@ -194,10 +207,16 @@ function companionMainTable(companionTable: string): string {
   return companionTable.replace(/_locales$/, "");
 }
 
+/** A kept column as the listing names it. */
+function columnName({ table, column }: KeptColumn): string {
+  return `${table}.${column}`;
+}
+
 /** What a prune would drop, read from the database as it stands. */
 interface PrunePlan {
   orphans: DynamicCollectionRecord[];
   orphanedCompanions: string[];
+  keptColumns: KeptColumn[];
   /** Every table the drop would take, as the consent is asked about them. */
   deletions: Deletion[];
 }
@@ -236,7 +255,16 @@ async function planPrune(args: RunPruneArgs): Promise<PrunePlan> {
   deletions.push(
     ...orphanedCompanions.map(table => ({ kind: "table" as const, table }))
   );
-  return { orphans, orphanedCompanions, deletions };
+  // Asked about with the tables, under the one consent: their values go too.
+  const keptColumns = (await args.keptColumns?.()) ?? [];
+  deletions.push(
+    ...keptColumns.map(({ table, column }) => ({
+      kind: "column" as const,
+      table,
+      column,
+    }))
+  );
+  return { orphans, orphanedCompanions, keptColumns, deletions };
 }
 
 /**
@@ -297,6 +325,8 @@ export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
     orphanedCompanions: consented.orphanedCompanions,
     droppedCompanions: [],
     planned: consented.deletions,
+    keptColumns: consented.keptColumns.map(columnName),
+    droppedColumns: [],
   };
   // A dry run asks the question a real prune asks before its first drop,
   // without asking for consent first: its refusal is the real run's.
@@ -398,12 +428,24 @@ async function dropPlanned(
     droppedCompanions.push(companion);
   }
 
+  // The kept columns last: no orphan's table holds one, and a type's own table
+  // stays, with only the column the site no longer keeps taken from it.
+  const droppedColumns: string[] = [];
+  for (const kept of plan.keptColumns) {
+    await args.adapter.executeQuery(
+      `ALTER TABLE ${q}${kept.table}${q} DROP COLUMN ${q}${kept.column}${q}`
+    );
+    droppedColumns.push(columnName(kept));
+  }
+
   return {
     orphans: slugs,
     dropped,
     orphanedCompanions,
     droppedCompanions,
     planned: plan.deletions,
+    keptColumns: plan.keptColumns.map(columnName),
+    droppedColumns,
   };
 }
 

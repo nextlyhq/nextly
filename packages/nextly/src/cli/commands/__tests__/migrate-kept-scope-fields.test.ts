@@ -192,13 +192,15 @@ async function run(
   }
 }
 
-const create = (config: unknown) =>
+const create = (config: unknown, releaseHeldBack = false) =>
   run(config, context => {
     // As `--non-interactive` does: nothing is asked about.
     setNonInteractive(true);
-    return runMigrateCreate("create", { cwd: dir }, context).finally(() =>
-      setNonInteractive(false)
-    );
+    return runMigrateCreate(
+      "create",
+      { cwd: dir, ...(releaseHeldBack ? { releaseHeldBack } : {}) },
+      context
+    ).finally(() => setNonInteractive(false));
   });
 const check = (config: unknown) =>
   run(config, context => runMigrateCheck({ cwd: dir }, context));
@@ -345,6 +347,20 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       expect((await check(project(undefined, translated))).code).toBe(
         undefined
       );
+    });
+
+    it("drops the kept column, and only it, when what is held back is released", async () => {
+      expect((await create(project())).code).toBeUndefined();
+      expect((await create(project(["pages"]))).code).toBeUndefined();
+      const before = sqlFiles();
+
+      // As `nextly prune` runs it on a site that keeps migration files.
+      expect((await create(project(["pages"]), true)).code).toBeUndefined();
+      const released = statements(written(before));
+      expect(released).toMatch(/dc_pages[^\n;]*DROP COLUMN[^\n;]*seo_title/i);
+      expect(released).not.toMatch(/dc_posts[^\n;]*seo_title/i);
+      // Its snapshot no longer has the column, so the check passes after it.
+      expect((await check(project(["pages"]))).code).toBeUndefined();
     });
 
     it("never makes the column for a type switched off before its first migration", async () => {

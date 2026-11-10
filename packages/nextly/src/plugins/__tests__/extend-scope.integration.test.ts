@@ -33,6 +33,13 @@ import {
 import { clearServices, type NextlyServiceConfig } from "../../di/register";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
+import {
+  liveKeptColumns,
+  registeredTypes,
+} from "../../cli/commands/prune-kept-columns";
+import { pruneUnderSchemaLock, runPrune } from "../../cli/commands/prune";
+import type { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
+import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import { reloadNextlyConfig } from "../../init/reload-config";
 import { _resetEnvCache } from "../../shared/lib/env";
 import type { PluginDefinition } from "../plugin-context";
@@ -600,6 +607,66 @@ describe.each(getConfiguredTestDialects())(
         id,
       } as never)) as Record<string, unknown> | null;
       expect(read?.seo_title).toBe("T");
+    }, 240_000);
+
+    it("lets nextly prune drop a switched-off type's kept column, only with consent", async () => {
+      database = await openDatabase(dialect);
+      const adapter = database.adapter;
+      vi.stubEnv("NODE_ENV", "development");
+      current = await createTestNextly({
+        adapter: adapter as never,
+        collections: [posts, pages],
+        plugins: [seoEverywhere],
+      });
+      configWith({ collections: [posts, pages] }, [seoEverywhere]);
+      await reloadNextlyConfig();
+      await current.nextly.create({
+        collection: "es_pages" as never,
+        data: { title: "Saved", seo_title: "Kept" } as never,
+      });
+      configWith({ collections: [posts, pages] }, [seoPlugin]);
+      await reloadNextlyConfig();
+
+      // A site that applies its schema directly: the prune lists the kept
+      // column with what it drops, and drops it only once that is agreed to.
+      const t = current;
+      const prune = (approve: boolean) =>
+        runPrune({
+          registry: t.getService(
+            "collectionRegistryService"
+          ) as CollectionRegistryService,
+          adapter: t.adapter as never,
+          lock: pruneUnderSchemaLock(t.adapter as never),
+          currentSlugs: ["es_posts", "es_pages"],
+          approve: async () => approve,
+          keptColumns: async () =>
+            liveKeptColumns(
+              t.adapter.getDrizzle(),
+              t.adapter.dialect as Parameters<typeof liveKeptColumns>[1],
+              await registeredTypes({
+                collections: t.getService(
+                  "collectionRegistryService"
+                ) as CollectionRegistryService,
+                singles: t.getService(
+                  "singleRegistryService"
+                ) as SingleRegistryService,
+              })
+            ),
+        });
+
+      const refused = await prune(false);
+      expect(refused.keptColumns).toEqual(["dc_es_pages.seo_title"]);
+      expect(refused.droppedColumns).toEqual([]);
+      expect(await columnsOf(current, "dc_es_pages")).toContain("seo_title");
+
+      const agreed = await prune(true);
+      expect(agreed.droppedColumns).toEqual(["dc_es_pages.seo_title"]);
+      expect(await columnsOf(current, "dc_es_pages")).not.toContain(
+        "seo_title"
+      );
+      // The type's own columns stay, and the posts type keeps its field.
+      expect(await columnsOf(current, "dc_es_pages")).toContain("title");
+      expect(await columnsOf(current, "dc_es_posts")).toContain("seo_title");
     }, 240_000);
 
     it("keeps a Builder type's column and values, hidden, while it is switched off in development", async () => {
