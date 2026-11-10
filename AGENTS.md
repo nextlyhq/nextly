@@ -323,7 +323,7 @@ Why, as measured, and how to recover a file once it has been clobbered: the
 - One flow: a short-lived branch off `dev`, the default branch
   (`pnpm worktree new` starts there), for each pull request, squash-merged
   into `dev`, its title becoming the commit message. A merge does not wait
-  for CI: run `pnpm check:quick` first. Never commit to `dev` or `main`
+  for CI: `git fetch origin dev`, then `pnpm check:quick`. Never commit to `dev` or `main`
   directly, and keep no other long-lived branch: no check runs on a pull
   request into one, and a branch that gathers weeks of work is too large to
   review. A feature too large for one pull request lands in slices, each

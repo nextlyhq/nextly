@@ -119,6 +119,22 @@ function quickPhases(limits, base) {
   ];
 }
 
+/**
+ * The commit the quick check compares with, named before it runs. The base is
+ * the local copy of the target branch, which only a fetch moves: compared with
+ * a stale one, a package the target has since changed reads as this branch's
+ * change and one this branch changed can be missed. Nothing is fetched here,
+ * since a fork may track the target under another remote and the base may be
+ * any ref; the line says which commit was used and how to refresh it.
+ */
+export function describeBase(base, git = args => spawnSync("git", args, { cwd: root, encoding: "utf8" })) {
+  const read = git(["log", "-1", "--format=%h, committed %cr", base, "--"]);
+  if (read.status !== 0 || !read.stdout.trim()) {
+    return `verify (quick): ${base} cannot be read; fetch the branch this merges into and name it, e.g. \`pnpm check:quick origin/dev\``;
+  }
+  return `verify (quick): comparing with ${base} (${read.stdout.trim()}); \`git fetch origin dev\` first if that is not the current target`;
+}
+
 function run(argv, limits, env = {}) {
   // `shell` on Windows because the launcher is `pnpm.cmd` there and Node will
   // not execute it directly. Everywhere else it stays off, so no argument
@@ -151,6 +167,8 @@ function main() {
     `verify (${scope}): ${limits.concurrency} package task(s) x ${limits.maxWorkers} worker(s)` +
       `${limits.overridden ? " (overridden)" : ""} on ${limits.totalGiB} GiB / ${limits.cpus} cpu(s)\n`
   );
+
+  if (scope === "quick") console.log(describeBase(base));
 
   const started = Date.now();
   for (const phase of phasesFor(scope, limits, base)) {
