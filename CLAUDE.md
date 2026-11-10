@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (bcc8a83411172ffb). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (31f373adc6226381). Edit that file, never this one. -->
 
 # Nextly Monorepo: Agent Guide
 
@@ -322,21 +322,20 @@ Why, as measured, and how to recover a file once it has been clobbered: the
 
 ## Git and PR rules
 
-- One flow: a short-lived branch off `main` for each pull request,
-  squash-merged into `main`, its title becoming the commit message. Never
-  commit to `main` directly, and keep no long-lived branch (`dev`, release,
-  integration): lint, type-checking, the unit and integration tests and the
-  secret scan never run on a pull request into one, and a branch that gathers
-  weeks of work is too large to review. A feature too large for one pull
-  request lands in slices, each complete and tested; public API not yet
-  finished is marked `@experimental` until the feature is, as
-  `packages/ui/STABILITY.md` uses the tag.
-- Every pull request merges through the merge queue, which runs the required
-  checks on it combined with the latest `main` and squash-merges only what
-  passes, so no branch is brought up to date by hand. `node
-scripts/verify-merge.mjs <pr-number>` reads a pull request's checks and
-  threads before it joins the queue, and checks that a merged one landed
-  whole.
+- One flow: a short-lived branch off `dev`, the default branch
+  (`pnpm worktree new` starts there), for each pull request, squash-merged
+  into `dev`, its title becoming the commit message. A merge does not wait
+  for CI: run `pnpm check:quick` first. Never commit to `dev` or `main`
+  directly, and keep no other long-lived branch: no check runs on a pull
+  request into one, and a branch that gathers weeks of work is too large to
+  review. A feature too large for one pull request lands in slices, each
+  complete and tested; public API not yet finished is marked `@experimental`
+  until the feature is, as `packages/ui/STABILITY.md` uses the tag.
+- `dev` is promoted to `main` daily when green, through `main`'s merge
+  queue; a red `dev` blocks the promotion, and its author fixes it that day.
+  Releases come from `main` alone.
+  `node scripts/verify-merge.mjs <pr-number>` reads a pull request's checks
+  and threads, and checks that a merged one landed whole.
 - Do not add a "generated with" line naming an AI tool, an AI co-author
   trailer, or any other AI attribution to commits or PR bodies.
 - Husky runs gitleaks + lint-staged on commit, commitlint on the message, and
@@ -428,7 +427,7 @@ missed.
 
 Before any `git commit` or `git push`, run
 `fallow audit --format json --quiet --explain --gate-marker agent`, with
-`FALLOW_AUDIT_BASE=origin/main` (`.claude/settings.json` sets it for Claude
+`FALLOW_AUDIT_BASE=origin/dev` (`.claude/settings.json` sets it for Claude
 Code sessions). If the verdict is `fail`, fix the reported findings before
 retrying; treat a JSON runtime error (`{ "error": true, ... }`) as
 non-blocking. Only findings the change introduces decide the verdict. What CI

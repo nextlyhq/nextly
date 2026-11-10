@@ -383,31 +383,31 @@ These keywords auto-close the linked issue when the PR merges.
 
 ## Submitting a pull request
 
-Every change reaches `main` the same way: a short-lived branch off `main`, one pull request into `main`, squash-merged. There are no long-lived branches — no `dev`, release or integration branch — because lint, type-checking, the unit and integration tests and the secret scan never run on a pull request into any other branch, and a branch that gathers weeks of work is too large to review.
+Every change reaches `dev`, the default branch, the same way: a short-lived branch off `dev`, one pull request into `dev`, squash-merged. CI and the integration tests run on the pull request and on every push to `dev`, but merging does not wait for them, so run `pnpm check:quick` first: it type-checks the packages your branch affects and runs the unit tests of the packages it changes, in about three minutes. Once a day, when `dev`'s CI and integration runs are green, `dev` is promoted to `main` through a pull request that `main`'s merge queue tests; a red `dev` holds the promotion back until the commit that broke it is fixed. Releases are cut from `main` only. There are no other long-lived branches — no release or integration branch — because the checks never run on a pull request into one, and a branch that gathers weeks of work is too large to review.
 
-1. **Fork** the repo and create a branch off `main`, one branch per pull request.
+1. **Fork** the repo and create a branch off `dev`, one branch per pull request.
 2. **Make your change.** Add or update tests when relevant.
 3. **Run locally**: `pnpm lint && pnpm check-types && pnpm test`.
 4. **Add a changeset** if your PR touches any publishable package (see [Release process](#release-process) below).
-5. **Open the PR against `main`.** Fill out the [PR template](.github/pull_request_template.md) — it's auto-applied when you open a PR.
-6. **Watch CI.** Lint, typecheck, build, unit tests, and the integration matrix all need to be green before merge.
+5. **Open the PR against `dev`.** Fill out the [PR template](.github/pull_request_template.md) — it's auto-applied when you open a PR.
+6. **Watch CI.** Lint, typecheck, build, unit tests, and the integration matrix run on the PR; a red one is yours to fix, before or after the merge.
 
 ### Landing a large feature in slices
 
-A feature too large for one pull request lands as several, each complete, tested and merged into `main` on its own. Until the feature is complete, the public API it adds is marked with the TSDoc `@experimental` tag, which carries no compatibility guarantee; [`packages/ui/STABILITY.md`](packages/ui/STABILITY.md) shows the convention. Don't collect the slices on a branch of their own.
+A feature too large for one pull request lands as several, each complete, tested and merged into `dev` on its own. Until the feature is complete, the public API it adds is marked with the TSDoc `@experimental` tag, which carries no compatibility guarantee; [`packages/ui/STABILITY.md`](packages/ui/STABILITY.md) shows the convention. Don't collect the slices on a branch of their own.
 
 ### Reviewer expectations
 
 - At least one maintainer approval is required before merge, from a code owner for the files [`.github/CODEOWNERS`](.github/CODEOWNERS) names.
 - All conversations resolved.
 - All CI checks passing (no `continue-on-error` workarounds).
-- No need to bring a branch up to date with `main` by hand: the merge queue tests it on top of the latest `main` (see [Merge strategy](#merge-strategy)).
+- No need to bring a branch up to date with `dev` by hand unless it conflicts: the next push to `dev` tests it on top of everything merged before it (see [Merge strategy](#merge-strategy)).
 
 ### Merge strategy
 
-Every pull request is squash-merged into `main`, the Version Packages pull request included. Its title becomes the commit message, so make sure it follows [Conventional Commits](#commit-messages).
+Every pull request is squash-merged into `dev`. Its title becomes the commit message, so make sure it follows [Conventional Commits](#commit-messages).
 
-Every pull request merges through GitHub's merge queue: it runs the required checks on each pull request combined with the latest `main`, and squash-merges only what passes. Once a pull request is approved and its checks are green, choose **Merge when ready** to add it to the queue.
+Two pull requests go to `main` instead, through GitHub's merge queue, which runs the required checks on each combined with the latest `main` and merges only what passes: the daily promotion of `dev`, merged with a merge commit so the two branches keep one history, and the Version Packages pull request. After a release, `main` is merged back into `dev`.
 
 ### Branch protection
 
@@ -447,8 +447,8 @@ Commit the generated `.changeset/*.md` file with your PR.
 
 ### How a release happens
 
-1. You merge your PR (with its changeset) into `main`.
-2. [`.github/workflows/release.yml`](.github/workflows/release.yml) runs on `push` to `main` and opens a `Version Packages` PR that bumps every `fixed[]` package by the same amount and rewrites per-package `CHANGELOG.md` files.
+1. You merge your PR (with its changeset) into `dev`, and the daily promotion carries it to `main`.
+2. [`.github/workflows/release.yml`](.github/workflows/release.yml) runs on `main` and opens a `Version Packages` PR that bumps every `fixed[]` package by the same amount and rewrites per-package `CHANGELOG.md` files.
 3. The Version Packages PR accumulates as more PRs land — so all pending changes ship together when it's merged.
 4. A maintainer reviews and merges the Version Packages PR.
 5. The release workflow runs again, this time publishing to npm:

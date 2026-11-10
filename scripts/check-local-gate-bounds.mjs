@@ -43,7 +43,7 @@ export const HOOK = ".husky/pre-push";
  * kind that drifts silently. Holding both to the same assertion is what stops
  * `verify:pr` quietly becoming the unbounded path the hook stopped being.
  */
-export const BOUNDED_SCRIPTS = ["verify:pr", "verify:full"];
+export const BOUNDED_SCRIPTS = ["verify:pr", "verify:full", "check:quick"];
 
 /** The runner that derives the limits and applies them to every phase. */
 export const BOUNDED_RUNNER = "scripts/verify.mjs";
@@ -86,6 +86,7 @@ export const HEAVY_SCRIPTS = [
   "test:integration:sqlite",
   "verify:pr",
   "verify:full",
+  "check:quick",
 ];
 
 /**
@@ -127,7 +128,9 @@ export function runnerProblems(source, phases = null) {
     // one phase never checked. Verified: removing its cap reported zero
     // problems. The runner is named as well as the task.
     if (!/\btest\b/.test(argv) && !/\bvitest\b/.test(argv)) continue;
-    if (!/--maxWorkers=/.test(argv)) {
+    // `scripts/test-changed.mjs` takes the cap as `--max-workers=` and hands
+    // it to each Vitest run as `--maxWorkers`, so either spelling is the cap.
+    if (!/--maxWorkers=|--max-workers=/.test(argv)) {
       problems.push(
         `${BOUNDED_RUNNER}: phase '${phase.name}' runs tests without --maxWorkers — '${argv}'`
       );
@@ -404,6 +407,7 @@ async function main() {
     runnerPhases = [
       ...phasesFor("pr", { concurrency: 2, maxWorkers: 2 }),
       ...phasesFor("full", { concurrency: 2, maxWorkers: 2 }),
+      ...phasesFor("quick", { concurrency: 2, maxWorkers: 2 }),
     ];
   }
   const problems = [

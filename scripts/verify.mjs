@@ -18,15 +18,24 @@
  * independent: `check-types` reads what `build` produced, so running them
  * together reports a missing `dist` as a type error in the diff.
  *
+ * `quick` is the check before a merge into `dev`: the types of the packages a
+ * branch affects (each one it changes and each one that depends on them, as
+ * turbo's `--affected` answers it), then the unit tests of the packages it
+ * changes, narrowed to the test files the change can reach by
+ * `scripts/test-changed.mjs`, the pre-push's own selection. Both compare with
+ * the merge base of `origin/dev` unless another base is named.
+ *
  * Usage:
  *   node scripts/verify.mjs pr
  *   node scripts/verify.mjs full
+ *   node scripts/verify.mjs quick [base]
  */
 
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { INTEGRATION_BASE } from "./integration-branch.mjs";
 import { localLimits } from "./local-limits.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -37,8 +46,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
  * `full` extends `pr` rather than restating it, so the two cannot drift into
  * disagreeing about what a PR needs.
  */
-export function phasesFor(scope, limits) {
+export function phasesFor(scope, limits, base = INTEGRATION_BASE) {
   const workers = `--maxWorkers=${limits.maxWorkers}`;
+  if (scope === "quick") return quickPhases(limits, base);
   const pr = [
     { name: "build", argv: ["turbo", "run", "build"] },
     // Lint is the root script, one oxlint run in passes rather than a turbo
@@ -87,7 +97,27 @@ export function phasesFor(scope, limits) {
   ];
 }
 
-function run(argv, limits) {
+/**
+ * The quick check's phases. The typecheck runs without `--only`, so the
+ * builds and typechecks the affected packages depend on run first (replayed
+ * from turbo's cache when nothing changed them); a typecheck read against a
+ * missing or stale `dist` answers about code that is not there. At most two
+ * test workers, whatever the machine allows, so the check stays light enough
+ * to run before every merge.
+ */
+function quickPhases(limits, base) {
+  const workers = Math.min(2, limits.maxWorkers);
+  return [
+    {
+      name: "types (affected)",
+      argv: ["turbo", "run", "check-types", "--affected", "--continue"],
+      env: { TURBO_SCM_BASE: base },
+    },
+    { name: "unit tests (changed)", argv: ["exec", "node", "scripts/test-changed.mjs", base, `--max-workers=${workers}`] },
+  ];
+}
+
+function run(argv, limits, env = {}) {
   // `shell` on Windows because the launcher is `pnpm.cmd` there and Node will
   // not execute it directly. Everywhere else it stays off, so no argument
   // passes through a shell that could reinterpret it.
@@ -99,6 +129,7 @@ function run(argv, limits) {
       ...process.env,
       // turbo's own variable, so it reaches every nested invocation.
       TURBO_CONCURRENCY: String(limits.concurrency),
+      ...env,
     },
   });
   if (result.error) throw result.error;
@@ -107,10 +138,11 @@ function run(argv, limits) {
 
 function main() {
   const scope = process.argv[2];
-  if (scope !== "pr" && scope !== "full") {
-    console.error("verify: usage — node scripts/verify.mjs pr|full");
+  if (scope !== "pr" && scope !== "full" && scope !== "quick") {
+    console.error("verify: usage — node scripts/verify.mjs pr|full|quick [base]");
     process.exit(2);
   }
+  const base = process.argv[3] ?? INTEGRATION_BASE;
 
   const limits = localLimits();
   console.log(
@@ -118,9 +150,10 @@ function main() {
       `${limits.overridden ? " (overridden)" : ""} on ${limits.totalGiB} GiB / ${limits.cpus} cpu(s)\n`
   );
 
-  for (const phase of phasesFor(scope, limits)) {
+  const started = Date.now();
+  for (const phase of phasesFor(scope, limits, base)) {
     console.log(`\n--- ${phase.name} ---`);
-    const status = run(phase.argv, limits);
+    const status = run(phase.argv, limits, phase.env);
     if (status !== 0) {
       // Name the phase. A bare non-zero exit from a seven-phase run sends the
       // reader to the top of a very long log to work out which one it was.
@@ -129,7 +162,7 @@ function main() {
     }
   }
 
-  console.log(`\nverify (${scope}): OK`);
+  console.log(`\nverify (${scope}): OK in ${Math.round((Date.now() - started) / 1000)}s`);
 }
 
 if (process.argv[1] && process.argv[1].endsWith("verify.mjs")) {

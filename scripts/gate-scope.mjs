@@ -29,7 +29,7 @@
  * rename cannot leave a filter pointing at nothing.
  *
  * Usage:
- *   node scripts/gate-scope.mjs [base]      # base defaults to origin/main
+ *   node scripts/gate-scope.mjs [base]      # base defaults to origin/dev
  *
  * @module scripts/gate-scope
  */
@@ -38,6 +38,7 @@ import { realpathSync } from "node:fs";
 import { relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { INTEGRATION_BASE } from "./integration-branch.mjs";
 import { pnpmInvocation } from "./pnpm-invocation.mjs";
 
 /**
@@ -434,7 +435,7 @@ export function filterArguments(filters) {
 
 function main() {
   const args = process.argv.slice(2);
-  const base = args.find(arg => !arg.startsWith("--")) ?? "origin/main";
+  const base = args.find(arg => !arg.startsWith("--")) ?? INTEGRATION_BASE;
   const cwd = process.cwd();
   const paths = changedPaths(cwd, base);
   const workspaces = workspacesFrom(pnpmWorkspaces(cwd), cwd);
