@@ -23,7 +23,9 @@ import {
 import {
   createDurableEventRecorder,
   durableEventNames,
+  MAX_DURABLE_PAYLOAD_BYTES,
 } from "../durable-events";
+import { pluginEventsTables } from "../../../schemas/plugin-events";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -37,11 +39,19 @@ const EVENTS = [
   { name: "test-orders.viewed" },
 ];
 
+/** A plain select through a table's schema, as Drizzle builds it. */
+interface SchemaReadDb {
+  select(fields: Record<string, unknown>): {
+    from(table: unknown): PromiseLike<Array<{ createdAt: Date }>>;
+  };
+}
+
 interface EventRow {
   id: string;
   owner: string;
   name: string;
   payload: string;
+  createdAt: unknown;
   fannedOutAt: unknown;
   finishedAt: unknown;
 }
@@ -136,6 +146,51 @@ describe.each(getConfiguredTestDialects())(
         await events.record("test-orders.paid", { order: "o-5" });
       });
       expect(await rows()).toHaveLength(1);
+    });
+
+    it("a payload of exactly the cap is recorded and read back whole", async () => {
+      const { events, rows } = await boot();
+      // `{"note":"…"}` is 11 bytes around the note: the whole JSON is the
+      // cap to the byte, which every dialect's column must hold.
+      const note = "x".repeat(MAX_DURABLE_PAYLOAD_BYTES - 11);
+      expect(Buffer.byteLength(JSON.stringify({ note }), "utf8")).toBe(
+        MAX_DURABLE_PAYLOAD_BYTES
+      );
+      await events.record("test-orders.paid", { note });
+      const [row] = await rows();
+      expect(JSON.parse(row!.payload)).toEqual({ note });
+    });
+
+    it("an event dated past 2038 is recorded and read back", async () => {
+      const { adapter, rows } = await boot();
+      // A whole second, as SQLite keeps it, on every dialect.
+      const at = new Date("2040-06-01T12:34:56.000Z");
+      const later = createDurableEventRecorder({
+        owner: OWNER,
+        durable: durableEventNames(EVENTS),
+        adapter: () => adapter,
+        now: () => at,
+      });
+      await later.record("test-orders.paid", { order: "o-7" });
+      const [row] = await rows();
+      // SQLite hands back the seconds it stores; the others a date.
+      const created = row!.createdAt;
+      const ms =
+        typeof created === "number"
+          ? created * 1000
+          : new Date(created as string | Date).getTime();
+      expect(ms).toBe(at.getTime());
+      // Read through the table's own schema too, as the dispatcher reads it:
+      // a column declared in another unit than the one written would misread
+      // it by a factor of a thousand.
+      const table = pluginEventsTables(adapter.dialect).nextlyPluginEvents;
+      const [viaSchema] = await adapter.transaction(tx =>
+        tx
+          .getDrizzle<SchemaReadDb>()
+          .select({ createdAt: table.createdAt })
+          .from(table)
+      );
+      expect(viaSchema?.createdAt.getTime()).toBe(at.getTime());
     });
 
     it("the booted database refuses a second delivery for one event and subscriber", async () => {

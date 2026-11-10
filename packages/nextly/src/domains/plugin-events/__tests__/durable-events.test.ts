@@ -87,6 +87,11 @@ describe("recording a durable event", () => {
       cycle,
       { amount: BigInt(10) },
       { note: "x".repeat(MAX_DURABLE_PAYLOAD_BYTES) },
+      // An object whose own JSON is not an object: what is stored is what
+      // JSON.stringify gives, so that is what is judged.
+      { toJSON: () => "scalar" },
+      { toJSON: () => [1, 2] },
+      { toJSON: () => undefined },
     ]) {
       const error = await refusal(
         events.record("test-orders.paid", payload as Record<string, unknown>)

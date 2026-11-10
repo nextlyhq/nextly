@@ -100,12 +100,18 @@ function payloadJson(name: string, payload: unknown): string {
   ) {
     return refuse("must be a JSON object");
   }
-  let json: string;
+  let json: unknown;
   try {
     json = JSON.stringify(payload);
   } catch {
     // A cycle, or a value JSON cannot hold, such as a bigint.
     return refuse("cannot be written as JSON");
+  }
+  // What is stored is what JSON.stringify gives, which a `toJSON` decides:
+  // judged as stored, so an object that serializes to a string, an array or
+  // nothing at all is refused like one that is not an object.
+  if (typeof json !== "string" || !json.startsWith("{")) {
+    return refuse("must be written as a JSON object");
   }
   if (Buffer.byteLength(json, "utf8") > MAX_DURABLE_PAYLOAD_BYTES) {
     return refuse(`is larger than ${MAX_DURABLE_PAYLOAD_BYTES} bytes as JSON`);

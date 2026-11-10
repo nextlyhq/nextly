@@ -7,11 +7,12 @@
  * @module schemas/plugin-events/mysql
  */
 import {
+  datetime,
   index,
   int,
+  mediumtext,
   mysqlTable,
   text,
-  timestamp,
   uniqueIndex,
   varchar,
 } from "drizzle-orm/mysql-core";
@@ -28,12 +29,14 @@ export const nextlyPluginEvents = mysqlTable(
     // Unbounded, as a plugin's name is: nothing is indexed on it.
     owner: text("owner").notNull(),
     name: text("name").notNull(),
-    // Up to the 64 KiB a payload may be, which TEXT holds.
-    payload: text("payload").notNull(),
-    // Milliseconds, as the backoff and leases read them.
-    createdAt: timestamp("created_at", { fsp: 3 }).notNull(),
-    fannedOutAt: timestamp("fanned_out_at", { fsp: 3 }),
-    finishedAt: timestamp("finished_at", { fsp: 3 }),
+    // MEDIUMTEXT: TEXT holds 65,535 bytes, one short of the 64 KiB a payload
+    // may be.
+    payload: mediumtext("payload").notNull(),
+    // DATETIME, not TIMESTAMP, which ends in 2038, and to the millisecond,
+    // as the backoff and leases read them.
+    createdAt: datetime("created_at", { fsp: 3 }).notNull(),
+    fannedOutAt: datetime("fanned_out_at", { fsp: 3 }),
+    finishedAt: datetime("finished_at", { fsp: 3 }),
   },
   table => [
     index("nextly_plugin_events_fan_out_idx").on(
@@ -55,12 +58,12 @@ export const nextlyPluginEventDeliveries = mysqlTable(
     subscriberKey: varchar("subscriber_key", { length: 64 }).notNull(),
     status: varchar("status", { length: 16 }).notNull(),
     attemptCount: int("attempt_count").notNull().default(0),
-    nextAttemptAt: timestamp("next_attempt_at", { fsp: 3 }).notNull(),
+    nextAttemptAt: datetime("next_attempt_at", { fsp: 3 }).notNull(),
     lockedBy: varchar("locked_by", { length: 64 }),
-    lockedUntil: timestamp("locked_until", { fsp: 3 }),
+    lockedUntil: datetime("locked_until", { fsp: 3 }),
     lastError: text("last_error"),
-    createdAt: timestamp("created_at", { fsp: 3 }).notNull(),
-    finishedAt: timestamp("finished_at", { fsp: 3 }),
+    createdAt: datetime("created_at", { fsp: 3 }).notNull(),
+    finishedAt: datetime("finished_at", { fsp: 3 }),
   },
   table => [
     uniqueIndex("nextly_plugin_event_deliveries_event_subscriber_unique").on(
