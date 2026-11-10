@@ -595,29 +595,73 @@ function publishWithheld(
       new Set()
     ).map(type => [type.slug, type])
   );
-  const allOn = foldedWithEveryTypeOn(config, plugins);
+  const allOn = foldedWithEveryTypeOnIfItFolds(config, plugins);
   const withheld = new Map<string, FieldConfig[]>();
-  for (const { target, fields } of clauses) {
-    for (const slug of target.except ?? []) {
-      const type = configured.get(slug);
-      if (type !== undefined) {
-        if (type.kind === "fieldGroup") continue;
-        withheld.set(
-          scopedTypeKey(type.kind, slug),
-          fieldsOnlyIn(allOn, folded, type.kind, slug)
-        );
-        continue;
-      }
-      // Its kind is known only once its row is read: held back under each
-      // kind the scope reaches, of which it has one.
-      const judged = target.every.map(kind => ({ slug, kind }));
-      for (const reached of typesReachedBy({ every: target.every }, judged)) {
-        const key = scopedTypeKey(reached.kind, slug);
-        withheld.set(key, withFirstOfEachName(withheld.get(key), fields));
-      }
+  for (const clause of clauses) {
+    for (const slug of clause.target.except ?? []) {
+      holdBack(withheld, clause, slug, {
+        type: configured.get(slug),
+        allOn,
+        folded,
+      });
     }
   }
   publishWithheldScopeFields(withheld);
+}
+
+/**
+ * Records in `withheld` what `clause` holds back from the type `slug`. A
+ * configured type is held back what it has with every type on and lacks now.
+ * A Builder type's kind is known only once its row is read: held back under
+ * each kind the scope reaches, of which it has one, the clause's own fields.
+ * A configured type takes those too when the configuration does not fold with
+ * every type on, less what the type declares itself (`keptScopeFields`).
+ */
+function holdBack(
+  withheld: Map<string, FieldConfig[]>,
+  clause: DeferredExtend & { target: ContentTypeScope },
+  slug: string,
+  judged: {
+    type: ContentTypeCandidate | undefined;
+    allOn: Pick<NextlyServiceConfig, "collections" | "singles"> | undefined;
+    folded: Pick<NextlyServiceConfig, "collections" | "singles">;
+  }
+): void {
+  const { type, allOn, folded } = judged;
+  const { target, fields } = clause;
+  if (type !== undefined && allOn !== undefined) {
+    if (type.kind === "fieldGroup") return;
+    withheld.set(
+      scopedTypeKey(type.kind, slug),
+      fieldsOnlyIn(allOn, folded, type.kind, slug)
+    );
+    return;
+  }
+  const candidates: ContentTypeCandidate[] =
+    type === undefined ? target.every.map(kind => ({ slug, kind })) : [type];
+  for (const reached of typesReachedBy({ every: target.every }, candidates)) {
+    if (reached.kind === "fieldGroup") continue;
+    const key = scopedTypeKey(reached.kind, slug);
+    withheld.set(key, withFirstOfEachName(withheld.get(key), fields));
+  }
+}
+
+/**
+ * {@link foldedWithEveryTypeOn}, or undefined when that fold is refused. It is
+ * a fold the configuration never runs: lifting an `except` can give a type the
+ * same field twice, from the scope and from a clause that names the type, and
+ * the refusal is about that what-if, not about the configuration. The real
+ * fold has already accepted it, so it still loads.
+ */
+function foldedWithEveryTypeOnIfItFolds(
+  config: NextlyServiceConfig,
+  plugins: PluginDefinition[]
+): Pick<NextlyServiceConfig, "collections" | "singles"> | undefined {
+  try {
+    return foldedWithEveryTypeOn(config, plugins);
+  } catch {
+    return undefined;
+  }
 }
 
 /**

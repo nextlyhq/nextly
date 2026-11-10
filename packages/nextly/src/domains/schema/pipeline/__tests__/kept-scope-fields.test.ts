@@ -77,6 +77,16 @@ describe("keptScopeFields", () => {
     ).toEqual([]);
   });
 
+  it("leaves a type whose own field, spelled otherwise, has that column", () => {
+    hold(text({ name: "seo_title" }));
+    // `seoTitle` is stored in `seo_title` too.
+    const own = { ...pages, fields: [text({ name: "seoTitle" })] };
+
+    expect(
+      keptScopeFields("collection", own, live({ dc_pages: ["seo_title"] }))
+    ).toEqual([]);
+  });
+
   it("keeps a required field as optional", () => {
     hold(text({ name: "seo_title", required: true }));
 

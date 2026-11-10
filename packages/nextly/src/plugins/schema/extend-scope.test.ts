@@ -442,3 +442,32 @@ describe("extend with a scope — what a switched-off type would have had, trans
     publishWithheldScopeFields(new Map());
   });
 });
+
+describe("extend with a scope — a switched-off type given the field another way", () => {
+  it("folds a type a scope excepts that another clause gives the same field", async () => {
+    const { withheldScopeFieldsOf, publishWithheldScopeFields } = await import(
+      "../../domains/schema/pipeline/withheld-scope-fields"
+    );
+    const seo = plugin("@t/seo", {
+      extend: [
+        { target: { ...EVERY, except: ["pages"] }, fields: [field("seo")] },
+        { target: "pages", fields: [field("seo")] },
+      ],
+    });
+
+    const { config } = applyPluginSchemaContributionsDeferred(siteConfig(), [
+      seo,
+    ]);
+    expect(fieldNames(find(config.collections, "pages"))).toEqual([
+      "title",
+      "seo",
+    ]);
+    // The type declares the field itself, so nothing of it is kept apart.
+    expect(
+      withheldScopeFieldsOf("collection", "pages").filter(
+        f => (f as { name?: string }).name !== "seo"
+      )
+    ).toEqual([]);
+    publishWithheldScopeFields(new Map());
+  });
+});
