@@ -6,6 +6,7 @@ import {
 
 import { answeredNotFound } from "../support/not-found";
 import { test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 /**
  * A post's page refreshes when what it is drawn from changes, in a
@@ -31,8 +32,6 @@ import { test } from "../support/visible";
  *
  * @module tests/production/collection-templates-refresh
  */
-
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 
 const API = "/admin/api";
 
@@ -153,14 +152,8 @@ test.describe("a post's page as its template, the post and the access to it chan
   }) => {
     // Three refreshes by a write, each well within a cached read's lifetime.
     test.setTimeout(120_000);
-    // Sign in through the real form; dev auto-login is blocked here.
-    await page.goto("/admin");
-    await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-    await page
-      .getByRole("textbox", { name: /password/i })
-      .fill(DEV_USER.password);
-    await page.getByRole("button", { name: /sign in|log in/i }).click();
-    await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+    // Signed in as the file's one sign-in; dev auto-login is blocked here.
+    await signIn(page);
     const api = page.request;
 
     // Visitors read posts through the Public role, which boot grants the read

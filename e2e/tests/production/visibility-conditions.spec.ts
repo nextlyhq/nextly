@@ -1,6 +1,7 @@
-import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, type APIRequestContext } from "@playwright/test";
 
 import { test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 /**
  * Blocks shown by their visibility conditions, on a production build, as an
@@ -13,25 +14,12 @@ import { test } from "../support/visible";
  * generated on the server, with nothing a visitor can toggle.
  */
 
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 const API = "/admin/api";
 
 /** Distinctive per run, so finding a text cannot be a coincidence. */
 const STAMP = Date.now().toString(36);
 
 type Json = Record<string, unknown>;
-
-/** Sign in through the real form; dev auto-login is blocked here. */
-async function signIn(page: Page): Promise<APIRequestContext> {
-  await page.goto("/admin");
-  await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-  await page
-    .getByRole("textbox", { name: /password/i })
-    .fill(DEV_USER.password);
-  await page.getByRole("button", { name: /sign in|log in/i }).click();
-  await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
-  return page.request;
-}
 
 /** A heading shown only when `conditions` hold for the page's entry. */
 function shownWhen(

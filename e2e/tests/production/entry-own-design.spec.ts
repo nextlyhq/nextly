@@ -9,6 +9,7 @@ import {
 import { gotoAdmin } from "../support/admin";
 import { answeredNotFound } from "../support/not-found";
 import { test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 /**
  * An entry's own design, from the admin to the page a visitor is served, in a
@@ -33,8 +34,6 @@ import { test } from "../support/visible";
  *
  * @module tests/production/entry-own-design
  */
-
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 
 const API = "/admin/api";
 const PLUGIN = `${API}/plugins/@nextlyhq/plugin-page-builder`;
@@ -79,19 +78,6 @@ function design(heading: string) {
       },
     ],
   };
-}
-
-/** Sign in through the real form; dev auto-login is blocked here. */
-async function signIn(page: Page): Promise<APIRequestContext> {
-  await page.goto("/admin");
-  await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-  // By role, not label: "Show password" also matches a password label.
-  await page
-    .getByRole("textbox", { name: /password/i })
-    .fill(DEV_USER.password);
-  await page.getByRole("button", { name: /sign in|log in/i }).click();
-  await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
-  return page.request;
 }
 
 /** Fail with the server's message rather than with a bare status code. */
