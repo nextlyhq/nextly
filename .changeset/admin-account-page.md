@@ -34,4 +34,4 @@ Every signed-in person now has an account page, at `/admin/account`.
 - It edits their own name and avatar through `/me` and shows their email, which an administrator changes. It needs no permission beyond being signed in.
 - The user menu's "My Account" opens it. Before, it opened the users edit page, which needs `update-users`.
 - Plugins can add blocks and tabs to it, at the `account` place, around its `profile` card.
-- A person's own profile change through `/me` (and the Direct API's `updateMe`) is refused, naming the field, when its name or picture address is longer than 255 characters, the most every database stores. Before, MySQL refused such a save with a database error, or cut the value short.
+- A person's own profile change through `/me` (and the Direct API's `updateMe`) is refused, naming the field, when its name or picture address is longer than 255 characters, the most every database stores. Before, MySQL refused such a save with a database error, or cut the value short. The limit now holds on every dialect: PostgreSQL and SQLite, which kept a longer value before, refuse it with the same message, so the same request gets the same answer everywhere.
