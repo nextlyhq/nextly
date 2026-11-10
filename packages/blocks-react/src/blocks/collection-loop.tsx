@@ -215,11 +215,14 @@ function tagMarks(ctx: PageContext, nodeId: string): Record<string, string> {
 
 /**
  * Tell an editor that asks how many entries a list drew, only while an
- * author is looking. A throw from the editor's handler is contained, so it
+ * author is looking, and only for a list drawn once: one inside another
+ * list's entries is drawn once per entry, under one id, which no single
+ * count describes. A throw from the editor's handler is contained, so it
  * never fails the list.
  */
 function reportShown(ctx: PageContext, nodeId: string, shown: number): void {
   if (ctx.diagnostics !== true || ctx.listShown === undefined) return;
+  if (ctx.item !== undefined) return;
   try {
     ctx.listShown(nodeId, shown);
   } catch {
@@ -465,6 +468,8 @@ export async function renderCollectionLoop({
   // with no item: not the item of a list around this one.
   const claim = { ...readClaimOf(node), kind: "entries" } as const;
   if (paging?.claimed !== true && ctx.queries?.take(claim) === false) {
+    // Refused its read, it draws no entry, and says so as a list that drew.
+    reportShown(ctx, node.id, 0);
     return (
       <div
         className={className}

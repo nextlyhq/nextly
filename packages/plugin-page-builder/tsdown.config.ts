@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync } from "fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 
 import { defineConfig } from "tsdown";
@@ -67,12 +67,44 @@ export default defineConfig({
    */
   external: [/\.css$/],
   onSuccess() {
-    // Copy the editor stylesheet.
+    // Copy the editor stylesheet. Only the sheets: a test kept beside them in
+    // `src/styles` is not part of the package and stays out of `dist`.
     const src = join(process.cwd(), "src/styles");
     const dist = join(process.cwd(), "dist/styles");
     if (existsSync(src)) {
       mkdirSync(dist, { recursive: true });
-      cpSync(src, dist, { recursive: true });
+      cpSync(src, dist, { recursive: true, filter: isShippedStyle });
     }
+    dropStylesheetFromDeclarations(
+      join(process.cwd(), "dist/admin/index.d.ts")
+    );
   },
 });
+
+/** Whether a file under `src/styles` ships: a folder or a sheet, never a test. */
+function isShippedStyle(source: string): boolean {
+  return !/\.test\.[cm]?[jt]sx?$/.test(source);
+}
+
+/** The admin entry's import of its stylesheet, as the declarations carry it. */
+const STYLESHEET_IMPORT_LINE = 'import "../styles/editor.css";';
+
+/**
+ * Removes the stylesheet import from the admin entry's declarations, leaving
+ * it in the JavaScript, which is where it loads the sheet.
+ *
+ * The declaration writer keeps every side-effect import of the source, and a
+ * declaration importing a `.css` file names a module with no types behind it:
+ * a consumer's resolution of the entry's types fails there (the
+ * InternalResolutionError arethetypeswrong reports). A side-effect import
+ * declares nothing, so the declarations lose no type by its removal.
+ */
+function dropStylesheetFromDeclarations(file: string): void {
+  if (!existsSync(file)) return;
+  const text = readFileSync(file, "utf8");
+  const kept = text
+    .split("\n")
+    .filter(line => line.trim() !== STYLESHEET_IMPORT_LINE)
+    .join("\n");
+  if (kept !== text) writeFileSync(file, kept);
+}

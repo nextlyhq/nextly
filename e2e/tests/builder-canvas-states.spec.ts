@@ -366,17 +366,15 @@ async function ringAndGround(
   await layer.evaluate(element => {
     (element as HTMLElement).style.visibility = "hidden";
   });
-  await frameBody.evaluate(body => {
+  const noText = await frameBody.evaluateHandle(body => {
     const style = body.ownerDocument.createElement("style");
-    style.id = "nx-e2e-no-text";
     style.textContent =
       "*, *::before, *::after { color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; caret-color: transparent !important; }";
     body.ownerDocument.head.append(style);
+    return style;
   });
   const ground = await pixelAt(page, x, y);
-  await frameBody.evaluate(body => {
-    body.ownerDocument.getElementById("nx-e2e-no-text")?.remove();
-  });
+  await noText.evaluate(style => style.remove());
   await layer.evaluate(element => {
     (element as HTMLElement).style.visibility = "";
   });

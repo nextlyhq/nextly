@@ -14,6 +14,7 @@ import {
   type BlockDocument,
   type BlockNode,
   type BuilderOp,
+  type VisitorUnreadableBinding,
 } from "@nextlyhq/blocks-engine";
 import {
   cleanup,
@@ -24,12 +25,13 @@ import {
   within,
 } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { BindingFieldSource, UnbindPlanAnswer } from "./binding-services";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
+import { VisitorUnreadableProvider } from "./visitor-unreadable-context";
 
 beforeAll(() => {
   // What Radix's menus ask of an element, which jsdom does not draw.
@@ -136,32 +138,40 @@ function mount(
   bindings: BlockNode["bindings"],
   planUnbind?: ContentServices["planUnbind"],
   sources: readonly BindingFieldSource[] = SOURCES,
-  props: Record<string, unknown> = {}
+  props: Record<string, unknown> = {},
+  unreadable: readonly VisitorUnreadableBinding[] = [],
+  listBindingFields: ContentServices["listBindingFields"] = async () => sources
 ): void {
   register();
   applied = [];
   render(
-    <Live
-      initial={
-        {
-          formatVersion: 1,
-          kind: "page",
-          nodes: [
-            {
-              id: "a",
-              type: "acme/picture",
-              version: 1,
-              props,
-              bindings,
-            } as BlockNode,
-          ],
-        } as BlockDocument
-      }
-      services={{
-        listBindingFields: async () => sources,
-        ...(planUnbind === undefined ? {} : { planUnbind }),
-      }}
-    />
+    // What the host marks as visitors can't read on the block, as the
+    // editor provides it around the inspector.
+    <VisitorUnreadableProvider value={new Map([["a", unreadable]])}>
+      <Live
+        initial={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "a",
+                type: "acme/picture",
+                version: 1,
+                props,
+                // Absent rather than holding `undefined`, as a stored block
+                // is: the engine refuses to edit a node holding that value.
+                ...(bindings === undefined ? {} : { bindings }),
+              } as BlockNode,
+            ],
+          } as BlockDocument
+        }
+        services={{
+          listBindingFields,
+          ...(planUnbind === undefined ? {} : { planUnbind }),
+        }}
+      />
+    </VisitorUnreadableProvider>
   );
 }
 
@@ -330,22 +340,112 @@ describe("a bound image", () => {
     ).toBe("true");
   });
 
-  it("does not say no file is chosen while the picture is bound", async () => {
+  it("says a picture bound to an upload field is described by its file's alt text", async () => {
     // The page reads the bound field's file, and its library alt text with
     // it: "no library file" would tell the author screen readers get none.
     mount({ mediaId: { $bind: "cover" } });
-    const note = await screen.findByText(/comes from a bound field/);
+    const note = await screen.findByText(/comes from a bound library file/);
+    expect(note.textContent).toMatch(/its own alt text is used/);
+    // An entry may leave the field empty: with no fallback kept, the block's
+    // own image is what visitors see then.
+    expect(note.textContent).toMatch(
+      /Where the field is empty, visitors see the block's own image\./
+    );
     expect(screen.queryByText(/No library file is chosen/)).toBeNull();
-    // The field may hold an image address, which has no library alt text:
-    // the note says so rather than promising a description.
+    // Known to be a file, by the field's type: no hedging about addresses.
+    expect(note.textContent).not.toMatch(/address/);
+  });
+
+  it("says a picture bound to a URL field has no alt text, by the field's type", async () => {
+    // The same prop bound to an address: the page draws it with no library
+    // alt text, so the note must not promise one.
+    mount({ mediaId: { $bind: "bannerUrl" } }, undefined, [
+      {
+        binding: { source: "entry" },
+        label: "Post",
+        fields: [{ name: "bannerUrl", type: "url", public: true }],
+      },
+    ]);
+    const note = await screen.findByText(/comes from an address/);
+    // It says what to do, not only what is lost.
+    expect(note.textContent).toMatch(/carries no alt text\./);
+    expect(note.textContent).toMatch(
+      /Choose Custom to describe it for screen readers\./
+    );
+    // An entry's empty or unusable address shows the block's own image here
+    // (no fallback kept), which the note names rather than denying all alt.
+    expect(note.textContent).toMatch(
+      /Where the field holds no usable address, visitors see the block's own image\./
+    );
+    expect(screen.queryByText(/its own alt text is used/)).toBeNull();
+  });
+
+  it("promises neither while the bound field is one its source doesn't list", async () => {
+    // The control for the two above: the field's type unknown, the note
+    // says both cases rather than guessing one.
+    mount({ mediaId: { $bind: "gone" } });
+    // Once the sources are read (the chip names the post), not while they
+    // are, when the note is neutral anyway.
+    await screen.findByRole("button", {
+      name: "Image: bound to Gone of this post",
+    });
+    const note = await screen.findByText(/comes from a bound field\./);
     expect(note.textContent).toMatch(/an image address has none/);
+    expect(screen.queryByText(/comes from a bound library file/)).toBeNull();
+    expect(screen.queryByText(/comes from an address/)).toBeNull();
+  });
+
+  it("says visitors see the fallback where they can't read the bound field", async () => {
+    // An upload field, so its kind alone would promise its file's alt text;
+    // visitors can't read it, so the page draws the fallback instead.
+    mount(
+      { mediaId: { $bind: "cover", fallback: "m-9" } },
+      undefined,
+      SOURCES,
+      {},
+      [{ prop: "mediaId", path: "cover", fallback: { value: "m-9" } }]
+    );
+    const note = await screen.findByText(/Visitors can't read the bound field/);
+    expect(note.textContent).toMatch(/they see its fallback/);
+    // The control is the upload test above: the same field, readable, gets
+    // the library-file note.
+    expect(screen.queryByText(/comes from a bound library file/)).toBeNull();
+  });
+
+  it("says an empty upload field shows the binding's fallback, where it keeps one", async () => {
+    // The control for the empty-field clause above: a fallback kept.
+    mount({ mediaId: { $bind: "cover", fallback: ADDRESS } });
+    const note = await screen.findByText(/comes from a bound library file/);
+    expect(note.textContent).toMatch(
+      /Where the field is empty, visitors see its fallback\./
+    );
+  });
+
+  it("says visitors see the block's own image where an unreadable binding keeps no fallback", async () => {
+    // The same unreadable field as above, with no fallback: the page keeps
+    // the block's own image, so the note must not name a fallback.
+    mount({ mediaId: { $bind: "cover" } }, undefined, SOURCES, {}, [
+      { prop: "mediaId", path: "cover" },
+    ]);
+    const note = await screen.findByText(/Visitors can't read the bound field/);
+    expect(note.textContent).toMatch(/they see the block's own image\./);
+    expect(note.textContent).not.toMatch(/fallback/);
+  });
+
+  it("reads the binding sources once for the chip and the alt note together", async () => {
+    // Two reads could answer differently and leave the chip and the note
+    // naming different fields; one read shared while in flight cannot.
+    const list = vi.fn(async () => SOURCES);
+    mount({ mediaId: { $bind: "cover" } }, undefined, SOURCES, {}, [], list);
+    await screen.findByText(/comes from a bound library file/);
+    expect(list).toHaveBeenCalledTimes(1);
   });
 
   it("says no file is chosen where the picture is neither bound nor picked", () => {
     // The control: the same alt row, nothing behind the picture.
     mount(undefined);
     expect(screen.getByText(/No library file is chosen/)).toBeTruthy();
-    expect(screen.queryByText(/comes from a bound field/)).toBeNull();
+    expect(screen.queryByText(/comes from a bound/)).toBeNull();
   });
 });
 

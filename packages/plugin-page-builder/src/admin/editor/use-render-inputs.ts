@@ -75,10 +75,7 @@ import {
 } from "../../host-policy";
 import { siteSheet, type SiteStyleData } from "../../site-style";
 import { readSiteStyleRecord } from "../../site-style-record";
-import {
-  listConditionsFor,
-  useCanvasBindings,
-} from "../canvas-bindings-client";
+import { useCanvasBindings } from "../canvas-bindings-client";
 import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
 import { useSiteStyle } from "../site-style-client";
 import { useStoredSiteStyle } from "../site-style-read";
@@ -92,6 +89,7 @@ import {
   type ClassSurface,
 } from "./site-style-studios";
 import type { EditorMount } from "./use-editor-mount";
+import { canvasConditionsFor } from "./visitor-lists";
 
 /**
  * The interaction state to SHOW, given the state being edited and how many
@@ -1096,13 +1094,18 @@ export function useBoundCanvasRender(
   // applied, though nothing on the page binds.
   // The regions of its Layout too, whose lists read as a visitor while
   // conditions are applied, judged in the same site zone.
+  // As stored, for the conditions the page's own blocks read, and as the
+  // renderer draws it while items are judged, so an ordering condition inside
+  // a placed component's list asks for the site's zone too.
   const conditions = useMemo(
     () =>
-      listConditionsFor([
-        ...document.nodes,
-        ...regions.flatMap(region => region.document.nodes),
-      ]),
-    [document, regions]
+      canvasConditionsFor(
+        document,
+        regions,
+        canvasRender.definitions,
+        canvasRender.limits
+      ),
+    [document, regions, canvasRender.definitions, canvasRender.limits]
   );
   const bindings = useCanvasBindings(
     trees,

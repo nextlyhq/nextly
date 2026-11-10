@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BindingFieldShape, BindingSchemaRef } from "./binding-rules";
 import type { BlockDocument, BlockNode } from "./document";
+import type { BlockPropsLookup } from "./resolve-bindings";
 import { visitorUnreadableBindings } from "./visitor-unreadable-bindings";
 
 /** The fields a visitor may read, by source. `internalNote` is not among them. */
@@ -196,5 +197,43 @@ describe("the bound props a visitor will not see", () => {
     // The control, `title`, reads no relation.
     expect([...marked.keys()]).toEqual(["email"]);
     expect(marked.get("email")?.[0]?.path).toBe("author.email");
+  });
+
+  it("says what each marked prop takes, where the block's props are known", () => {
+    // An image and a heading on one page, each bound to the field visitors
+    // may not read, each with a fallback that reads alike as text.
+    const image = {
+      id: "image",
+      type: "core/image",
+      version: 1,
+      props: {},
+      bindings: { mediaId: { $bind: "internalNote", fallback: "m-7" } },
+    } as BlockNode;
+    const props: BlockPropsLookup = {
+      get: (type: string) =>
+        type === "core/image"
+          ? { props: { mediaId: { type: "media" } } }
+          : type === "core/heading"
+            ? { props: { text: { type: "text" } } }
+            : undefined,
+    };
+    const marked = visitorUnreadableBindings(
+      page(
+        image,
+        heading("note", { text: { $bind: "internalNote", fallback: "m-7" } })
+      ),
+      { schema, entryRef, props }
+    );
+    // The heading is the control: the same fallback, a prop that is text.
+    expect(marked.get("image")?.[0]?.kind).toBe("image");
+    expect(marked.get("note")?.[0]?.kind).toBe("text");
+  });
+
+  it("says no kind where the block's props are not known", () => {
+    const marked = visitorUnreadableBindings(
+      page(heading("note", { text: { $bind: "internalNote" } })),
+      { schema, entryRef }
+    );
+    expect(marked.get("note")?.[0]).not.toHaveProperty("kind");
   });
 });

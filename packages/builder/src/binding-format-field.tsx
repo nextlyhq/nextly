@@ -389,6 +389,9 @@ export function BindingFormatField({
   // written: a currency format without one is refused.
   const [choosingCurrency, setChoosingCurrency] = React.useState(false);
   const [codeRefusal, setCodeRefusal] = React.useState<string | undefined>();
+  // Set by the pick that draws the Code field, read as the menu closes. A ref
+  // because the menu's last render predates the pick.
+  const codeTakesFocus = React.useRef(false);
   const value = menuValue(choosingCurrency, storedKey, stored);
   const storedCode = storedCurrencyCode(stored);
   // A code is judged by the engine whatever it is, an empty one included:
@@ -415,6 +418,7 @@ export function BindingFormatField({
   const choose = (next: string): void => {
     setCodeRefusal(undefined);
     if (next === CURRENCY) {
+      codeTakesFocus.current = storedKey !== CURRENCY;
       setChoosingCurrency(storedKey !== CURRENCY);
       return;
     }
@@ -443,7 +447,16 @@ export function BindingFormatField({
         >
           <SelectValue placeholder="Choose a format" />
         </SelectTrigger>
-        <SelectContent>
+        <SelectContent
+          // A closing menu hands focus back to its trigger, a moment after
+          // the Code field has taken it. Left to, the field would blur empty
+          // and let the pick go before a code could be typed.
+          onCloseAutoFocus={event => {
+            if (!codeTakesFocus.current) return;
+            codeTakesFocus.current = false;
+            event.preventDefault();
+          }}
+        >
           {presets.map(preset => (
             <SelectItem key={preset.key} value={preset.key}>
               {preset.label}

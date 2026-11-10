@@ -37,6 +37,19 @@ export interface BindingFieldChoice extends Omit<BindingFieldShape, "fields"> {
    * entry it names holds them.
    */
   readonly fields?: readonly BindingFieldChoice[];
+  /**
+   * Set on a related entry's own id, listed under a relation that names one
+   * entry of one collection: the collection that entry is in. A link's entry
+   * can be bound to it, and only a link's, since an id is no value a reader
+   * is shown.
+   */
+  readonly linksTo?: string;
+  /**
+   * Set on a related entry (`linksTo`) whose collection has no page yet, as
+   * the host serves pages: the collection's name, which the picker says the
+   * row is waiting for. Listed, so the author sees why, but not picked.
+   */
+  readonly noPageFor?: string;
 }
 
 /**

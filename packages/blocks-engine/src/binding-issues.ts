@@ -44,6 +44,8 @@ export const BINDING_ISSUE_CODES = {
     "A binding's format is not one this release formats, so its value is shown unformatted when it fits.",
   "binding-fallback-invalid":
     "A binding's fallback is not a valid value of its prop, so the prop's own value is shown instead.",
+  "binding-entry-collection-mismatch":
+    "A link's entry id is bound to a related entry, and its Linked collection is not the collection that relation points at, so the link would find no entry.",
   "binding-source-unavailable":
     "A binding's source could not be read for this page, such as a list item outside a list.",
 } as const;

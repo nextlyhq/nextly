@@ -96,6 +96,7 @@ export {
   Canvas,
   DropRefusal,
   nodeIdFromEvent,
+  revealedDefinitions,
 } from "./canvas";
 
 /**

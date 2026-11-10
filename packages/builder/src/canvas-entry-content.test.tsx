@@ -283,7 +283,7 @@ describe("Entry content with conditions applied", () => {
     const marker = container.querySelector(".nx-condition-hidden");
     expect(marker?.getAttribute("data-nx-node")).toBe("ec");
     expect(marker?.textContent).toBe(
-      "Entry content · hidden for this article: tier is not vip"
+      "Entry content · hidden for this article: tier is not “vip”"
     );
     expect(container.textContent).not.toContain(BODY_WORDS);
   });
@@ -353,7 +353,7 @@ describe("a conditioned block inside the entry's Body", () => {
     // In the Entry content block's place for it, not the template's own.
     expect(marker?.closest('[data-nx-node="ec"]')).not.toBeNull();
     expect(marker?.textContent).toBe(
-      "Members' worksheet · hidden for this article: tier is not vip"
+      "Members' worksheet · hidden for this article: tier is not “vip”"
     );
     expect(container.textContent).toContain("Body link");
   });

@@ -100,7 +100,7 @@ describe("the page with its conditions applied", () => {
       {
         id: "worksheet",
         name: "Members’ worksheet",
-        reason: "hidden for this post: Category is not Guides",
+        reason: "hidden for this post: Category is not “Guides”",
         unchecked: false,
       },
     ]);
@@ -273,7 +273,7 @@ describe("the page with its conditions applied, as the canvas draws it", () => {
     ).toHaveLength(1);
   });
 
-  it("says a placed component's conditioned blocks go unjudged", () => {
+  it("judges a placed component's conditioned blocks for the entry, as the route does", () => {
     const placed = block("placed", {
       type: COMPONENT_INSTANCE_TYPE,
       props: { componentId: "promo" },
@@ -294,7 +294,34 @@ describe("the page with its conditions applied, as the canvas draws it", () => {
       nameOf,
       { definitions }
     );
-    expect(passing.unjudged).toBe(true);
+    // Judged, so nothing is left unjudged: shown, by the id it is drawn under.
+    expect(passing.unjudged).toBe(false);
+    expect(passing.hidden).toEqual([]);
+    expect(passing.shown.size).toBe(1);
+    expect(passing.shown.has("worksheet")).toBe(false);
+    const failing = appliedConditionsOf(
+      page(placed),
+      previewFor({ category: "News" }),
+      nameOf,
+      { definitions }
+    );
+    expect(failing.shown.size).toBe(0);
+    expect(failing.hidden).toHaveLength(1);
+    expect(failing.hidden[0]).toMatchObject({
+      reason: "hidden for this post: Category is not “Guides”",
+      unchecked: false,
+    });
+    // The canvas draws its marker in its place, keeping its placement.
+    const composed = {
+      ...worksheet,
+      id: failing.hidden[0]?.id ?? "",
+      instanceOf: "placed",
+    } as BlockNode;
+    expect(failing.entryJudgement.hiddenAs(composed)).toMatchObject({
+      id: composed.id,
+      type: CONDITION_HIDDEN_TYPE,
+      instanceOf: "placed",
+    });
     // A component with no conditioned block leaves nothing unjudged.
     const plain = appliedConditionsOf(
       page(placed),
@@ -331,7 +358,7 @@ describe("the page with its conditions applied, as the canvas draws it", () => {
     ]);
   });
 
-  it("says a component reached through another, or a Layout region, goes unjudged", () => {
+  it("judges a component reached through another, and leaves a Layout region's unjudged", () => {
     const inner = {
       formatVersion: DOCUMENT_FORMAT_VERSION,
       kind: "component",
@@ -356,17 +383,15 @@ describe("the page with its conditions applied, as the canvas draws it", () => {
       ["inner", inner],
     ]);
     // Reached as the resolver reaches it: the page places outer, which
-    // places inner, which holds the conditioned block.
-    expect(
-      appliedConditionsOf(
-        page(placed),
-        previewFor({ category: "Guides" }),
-        nameOf,
-        {
-          definitions,
-        }
-      ).unjudged
-    ).toBe(true);
+    // places inner, which holds the conditioned block, judged there.
+    const reached = appliedConditionsOf(
+      page(placed),
+      previewFor({ category: "News" }),
+      nameOf,
+      { definitions }
+    );
+    expect(reached.unjudged).toBe(false);
+    expect(reached.hidden).toHaveLength(1);
     // A region of the page's Layout placing a conditioned component.
     const region = {
       document: page(
@@ -435,6 +460,103 @@ describe("the page with its conditions applied, as the canvas draws it", () => {
   });
 });
 
+describe("the conditioned blocks a page holds with its components", () => {
+  it("counts a placed component's own conditioned blocks, in the scope they are drawn in", () => {
+    const placed = block("placed", {
+      type: COMPONENT_INSTANCE_TYPE,
+      props: { componentId: "promo" },
+    });
+    const definitions = new Map([
+      [
+        "promo",
+        {
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "component",
+          nodes: [worksheet],
+        } as BlockDocument,
+      ],
+    ]);
+    // CONTROL: the page alone holds no conditioned block.
+    expect(conditionedBlocksIn(page(placed)).any).toBe(false);
+    expect(conditionedBlocksIn(page(placed), undefined, definitions)).toEqual({
+      any: true,
+      readingEntry: true,
+      readingItems: false,
+    });
+  });
+});
+
+describe("a conditioned placement inside a placed component", () => {
+  // The page places outer; outer places inner under conditions of its own;
+  // inner's root has none, so the placement's gate is carried onto it.
+  const inner = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "component",
+    nodes: [block("offer")],
+  } as BlockDocument;
+  const outer = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "component",
+    nodes: [
+      block("nested", {
+        type: COMPONENT_INSTANCE_TYPE,
+        props: { componentId: "inner" },
+        visibility: { conditions: [[guides]] },
+      }),
+    ],
+  } as BlockDocument;
+  const definitions = new Map([
+    ["outer", outer],
+    ["inner", inner],
+  ]);
+  const placed = page(
+    block("placed", {
+      type: COMPONENT_INSTANCE_TYPE,
+      props: { componentId: "outer" },
+    })
+  );
+
+  it("is a condition the page holds, so the switch is offered", () => {
+    // CONTROL: read without the definitions, the page holds none.
+    expect(conditionedBlocksIn(placed).readingEntry).toBe(false);
+    expect(
+      conditionedBlocksIn(placed, undefined, definitions).readingEntry
+    ).toBe(true);
+  });
+
+  it("words each hidden block from its own conditions, a repeated id among them", () => {
+    const applied = appliedConditionsOf(
+      placed,
+      previewFor({ category: "News", readingTime: 2 }),
+      nameOf,
+      { definitions }
+    );
+    const first = applied.entryJudgement.hiddenAs(
+      block("dup", { visibility: { conditions: [[guides]] } })
+    );
+    const second = applied.entryJudgement.hiddenAs(
+      block("dup", { visibility: { conditions: [[long]] } })
+    );
+    expect(first?.props.reason).toBe(
+      "hidden for this post: Category is not “Guides”"
+    );
+    expect(second?.props.reason).not.toBe(first?.props.reason);
+  });
+
+  it("names the placement's condition that hides the block", () => {
+    const applied = appliedConditionsOf(
+      placed,
+      previewFor({ category: "News" }),
+      nameOf,
+      { definitions }
+    );
+    expect(applied.hidden).toHaveLength(1);
+    expect(applied.hidden[0]?.reason).toBe(
+      "hidden for this post: Category is not “Guides”"
+    );
+  });
+});
+
 describe("the conditioned blocks a document holds", () => {
   it("tells a block reading the entry from one only a list's items read", () => {
     expect(conditionedBlocksIn(page(worksheet))).toEqual({
@@ -492,7 +614,7 @@ describe("what the canvas draws where a list's item hides a block", () => {
       version: 1,
       props: {
         name: "Guide badge",
-        reason: "hidden for this entry: Category is not Guides",
+        reason: "hidden for this entry: Category is not “Guides”",
         unchecked: false,
       },
       visibility: { devices: { mobile: false } },
@@ -532,12 +654,17 @@ describe("what the canvas draws where a list's item hides a block", () => {
         within: [{ conditions: [[guides]] }],
       } as unknown as BlockNode["visibility"],
     });
-    const marker = hiddenAs(root, {
+    const marker = hiddenAs({ ...root, instanceOf: "placed" } as BlockNode, {
       values: { category: "News" },
       collection: "posts",
       fields: FIELDS,
     });
-    expect(marker).toMatchObject({ id: "root", type: CONDITION_HIDDEN_TYPE });
+    // Keeping the placement, so a press on the marker selects it.
+    expect(marker).toMatchObject({
+      id: "root",
+      type: CONDITION_HIDDEN_TYPE,
+      instanceOf: "placed",
+    });
     expect(
       hiddenAs(root, {
         values: { category: "Guides" },

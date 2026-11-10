@@ -32,6 +32,7 @@ import {
   mapChecksAgainstConfig,
   mapRegisteredPathsOf,
 } from "./component-import-map";
+import { unbackedContributions, unbackedPaths } from "./unbacked-contributions";
 
 /** What the check found: each way the committed map can disagree with the declarations. */
 export interface ComponentMapAgreement {
@@ -97,7 +98,15 @@ export async function checkComponentMapFiles(
   ] as const;
   const [map, list] = await Promise.all(files.map(contentOf));
   const listed = list === undefined ? [] : listedPathsOf(list);
-  const declared = componentImportMapEntries(plugins, siteDashboard);
+  // Without the contributions whose module is not there, which the generator
+  // leaves out of the map from the same answer.
+  const declared = componentImportMapEntries(
+    plugins,
+    siteDashboard,
+    unbackedPaths(
+      unbackedContributions(plugins, typesOutputPath, cwd, siteDashboard)
+    )
+  );
   const held = new Set(listed ?? []);
   const declaredPaths = new Set(declared.map(each => each.path));
   return {

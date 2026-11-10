@@ -87,8 +87,8 @@ describe("what the conditions did, in words", () => {
     expect(
       conditionsCountWords({ ...appliedHiding("a"), byEntry: true }, "page")
     ).toBe("1 block hidden for this page");
-    // A placed component's block left unchecked beside them: said only of
-    // the blocks checked.
+    // A placed component's block left unchecked beside them: the list's
+    // checks claimed nothing of, the unchecked blocks said.
     expect(
       conditionsCountWords(
         {
@@ -99,7 +99,19 @@ describe("what the conditions did, in words", () => {
         },
         "page"
       )
-    ).toBe("Every block checked shows for this page");
+    ).toBe(
+      "Conditions checked for each entry in the list; some blocks aren’t checked"
+    );
+    // Only list blocks checked, and a placed component's left unchecked:
+    // never "every block shows", which an entry's marker would contradict.
+    expect(
+      conditionsCountWords(
+        { ...appliedHiding(), byEntry: true, unjudged: true },
+        "page"
+      )
+    ).toBe(
+      "Conditions checked for each entry in the list; some blocks aren’t checked"
+    );
   });
 });
 

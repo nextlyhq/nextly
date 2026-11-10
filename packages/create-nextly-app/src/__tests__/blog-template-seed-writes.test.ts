@@ -11,7 +11,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  patchPostTaxonomy,
+  patchSeededPost,
   seedSingles,
   type SeedData,
 } from "../../../../templates/blog/src/endpoints/seed/index";
@@ -31,7 +31,7 @@ const seedData: Pick<SeedData, "siteSettings" | "navigation" | "homepage"> = {
 describe("the blog seed's updates", () => {
   it("patches an existing post with the version its lookup read", async () => {
     const update = vi.fn(async () => ({}));
-    await patchPostTaxonomy(
+    await patchSeededPost(
       { update } as never,
       { id: "post-1", _rev: "3" },
       { categories: ["c1"], tags: [] }
@@ -40,6 +40,41 @@ describe("the blog seed's updates", () => {
       collection: "posts",
       id: "post-1",
       data: { categories: ["c1"], tags: undefined, _rev: "3" },
+    });
+  });
+
+  it("gives an existing post with no byline the one its author now has", async () => {
+    for (const byline of [undefined, null, ""]) {
+      const update = vi.fn(async () => ({}));
+      await patchSeededPost(
+        { update } as never,
+        { id: "post-1", _rev: "3", byline },
+        { categories: [], tags: [], byline: "author-1" }
+      );
+      expect(update).toHaveBeenCalledWith({
+        collection: "posts",
+        id: "post-1",
+        data: {
+          categories: undefined,
+          tags: undefined,
+          byline: "author-1",
+          _rev: "3",
+        },
+      });
+    }
+  });
+
+  it("keeps the byline an existing post already has", async () => {
+    const update = vi.fn(async () => ({}));
+    await patchSeededPost(
+      { update } as never,
+      { id: "post-1", _rev: "3", byline: "author-7" },
+      { categories: [], tags: [], byline: "author-1" }
+    );
+    expect(update).toHaveBeenCalledWith({
+      collection: "posts",
+      id: "post-1",
+      data: { categories: undefined, tags: undefined, _rev: "3" },
     });
   });
 

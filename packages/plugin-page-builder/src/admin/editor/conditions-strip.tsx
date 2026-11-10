@@ -76,22 +76,29 @@ export function conditionsCountWords(
 ): string {
   if (applied === undefined) return "";
   const hidden = applied.hidden.length;
-  // Counted of the blocks that read the entry; one a list's entry decides
-  // is checked for each entry drawn, and marked there.
-  if (hidden === 0 && applied.byEntry && applied.shown.size === 0) {
-    return "Conditions checked for each entry in the list";
-  }
-  // Said only of the blocks checked while any went unchecked: one inside a
-  // placed component or a region of the Layout.
-  if (hidden === 0 && applied.unjudged) {
-    return `Every block checked shows for this ${noun}`;
-  }
-  if (hidden === 0) {
-    return applied.byEntry
-      ? `Every conditioned block shows on this ${noun}`
-      : `Every conditioned block shows for this ${noun}`;
-  }
+  if (hidden === 0) return nothingHiddenWords(applied, noun);
   return `${String(hidden)} block${hidden === 1 ? "" : "s"} hidden for this ${noun}`;
+}
+
+/**
+ * What the count says while no block reading the entry is hidden. A block a
+ * list's entry decides is checked for each entry drawn, and marked there,
+ * which the count claims nothing of; one inside a placed component or a
+ * region of the Layout, left unchecked, is said to be, so no words pass
+ * over it.
+ */
+function nothingHiddenWords(applied: AppliedConditions, noun: string): string {
+  if (applied.byEntry) {
+    if (applied.unjudged) {
+      return "Conditions checked for each entry in the list; some blocks aren’t checked";
+    }
+    return applied.shown.size === 0
+      ? "Conditions checked for each entry in the list"
+      : `Every conditioned block shows on this ${noun}`;
+  }
+  return applied.unjudged
+    ? `Every block checked shows for this ${noun}`
+    : `Every conditioned block shows for this ${noun}`;
 }
 
 /**

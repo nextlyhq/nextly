@@ -24,7 +24,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, text, upload } from "nextly/config";
+import { defineCollection, relationship, text, upload } from "nextly/config";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { TEMPLATES_SLUG } from "../collections/templates";
@@ -35,6 +35,8 @@ import { pageBuilder } from "../plugin";
 import { holding, person, post } from "./transfer-harness";
 
 const ARTICLES = "ba_articles";
+/** Who an article is by: a collection named by its `name`. */
+const WRITERS = "ba_writers";
 const AUTHOR = [
   "read-ba_articles",
   "update-ba_articles",
@@ -80,8 +82,16 @@ describe.each(getConfiguredTestDialects())(
               text({ name: "title" }),
               text({ name: "secret", access: { read: () => false } }),
               upload({ name: "cover", relationTo: "media" }),
+              relationship({ name: "author", relationTo: WRITERS }),
               { name: "content", type: BLOCKS_TYPE } as never,
             ],
+          }),
+          defineCollection({
+            slug: WRITERS,
+            status: true,
+            access: { read: () => true },
+            admin: { useAsTitle: "name" },
+            fields: [text({ name: "name" })],
           }),
         ],
         seedPublic: true,
@@ -94,7 +104,8 @@ describe.each(getConfiguredTestDialects())(
     async function article(
       t: TestNextly,
       title: string,
-      nodes: BlockNode[] = []
+      nodes: BlockNode[] = [],
+      more: Record<string, unknown> = {}
     ): Promise<string> {
       const row = await t.nextly.create({
         collection: ARTICLES,
@@ -103,6 +114,7 @@ describe.each(getConfiguredTestDialects())(
           secret: "The staff door code",
           status: "published",
           content: page("page", nodes),
+          ...more,
         },
         overrideAccess: true,
       });
@@ -180,6 +192,48 @@ describe.each(getConfiguredTestDialects())(
         "headline"
       );
       expect((await act(cookie, at, missing)).status).toBe(422);
+    });
+
+    it("keeps a link's related entry by its reference, naming the entry visitors were sent to", async () => {
+      const t = await boot();
+      const writer = await t.nextly.create({
+        collection: WRITERS,
+        data: { name: "Ada Lovelace", status: "published" },
+        overrideAccess: true,
+      });
+      const writerId = String(writer.item.id);
+      // A byline button linking to the article's author, by the author's id.
+      const byline = {
+        id: "b",
+        type: "core/button",
+        version: 1,
+        props: { label: "About the author", entryCollection: WRITERS },
+        bindings: { entryId: { $bind: "author.id" } },
+      } as BlockNode;
+      const id = await article(t, "Byline", [byline], { author: writerId });
+      const { cookie } = await holding(t, AUTHOR);
+
+      const answer = await act(
+        cookie,
+        { collection: ARTICLES, id },
+        { kind: "unbind-prop", nodeId: "b", prop: "entryId" }
+      );
+      expect(answer.status).toBe(200);
+      // The entry visitors were sent to, named by the title they may read.
+      expect(unbound(answer.body)).toMatchObject({
+        kept: "visitor",
+        value: writerId,
+        entry: { title: "Ada Lovelace" },
+      });
+      // Kept as the entry's reference, beside its collection: the link goes
+      // on to the same page whatever its address becomes, never a copied href.
+      const node = await stored(t, ARTICLES, id, "b");
+      expect(node?.props).toMatchObject({
+        entryCollection: WRITERS,
+        entryId: writerId,
+      });
+      expect(node?.props).not.toHaveProperty("href");
+      expect(node).not.toHaveProperty("bindings");
     });
 
     it("keeps the PUBLISHED value a visitor sees, not a pending draft's", async () => {

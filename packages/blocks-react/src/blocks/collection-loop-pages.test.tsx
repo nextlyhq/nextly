@@ -68,7 +68,7 @@ const itemTitle = (id: string): BlockNode =>
 function list(id: string, props: Record<string, unknown>): BlockNode {
   return node(id, "core/collection-loop", props, {
     children: [itemTitle(`${id}-title`)],
-    empty: [node(`${id}-empty`, "core/paragraph", { text: "Nothing yet" })],
+    empty: [node(`${id}-empty`, "core/text", { text: "Nothing yet" })],
   });
 }
 

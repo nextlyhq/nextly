@@ -41,6 +41,10 @@ import {
 import { NextlyError } from "../../errors/nextly-error";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import {
+  describeUnbackedContribution,
+  unbackedContributions,
+} from "../../plugins/codegen/unbacked-contributions";
+import {
   planComponentMapFiles,
   writeComponentMapFiles,
 } from "../../plugins/codegen/write-component-map";
@@ -313,6 +317,16 @@ export async function runGenerateTypes(
         target: projectPath(manifestCwd, each.file),
       });
     }
+  }
+  // Each contribution the map leaves out because its module is not there,
+  // named, since its place then draws its fallback with no other sign.
+  for (const each of unbackedContributions(
+    configResult.config.plugins ?? [],
+    importMapArgs[1],
+    manifestCwd,
+    configResult.config.admin?.dashboard
+  )) {
+    logger.warn(describeUnbackedContribution(each));
   }
   const writtenImportMapPath = dryRun
     ? undefined

@@ -21,6 +21,10 @@ import {
   type ComponentMapAgreement,
 } from "../../plugins/codegen/check-component-map";
 import { describeComponentUse } from "../../plugins/codegen/component-import-map";
+import {
+  describeUnbackedContribution,
+  unbackedContributions,
+} from "../../plugins/codegen/unbacked-contributions";
 import { generatedTypesFile } from "../../shared/lib/generated-output-paths";
 import { projectPath } from "../dry-run";
 import { componentMapOutOfDate } from "../errors/areas/commands";
@@ -50,14 +54,28 @@ export async function runComponentMapCheck(
   let found: ComponentMapAgreement;
   try {
     const loaded = await loadConfig({ configPath: options.config, cwd });
+    const typesFile = generatedTypesFile(
+      cwd,
+      loaded.config.typescript.outputFile
+    );
     found = await checkComponentMapFiles(
       loaded.config.plugins ?? [],
-      generatedTypesFile(cwd, loaded.config.typescript.outputFile),
+      typesFile,
       cwd,
       loaded.configPath,
       // The site's own widgets, which the map lists beside the plugins'.
       loaded.config.admin?.dashboard
     );
+    // The contributions the map leaves out, named as `generate:types` names
+    // them: the check passes without them, and their places draw fallbacks.
+    for (const each of unbackedContributions(
+      loaded.config.plugins ?? [],
+      typesFile,
+      cwd,
+      loaded.config.admin?.dashboard
+    )) {
+      logger.warn(describeUnbackedContribution(each));
+    }
   } catch (error) {
     // What stopped the check, in the error shape; the status still says it was not an answer.
     printCliError(logger, error);

@@ -11,9 +11,24 @@
  *
  * @module visitor-lists
  */
-import type { BlockNode } from "@nextlyhq/blocks-engine";
-import type { PageBindings } from "@nextlyhq/blocks-react";
 import {
+  DEFAULT_LIMITS,
+  resolveComponentInstances,
+  type BlockDocument,
+  type DocumentLimits,
+  type BlockNode,
+  type ConditionDemand,
+  type DefinitionsById,
+} from "@nextlyhq/blocks-engine";
+import {
+  prepareDocumentAsDrawn,
+  registeredBlocks,
+  repairingLookup,
+  type EntryJudgement,
+  type PageBindings,
+} from "@nextlyhq/blocks-react";
+import {
+  revealedDefinitions,
   useItemHiddenAs,
   type ItemHiddenOptions,
 } from "@nextlyhq/builder/shell";
@@ -21,9 +36,95 @@ import { useDocumentIdentity } from "@nextlyhq/plugin-sdk/admin";
 import { useEffect, useMemo, useState } from "react";
 
 import type { ListEntriesVisitor } from "../../list-entries-contract";
+import { listConditionsFor } from "../canvas-bindings-client";
 import type { PageRenderInputs } from "../page-render-inputs";
 
 import type { VisitorLists } from "./canvas-page-context";
+
+/**
+ * The blocks a document is drawn with while its conditions are applied, as
+ * the renderer itself prepares them (`prepareDocumentAsDrawn`), each by the
+ * id it is drawn under, so a list a placed component draws is found by the
+ * id its own report of what it drew names.
+ *
+ * With the page's `judgement`, its components are composed from their
+ * definitions as stored and their blocks judged for the entry, as the canvas
+ * draws the page itself. Without it (a region of the Layout), they are
+ * composed as the canvas draws them unjudged (`revealedDefinitions`, each
+ * reached one's conditions lifted), and the blocks a list's item decides
+ * kept for the list. None for a document the renderer can't read.
+ */
+export function drawnNodesOf(
+  document: BlockDocument,
+  render: Partial<Pick<PageRenderInputs, "styleContext" | "limits">>,
+  definitions: DefinitionsById | undefined,
+  judgement?: EntryJudgement
+): readonly BlockNode[] {
+  const judged = judgement !== undefined;
+  return (
+    prepareDocumentAsDrawn(document, {
+      resolver: registeredBlocks(),
+      ...(render.styleContext === undefined
+        ? {}
+        : { styleContext: render.styleContext }),
+      ...(definitions === undefined
+        ? {}
+        : {
+            definitions: judged
+              ? definitions
+              : revealedDefinitions(document, definitions, render.limits),
+          }),
+      ...(render.limits === undefined ? {} : { limits: render.limits }),
+      // Judged as the canvas judges it, telling no one: the canvas's own
+      // judgement is the one counted.
+      ...(judged
+        ? { entryJudged: { ...judgement, onJudged: undefined } }
+        : { itemsDecided: true }),
+    })?.nodes ?? []
+  );
+}
+
+/**
+ * What a page's conditions ask of the canvas's reads: the page and each
+ * region of its Layout read together, as stored, with the definitions of
+ * the components the page places, whose blocks are judged for the entry
+ * while conditions apply, so a condition of theirs ordering a date asks for
+ * the site's zone too.
+ */
+export function canvasConditionsFor(
+  document: BlockDocument,
+  regions: readonly { readonly document: BlockDocument }[],
+  definitions: DefinitionsById | undefined,
+  /** The limits the canvas composes under. */
+  limits?: DocumentLimits
+): ConditionDemand | undefined {
+  return listConditionsFor([
+    ...document.nodes,
+    ...regions.flatMap(region => region.document.nodes),
+    ...composedNodesOf(document, definitions, limits),
+  ]);
+}
+
+/**
+ * The blocks a page draws with the components it places composed in, as the
+ * resolver composes them under the canvas's own limits from the definitions
+ * as the renderer reads them (`repairingLookup`): a definition it refuses or
+ * repairs is read as it does, never as stored, and the tree is no larger
+ * than the canvas would draw. None where it places no component: its own
+ * blocks are read beside these.
+ */
+function composedNodesOf(
+  document: BlockDocument,
+  definitions: DefinitionsById | undefined,
+  limits: DocumentLimits | undefined
+): readonly BlockNode[] {
+  if (definitions === undefined || definitions.size === 0) return [];
+  return resolveComponentInstances(
+    document,
+    repairingLookup(definitions, limits ?? DEFAULT_LIMITS),
+    { conditioned: "carry", ...(limits === undefined ? {} : { limits }) }
+  ).document.nodes;
+}
 
 /** Whether the canvas's lists read as a visitor, and the switch's say in it. */
 export interface ListsAsVisitor {

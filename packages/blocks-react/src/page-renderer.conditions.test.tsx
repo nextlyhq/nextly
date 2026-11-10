@@ -12,6 +12,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   type BindingFieldShape,
   type BlockDocument,
+  type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
@@ -34,6 +35,10 @@ async function renderToHtml(element: ReactElement): Promise<string> {
 }
 
 const resolver = createBlockResolver(coreBlocks);
+
+const BASE_ONLY: StyleCompileContext = {
+  breakpoints: { viewport: [{ id: "base", label: "Base" }], container: [] },
+};
 
 const POSTS: readonly BindingFieldShape[] = [
   { name: "title", type: "text" },
@@ -83,6 +88,9 @@ async function renderWith(
       document={document}
       blocks={resolver}
       siteStyles={false}
+      // With no compile context the page draws no sheet at all, and no rules
+      // to serve beside an item.
+      styleContext={BASE_ONLY}
       {...(prepared === undefined ? {} : { prepared })}
       context={createStandaloneContext({
         data: { find: () => Promise.resolve({ items: [...items] }) },
@@ -112,6 +120,63 @@ describe("a page drawn with list data and no bindings", () => {
   it("serves none of them when no item shows the block", async () => {
     const html = await renderWith([{ id: "1", title: "One", featured: false }]);
     expect(html).not.toContain(">Featured<");
+    expect(html).not.toContain("#c0ffee");
+  });
+});
+
+describe("a block its entry's conditions keep", () => {
+  const conditioned: BlockDocument = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [
+      {
+        id: "held",
+        type: "core/heading",
+        version: 1,
+        props: { text: "Members", level: "h2" },
+        styles: { base: { base: { color: "#c0ffee" } } },
+        visibility: {
+          conditions: [[{ field: "featured", op: "is_true" }]],
+        },
+      },
+    ],
+  };
+
+  async function renderForEntry(featured: boolean): Promise<string> {
+    const prepared = prepareDocument(conditioned, { resolver });
+    const decided =
+      prepared === null
+        ? undefined
+        : regateDocument(prepared, {
+            entry: {
+              fields: {
+                declared: new Set(POSTS.map(field => field.name)),
+                readable: POSTS,
+              },
+              values: { featured },
+            },
+          })?.prepared;
+    return await renderToHtml(
+      <PageRenderer
+        document={conditioned}
+        blocks={resolver}
+        siteStyles={false}
+        styleContext={BASE_ONLY}
+        {...(decided === undefined ? {} : { prepared: decided })}
+        context={createStandaloneContext()}
+      />
+    );
+  }
+
+  it("serves its rules in the page's sheet", async () => {
+    const html = await renderForEntry(true);
+    expect(html).toContain(">Members<");
+    expect(html).toContain("#c0ffee");
+  });
+
+  it("serves none of them when the entry hides it", async () => {
+    const html = await renderForEntry(false);
+    expect(html).not.toContain(">Members<");
     expect(html).not.toContain("#c0ffee");
   });
 });

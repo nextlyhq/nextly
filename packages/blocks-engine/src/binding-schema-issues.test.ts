@@ -130,12 +130,18 @@ describe("bindings judged against the schema at save", () => {
     ]);
     // The binding to `title`, which the source has, is the control.
     expect(judged([], undefined, titled("title"))).toEqual([]);
-    const held = judged([], [{ nodes: [], settings: titled("headline") }], {
-      seo: { title: [{ $bind: "headline" }, " today"] },
+    const stored = [{ nodes: [], settings: titled("headline") }];
+    const held = judged([], stored, {
+      seo: { title: [{ $bind: "headline", fallback: "this" }, " today"] },
     });
     expect(held.map(issue => [issue.path, issue.severity])).toEqual([
       ["/settings/seo/title/0", "warning"],
     ]);
+    // A changed fallback makes it another binding, which is judged afresh.
+    const changed = judged([], stored, {
+      seo: { title: [{ $bind: "headline" }, " today"] },
+    });
+    expect(changed.map(issue => issue.severity)).toEqual(["error"]);
   });
 
   it("finds a timestamp missing where the shapes list timestamps, and judges it where they don't", () => {

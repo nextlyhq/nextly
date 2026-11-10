@@ -36,14 +36,21 @@ import { pageBuilder } from "../plugin";
 const PLAIN_PAGE = { formatVersion: 1, kind: "page", nodes: [] };
 const TEMPLATE = { formatVersion: 1, kind: "template", nodes: [] };
 
-/** The words a refused write gives, as its caller reads them. */
-async function refusal(write: Promise<unknown>): Promise<string> {
-  const error = (await write.then(
+/** What a write was refused with, or undefined when it was not. */
+function refusedWith(write: Promise<unknown>): Promise<unknown> {
+  return write.then(
     () => undefined,
     (caught: unknown) => caught
-  )) as { publicMessage?: unknown; message?: unknown } | undefined;
-  if (error === undefined) return "no refusal";
-  return String(error.publicMessage ?? error.message);
+  );
+}
+
+/** The words a refusal gives, as its caller reads them. */
+function wordsOf(error: unknown): string {
+  const found = error as
+    | { publicMessage?: unknown; message?: unknown }
+    | undefined;
+  if (found === undefined || found === null) return "no refusal";
+  return String(found.publicMessage ?? found.message);
 }
 
 /**
@@ -230,7 +237,10 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot();
       await template(t);
       const taken = await page(t, "Taken", "blog/taken");
-      const words = await refusal(post(t, "taken"));
+      const refused = await refusedWith(post(t, "taken"));
+      // A conflict, so the save says why, not a failure of the server.
+      expect(NextlyError.isCode(refused, "CONFLICT")).toBe(true);
+      const words = wordsOf(refused);
       expect(words).toContain("/blog/taken is already the address of");
       expect(words).toContain(taken);
       const posts = await t.nextly.find({

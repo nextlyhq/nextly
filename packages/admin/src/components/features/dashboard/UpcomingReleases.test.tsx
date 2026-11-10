@@ -8,15 +8,21 @@
  * own tests.
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
+import { LIST_ROW_HEIGHT_PX } from "nextly/card-geometry";
 import type { CoreListWidgetData } from "nextly/core-widget-data";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
+import {
+  CardFitContext,
+  oneItemBodyPx,
+} from "@admin/components/features/widgets/frame/fit";
 import { render, screen, within } from "@admin/__tests__/utils";
 import {
   CardHeightContext,
   CardTierContext,
 } from "@admin/components/features/widgets/frame/tier";
+import { WidgetCard } from "@admin/components/features/widgets/WidgetCard";
 
 import { UpcomingReleasesCard } from "./UpcomingReleases";
 
@@ -199,5 +205,138 @@ describe("the upcoming rows", () => {
     // not know is left out, so an answer of only those draws the same state.
     draw(answer([{ kind: "unknown" }]));
     expect(screen.getByTestId("card-empty")).toBeInTheDocument();
+  });
+
+  it("asks its cell for the height its line and rows take while they leave a row empty, and not once they fill it", () => {
+    // 🔴 Fails where the card reports nothing: its row of the dashboard then keeps their stored
+    // height however short both cards' lists are. Drawn four rows high, its body holds four rows,
+    // three under the attention line.
+    const asked = (items: CoreListWidgetData["items"]) => {
+      const report = vi.fn();
+      const { unmount } = render(
+        <CardFitContext.Provider value={report}>
+          <CardHeightContext.Provider value={4}>
+            <CardTierContext.Provider value="medium">
+              {inFrame(
+                <UpcomingReleasesCard
+                  widgetId="core/upcoming-releases"
+                  placementId="card-1"
+                  settings={{}}
+                  size={{ w: 4, h: 4, tier: "medium" }}
+                  data={answer(items)}
+                  refreshing={false}
+                  retry={() => undefined}
+                />
+              )}
+            </CardTierContext.Provider>
+          </CardHeightContext.Provider>
+        </CardFitContext.Provider>
+      );
+      const last = report.mock.calls.at(-1)?.[0];
+      unmount();
+      // Withdrawn as the body leaves, so the cell asks for the card's stored height again.
+      expect(report.mock.calls.at(-1)?.[0]).toBeUndefined();
+      return last;
+    };
+    const releases = (count: number) =>
+      Array.from({ length: count }, (_, index) => release(index + 1));
+    // A height to fit to (jsdom measures it as 0), not "its own rows".
+    expect(asked(releases(2))).toEqual(expect.any(Number));
+    expect(asked([...ATTENTION, ...releases(2)])).toEqual(expect.any(Number));
+    // Four rows fill the body, and three fill it under the line: the stored height.
+    expect(asked(releases(4))).toBeUndefined();
+    expect(asked([...ATTENTION, ...releases(3)])).toBeUndefined();
+    // More than it draws: the rows it draws fill the body, so the stored height too.
+    expect(asked(releases(6))).toBeUndefined();
+  });
+
+  it("asks, while loading, for exactly the height a one-release answer then asks for", () => {
+    // 🔴 Fails where the loading card asks for nothing: its cell then stands at its stored
+    // height until the answer arrives and shrinks the row it shares, moving every card below.
+    const report = vi.fn();
+    const loading = render(
+      <CardFitContext.Provider value={report}>
+        <WidgetCard
+          title="Upcoming releases"
+          widgetId="core/upcoming-releases"
+          h={4}
+          state={{ kind: "loading" }}
+          skeleton="rows"
+        >
+          {null}
+        </WidgetCard>
+      </CardFitContext.Provider>
+    );
+    const asked = report.mock.calls.at(-1)?.[0];
+    loading.unmount();
+    expect(asked).toBe(oneItemBodyPx("default"));
+
+    // The answer with one scheduled release, laid out as it is drawn: one row, and no attention
+    // line, which only stopped or overdue releases bring.
+    const measure = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const rows = this.querySelector(':scope > [data-testid="list-card"]')
+          ? this.querySelectorAll('[data-testid="entity-row"]').length
+          : 0;
+        const height = rows * LIST_ROW_HEIGHT_PX.default;
+        return {
+          top: 0,
+          bottom: height,
+          left: 0,
+          right: 0,
+          width: 0,
+          height,
+        } as DOMRect;
+      });
+    const answered = vi.fn();
+    render(
+      <CardFitContext.Provider value={answered}>
+        <CardHeightContext.Provider value={4}>
+          <CardTierContext.Provider value="medium">
+            {inFrame(
+              <UpcomingReleasesCard
+                widgetId="core/upcoming-releases"
+                placementId="card-1"
+                settings={{}}
+                size={{ w: 4, h: 4, tier: "medium" }}
+                data={answer([release(1)])}
+                refreshing={false}
+                retry={() => undefined}
+              />
+            )}
+          </CardTierContext.Provider>
+        </CardHeightContext.Provider>
+      </CardFitContext.Provider>
+    );
+    expect(screen.queryByTestId("release-attention")).toBeNull();
+    expect(answered.mock.calls.at(-1)?.[0]).toBe(asked);
+    measure.mockRestore();
+  });
+
+  it("asks for nothing while loading at the large tier, where its answer is a table", () => {
+    // 🔴 Fails where the loading card reserves one list row at every tier: at the large tier its
+    // answer is a heading row over table rows, whose heading has no fixed height, so the row
+    // would grow as the answer lands and the table skeleton would be cut at the card's foot.
+    const report = vi.fn();
+    const loading = render(
+      <CardFitContext.Provider value={report}>
+        <WidgetCard
+          title="Upcoming releases"
+          widgetId="core/upcoming-releases"
+          tier="large"
+          h={4}
+          state={{ kind: "loading" }}
+          skeleton="rows"
+        >
+          {null}
+        </WidgetCard>
+      </CardFitContext.Provider>
+    );
+    expect(report.mock.calls.at(-1)?.[0]).toBeUndefined();
+    loading.unmount();
+    // The table it would have reserved for: drawn at the large tier.
+    draw(answer([release(1)]), "large");
+    expect(screen.getByTestId("list-card-table")).toBeInTheDocument();
   });
 });

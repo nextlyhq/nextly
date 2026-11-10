@@ -330,6 +330,20 @@ describe("a bound prop's Format", () => {
     expect(editor.apply).not.toHaveBeenCalled();
   });
 
+  it("keeps the Code field and its focus once the menu has closed on Currency", async () => {
+    // A closing menu returns focus to its trigger a moment later: the field
+    // would blur empty and be gone before a code could be typed.
+    const editor = mount({ label: { $bind: "price" } });
+    fireEvent.click(await formatMenu());
+    fireEvent.click(screen.getByRole("option", { name: "Currency" }));
+    const code = await screen.findByRole("textbox", { name: "Code" });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(code.isConnected).toBe(true);
+    expect(document.activeElement).toBe(code);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
   it("writes a currency once a known code is given", async () => {
     // The control for the two above: the same pick, a code typed.
     const editor = mount({ label: { $bind: "price" } });

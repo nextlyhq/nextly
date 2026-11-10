@@ -9,35 +9,93 @@
  * collection's and Single's writes flush, leaves out one that opts out of
  * revalidation, and an unchanged set flushes nothing.
  *
+ * The expiry is owed until it lands: queued as a job before it is tried and
+ * withdrawn once it lands, so when the registries cannot be read, the job is
+ * left for a jobs run to perform after the process that owed it is gone, and
+ * a process still running tries again until it lands. Landing means every tag
+ * expired or was recorded for every instance, not kept by this process alone,
+ * and a row whose attempts run out leaves a successor queued.
+ *
+ * The job is queued before the grants write starts, due only after a margin
+ * of minutes, so it is owed before the change commits and no jobs run takes it
+ * before then: a process stopped right after the commit still leaves it.
+ *
  * SQLite needs no URL, and the flush is post-commit bookkeeping that no
  * dialect changes.
  */
-import { eq } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
 
+import { eq } from "drizzle-orm";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { testLogger } from "../../../__tests__/fixtures/db";
 import { defineCollection, defineSingle, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { getDialectTables } from "../../../database/index";
 import { container } from "../../../di/container";
+import type { JobRegistry } from "../../../domains/jobs/job-registry";
+import type {
+  JobRow,
+  JobsRepository,
+} from "../../../domains/jobs/jobs-repository";
+import { runJobsPass } from "../../../domains/jobs/jobs-runner";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type {
   CacheRevalidator,
+  FlushOutcome,
   RevalidationIntent,
 } from "../../../revalidation/types";
 import {
   inPermissionSweep,
   writingPermissions,
 } from "../../../services/lib/permissions";
+import type { CollectionRegistryService } from "../../../services/collections/collection-registry-service";
 import { PUBLIC_ROLE_SLUG } from "../services/public-role";
+import { RoleInheritanceService } from "../services/role-inheritance-service";
+
+/** The slug the queued expiry carries, as stored: a row an earlier process queued must match. */
+const GRANTS_EXPIRY_JOB = "nextly:grants-content-expiry";
+
+/** The process's own tries at an owed expiry, as a process holds them. */
+const retryKey = "__nextly_grants_expiry_retry";
+type RetryHolder = Record<
+  typeof retryKey,
+  { timer?: ReturnType<typeof setTimeout> } | undefined
+>;
+
+/** Past the margin a row queued ahead of a write waits before a jobs run may take it. */
+function pastTheMargin(): Date {
+  return new Date(Date.now() + 6 * 60_000);
+}
+
+/**
+ * The table the step right after a grants write commits asks after first (the
+ * retirement of stored permission answers), so a test can stop that step
+ * there, as a process stopped right after the commit would.
+ */
+const FIRST_ASKED_AFTER_COMMIT = "user_permission_cache";
+
+/** Forgets what this process owes, as a restart does: only what the database holds is left. */
+function forgetThisProcess(): void {
+  const holder = globalThis as unknown as RetryHolder;
+  const timer = holder[retryKey]?.timer;
+  if (timer !== undefined) clearTimeout(timer);
+  holder[retryKey] = undefined;
+}
 
 /** Every intent flushed to it, so a test sees exactly which tags expired. */
 class RecordingRevalidator implements CacheRevalidator {
   readonly flushed: RevalidationIntent[] = [];
-  flush(intents: RevalidationIntent[]): void {
+  /** Whether it answers as a revalidator whose hand-off kept the tags in this process only. */
+  keepInProcess = false;
+  flush(intents: RevalidationIntent[]): FlushOutcome | void {
     this.flushed.push(...intents);
+    if (!this.keepInProcess) return;
+    const tags = intents.flatMap(intent => intent.tags);
+    return { deferredTags: tags, keptInProcess: tags };
   }
   get tags(): string[] {
     return this.flushed.flatMap(intent => intent.tags);
@@ -58,9 +116,44 @@ describe("a change to a role's grants and the cached content reads (sqlite)", ()
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
+    forgetThisProcess();
     await t?.destroy();
     t = undefined;
   });
+
+  /** The states of `jobs`, sorted, so a set of rows reads the same in any order. */
+  function states(jobs: readonly JobRow[]): string[] {
+    return jobs.map(job => job.state).sort();
+  }
+
+  /** The grants expiry jobs in the queue, whatever their state. */
+  async function grantsExpiryJobs(nextly: TestNextly): Promise<JobRow[]> {
+    return nextly.adapter.select<JobRow>("nextly_jobs", {
+      where: { and: [{ column: "slug", op: "=", value: GRANTS_EXPIRY_JOB }] },
+    });
+  }
+
+  /** Makes every read of the collection registry's settings fail, until restored. */
+  function failRegistryReads() {
+    return vi
+      .spyOn(
+        container.get<CollectionRegistryService>("collectionRegistryService"),
+        "getAllRevalidateConfigs"
+      )
+      .mockRejectedValue(new Error("database unavailable"));
+  }
+
+  /** Takes the read of posts away from Public. */
+  async function removePublicRead(nextly: TestNextly): Promise<void> {
+    const { id, held } = await publicRole(nextly);
+    await nextly.nextly.roles.setPermissions({
+      roleId: id,
+      permissionIds: held
+        .filter(permission => permission.slug !== "read-posts")
+        .map(permission => permission.id),
+    });
+  }
 
   /**
    * Boots with posts anyone may read, a Single anyone may read, and a
@@ -163,6 +256,8 @@ describe("a change to a role's grants and the cached content reads (sqlite)", ()
     expect(spy.tags).toEqual(
       expect.arrayContaining(["nextly:posts", "nextly:single:header"])
     );
+    // One row queued ahead of the sweep's writes, withdrawn once it landed.
+    expect(await grantsExpiryJobs(nextly)).toEqual([]);
   });
 
   it("expires nothing when the role is set to what it already holds", async () => {
@@ -176,5 +271,314 @@ describe("a change to a role's grants and the cached content reads (sqlite)", ()
     });
 
     expect(spy.flushed).toEqual([]);
+    // The row queued ahead of the write is withdrawn: nothing changed.
+    expect(await grantsExpiryJobs(nextly)).toEqual([]);
+  });
+
+  it("leaves no job queued once the expiry lands", async () => {
+    const nextly = await boot();
+    spy.flushed.length = 0;
+
+    await removePublicRead(nextly);
+
+    expect(spy.tags).toContain("nextly:posts");
+    expect(await grantsExpiryJobs(nextly)).toEqual([]);
+  });
+
+  it("leaves the expiry queued when it fails, and a jobs run after a restart expires it", async () => {
+    const nextly = await boot();
+    const reads = failRegistryReads();
+    spy.flushed.length = 0;
+
+    await removePublicRead(nextly);
+
+    expect(spy.flushed).toEqual([]);
+    const owed = await grantsExpiryJobs(nextly);
+    expect(owed.map(job => job.state)).toEqual(["pending"]);
+
+    // The process that owed it is gone; the database is reachable again.
+    forgetThisProcess();
+    reads.mockRestore();
+    await runJobsPass(
+      nextly.adapter,
+      container.get<JobRegistry>("jobRegistry"),
+      { now: pastTheMargin }
+    );
+
+    expect(spy.tags).toEqual(
+      expect.arrayContaining(["nextly:posts", "nextly:single:header"])
+    );
+    // Done, and, never confirmed by the process that is gone, its chain goes on.
+    expect(states(await grantsExpiryJobs(nextly))).toEqual(["done", "pending"]);
+  });
+
+  it("tries again in a process still running until the expiry lands, and withdraws the job", async () => {
+    const nextly = await boot();
+    const reads = failRegistryReads();
+    spy.flushed.length = 0;
+
+    await removePublicRead(nextly);
+    expect(spy.flushed).toEqual([]);
+
+    reads.mockRestore();
+
+    // The first retry comes a second after the failure.
+    await vi.waitFor(
+      () => {
+        expect(spy.tags).toEqual(
+          expect.arrayContaining(["nextly:posts", "nextly:single:header"])
+        );
+      },
+      { timeout: 5_000, interval: 50 }
+    );
+    await vi.waitFor(
+      async () => {
+        expect(await grantsExpiryJobs(nextly)).toEqual([]);
+      },
+      { timeout: 5_000, interval: 50 }
+    );
+  });
+
+  it("keeps the job while the expiry's tags are kept in this process only, until they are recorded", async () => {
+    const nextly = await boot();
+    spy.keepInProcess = true;
+    spy.flushed.length = 0;
+
+    await removePublicRead(nextly);
+
+    // Flushed, but not for good: the job stays queued for a jobs run.
+    expect(spy.tags).toContain("nextly:posts");
+    expect((await grantsExpiryJobs(nextly)).map(job => job.state)).toEqual([
+      "pending",
+    ]);
+
+    spy.keepInProcess = false;
+    await vi.waitFor(
+      async () => {
+        expect(await grantsExpiryJobs(nextly)).toEqual([]);
+      },
+      { timeout: 5_000, interval: 50 }
+    );
+  });
+
+  it("leaves a successor queued when a row's last attempt fails", async () => {
+    const nextly = await boot();
+    failRegistryReads();
+    await removePublicRead(nextly);
+    forgetThisProcess();
+    const [owed] = await grantsExpiryJobs(nextly);
+    if (!owed) throw new Error("the failed expiry left no job");
+    const registry = container.get<JobRegistry>("jobRegistry");
+    const last = registry.get(GRANTS_EXPIRY_JOB)?.retry.maxAttempts;
+    if (last === undefined)
+      throw new Error("the grants expiry job is not registered");
+    // Every attempt but the last already spent.
+    await nextly.adapter.update(
+      "nextly_jobs",
+      { attempt_count: last - 1 },
+      { and: [{ column: "id", op: "=", value: owed.id }] }
+    );
+
+    await runJobsPass(nextly.adapter, registry, { now: pastTheMargin });
+
+    const rows = await grantsExpiryJobs(nextly);
+    expect(rows.find(job => job.id === owed.id)?.state).toBe("failed");
+    const successors = rows.filter(job => job.id !== owed.id);
+    expect(successors.map(job => job.state)).toEqual(["pending", "pending"]);
+    // The row's own successor, beside the next link of its chain.
+    expect(successors.map(job => job.dedupeKey)).toContain(
+      `${GRANTS_EXPIRY_JOB}:after:${owed.id}`
+    );
+  });
+
+  it("leaves a pending job when the process stops right after the grants write commits", async () => {
+    const nextly = await boot();
+    const registry = container.get<JobRegistry>("jobRegistry");
+    spy.flushed.length = 0;
+    let resume = (): void => undefined;
+    const stopped = new Promise<void>(resolve => {
+      resume = resolve;
+    });
+    const tableExists = nextly.adapter.tableExists.bind(nextly.adapter);
+    vi.spyOn(nextly.adapter, "tableExists").mockImplementation(
+      async (name: string) => {
+        if (name === FIRST_ASKED_AFTER_COMMIT) await stopped;
+        return tableExists(name);
+      }
+    );
+
+    const writing = removePublicRead(nextly);
+    // The change commits; the step after it never gets on.
+    await vi.waitFor(
+      async () => {
+        const { held } = await publicRole(nextly);
+        expect(held.map(permission => permission.slug)).not.toContain(
+          "read-posts"
+        );
+      },
+      { timeout: 5_000, interval: 20 }
+    );
+    expect(spy.flushed).toEqual([]);
+    expect((await grantsExpiryJobs(nextly)).map(job => job.state)).toEqual([
+      "pending",
+    ]);
+
+    // A jobs run now leaves it: it cannot run before the write it follows commits.
+    await runJobsPass(nextly.adapter, registry);
+    expect(spy.flushed).toEqual([]);
+
+    // The process is gone; a jobs run past the margin expires the pages.
+    forgetThisProcess();
+    await runJobsPass(nextly.adapter, registry, { now: pastTheMargin });
+    expect(spy.tags).toEqual(
+      expect.arrayContaining(["nextly:posts", "nextly:single:header"])
+    );
+    // The row ran before the expiry after the write confirmed it, so the next
+    // link of its chain waits, for a write that commits later still.
+    const ran = await grantsExpiryJobs(nextly);
+    expect(states(ran)).toEqual(["done", "pending"]);
+    const next = ran.find(job => job.state === "pending");
+    expect(next?.dedupeKey).toMatch(
+      /^nextly:grants-content-expiry:ahead:.+:1$/
+    );
+
+    // The step after the commit gets on, expires, and confirms: the chain goes.
+    resume();
+    await writing;
+    expect(states(await grantsExpiryJobs(nextly))).toEqual(["done"]);
+  });
+
+  it("leaves a job for a grants write that rolls back, which jobs runs perform until the horizon", async () => {
+    const nextly = await boot();
+    const { id } = await publicRole(nextly);
+    spy.flushed.length = 0;
+
+    await expect(
+      nextly.nextly.roles.setPermissions({
+        roleId: id,
+        permissionIds: ["no-such-permission"],
+      })
+    ).rejects.toThrow();
+
+    expect(spy.flushed).toEqual([]);
+    expect((await grantsExpiryJobs(nextly)).map(job => job.state)).toEqual([
+      "pending",
+    ]);
+    await runJobsPass(
+      nextly.adapter,
+      container.get<JobRegistry>("jobRegistry"),
+      {
+        now: pastTheMargin,
+      }
+    );
+    expect(spy.tags).toContain("nextly:posts");
+    // Never confirmed, so its chain goes on, each link later, to the horizon.
+    expect(states(await grantsExpiryJobs(nextly))).toEqual(["done", "pending"]);
+  });
+
+  it("refuses the grants write when its expiry cannot be queued ahead of it", async () => {
+    const nextly = await boot();
+    spy.flushed.length = 0;
+    vi.spyOn(
+      container.get<JobsRepository>("jobsRepository"),
+      "enqueue"
+    ).mockRejectedValue(new Error("jobs table locked"));
+
+    await expect(removePublicRead(nextly)).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+    });
+
+    // Not made: Public still reads posts, and nothing was expired or queued.
+    const { held } = await publicRole(nextly);
+    expect(held.map(permission => permission.slug)).toContain("read-posts");
+    expect(spy.flushed).toEqual([]);
+    expect(await grantsExpiryJobs(nextly)).toEqual([]);
+  });
+
+  it("queues no job for a request its checks refuse", async () => {
+    const nextly = await boot();
+    // A built-in role and another, as raw rows: the refusal below is about
+    // the built-in one, and inserting it writes no grants through any gate.
+    const { roles } = getDialectTables();
+    const db = nextly.adapter.getDrizzle() as unknown as {
+      insert(table: unknown): {
+        values(rows: Record<string, unknown>[]): Promise<unknown>;
+      };
+    };
+    const now = new Date();
+    await db.insert(roles).values(
+      [
+        { id: "built-in-role", slug: "grants-test-built-in", isSystem: true },
+        { id: "other-role", slug: "grants-test-other", isSystem: false },
+      ].map(role => ({
+        ...role,
+        name: role.slug,
+        level: 10,
+        createdAt: now,
+        updatedAt: now,
+      }))
+    );
+
+    await expect(
+      new RoleInheritanceService(
+        nextly.adapter,
+        testLogger
+      ).removeRoleInheritance("other-role", "built-in-role")
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    expect(await grantsExpiryJobs(nextly)).toEqual([]);
+  });
+
+  it("edits a role's name without the gate, so a refused jobs queue does not refuse it", async () => {
+    const nextly = await boot();
+    const { roles } = getDialectTables();
+    const db = nextly.adapter.getDrizzle() as unknown as {
+      insert(table: unknown): {
+        values(rows: Record<string, unknown>[]): Promise<unknown>;
+      };
+    };
+    const now = new Date();
+    // Role ids are UUIDs, which the update checks.
+    const editedRole = randomUUID();
+    await db.insert(roles).values([
+      {
+        id: editedRole,
+        slug: "grants-test-edited",
+        name: "Edited",
+        level: 10,
+        isSystem: false,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ]);
+    vi.spyOn(
+      container.get<JobsRepository>("jobsRepository"),
+      "enqueue"
+    ).mockRejectedValue(new Error("jobs table locked"));
+
+    // A name changes no grants: made, and nothing queued.
+    await nextly.nextly.roles.update({
+      id: editedRole,
+      data: { name: "Renamed" },
+    });
+    expect(await grantsExpiryJobs(nextly)).toEqual([]);
+
+    // A slug does: refused while the queue refuses its expiry.
+    await expect(
+      nextly.nextly.roles.update({
+        id: editedRole,
+        data: { slug: "grants-test-moved" },
+      })
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+    const [stored] = await nextly.adapter.select<{
+      name: string;
+      slug: string;
+    }>("roles", {
+      where: { and: [{ column: "id", op: "=", value: editedRole }] },
+    });
+    expect(stored).toMatchObject({
+      name: "Renamed",
+      slug: "grants-test-edited",
+    });
   });
 });

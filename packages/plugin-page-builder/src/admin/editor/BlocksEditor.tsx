@@ -116,8 +116,10 @@ import {
 import { EditorSearch, SearchButton } from "./editor-search";
 import { HistoryButtons } from "./history-buttons";
 import {
+  useMediaSearchReader,
   useMediaSummaryReader,
   type ReadMediaSummary,
+  type SearchMediaSummaries,
 } from "./media-summary-reader";
 import {
   usePageConditionsRead,
@@ -175,6 +177,7 @@ import {
   type SiteStyleInputs,
 } from "./use-render-inputs";
 import {
+  drawnNodesOf,
   useFollowApplied,
   useItemsJudgedRender,
   useListsAsVisitor,
@@ -217,6 +220,8 @@ type EditorView = EditorMount &
     conditionsShownLabel: string;
     /** A stored media id's name, picture and alt text, for the image fields. */
     readMedia: ReadMediaSummary;
+    /** The library's images by name, for an image binding's Fallback picker. */
+    searchMedia: SearchMediaSummaries;
     /** The variant open in a component's view, which the canvas previews. */
     preview: ComponentView["preview"];
     /**
@@ -552,6 +557,7 @@ function servicesFor(
   passages: OpenPassages,
   locale: string | undefined,
   readMedia: ReadMediaSummary,
+  searchMedia: SearchMediaSummaries,
   entryCollection: string | null | undefined,
   userId: string | null,
   /** The entry bindings read, and the document an unbind is planned in. */
@@ -588,6 +594,9 @@ function servicesFor(
       ...borrowedServices(),
       openPassages: passages,
       readMedia,
+      // The library's images by name, for an image binding's Fallback: read
+      // as the author, through the admin's own list read.
+      searchMedia,
       findEntries: query =>
         findEntries(locale === undefined ? query : { ...query, locale }),
       // The same language for a link's search, so a page is found and named
@@ -725,6 +734,7 @@ function editorInspector(
         view.passages,
         view.locale,
         view.readMedia,
+        view.searchMedia,
         view.entryCollection,
         view.userId,
         {
@@ -846,6 +856,7 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     onCanvasFallback,
     canvasDir,
     visitorUnreadable,
+    readMedia,
   } = view;
   // The theme the frame draws the page in and the tags saying so, from one
   // answer, so the tag never names a mode the canvas is not drawn in.
@@ -927,10 +938,12 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             // The site mode the author picked, on the frame's document and
             // the frame element only; nothing picked draws the page's own.
             theme={previewed.theme}
+            // One row: the variant previewed and the mode picked. Pinned to
+            // the frame's viewport, so it stays in view while the page
+            // scrolls rather than leaving with the page's top.
+            pinned={previewed.tags}
             overlay={
               <>
-                {/* One row: the variant previewed and the mode picked. */}
-                {previewed.tags}
                 {/* A selected block the page hides on this device is drawn
                     anyway, and its ring says so. */}
                 <CanvasMarks
@@ -956,6 +969,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                     other controls over the canvas are. */}
                 <VisitorUnreadableBadges
                   marked={visitorUnreadable}
+                  // A fallback chosen from the library is named in the
+                  // tooltip by its file, read as the inspector reads it.
+                  readMedia={readMedia}
                   onSelect={editor.select}
                   hidden={dragging}
                 />
@@ -1510,6 +1526,8 @@ function EditorBody<TFieldValues extends FieldValues>({
   // A stored image's name and picture in the inspector, read as the canvas
   // reads it.
   const readMedia = useMediaSummaryReader();
+  // The library's images by name, for an image binding's Fallback picker.
+  const searchMedia = useMediaSearchReader();
   // The entry the canvas is drawn as: the document's own, or the entry a
   // template is previewed with, whose collection the inspector judges by.
   const identity = useCanvasEntryIdentity();
@@ -1578,20 +1596,30 @@ function EditorBody<TFieldValues extends FieldValues>({
       itemsJudged: listsAsVisitor.visitor !== undefined,
     }
   );
-  // The blocks the canvas draws while the conditions are applied: the page,
-  // composed, and the regions of its Layout, whose lists read as a visitor
-  // too.
-  const applied = conditions.applied !== undefined;
+  // The blocks the canvas draws while the conditions are applied: the page
+  // as they leave it, and the regions of its Layout, whose lists read as a
+  // visitor too, each as the renderer prepares it, so a list inside a placed
+  // component is found by the id it is drawn with.
+  // The page with its components judged for the entry, as the canvas draws
+  // it; the regions of the Layout as they are drawn, unjudged.
+  const appliedNow = conditions.applied;
   const regions = panels.canvasRegions;
   const visitorDrawn = useMemo(
     () =>
-      applied
-        ? [
-            ...conditions.composed.nodes,
-            ...(regions ?? []).flatMap(region => region.document.nodes),
-          ]
-        : undefined,
-    [applied, conditions.composed, regions]
+      appliedNow === undefined
+        ? undefined
+        : [
+            ...drawnNodesOf(
+              appliedNow.document,
+              canvasRender,
+              canvasRender.definitions,
+              appliedNow.entryJudgement
+            ),
+            ...(regions ?? []).flatMap(region =>
+              drawnNodesOf(region.document, canvasRender, region.definitions)
+            ),
+          ],
+    [appliedNow, regions, canvasRender]
   );
   useFollowApplied(listsAsVisitor, visitorDrawn);
   const shownRender = useItemsJudgedRender(
@@ -1616,6 +1644,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     layerVerbs: cardVerbs,
     reveal,
     readMedia,
+    searchMedia,
     preview: componentView.preview,
     // The stored document's kind too: a component's lists relate to the
     // entries of the pages placing it, as its save judges them.

@@ -95,6 +95,8 @@ function reads(): BindingFieldsReads {
       { slug: "settings", label: "Settings" },
     ],
     collectionLabel: async () => "Post",
+    // Every collection has a page here, unless a test says otherwise.
+    pagesFor: async () => ({ served: true, label: "Users" }),
     site: async () => ({ applicationName: "Northwind Academy" }),
   };
 }
@@ -166,7 +168,86 @@ describe("the picker's fields", () => {
     const author = named(fieldsOf(await ask("p1"), "Post"), "author");
     expect(author?.fields).toEqual([
       { name: "name", type: "text", public: true, preview: "Ada Lovelace" },
+      // The entry itself, by its id, which a link's entry binds to.
+      {
+        name: "id",
+        type: "text",
+        label: "Link to this entry",
+        linksTo: "users",
+        public: true,
+      },
     ]);
+  });
+
+  it("names the collection a related entry waits for, where it has no page yet", async () => {
+    const pagesFor = vi.fn(
+      async (entry: { readonly collection: string; readonly id: string }) => ({
+        served: false,
+        label: entry.collection === "users" ? "Users" : entry.collection,
+      })
+    );
+    const answer = await readBindingFields(
+      { source: { kind: "collection", slug: "posts", id: "p1" } },
+      { ...reads(), pagesFor }
+    );
+    // Asked of the entry itself, as the public page finds its design: its
+    // own design may outlive its collection's template.
+    expect(pagesFor).toHaveBeenCalledWith({ collection: "users", id: "u1" });
+    const author = named(fieldsOf(answer, "Post"), "author");
+    // Still listed, so the author sees why it can't be picked yet.
+    expect(named(author?.fields ?? [], "id")).toMatchObject({
+      linksTo: "users",
+      noPageFor: "Users",
+    });
+    // The related entry's own fields are not affected.
+    expect(named(author?.fields ?? [], "name")).not.toHaveProperty("noPageFor");
+  });
+
+  it("offers a related entry as a link only as visitors reach it", async () => {
+    const base = reads();
+    const answer = await readBindingFields(
+      { source: { kind: "collection", slug: "posts", id: "p1" } },
+      {
+        ...base,
+        // A cover from the media library, which has no page to link to.
+        declared: async ref =>
+          "collection" in ref && ref.collection === "posts"
+            ? [
+                ...(DECLARED["collection:posts"] ?? []),
+                { name: "cover", type: "upload", relationTo: "media" },
+              ]
+            : "collection" in ref && ref.collection === "media"
+              ? [{ name: "altText", type: "text" }]
+              : base.declared(ref),
+        publicShapes: async ref =>
+          "collection" in ref && ref.collection === "media"
+            ? [{ name: "altText", type: "text" }]
+            : base.publicShapes(ref),
+        asEditor: async (ref, select) =>
+          rowKey(ref) === "posts:p1"
+            ? { ...AS_EDITOR["posts:p1"], cover: "m1" }
+            : rowKey(ref) === "media:m1"
+              ? { altText: "A harbour" }
+              : base.asEditor(ref, select),
+        // The author is not published yet.
+        published: async (ref, select) =>
+          rowKey(ref) === "users:u1" ? null : base.published(ref, select),
+      }
+    );
+    const post = fieldsOf(answer, "Post");
+    const link = (relation: string) =>
+      named(named(post, relation)?.fields ?? [], "id");
+    // Visitors don't see the unpublished author yet.
+    expect(link("author")).toMatchObject({
+      linksTo: "users",
+      public: true,
+      draft: true,
+    });
+    // Visitors can't follow the reviewer, so they can't follow its link.
+    expect(link("reviewer")).toMatchObject({ linksTo: "users", public: false });
+    // The cover's alt text is listed, and no link to the media record.
+    expect(named(named(post, "cover")?.fields ?? [], "altText")).toBeDefined();
+    expect(link("cover")).toBeUndefined();
   });
 
   it("lists the Singles and the site for a document with no entry of its own", async () => {

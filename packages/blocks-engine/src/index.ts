@@ -1290,11 +1290,12 @@ export type {
   BindingSchemaRef,
   BindingSchemaSource,
   CheckedBinding,
+  CrossedRelation,
   ImageValue,
 } from "./binding-rules";
 // A document's bindings judged against the schema of what they read, as a
 // save judges them: one rule with the renderer, a held break a warning.
-export { bindingSchemaIssues } from "./binding-schema-issues";
+export { bindingSchemaIssues, ENTRY_LINK_PROPS } from "./binding-schema-issues";
 export type {
   BindingDocument,
   BindingSchemaJudgement,

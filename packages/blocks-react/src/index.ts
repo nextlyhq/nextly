@@ -184,6 +184,23 @@ export type {
 // The binding pass's own types, which the props above and a block's `bound`
 // argument name. A consumer passing bindings or reading a bound value has no
 // other path to them: the engine is this package's dependency, not theirs.
+// Named by this package's published declarations, so a consumer can write
+// the type of what it passes or receives without a dependency on the engine.
+export type {
+  BindingDemand,
+  BlockSeoRead,
+  ComponentLookup,
+  ConditionDayStart,
+  ConditionDemand,
+  ConditionSubject,
+  DocumentSeo,
+  EntryContentIssueCode,
+  ImageValue,
+  ListFields,
+  SeoBinding,
+  SeoTextSegment,
+  SourceDemand,
+} from "@nextlyhq/blocks-engine";
 export type {
   BindablePropKind,
   BindingFieldShape,
@@ -293,6 +310,12 @@ export type {
  * from the evidence, which is why it exists rather than a documented instruction to pass a flag.
  */
 export { pruneHiddenNodes } from "./visibility";
+/**
+ * @experimental How an editor judges a page's conditions for an entry, the
+ * route's way, drawing its own node in place of a block they hide, and one
+ * block with its conditions lifted, as an editor draws one that holds.
+ */
+export { liftedNode, type EntryJudgement } from "./visibility";
 export {
   pageBindingRun,
   prepareDocumentForRead,

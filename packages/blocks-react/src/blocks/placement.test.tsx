@@ -150,6 +150,8 @@ const VARIANTS: readonly Variant[] = [
     without: ["main"],
   },
   { name: "Collection loop", type: "core/collection-loop", props: {}, ...FLOW },
+  // A plain `div` around the entry's own blocks.
+  { name: "Entry content", type: "core/entry-content", props: {}, ...FLOW },
   { name: "Spacer", type: "core/spacer", props: {}, ...FLOW },
   { name: "Heading", type: "core/heading", props: { text: "Hi" }, ...FLOW },
   {

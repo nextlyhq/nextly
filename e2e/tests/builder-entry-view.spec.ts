@@ -70,6 +70,7 @@ async function seedFiveSections(page: Page): Promise<void> {
         kind: "page",
         nodes: TITLES.map((title, i) => section(`s${i + 1}`, title)),
       },
+      _overwrite: true,
     },
   });
   expect(stored.ok(), `seeding the homepage layout: ${stored.status()}`).toBe(

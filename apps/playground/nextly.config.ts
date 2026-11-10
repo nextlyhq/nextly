@@ -28,6 +28,7 @@ import { pageBuilder } from "@nextlyhq/plugin-page-builder";
 import { seoPlugin } from "@nextlyhq/plugin-seo";
 import { defineCollection, defineConfig, text } from "nextly/config";
 
+import { JOURNAL, JOURNAL_COLLECTIONS } from "./src/blog-fixture/collections";
 import { Authors } from "./src/collections/authors";
 import { BlockPages } from "./src/collections/block-pages";
 import { BoundEntries } from "./src/collections/bound-entries";
@@ -104,12 +105,17 @@ export const pageBuilderPlugin = pageBuilder({
   pagePreviewPath: "/{slug}",
   // Each post is served at `/blog/<its slug>` by the same route as the pages,
   // drawn with the Posts template once one is published.
-  // The Entry content fixture's articles at `/articles/<slug>`, with it.
+  // The Entry content fixture's articles at `/articles/<slug>`, and the blog
+  // fixture's posts at `/journal/<slug>`, with it.
   templates: {
     addresses: {
       posts: "/blog",
       ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
-        ? { "entry-articles": "/articles" }
+        ? {
+            "entry-articles": "/articles",
+            // The blog fixture's posts, rebuilt with their template.
+            [JOURNAL.posts]: "/journal",
+          }
         : {}),
     },
   },
@@ -213,6 +219,11 @@ export default defineConfig({
     // page-built entry holding a public to-many relation; registered for the
     // e2e run only, by the same switch.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [ListStories] : []),
+    // The blog template's own posts, authors, categories and tags, renamed,
+    // for the browser test of its post page rebuilt with a template.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? JOURNAL_COLLECTIONS
+      : []),
     // The collection the SEO plugin extends, by the plugin's own switch.
     ...(seoPluginEnabled ? [SeoPages] : []),
   ],
