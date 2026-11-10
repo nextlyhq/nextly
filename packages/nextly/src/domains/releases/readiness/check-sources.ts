@@ -28,7 +28,6 @@
  * those.
  *
  * @module domains/releases/readiness/check-sources
- * @experimental Core sources only for now.
  */
 import { NextlyError } from "../../../errors";
 import type { ReleaseMemberAction } from "../../../schemas/releases/types";
@@ -45,8 +44,6 @@ import type { DueMember } from "../resolve-release-effect";
 
 /**
  * Whether a finding stops the release (`hard`) or is a note (`soft`).
- *
- * @experimental
  */
 export type ReleaseCheckSeverity = "hard" | "soft";
 
@@ -57,7 +54,6 @@ const SEVERITIES: readonly ReleaseCheckSeverity[] = ["hard", "soft"];
  * One thing a source found about one member.
  *
  * @typeParam Code - The codes the reporting source declares.
- * @experimental
  */
 export interface ReleaseCheckFinding<Code extends string = string> {
   memberId: string;
@@ -82,8 +78,6 @@ export interface ReleaseCheckScope {
  * Every answer is the one the release's own run would reach: the run performs
  * each member as its recorded author, through the ordinary write, so a check
  * that asked anything else could pass a member the run then refuses.
- *
- * @experimental
  */
 export interface ReleaseCheckReads {
   /** Which of these user ids belong to users who exist and are active. */
@@ -151,8 +145,6 @@ export interface ReleaseCheckReads {
 
 /**
  * What a source is told about the release it is checking.
- *
- * @experimental
  */
 export interface ReleaseCheckContext {
   release: ReleaseRow;
@@ -165,7 +157,6 @@ export interface ReleaseCheckContext {
  * A source of findings.
  *
  * @typeParam Code - The codes it may report. `check` can return no other.
- * @experimental
  */
 export interface ReleaseCheckSource<Code extends string = string> {
   /** `<feature>.<name>` in lowercase, such as `core.author`. */
@@ -221,8 +212,6 @@ const CORE_NAMESPACE = "core.";
  *
  * Generic over the codes so `check` is typed to report only those: a finding
  * with a code the source did not declare does not compile.
- *
- * @experimental
  */
 export function defineReleaseCheckSource<const Code extends string>(
   source: ReleaseCheckSource<Code>
@@ -276,8 +265,6 @@ const sources = new Map<string, ReleaseCheckSource>();
  * Registering a key again REPLACES it, keeping its place in the order, so a
  * development reload that re-runs every registration does not run a source
  * twice.
- *
- * @experimental Core sources only for now.
  */
 export function registerReleaseCheckSource<Code extends string>(
   source: ReleaseCheckSource<Code>

@@ -16,7 +16,6 @@
  * invite a retry of something that happened.
  *
  * @module domains/releases/early-stop
- * @experimental
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
@@ -83,8 +82,6 @@ function apartFromRunWrite(
  * the write may be inside an enclosing transaction), never inside it: the
  * checks read through the database as any reader does, and the stop opens a
  * transaction of its own.
- *
- * @experimental
  */
 export async function stopReleasesHolding(
   target: ReleaseRecheckTarget
