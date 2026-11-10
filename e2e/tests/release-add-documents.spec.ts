@@ -6,7 +6,9 @@
  *
  * Each test writes documents and releases of its own, named with a stamp, and
  * cancels the releases it made. The linked-documents tests share one
- * collection, made once for them.
+ * collection, made once for them through the Schema Builder's own call, which
+ * a production build refuses, so this runs on the dev server (`DEV_SPECS` in
+ * `playwright.config.ts`).
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
