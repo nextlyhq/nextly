@@ -21,53 +21,64 @@ import { NextlyError } from "../../errors/nextly-error";
 
 import { queryLiveColumnTypes } from "./pipeline/live-column-types";
 
+/** Where a comment that starts at `i` ends (the index after it), or -1 when none starts there. */
+function commentEnd(sql: string, i: number): number {
+  if (sql.startsWith("--", i)) {
+    const end = sql.indexOf("\n", i);
+    return end === -1 ? sql.length : end;
+  }
+  if (sql.startsWith("/*", i)) {
+    const end = sql.indexOf("*/", i + 2);
+    return end === -1 ? sql.length : end + 2;
+  }
+  return -1;
+}
+
 /**
- * `sql` with each string literal's contents and each comment blanked (`'...'` keeps its quotes,
- * a comment becomes spaces), and, when `identifiers` is set, each quoted identifier's contents too,
- * so a word inside any of them is never read as SQL. Lengths are kept. A doubled quote inside a
- * literal or an identifier stands for one, as every generator writes it.
+ * The index of the quote closing the literal or identifier `quote` opens at `i`, a doubled quote
+ * standing for one, as every generator writes it; the end of `sql` when it never closes.
  */
-function blankQuotedAndComments(sql: string, identifiers: boolean): string {
+function quoteEnd(sql: string, i: number, quote: string): number {
+  let j = i + 1;
+  while (j < sql.length) {
+    if (sql[j] !== quote) {
+      j += 1;
+    } else if (sql[j + 1] === quote) {
+      j += 2;
+    } else {
+      return j;
+    }
+  }
+  return sql.length;
+}
+
+const QUOTES = new Set(["'", '"', "`"]);
+
+/**
+ * `sql` with each comment, string literal and quoted name blanked (a quote keeps its quotes, its
+ * contents become spaces; a comment becomes spaces), so a word inside any of them is never read as
+ * a keyword. Lengths are kept.
+ */
+function keywordsOnly(sql: string): string {
   let out = "";
   let i = 0;
   while (i < sql.length) {
+    const comment = commentEnd(sql, i);
+    if (comment !== -1) {
+      out += " ".repeat(comment - i);
+      i = comment;
+      continue;
+    }
     const ch = sql[i] ?? "";
-    const next = sql[i + 1] ?? "";
-    if (ch === "-" && next === "-") {
-      const end = sql.indexOf("\n", i);
-      const stop = end === -1 ? sql.length : end;
-      out += " ".repeat(stop - i);
-      i = stop;
+    if (!QUOTES.has(ch)) {
+      out += ch;
+      i += 1;
       continue;
     }
-    if (ch === "/" && next === "*") {
-      const end = sql.indexOf("*/", i + 2);
-      const stop = end === -1 ? sql.length : end + 2;
-      out += " ".repeat(stop - i);
-      i = stop;
-      continue;
-    }
-    if (ch === "'" || ch === '"' || ch === "`") {
-      const blank = ch === "'" || identifiers;
-      let j = i + 1;
-      while (j < sql.length) {
-        if (sql[j] === ch) {
-          if (sql[j + 1] === ch) {
-            j += 2;
-            continue;
-          }
-          break;
-        }
-        j += 1;
-      }
-      const inside = sql.slice(i + 1, j);
-      out += ch + (blank ? " ".repeat(inside.length) : inside);
-      if (j < sql.length) out += ch;
-      i = j + 1;
-      continue;
-    }
-    out += ch;
-    i += 1;
+    const end = quoteEnd(sql, i, ch);
+    out +=
+      ch + " ".repeat(Math.max(0, end - i - 1)) + (end < sql.length ? ch : "");
+    i = end + 1;
   }
   return out;
 }
@@ -81,7 +92,7 @@ function blankQuotedAndComments(sql: string, identifiers: boolean): string {
  * quoted name is not one.
  */
 export function isRenameStatement(statement: string): boolean {
-  const words = blankQuotedAndComments(statement, true);
+  const words = keywordsOnly(statement);
   return (
     (/^\s*ALTER\s+(?:TABLE|INDEX)\b/i.test(words) &&
       /\bRENAME\b/i.test(words)) ||
