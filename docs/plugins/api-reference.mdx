@@ -1003,6 +1003,31 @@ export function TitleCheckTab({ control, setBadge }: DocumentTabProps) {
 }
 ```
 
+Any component a plugin draws inside an edit page, a block, a side panel
+section or a tab, can read the document as it is being typed with
+`useDocumentValues` and `useDocumentField` (`@experimental`, from
+`@nextlyhq/plugin-sdk/admin`). A place's `entry` prop is the document as it
+was read; these are the values before any save. `useDocumentValues(paths)`
+answers the named fields by their dot paths and draws again only when one of
+them changes. `useDocumentField(path)` answers one field's `value`, whether it
+is `writable` now, and `set(next)`, which writes as the author typing would
+and marks the document changed. While the document's content is held (a past
+version on screen, a colleague editing it, a page the reader may only read),
+`set` writes nothing and answers `false`. `set(null)` returns a field to its
+automatic value. Both read the editor's own form, so a component with a form
+of its own still reads the document, and both answer `null` outside an editor.
+
+```tsx
+import { useDocumentField } from "@nextlyhq/plugin-sdk/admin";
+
+export function TitleLength() {
+  const title = useDocumentField("title");
+  if (title === null) return null;
+  const length = typeof title.value === "string" ? title.value.length : 0;
+  return <p>{length} characters</p>;
+}
+```
+
 The entry list offers a collection's row actions in each row's menu,
 after its own, on the rows whose `visibleWhen` holds. Columns, bulk actions,
 and blocks at the entry list arrive as data and are not drawn yet.
