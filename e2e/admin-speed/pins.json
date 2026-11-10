@@ -1,0 +1,392 @@
+{
+  "racy": [
+    "GET /admin/api/admin-meta/workspace",
+    "GET /admin/api/auth/session",
+    "GET /admin/api/collections/posts/entries/:id",
+    "GET /admin/api/schema/journal"
+  ],
+  "sqlite": {
+    "start": {
+      "statements": 1109
+    },
+    "screens": {
+      "login": {
+        "requests": 10,
+        "rounds": 6,
+        "statements": 8,
+        "kinds": {
+          "GET /admin/api/general-settings": 1,
+          "GET /admin/api/auth/setup-status": 2,
+          "GET /admin/api/admin-meta": 2,
+          "GET /admin/api/auth/session": 3,
+          "GET /admin/api/admin-meta/workspace": 1,
+          "GET /admin/api/auth/ui": 1
+        },
+        "occasional": []
+      },
+      "signin": {
+        "requests": 19,
+        "rounds": 8,
+        "statements": 174,
+        "kinds": {
+          "GET /admin/api/auth/csrf": 1,
+          "POST /admin/api/auth/login": 1,
+          "GET /admin/api/general-settings": 1,
+          "GET /admin/api/auth/setup-status": 1,
+          "GET /admin/api/admin-meta": 1,
+          "GET /admin/api/auth/session": 1,
+          "GET /admin/api/collections": 1,
+          "GET /admin/api/singles": 1,
+          "GET /admin/api/notices/count": 1,
+          "GET /admin/api/me": 1,
+          "GET /admin/api/admin-meta/workspace": 1,
+          "GET /admin/api/me/permissions": 1,
+          "GET /admin/api/me/capabilities": 1,
+          "GET /admin/api/dashboard/new-types": 1,
+          "GET /admin/api/dashboard/summary": 1,
+          "GET /admin/api/dashboard/setup": 1,
+          "GET /admin/api/dashboard/layout": 1,
+          "POST /admin/api/dashboard/query": 1,
+          "HEAD /admin/api/seed": 1
+        },
+        "occasional": []
+      },
+      "dashboard": {
+        "requests": 17,
+        "rounds": 6,
+        "statements": 150,
+        "kinds": {
+          "GET /admin/api/general-settings": 1,
+          "GET /admin/api/auth/setup-status": 1,
+          "GET /admin/api/admin-meta": 1,
+          "GET /admin/api/auth/session": 1,
+          "GET /admin/api/collections": 1,
+          "GET /admin/api/singles": 1,
+          "GET /admin/api/notices/count": 1,
+          "GET /admin/api/me": 1,
+          "GET /admin/api/admin-meta/workspace": 1,
+          "GET /admin/api/me/permissions": 1,
+          "GET /admin/api/me/capabilities": 1,
+          "GET /admin/api/dashboard/new-types": 1,
+          "GET /admin/api/dashboard/summary": 1,
+          "GET /admin/api/dashboard/layout": 1,
+          "GET /admin/api/dashboard/setup": 1,
+          "POST /admin/api/dashboard/query": 1,
+          "HEAD /admin/api/seed": 1
+        },
+        "occasional": []
+      },
+      "list": {
+        "requests": 15,
+        "rounds": 6,
+        "statements": 51,
+        "kinds": {
+          "GET /admin/api/general-settings": 1,
+          "GET /admin/api/auth/setup-status": 1,
+          "GET /admin/api/collections": 1,
+          "GET /admin/api/admin-meta": 1,
+          "GET /admin/api/auth/session": 1,
+          "GET /admin/api/singles": 2,
+          "GET /admin/api/notices/count": 1,
+          "GET /admin/api/me": 1,
+          "GET /admin/api/admin-meta/workspace": 1,
+          "GET /admin/api/me/permissions": 1,
+          "GET /admin/api/me/capabilities": 1,
+          "GET /admin/api/collections/posts": 1,
+          "GET /admin/api/collections/posts/entries": 1,
+          "GET /admin/api/plugins/@nextlyhq/plugin-page-builder/templates/entry-designs": 1
+        },
+        "occasional": ["GET /admin/api/schema/journal"]
+      },
+      "edit": {
+        "requests": 26,
+        "rounds": 8,
+        "statements": 84,
+        "kinds": {
+          "GET /admin/api/general-settings": 1,
+          "GET /admin/api/auth/setup-status": 1,
+          "GET /admin/api/collections": 1,
+          "GET /admin/api/admin-meta": 1,
+          "GET /admin/api/auth/session": 1,
+          "GET /admin/api/singles": 2,
+          "GET /admin/api/notices/count": 1,
+          "GET /admin/api/me": 1,
+          "GET /admin/api/admin-meta/workspace": 1,
+          "GET /admin/api/me/permissions": 1,
+          "GET /admin/api/me/capabilities": 1,
+          "GET /admin/api/collections/schema/posts": 1,
+          "GET /admin/api/collections/posts/entries/:id": 4,
+          "GET /admin/api/dashboard/pins": 1,
+          "GET /admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/page-collection": 1,
+          "GET /admin/api/releases": 1,
+          "GET /admin/api/media/folders": 1,
+          "GET /admin/api/media": 2,
+          "GET /admin/api/plugins/@nextlyhq/plugin-page-builder/templates/entry-designs": 1,
+          "POST /admin/api/document-lock": 1,
+          "GET /admin/api/collections/posts/entries/:id/versions/autosave": 1
+        },
+        "occasional": ["GET /admin/api/schema/journal"]
+      }
+    }
+  },
+  "postgresql": {
+    "start": {
+      "statements": 1039
+    },
+    "screens": {
+      "login": {
+        "requests": 9,
+        "rounds": 4,
+        "statements": 8,
+        "kinds": {
+          "GET /admin/api/general-settings": 1,
+          "GET /admin/api/auth/setup-status": 2,
+          "GET /admin/api/admin-meta": 2,
+          "GET /admin/api/auth/session": 2,
+          "GET /admin/api/auth/ui": 1,
+          "GET /admin/api/admin-meta/workspace": 1
+        },
+        "occasional": []
+      },
+      "signin": {
+        "requests": 20,
+        "rounds": 8,
+        "statements": 182,
+        "kinds": {
+          "GET /admin/api/auth/csrf": 1,
+          "POST /admin/api/auth/login": 1,
+          "GET /admin/api/general-settings": 1,
+          "GET /admin/api/auth/setup-status": 1,
+          "GET /admin/api/admin-meta": 1,
+          "GET /admin/api/auth/session": 1,
+          "GET /admin/api/collections": 1,
+          "GET /admin/api/singles": 1,
+          "GET /admin/api/notices/count": 1,
+          "GET /admin/api/me": 1,
+          "GET /admin/api/admin-meta/workspace": 1,
+          "GET /admin/api/me/permissions": 1,
+          "GET /admin/api/me/capabilities": 1,
+          "GET /admin/api/schema/journal": 1,
+          "GET /admin/api/dashboard/new-types": 1,
+          "GET /admin/api/dashboard/summary": 1,
+          "GET /admin/api/dashboard/setup": 1,
+          "GET /admin/api/dashboard/layout": 1,
+          "POST /admin/api/dashboard/query": 1,
+          "HEAD /admin/api/seed": 1
+        },
+        "occasional": []
+      },
+      "dashboard": {
+        "requests": 18,
+        "rounds": 5,
+        "statements": 165,
+        "kinds": {
+          "GET /admin/api/general-settings": 1,
+          "GET /admin/api/auth/setup-status": 1,
+          "GET /admin/api/admin-meta": 1,
+          "GET /admin/api/auth/session": 1,
+          "GET /admin/api/collections": 1,
+          "GET /admin/api/singles": 1,
+          "GET /admin/api/notices/count": 1,
+          "GET /admin/api/me": 1,
+          "GET /admin/api/admin-meta/workspace": 1,
+          "GET /admin/api/me/permissions": 1,
+          "GET /admin/api/me/capabilities": 1,
+          "GET /admin/api/dashboard/new-types": 1,
+          "GET /admin/api/dashboard/summary": 1,
+          "GET /admin/api/dashboard/layout": 1,
+          "GET /admin/api/schema/journal": 1,
+          "GET /admin/api/dashboard/setup": 1,
+          "POST /admin/api/dashboard/query": 1,
+          "HEAD /admin/api/seed": 1
+        },
+        "occasional": []
+      },
+      "list": {
+        "requests": 16,
+        "rounds": 6,
+        "statements": 53,
+        "kinds": {
+          "GET /admin/api/general-settings": 1,
+          "GET /admin/api/auth/setup-status": 1,
+          "GET /admin/api/collections": 1,
+          "GET /admin/api/admin-meta": 1,
+          "GET /admin/api/auth/session": 1,
+          "GET /admin/api/singles": 2,
+          "GET /admin/api/notices/count": 1,
+          "GET /admin/api/me": 1,
+          "GET /admin/api/admin-meta/workspace": 1,
+          "GET /admin/api/me/permissions": 1,
+          "GET /admin/api/me/capabilities": 1,
+          "GET /admin/api/schema/journal": 1,
+          "GET /admin/api/collections/posts": 1,
+          "GET /admin/api/collections/posts/entries": 1,
+          "GET /admin/api/plugins/@nextlyhq/plugin-page-builder/templates/entry-designs": 1
+        },
+        "occasional": []
+      },
+      "edit": {
+        "requests": 27,
+        "rounds": 8,
+        "statements": 92,
+        "kinds": {
+          "GET /admin/api/general-settings": 1,
+          "GET /admin/api/auth/setup-status": 1,
+          "GET /admin/api/collections": 1,
+          "GET /admin/api/admin-meta": 1,
+          "GET /admin/api/auth/session": 1,
+          "GET /admin/api/singles": 2,
+          "GET /admin/api/notices/count": 1,
+          "GET /admin/api/me": 1,
+          "GET /admin/api/admin-meta/workspace": 1,
+          "GET /admin/api/me/permissions": 1,
+          "GET /admin/api/me/capabilities": 1,
+          "GET /admin/api/schema/journal": 1,
+          "GET /admin/api/collections/schema/posts": 1,
+          "GET /admin/api/collections/posts/entries/:id": 4,
+          "GET /admin/api/dashboard/pins": 1,
+          "GET /admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/page-collection": 1,
+          "GET /admin/api/releases": 1,
+          "GET /admin/api/media/folders": 1,
+          "GET /admin/api/media": 2,
+          "GET /admin/api/plugins/@nextlyhq/plugin-page-builder/templates/entry-designs": 1,
+          "POST /admin/api/document-lock": 1,
+          "GET /admin/api/collections/posts/entries/:id/versions/autosave": 1
+        },
+        "occasional": []
+      }
+    }
+  },
+  "mysql": {
+    "start": {
+      "statements": 1054
+    },
+    "screens": {
+      "login": {
+        "requests": 9,
+        "rounds": 5,
+        "statements": 8,
+        "kinds": {
+          "GET /admin/api/general-settings": 1,
+          "GET /admin/api/auth/setup-status": 2,
+          "GET /admin/api/admin-meta": 2,
+          "GET /admin/api/auth/session": 2,
+          "GET /admin/api/auth/ui": 1,
+          "GET /admin/api/admin-meta/workspace": 1
+        },
+        "occasional": []
+      },
+      "signin": {
+        "requests": 20,
+        "rounds": 8,
+        "statements": 183,
+        "kinds": {
+          "GET /admin/api/auth/csrf": 1,
+          "POST /admin/api/auth/login": 1,
+          "GET /admin/api/general-settings": 1,
+          "GET /admin/api/auth/setup-status": 1,
+          "GET /admin/api/admin-meta": 1,
+          "GET /admin/api/auth/session": 1,
+          "GET /admin/api/collections": 1,
+          "GET /admin/api/singles": 1,
+          "GET /admin/api/notices/count": 1,
+          "GET /admin/api/me": 1,
+          "GET /admin/api/admin-meta/workspace": 1,
+          "GET /admin/api/me/permissions": 1,
+          "GET /admin/api/me/capabilities": 1,
+          "GET /admin/api/schema/journal": 1,
+          "GET /admin/api/dashboard/new-types": 1,
+          "GET /admin/api/dashboard/summary": 1,
+          "GET /admin/api/dashboard/setup": 1,
+          "GET /admin/api/dashboard/layout": 1,
+          "POST /admin/api/dashboard/query": 1,
+          "HEAD /admin/api/seed": 1
+        },
+        "occasional": []
+      },
+      "dashboard": {
+        "requests": 18,
+        "rounds": 5,
+        "statements": 153,
+        "kinds": {
+          "GET /admin/api/general-settings": 1,
+          "GET /admin/api/auth/setup-status": 1,
+          "GET /admin/api/admin-meta": 1,
+          "GET /admin/api/auth/session": 1,
+          "GET /admin/api/collections": 1,
+          "GET /admin/api/singles": 1,
+          "GET /admin/api/notices/count": 1,
+          "GET /admin/api/me": 1,
+          "GET /admin/api/admin-meta/workspace": 1,
+          "GET /admin/api/me/permissions": 1,
+          "GET /admin/api/me/capabilities": 1,
+          "GET /admin/api/dashboard/new-types": 1,
+          "GET /admin/api/dashboard/summary": 1,
+          "GET /admin/api/dashboard/layout": 1,
+          "GET /admin/api/dashboard/setup": 1,
+          "GET /admin/api/schema/journal": 1,
+          "POST /admin/api/dashboard/query": 1,
+          "HEAD /admin/api/seed": 1
+        },
+        "occasional": []
+      },
+      "list": {
+        "requests": 16,
+        "rounds": 6,
+        "statements": 53,
+        "kinds": {
+          "GET /admin/api/general-settings": 1,
+          "GET /admin/api/auth/setup-status": 1,
+          "GET /admin/api/collections": 1,
+          "GET /admin/api/admin-meta": 1,
+          "GET /admin/api/auth/session": 1,
+          "GET /admin/api/singles": 2,
+          "GET /admin/api/notices/count": 1,
+          "GET /admin/api/me": 1,
+          "GET /admin/api/admin-meta/workspace": 1,
+          "GET /admin/api/me/permissions": 1,
+          "GET /admin/api/me/capabilities": 1,
+          "GET /admin/api/schema/journal": 1,
+          "GET /admin/api/collections/posts": 1,
+          "GET /admin/api/collections/posts/entries": 1,
+          "GET /admin/api/plugins/@nextlyhq/plugin-page-builder/templates/entry-designs": 1
+        },
+        "occasional": []
+      },
+      "edit": {
+        "requests": 27,
+        "rounds": 8,
+        "statements": 95,
+        "kinds": {
+          "GET /admin/api/general-settings": 1,
+          "GET /admin/api/auth/setup-status": 1,
+          "GET /admin/api/collections": 1,
+          "GET /admin/api/admin-meta": 1,
+          "GET /admin/api/auth/session": 1,
+          "GET /admin/api/singles": 2,
+          "GET /admin/api/notices/count": 1,
+          "GET /admin/api/me": 1,
+          "GET /admin/api/admin-meta/workspace": 1,
+          "GET /admin/api/me/permissions": 1,
+          "GET /admin/api/me/capabilities": 1,
+          "GET /admin/api/schema/journal": 1,
+          "GET /admin/api/collections/schema/posts": 1,
+          "GET /admin/api/collections/posts/entries/:id": 4,
+          "GET /admin/api/dashboard/pins": 1,
+          "GET /admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/page-collection": 1,
+          "GET /admin/api/releases": 1,
+          "GET /admin/api/media/folders": 1,
+          "GET /admin/api/media": 2,
+          "GET /admin/api/plugins/@nextlyhq/plugin-page-builder/templates/entry-designs": 1,
+          "POST /admin/api/document-lock": 1,
+          "GET /admin/api/collections/posts/entries/:id/versions/autosave": 1
+        },
+        "occasional": []
+      }
+    }
+  },
+  "growth": {
+    "withDelay100ms": 7,
+    "with45MoreCollections": 1173
+  }
+}
