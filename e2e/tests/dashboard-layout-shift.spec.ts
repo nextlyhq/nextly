@@ -238,6 +238,11 @@ async function waitForSettled(page: Page): Promise<void> {
 }
 
 /** Follows the link at `href` the way the app does, without it counting as a reader's input. */
+/** Follow the first link to `href` with a real click, as a reader would. */
+async function clickLink(page: Page, href: string): Promise<void> {
+  await page.locator(`a[href="${href}"]`).first().click();
+}
+
 async function followLink(page: Page, href: string): Promise<void> {
   await page.evaluate(target => {
     const link = document.querySelector<HTMLAnchorElement>(
@@ -343,29 +348,32 @@ for (const site of SITES) {
 }
 
 for (const size of WIDTHS) {
-  test(`holds the main column through a round trip to a collection (${size.name})`, async ({
+  test(`draws each page of a round trip to a collection at its direct-load geometry (${size.name})`, async ({
     page,
   }, info) => {
     test.setTimeout(240_000);
     const wide = size.width >= 1024;
     await page.setViewportSize({ width: size.width, height: size.height });
     await recordShifts(page);
+
+    // Each page's geometry as a direct load draws it. A page with a panel
+    // (the collection) and one without (the dashboard) start their column at
+    // different edges on the wide layout, and the round trip must land on
+    // exactly these.
+    await gotoAdmin(page, "/collections/posts");
+    await waitForShellAnswers(page);
+    const collectionDirect = await mainColumnBox(page);
     await gotoAdmin(page, "/");
     await waitForSettled(page);
-    // Warm the collection's route (on the dev server, its compile) so the window measures the
-    // navigation, not a first compile.
-    await followLink(page, "/admin/collections/posts");
-    await page.waitForURL(/\/admin\/collections\/posts/);
-    await waitForShellAnswers(page);
-    await followLink(page, "/admin");
-    await page.waitForURL(/\/admin\/?$/);
-    await waitForSettled(page);
+    const dashboardDirect = await mainColumnBox(page);
 
-    const before = await mainColumnBox(page);
     await forgetShifts(page);
     await measureLeavingTheDashboard(page);
 
-    await followLink(page, "/admin/collections/posts");
+    // Followed with a real click, as a reader does: the column moving with a
+    // navigation the reader started is not a layout shift, and the browser
+    // records it as following input.
+    await clickLink(page, "/admin/collections/posts");
     await page.waitForURL(/\/admin\/collections\/posts/);
     await waitForShellAnswers(page);
     if (wide) {
@@ -379,7 +387,7 @@ for (const size of WIDTHS) {
     await page.waitForTimeout(1_000);
     const open = await mainColumnBox(page);
 
-    await followLink(page, "/admin");
+    await clickLink(page, "/admin");
     await page.waitForURL(/\/admin\/?$/);
     await waitForSettled(page);
     const after = await mainColumnBox(page);
@@ -387,15 +395,17 @@ for (const size of WIDTHS) {
     const shift = await shiftSoFar(page);
     report(info, `round trip ${size.name} ${size.width}px`, shift, "routed");
     console.log(
-      `LAYOUT-SHIFT   main column ${JSON.stringify({ before, open, after })}`
+      `LAYOUT-SHIFT   main column ${JSON.stringify({ collectionDirect, open, dashboardDirect, after })}`
     );
 
-    expect(open, "the main column moved as the second panel opened").toEqual(
-      before
-    );
-    expect(after, "the main column moved as the second panel closed").toEqual(
-      before
-    );
+    expect(
+      open,
+      "the collection reached from the dashboard is drawn as its direct load"
+    ).toEqual(collectionDirect);
+    expect(
+      after,
+      "the dashboard reached from the collection is drawn as its direct load"
+    ).toEqual(dashboardDirect);
     if (PRODUCTION_SERVER) {
       if (wide) {
         expect(

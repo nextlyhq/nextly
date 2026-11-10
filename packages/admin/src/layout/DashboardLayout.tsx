@@ -21,6 +21,7 @@ import {
   useSuppressedChrome,
 } from "../components/layout/ChromeSuppression";
 import { DashboardHeader } from "../components/layout/header";
+import { PanelFoldProvider } from "../components/layout/PanelFold";
 import { HeaderTrailProvider } from "../components/layout/header/HeaderTrail";
 import { SidebarProvider } from "../components/layout/sidebar";
 import { DualSidebar } from "../components/layout/sidebar/DualSidebar";
@@ -59,6 +60,10 @@ export function DashboardLayout({
 }: DashboardLayoutProps): React.JSX.Element {
   return (
     <ChromeSuppressionProvider>
+      {/* Inside chrome suppression: a page folding its panel asks for the
+          panel to go through it, and the bar reads the fold to draw its
+          toggle. */}
+      <PanelFoldProvider>
       <SidePanelReservationProvider>
         {/* Above the chrome for the same reason: the top bar draws the trail
             a page below it registers. */}
@@ -66,6 +71,7 @@ export function DashboardLayout({
           <DashboardChrome>{children}</DashboardChrome>
         </HeaderTrailProvider>
       </SidePanelReservationProvider>
+      </PanelFoldProvider>
     </ChromeSuppressionProvider>
   );
 }

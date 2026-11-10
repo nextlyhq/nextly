@@ -1,10 +1,11 @@
 /**
  * The second sidebar panel and the main column beside it.
  *
- * On the wide layout the panel's track is held at the open panel's width on every screen, so a
- * collection reached by navigating from the dashboard is drawn at the geometry a direct load of it
- * draws, with the panel's links in reach. On a phone the panel opens over the main column, inside
- * the navigation drawer, and the column keeps its place and width.
+ * On the wide layout the panel's track is held on a page whose section owns a panel, from its
+ * first paint, and absent on a page without one: the dashboard draws no empty column beside the
+ * rail. Every page reached by navigating is drawn at the geometry a direct load of it draws, with
+ * the panel's links in reach. On a phone the panel opens over the main column, inside the
+ * navigation drawer, and the column keeps its place and width.
  *
  * The round trip's layout shift and the column's box across it are measured in
  * `dashboard-layout-shift.spec.ts`, beside the dashboard's own.
@@ -31,11 +32,14 @@ test("draws a collection reached from the dashboard as a direct load draws it", 
 
   await gotoAdmin(page, "/");
   await waitForShellAnswers(page);
-  // One geometry on every surface: the dashboard owns no panel, and its column starts where a
-  // collection's does.
-  expect(await mainColumnBox(page)).toEqual(direct);
+  // The dashboard owns no panel, so it draws no empty column: its main column starts at the
+  // rail's edge, a panel's width (256px) before a collection's, and is that much wider.
+  const dashboard = await mainColumnBox(page);
+  expect(dashboard.x).toBe(direct.x - 256);
+  expect(dashboard.width).toBe(direct.width + 256);
 
-  // On the wide layout the rail's Content entry opens its panel in place; the column stays put.
+  // On the wide layout the rail's Content entry opens its panel beside the column, which then
+  // stands where a collection's does.
   // Found in the navigation: a dashboard card's title is the button that opens its quick
   // settings, so the Content card draws a second button named "Content" in the main column.
   await page
