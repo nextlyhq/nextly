@@ -31,6 +31,11 @@ export interface DrawnCard {
   id: string;
   /** The columns it spans at this width. */
   span: number;
+  /**
+   * How tall its content is, unstretched by the row it stands in: the height it takes in whichever
+   * row it lands in. Its drawn height where absent.
+   */
+  contentHeight?: number;
   rect: { left: number; top: number; right: number; bottom: number };
 }
 
@@ -112,9 +117,9 @@ export function gridPlacements(
 }
 
 /**
- * How tall each row of `order` placed at `cells` is drawn: as its tallest card, each card as tall
- * as it is drawn now. A card keeps its width wherever it moves, so its content's height, which a
- * card is drawn at, moves with it.
+ * How tall each row of `order` placed at `cells` is drawn: as its tallest card's content. A card
+ * keeps its width wherever it moves, so its content's height moves with it; its drawn height is
+ * its old row's, which it does not carry to a new one.
  */
 function rowHeights(
   order: readonly DrawnCard[],
@@ -123,7 +128,10 @@ function rowHeights(
   const heights: number[] = [];
   order.forEach((card, index) => {
     const row = cells[index]?.row ?? 0;
-    const height = Math.max(card.rect.bottom - card.rect.top, 0);
+    const height = Math.max(
+      card.contentHeight ?? card.rect.bottom - card.rect.top,
+      0
+    );
     heights[row] = Math.max(heights[row] ?? 0, height);
   });
   return Array.from(heights, height => height ?? 0);

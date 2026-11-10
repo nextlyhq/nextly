@@ -7,13 +7,19 @@
  * own beyond its loading skeleton's, and the cards below it would move when the answer lands.
  * Each cell remembers the height its card was last drawn at with an answer, by placement, for as
  * long as the page is open; while the card loads again (a return to the dashboard, a refresh, a
- * card put back) the cell holds that height as its minimum. A card never drawn with an answer
- * holds its skeleton's height, the default for its kind (`WidgetCard`'s loading body).
+ * card put back) the cell is drawn at exactly that height ({@link heldCellStyle}). A card never
+ * drawn with an answer holds its skeleton's height, the default for its kind (`WidgetCard`'s
+ * loading body).
  *
  * @module components/features/widgets/frame/held-height
  */
 
-import { useLayoutEffect, useState, type RefObject } from "react";
+import {
+  useLayoutEffect,
+  useState,
+  type CSSProperties,
+  type RefObject,
+} from "react";
 
 import { observeSize } from "./observe-size";
 
@@ -49,6 +55,20 @@ export function useHeldCardHeight(
     return observeSize(element, record);
   }, [placementId, loading, cell]);
   return loading ? held : undefined;
+}
+
+/**
+ * The style of a cell holding `heldPx` while its card loads: exactly that height, its skeleton
+ * clipped to it. A minimum alone would let a skeleton taller than the answer it stands in for
+ * grow the row while loading, and the row would close up again when the answer lands, moving
+ * every card under it. Nothing for a cell that holds no height.
+ */
+export function heldCellStyle(
+  heldPx: number | undefined
+): CSSProperties | undefined {
+  return heldPx === undefined
+    ? undefined
+    : { height: `${heldPx}px`, overflow: "hidden" };
 }
 
 /** Forgets every remembered height. For tests, which draw one placement id many times. */

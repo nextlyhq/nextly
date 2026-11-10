@@ -170,15 +170,18 @@ function measureCards(
     const id = cell.getAttribute(CELL_PLACEMENT_ATTRIBUTE);
     if (id !== null) cells.set(id, cell);
   }
+  const content = contentHeights([...cells.values()]);
   const cards: DrawnCard[] = [];
   for (const row of rows) {
     const cell = cells.get(row.placementId);
     if (cell === undefined) return undefined;
     const rect = cell.getBoundingClientRect();
     const size = drawnSize(row.size, row.widget.size);
+    const contentHeight = content.get(cell);
     cards.push({
       id: row.placementId,
       span: drawnSpan(size.w, dashboardWidth),
+      ...(contentHeight === undefined ? {} : { contentHeight }),
       rect: {
         left: rect.left - box.left,
         top: rect.top - box.top,
@@ -192,6 +195,26 @@ function measureCards(
     gridWidth: box.width,
     origin: { left: box.left, top: box.top },
   };
+}
+
+/**
+ * Each cell's content height, unstretched by its row: read with every cell drawn at
+ * `align-self: start` and put back in the same task, so nothing is painted between. A row is as
+ * tall as its tallest card, so a card's drawn height is its row's, not its own.
+ */
+function contentHeights(cells: readonly Element[]): Map<Element, number> {
+  const styled = cells.filter(
+    (cell): cell is HTMLElement => cell instanceof HTMLElement
+  );
+  const before = styled.map(cell => cell.style.alignSelf);
+  for (const cell of styled) cell.style.alignSelf = "start";
+  const heights = new Map<Element, number>(
+    styled.map(cell => [cell, cell.getBoundingClientRect().height])
+  );
+  styled.forEach((cell, index) => {
+    cell.style.alignSelf = before[index] ?? "";
+  });
+  return heights;
 }
 
 /** Whether a key picks a card up or puts it down. */

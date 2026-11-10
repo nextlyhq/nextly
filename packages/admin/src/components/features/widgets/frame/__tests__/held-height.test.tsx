@@ -6,7 +6,11 @@ import { render } from "@testing-library/react";
 import { useRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { forgetHeldCardHeights, useHeldCardHeight } from "../held-height";
+import {
+  forgetHeldCardHeights,
+  heldCellStyle,
+  useHeldCardHeight,
+} from "../held-height";
 
 /** A cell measuring `height` px tall, which reports the height it holds through `onHeld`. */
 function Cell({
@@ -97,5 +101,17 @@ describe("useHeldCardHeight", () => {
     const other: (number | undefined)[] = [];
     render(<Cell id="b" loading height={90} onHeld={h => other.push(h)} />);
     expect(other.at(-1)).toBeUndefined();
+  });
+});
+
+describe("heldCellStyle", () => {
+  it("draws a loading cell at exactly the held height, its skeleton clipped to it", () => {
+    // Exactly, not at least: a skeleton taller than the answer it stands in for would otherwise
+    // grow the row while loading, and the row would close up again when the answer lands.
+    expect(heldCellStyle(240)).toEqual({ height: "240px", overflow: "hidden" });
+  });
+
+  it("styles nothing for a cell that holds no height", () => {
+    expect(heldCellStyle(undefined)).toBeUndefined();
   });
 });

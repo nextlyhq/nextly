@@ -33,7 +33,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { CardCollapseContext, type CardCollapse } from "../frame/collapse";
-import { useHeldCardHeight } from "../frame/held-height";
+import { heldCellStyle, useHeldCardHeight } from "../frame/held-height";
 import type { AnswerSize } from "../frame/tier";
 import { CardHiddenReportContext } from "../hidden-while-empty";
 import type { MoveDirection } from "../layout-editor";
@@ -624,8 +624,8 @@ function useSettingsSheet(props: ArrangedCellProps, hasSettings: boolean) {
 
 /**
  * The cell's element, and its style: while the card's answer has not arrived (`loading`), the
- * height the card was last drawn at as its minimum (`frame/held-height`), so the cards below it
- * stay where they were; nothing otherwise.
+ * height the card was last drawn at (`frame/held-height`), so the cards below it stay where they
+ * were; nothing otherwise.
  */
 function useHeldCellStyle(
   placementId: string,
@@ -638,7 +638,7 @@ function useHeldCellStyle(
   const heldPx = useHeldCardHeight(placementId, loading, cellRef);
   return {
     cellRef,
-    style: heldPx === undefined ? undefined : { minHeight: `${heldPx}px` },
+    style: heldCellStyle(heldPx),
   };
 }
 

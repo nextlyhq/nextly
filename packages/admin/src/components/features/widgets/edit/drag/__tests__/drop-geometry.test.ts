@@ -179,6 +179,29 @@ describe("dropLineFor: where the line is drawn", () => {
         length: 200,
       });
     });
+
+    it("sizes a row by each card's content, not the height its old row stretched it to", () => {
+      // As a page draws them: `x` stretched to its row's 300 px, its content 200 px tall. `z` to
+      // between `x` and `y` leaves `x` and `z` in the first row, which is then 200 px tall, as
+      // `x`'s content is, not the 300 its old row stretched it to.
+      const stretched: DrawnCard[] = MIXED.map(card =>
+        card.id === "x"
+          ? { ...card, contentHeight: 200, rect: { ...card.rect, bottom: 300 } }
+          : card.id === "w"
+            ? {
+                ...card,
+                contentHeight: 100,
+                rect: { ...card.rect, bottom: 466 },
+              }
+            : card
+      );
+      expect(dropLineFor(stretched, 2, 1, GRID_WIDTH)).toEqual({
+        orientation: "vertical",
+        x: 600,
+        top: 0,
+        length: 200,
+      });
+    });
   });
 
   it("draws a horizontal line above the card it lands before, when it will start a row", () => {
