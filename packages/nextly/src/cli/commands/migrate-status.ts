@@ -51,6 +51,7 @@ import {
 import {
   markedFileChange,
   readOldBuilderLedger,
+  withOldBuilderMarks,
   type ChangedOldBuilderFile,
 } from "../../domains/schema/migrate/old-builder-ledger";
 import {
@@ -343,12 +344,18 @@ export async function runMigrateStatus(
 
     logger.debug(`Scanning migrations in ${migrationsDir}...`);
 
-    // Read as `nextly migrate` reads the folder. A manifest that cannot be
-    // read is the registry check's to report; until then none is declared.
-    const declared = await declaredNamesOf(
-      { ...configResult, projectRoot: cwd },
-      { orNone: true }
-    );
+    // Read as `nextly migrate` reads the folder, under the ledger's old
+    // Builder marks. A manifest that cannot be read is the registry check's
+    // to report; until then none is declared.
+    const { declared } = await withOldBuilderMarks({
+      adapter,
+      db: (adapter as unknown as DrizzleAdapter).getDrizzle(),
+      dialect,
+      declared: await declaredNamesOf(
+        { ...configResult, projectRoot: cwd },
+        { orNone: true }
+      ),
+    });
 
     const migrationFiles = await migrationEntries({
       plugin: options.plugin,

@@ -41,6 +41,50 @@ const READERS: Record<string, string> = {
     "replays only files carrying the localization intent header or marker; an old Builder file carries neither, so it reads as `other`",
 };
 
+/**
+ * How each reader stands to the ledger's old Builder marks, under which a file
+ * as its mark recorded keeps that identity whatever is declared since. A
+ * reader that has the database names the call it reads them through, which
+ * the scan finds in it; one that has none says why it reads without them.
+ */
+const MARKS: Record<string, { reads: string } | { without: string }> = {
+  "cli/utils/migration-discovery.ts": {
+    without:
+      "the shared reading applies the marks its caller passes in `DeclaredNames.marks`",
+  },
+  "cli/commands/migrate.ts": {
+    reads: "withOldBuilderMarks(",
+  },
+  "cli/commands/migrate-check.ts": {
+    without: "it runs offline, in CI, with no database to read a ledger from",
+  },
+  "cli/commands/migrate-status.ts": { reads: "withOldBuilderMarks(" },
+  "cli/commands/migrate-baseline.ts": { reads: "withOldBuilderMarks(" },
+  "cli/commands/migrate-resolve.ts": { reads: "withOldBuilderMarks(" },
+  "cli/commands/build.ts": {
+    without:
+      "it bundles the files with no database; the boot reads them under the marks",
+  },
+  "cli/commands/migrate-fresh.ts": {
+    without:
+      "it empties the ledger before its run, so its dry run lists the files as a run on an empty ledger reads them",
+  },
+  "domains/schema/migrate/pending-entities.ts": {
+    without:
+      "it reads under the declared names `migrateCore` hands it, the marks among them",
+  },
+  "domains/schema/migrate/old-builder-ledger.ts": {
+    reads: "currentOldBuilderMarks()",
+  },
+  "domains/dynamic-collections/services/removed-from-code-state.ts": {
+    without:
+      "it describes a removed entity for a request, reading no ledger and declaring nothing",
+  },
+  "domains/i18n/migration/companion-history.ts": {
+    without: "it reads only files a header marks, which no old Builder file is",
+  },
+};
+
 function productFiles(dir: string): string[] {
   return readdirSync(dir).flatMap(name => {
     const path = join(dir, name);
@@ -60,5 +104,14 @@ describe("the readers of the migrations folder", () => {
     // Read, not assumed: the scan finds the command every reader leads to.
     expect(readers).toContain("cli/commands/migrate.ts");
     expect(readers).toEqual(Object.keys(READERS).sort());
+  });
+
+  it("each say how they stand to the ledger's marks, and read them where they say so", () => {
+    expect(Object.keys(MARKS).sort()).toEqual(Object.keys(READERS).sort());
+    for (const [file, stance] of Object.entries(MARKS)) {
+      if (!("reads" in stance)) continue;
+      const text = readFileSync(join(SRC, file), "utf8");
+      expect(text.includes(stance.reads), `${file} reads the marks`).toBe(true);
+    }
   });
 });

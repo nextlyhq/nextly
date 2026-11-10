@@ -94,6 +94,7 @@ import {
 import {
   markedFileChange,
   readOldBuilderLedger,
+  withOldBuilderMarks,
   type ChangedOldBuilderFile,
   type OldBuilderLedger,
 } from "../../domains/schema/migrate/old-builder-ledger";
@@ -436,16 +437,26 @@ export async function runMigrate(
       adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
     );
 
+    // What the declared schema names, with the ledger's old Builder marks:
+    // the one value every reader of the folder below reads it through.
+    // `migrateCore` reads the marks again under the lock.
+    const { declared } = await withOldBuilderMarks({
+      adapter,
+      db,
+      dialect,
+      declared: {
+        junctions: resolvedSchema.junctionsByEntity,
+        tables: resolvedSchema.declaredTables,
+      },
+    });
+
     if (options.dryRun) {
       await previewMigrate({
         adapter,
         db,
         dialect,
         migrationsDir: appMigrationsDir,
-        declared: {
-          junctions: resolvedSchema.junctionsByEntity,
-          tables: resolvedSchema.declaredTables,
-        },
+        declared,
         plugins: configResult.config.plugins ?? [],
         step: options.step,
         logger,
@@ -516,10 +527,7 @@ export async function runMigrate(
         // refused, never run as written.
         refuseUnrecognisedBuilderFiles: true,
         knownJunctions: resolvedSchema.knownJunctions,
-        declared: {
-          junctions: resolvedSchema.junctionsByEntity,
-          tables: resolvedSchema.declaredTables,
-        },
+        declared,
         allowDestructive: allowCoreDestructive,
         ...commandLineConsent(options, logger),
         dropRetiredAuthTables,
@@ -537,10 +545,7 @@ export async function runMigrate(
             dialect,
             appMigrationsDir,
             logger,
-            {
-              junctions: resolvedSchema.junctionsByEntity,
-              tables: resolvedSchema.declaredTables,
-            }
+            declared
           );
           if (pending.length > 0) return;
           const { refuseCompanionColumnsThatCannotHold } = await import(
@@ -603,10 +608,7 @@ export async function runMigrate(
         dialect,
         appMigrationsDir,
         logger,
-        {
-          junctions: resolvedSchema.junctionsByEntity,
-          tables: resolvedSchema.declaredTables,
-        }
+        declared
       );
       if (stillPending.length > 0) {
         logger.info(
@@ -1925,6 +1927,10 @@ export async function migrateCore(
   // The history checks that need no database, before the lock is waited on:
   // a list edited by hand is refused with nothing changed.
   assertPluginListsSound(deps.pluginMigrationSets ?? []);
+  // The ledger's old Builder marks in the declared names every reader below
+  // reads the folder through: the command and the boot alike hand only what
+  // is declared. Read again under the lock.
+  deps = await withOldBuilderMarks(deps);
   // Each old Schema Builder file the run ignores, named once so a file that
   // merely carries the signature never vanishes without a word. Information:
   // the run does what it would without the file. The boot hands its own log.
@@ -1987,11 +1993,19 @@ export async function migrateCore(
       // a deploy refused after the core reconcile would leave core's tables
       // at a release that never ran.
       await assertPluginHistoriesHold(deps);
+      // The marks as the ledger holds them now, which no other run changes
+      // before this one writes: a mark withdrawn while this run waited is not
+      // read as standing.
+      deps = await withOldBuilderMarks(deps);
+      const lockedHistory = {
+        ...deps,
+        command: deps.lockCommand ?? "nextly migrate",
+      };
       // Under the lock, so the ledger read is the one no other run changes
       // before this one writes, and before Phase 1's first write: the
       // history checks of `assertAppHistoryHolds`, in its order.
-      await assertFilesPresent(historyArgs);
-      await refuseAttempts(historyArgs);
+      await assertFilesPresent(lockedHistory);
+      await refuseAttempts(lockedHistory);
       // And again under the lock, before anything writes (the checksum check
       // below records a missing checksum): a file changed while this run
       // waited for the lock is judged as it now reads.
@@ -2475,12 +2489,14 @@ async function readAppHistory(args: AppHistoryArgs): Promise<
   const rows = allRows.filter(
     row => row.filename === null || !oldBuilder.ignoredRows.has(row.filename)
   );
+  // Read under the marks the judgement above read, so the files compared and
+  // the rows ignored are of one reading.
   const files = await discoverMigrations(
     args.migrationsDir,
     args.logger,
     args.dialect,
     "app",
-    args.declared
+    { ...args.declared, marks: oldBuilder.marked }
   );
   // A removal stands for the applied outcome it was recorded after.
   const removed = removedOnPurpose(rows, await repo.listFileRemovals());

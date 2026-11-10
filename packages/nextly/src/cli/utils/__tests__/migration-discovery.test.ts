@@ -249,13 +249,15 @@ describe("migration-discovery", () => {
         expect(selectVariant(group?.variants ?? [], "postgresql")).toBe(OLD);
         expect(selectVariant(group?.variants ?? [], "mysql")).toBe(VARIANT);
         expect(folder.oldBuilderFiles).toEqual([]);
-        // The base lacks the variant's absence (on MySQL its Postgres quoting
-        // is out of scope too); the variant is no Builder file, so it is not
-        // named as one.
-        const partial = folder.partialBuilderFiles.map(f => f.file);
-        expect(partial).toEqual([OLD, HAND]);
-        expect(folder.partialBuilderFiles[0]?.lacks).toContain("variant");
-        expect(partial).not.toContain(VARIANT);
+        // Both the base and the variant lack the variant's absence (on MySQL
+        // the base's Postgres quoting is out of scope too): each is checked
+        // as a migration, and neither is ignored.
+        const lacking = new Map(
+          folder.partialBuilderFiles.map(f => [f.file, f.lacks])
+        );
+        expect([...lacking.keys()].sort()).toEqual([OLD, VARIANT, HAND].sort());
+        expect(lacking.get(OLD)).toContain("variant");
+        expect(lacking.get(VARIANT)).toContain("variant");
       }
     });
 

@@ -206,15 +206,16 @@ describe.each<Dialect>(["postgresql", "mysql"])(
       });
     });
 
-    // The Builder never wrote a dialect variant: a variant is a migration as
-    // any, and a base file with one beside it is the variant's migration too.
-    it("reads a dialect variant of a Builder name as an ordinary file", () => {
-      expect(
-        old(
-          "1730000000000_create_posts.mysql.sql",
-          createFile("posts", dialect)
-        )
-      ).toEqual({ kind: "ordinary" });
+    // The Builder never wrote a dialect variant: one with its name is never
+    // its file, so it is partial and refused as any, never ignored; a base
+    // file with one beside it is the variant's migration too.
+    it("reads a dialect variant of a Builder name as partial, lacking that", () => {
+      const kind = old(
+        "1730000000000_create_posts.mysql.sql",
+        createFile("posts", dialect)
+      );
+      expect(kind.kind).toBe("partial");
+      expect(kind.kind === "partial" && kind.lacks).toContain("variant");
     });
 
     it("(b) a dialect variant beside it makes it partial, lacking only that", () => {
@@ -755,6 +756,33 @@ describe("a junction-shaped name that is another collection's table", () => {
     expect(update(new Set(["dc_posts"]))).toEqual({
       kind: "old-builder",
       entity: "posts",
+    });
+  });
+
+  // A mark records the reading made when the file was recognised. With the
+  // file's bytes as marked, what is declared since cannot undo it; a snapshot
+  // or a dialect variant beside it still does, as for any file.
+  describe("in a file as its mark recorded", () => {
+    const marked = (over: Partial<MigrationFileFacts> = {}) =>
+      classifyMigrationFile(
+        facts({
+          name: "1730000000018_update_posts.sql",
+          content: `ALTER TABLE "dc_posts_dc_comments_secret" ADD COLUMN "x" text;`,
+          declaredTables: new Set(["dc_posts", "dc_posts_dc_comments_secret"]),
+          markedAsIs: true,
+          ...over,
+        })
+      );
+
+    it("keeps the entity's identity while that table is declared", () => {
+      expect(marked()).toEqual({ kind: "old-builder", entity: "posts" });
+    });
+
+    it.each([
+      ["a snapshot", { hasSnapshot: true }, "snapshot"],
+      ["a dialect variant", { hasDialectVariant: true }, "variant"],
+    ] as const)("is partial with %s beside it", (_n, over, part) => {
+      expect(marked(over)).toEqual({ kind: "partial", lacks: [part] });
     });
   });
 });

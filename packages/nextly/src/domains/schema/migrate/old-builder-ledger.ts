@@ -33,9 +33,9 @@ import {
   type DeclaredNames,
 } from "../../../cli/utils/migration-discovery";
 import { isPluginLedgerRow } from "../events/ledger-scope";
-import type {
-  SchemaEventRow,
+import {
   SchemaEventsRepository,
+  type SchemaEventRow,
 } from "../events/schema-events-repository";
 
 import type { OldBuilderSignaturePart } from "./old-builder-files";
@@ -94,6 +94,12 @@ export function markedFileChange(file: ChangedOldBuilderFile): string {
 export interface OldBuilderLedger {
   /** Files whose ledger rows are not an app migration's, for any check or listing. */
   ignoredRows: ReadonlySet<string>;
+  /**
+   * The current marks' checksums the folder was read under
+   * (`readOldBuilderLedger`), for a caller reading the folder again in the
+   * same check; absent from a judgement made without the ledger.
+   */
+  marked?: ReadonlyMap<string, string>;
   /** Old Builder files to mark at the run's first write, with their checksums. */
   toMark: { file: string; checksum: string }[];
   changed: ChangedOldBuilderFile[];
@@ -199,12 +205,15 @@ export async function readOldBuilderLedger(
   repo: Pick<SchemaEventsRepository, "currentOldBuilderMarks">,
   rows: readonly Pick<SchemaEventRow, "filename">[]
 ): Promise<OldBuilderLedger> {
-  const folder = await readMigrationFolder(
-    args.migrationsDir,
-    args.dialect,
-    args.declared
-  );
-  return judgeOldBuilderLedger({
+  // The folder is read under the very marks it is judged by, so a file as
+  // its mark recorded is never judged changed for what is declared since.
+  const marks = await repo.currentOldBuilderMarks();
+  const marked = markedChecksums(marks);
+  const folder = await readMigrationFolder(args.migrationsDir, args.dialect, {
+    ...args.declared,
+    marks: marked,
+  });
+  const ledger = judgeOldBuilderLedger({
     oldBuilderFiles: folder.oldBuilderFiles,
     partialBuilderFiles: folder.partialBuilderFiles,
     namedByRows: new Set(
@@ -214,7 +223,54 @@ export async function readOldBuilderLedger(
           : [row.filename]
       )
     ),
-    marks: await repo.currentOldBuilderMarks(),
+    marks,
     migrations: new Set([...folder.groups.keys()].map(name => `${name}.sql`)),
   });
+  return { ...ledger, marked };
+}
+
+/** The checksum each current mark records, by file (`DeclaredNames.marks`). */
+function markedChecksums(
+  marks: ReadonlyMap<string, Pick<SchemaEventRow, "status" | "sha256">>
+): ReadonlyMap<string, string> {
+  const marked = new Map<string, string>();
+  for (const [file, mark] of marks) {
+    if (isMarkCurrent(mark) && typeof mark.sha256 === "string") {
+      marked.set(file, mark.sha256);
+    }
+  }
+  return marked;
+}
+
+/**
+ * `args` with the ledger's current marks in its declared names
+ * (`DeclaredNames.marks`): the one way a reader that has the database reads
+ * the folder, so a file as its mark recorded keeps that identity in every
+ * command and the boot alike. With no ledger yet nothing is marked.
+ */
+export async function withOldBuilderMarks<
+  T extends {
+    adapter: unknown;
+    db: ConstructorParameters<typeof SchemaEventsRepository>[0];
+    dialect: SupportedDialect;
+    declared?: DeclaredNames;
+  },
+>(args: T): Promise<T & { declared: DeclaredNames }> {
+  const ledger = args.adapter as {
+    tableExists?: (table: string) => Promise<boolean>;
+  };
+  // An adapter that cannot say leaves the ledger unread: no mark, and every
+  // file judged afresh, the stricter reading.
+  const hasLedger =
+    typeof ledger.tableExists === "function" &&
+    (await ledger.tableExists("nextly_schema_events"));
+  const marks = hasLedger
+    ? markedChecksums(
+        await new SchemaEventsRepository(
+          args.db,
+          args.dialect
+        ).currentOldBuilderMarks()
+      )
+    : new Map<string, string>();
+  return { ...args, declared: { ...args.declared, marks } };
 }

@@ -7,9 +7,9 @@
  *     (`drop_comp_<slug>` for a field group, `drop_<N>_collections_<hash>`
  *     for a bulk delete, whose first line lists the collections the count
  *     and hash are derived from, `drop_user_ext` for the user-field table);
- * (b) no snapshot stands beside it, and no dialect variant of it
- *     (`<name>.mysql.sql`), which the Builder never wrote: a variant is
- *     never one of its files, and shares its base's ledger name;
+ * (b) no snapshot stands beside it; it is no dialect variant
+ *     (`<name>.mysql.sql`), and none stands beside it: the Builder never
+ *     wrote one, and a variant shares its base's ledger name;
  * (c) it holds none of the lines `migrate:create` writes: the UP and DOWN
  *     section markers and the entity headers;
  * (d) every statement changes only that entity's own tables: its table, its
@@ -77,6 +77,14 @@ export interface MigrationFileFacts {
    * ledger name, so such a file is the variant's migration too.
    */
   hasDialectVariant: boolean;
+  /**
+   * Whether a current mark records these very bytes (`DeclaredNames.marks`).
+   * The mark recorded that every statement kept to the entity when it was
+   * recognised; only what is declared can change that reading since, so it
+   * stands, and a collection declared later never turns the file into a
+   * changed one. Omitted, the statements are judged afresh.
+   */
+  markedAsIs?: boolean;
   dialect: SupportedDialect;
   /**
    * The junction tables the configuration and the Builder's manifest name
@@ -447,27 +455,32 @@ function mayBeEntityCompanion(table: string): boolean {
  * signature: the files worth reading to classify.
  */
 export function hasOldBuilderName(name: string): boolean {
-  // A dialect variant is never one: the Builder wrote one file per change.
-  return BUILDER_FILE_NAME.test(name) && dialectVariantOf(name) === undefined;
+  return BUILDER_FILE_NAME.test(name);
 }
 
 /** Classify one file of the migrations folder by the Builder's signature. */
 export function classifyMigrationFile(
   file: MigrationFileFacts
 ): MigrationFileKind {
-  const named = hasOldBuilderName(file.name)
-    ? BUILDER_FILE_NAME.exec(file.name)
-    : null;
+  const named = BUILDER_FILE_NAME.exec(file.name);
   if (!named) return { kind: "ordinary" };
   const [, verb, rest] = named;
-  // The one reading of the name whose tables every statement keeps to.
-  const entity = entitiesOf(verb, rest, file.content).find(candidate =>
-    staysInEntity(candidate, verb, file)
-  );
+  const readings = entitiesOf(verb, rest, file.content);
+  // The one reading of the name whose tables every statement keeps to; for a
+  // file as its mark recorded, the reading the mark was made under, the
+  // name's first.
+  const entity =
+    readings.find(candidate => staysInEntity(candidate, verb, file)) ??
+    (file.markedAsIs === true ? readings[0] : undefined);
 
   const lacks: OldBuilderSignaturePart[] = [];
   if (file.hasSnapshot) lacks.push("snapshot");
-  if (file.hasDialectVariant) lacks.push("variant");
+  // The Builder wrote one file per change, never a dialect variant: a
+  // variant with its name, or a file with one beside it, is never its file,
+  // so it is checked as a migration and refused as any partial one.
+  if (file.hasDialectVariant || dialectVariantOf(file.name) !== undefined) {
+    lacks.push("variant");
+  }
   if (hasCreateHeader(file.content)) lacks.push("header");
   if (entity === undefined) lacks.push("scope");
 

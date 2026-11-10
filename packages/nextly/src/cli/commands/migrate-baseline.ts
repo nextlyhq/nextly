@@ -45,7 +45,10 @@ import {
   EMPTY_SNAPSHOT,
   planBaseline,
 } from "../../domains/schema/migrate/baseline";
-import { readOldBuilderLedger } from "../../domains/schema/migrate/old-builder-ledger";
+import {
+  readOldBuilderLedger,
+  withOldBuilderMarks,
+} from "../../domains/schema/migrate/old-builder-ledger";
 import {
   resolveDeclaredSchema,
   type ResolvedEntity,
@@ -686,10 +689,16 @@ export async function baselineCore(
   // The app history checks every command that records migrations makes
   // before its first write (`assertAppHistoryHolds`); a dry run refuses as a
   // run would, recording no checksum.
-  const history = { ...deps, command: "nextly migrate:baseline" };
   if (deps.dryRun === true) {
-    await assertAppHistoryHolds({ ...history, recordChecksums: false });
-    const planned = await planAdoption(deps);
+    // The folder read under the ledger's old Builder marks, as every reader
+    // that has the database reads it.
+    const marked = await withOldBuilderMarks(deps);
+    await assertAppHistoryHolds({
+      ...marked,
+      command: "nextly migrate:baseline",
+      recordChecksums: false,
+    });
+    const planned = await planAdoption(marked);
     if (planned.kind !== "adopt") return planned;
     return {
       kind: "would-baseline",
@@ -712,8 +721,14 @@ export async function baselineCore(
       // Under the lock, before the plan and the first write, from the ledger
       // no other run changes now. Read-only: any applied history stops the
       // adoption anyway, so a refused baseline writes nothing.
-      await assertAppHistoryHolds({ ...history, recordChecksums: false });
-      const planned = await planAdoption(deps);
+      // The marks read here too, as the ledger holds them under the lock.
+      const marked = await withOldBuilderMarks(deps);
+      await assertAppHistoryHolds({
+        ...marked,
+        command: "nextly migrate:baseline",
+        recordChecksums: false,
+      });
+      const planned = await planAdoption(marked);
       if (planned.kind !== "adopt") return planned;
       const { baseName, sqlContent, sqlPath } = planned;
 
