@@ -63,14 +63,73 @@ describe("submissionAnswers", () => {
     expect(answer.value).toBe("retired-role");
   });
 
-  it("leaves out files, hidden fields and questions left blank or hidden by a condition", () => {
+  it("leaves out hidden fields and questions left blank", () => {
     const answers = submissionAnswers(FIELDS, {
       full_name: "Ali Shah",
-      cv: "9594cadb-e41e-43ae-baa3-fd2d121a7cdf",
       source: "website",
       notes: "   ",
     });
 
     expect(answers).toEqual([{ label: "Full name", value: "Ali Shah" }]);
+  });
+
+  it("leaves out a question its condition hid, even when a value was sent for it", () => {
+    const fields = [
+      {
+        type: "radio",
+        name: "attendance",
+        label: "How will you join?",
+        options: [
+          { label: "In person", value: "in-person" },
+          { label: "Online", value: "online" },
+        ],
+      },
+      {
+        type: "text",
+        name: "dietary",
+        label: "Dietary needs",
+        conditionalLogic: {
+          enabled: true,
+          action: "show",
+          operator: "AND",
+          conditions: [
+            { field: "attendance", comparison: "equals", value: "in-person" },
+          ],
+        },
+      },
+    ] as unknown as AnyFormField[];
+
+    const online = submissionAnswers(fields, {
+      attendance: "online",
+      dietary: "Vegan",
+    });
+    expect(online.map(a => a.label)).toEqual(["How will you join?"]);
+
+    // The control: shown, the same answer is listed.
+    const inPerson = submissionAnswers(fields, {
+      attendance: "in-person",
+      dietary: "Vegan",
+    });
+    expect(inPerson.map(a => a.label)).toEqual([
+      "How will you join?",
+      "Dietary needs",
+    ]);
+  });
+
+  it("says a file was uploaded, and whether it comes with the email, never its id", () => {
+    const fields = [
+      { type: "file", name: "cv", label: "CV", attachToEmail: true },
+      { type: "file", name: "photos", label: "Photos" },
+    ] as unknown as AnyFormField[];
+
+    const answers = submissionAnswers(fields, {
+      cv: "9594cadb-e41e-43ae-baa3-fd2d121a7cdf",
+      photos: ["a", "b"],
+    });
+
+    expect(answers).toEqual([
+      { label: "CV", value: "1 file, attached" },
+      { label: "Photos", value: "2 files, uploaded" },
+    ]);
   });
 });

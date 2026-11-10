@@ -29,6 +29,6 @@
 "nextly": patch
 ---
 
-Forms now bring two starter emails to Settings › Email: "Form submission", which lists every answer by its label for your team, and "Form confirmation", which confirms to the visitor that their submission arrived. A new notification starts on the team's email, and switches to the confirmation when it is sent to the visitor, so a new form sends from its first submission instead of waiting for someone to write an email. Templates also receive an `answers` variable: each answer's label and value, a choice by its option's label.
+Forms now bring two starter emails to Settings › Email: "Form submission", which lists every answer by its label for your team, and "Form confirmation", which confirms to the visitor that their submission arrived. A new notification starts on the team's email, and switches to the confirmation when it is sent to the visitor, so a new form sends from its first submission instead of waiting for someone to write an email. Templates also receive `submission.answers`: each answer's label and value, a choice by its option's label, leaving out questions left blank or hidden by a condition. A submitted field's own value is never replaced by these variables.
 
 A notification saved earlier without an email keeps sending nothing until you choose one: its editor now offers the matching starter in one press.

@@ -4,17 +4,22 @@
  * order.
  *
  * Left out:
- * - questions the visitor did not answer, which includes every question a
- *   condition hid from them, since a hidden question is never submitted;
+ * - questions the visitor did not answer;
+ * - questions the form's conditions hid, judged from the answers by the same
+ *   `evaluateConditions` the form runs, so a value sent for a hidden question
+ *   by a client that ignored the condition is never shown as answered;
  * - hidden fields, which carry values the page set for the site's own use,
- *   never something the visitor typed;
- * - files, whose stored value is a media id that means nothing in an inbox;
- *   a notification sends the files themselves as attachments.
+ *   never something the visitor typed.
+ *
+ * A file's stored value is a media id that means nothing in an inbox, so a
+ * file answer says how many were uploaded and whether they come with the
+ * email.
  *
  * Everything else is written by `formatExportValue`, the one place a stored
  * answer becomes text, so an email and an export never disagree about it.
  */
-import type { AnyFormField } from "../types";
+import type { AnyFormField, ConditionalLogic } from "../types";
+import { evaluateConditions } from "../utils/evaluate-conditions";
 import { formatExportValue } from "../utils/export-formats";
 
 /** One answer, as the starter messages' `answers` loop reads it. */
@@ -42,16 +47,39 @@ function choiceLabels(field: AnyFormField, value: unknown): unknown {
   return Array.isArray(value) ? value.map(label) : label(value);
 }
 
-/** The answers in a submission, for a notification's `answers` variable. */
+/** A file answer: how many, and whether they come with the email. */
+function fileAnswer(field: AnyFormField, value: unknown): string {
+  const count = Array.isArray(value) ? value.length : 1;
+  const files = count === 1 ? "1 file" : `${count} files`;
+  return (field as { attachToEmail?: boolean }).attachToEmail
+    ? `${files}, attached`
+    : `${files}, uploaded`;
+}
+
+/** Whether the form's conditions showed `field` for these answers. */
+function wasShown(field: AnyFormField, data: Record<string, unknown>): boolean {
+  const logic = (field as { conditionalLogic?: ConditionalLogic })
+    .conditionalLogic;
+  return evaluateConditions(logic, data);
+}
+
+/** The answers in a submission, for a notification's `submission.answers`. */
 export function submissionAnswers(
   fields: readonly AnyFormField[],
   data: Record<string, unknown>
 ): EmailAnswer[] {
   const answers: EmailAnswer[] = [];
   for (const field of fields) {
-    if (field.type === "hidden" || field.type === "file") continue;
+    if (field.type === "hidden") continue;
     const value = data[field.name];
-    if (!isAnswered(value)) continue;
+    if (!isAnswered(value) || !wasShown(field, data)) continue;
+    if (field.type === "file") {
+      answers.push({
+        label: field.label || field.name,
+        value: fileAnswer(field, value),
+      });
+      continue;
+    }
     const shown =
       field.type === "select" || field.type === "radio"
         ? choiceLabels(field, value)

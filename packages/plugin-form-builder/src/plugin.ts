@@ -759,9 +759,10 @@ export function buildNotificationEmails(input: {
   submissionId: unknown;
   defaultFrom?: string;
   /**
-   * The form's fields, which turn the answers into the `answers` list the
-   * starter messages loop over. Absent, the list is empty and templates that
-   * name answers by field (`{{ full_name }}`) still read them as before.
+   * The form's fields, which turn the answers into `submission.answers`, the
+   * list the starter messages loop over. Absent, the list is empty and
+   * templates that name answers by field (`{{ full_name }}`) still read them
+   * as before.
    */
   fields?: readonly AnyFormField[];
 }): { emails: FormEmailNotification[]; skipped: SkippedNotification[] } {
@@ -837,11 +838,14 @@ export function buildNotificationEmails(input: {
     emails.push({
       to,
       templateSlug: notification.templateSlug,
+      // `submission` (its answers by label, and its id) goes under the
+      // submitted fields, so a form with a field of that name keeps sending
+      // that field's value to the templates that read it, as it always has.
       variables: {
+        submission: { id: submissionId, answers },
         ...submittedData,
         formName,
         submissionId,
-        answers,
       },
       providerId: notification.providerId,
       from,
