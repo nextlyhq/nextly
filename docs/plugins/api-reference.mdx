@@ -965,9 +965,13 @@ heading behind. A section's component receives `SidebarSectionProps`
 and `entry`, as every contributed component does, and on a collection entry's
 page also the document's handles a `panelSections` section is given
 (`collectionSlug`, `entryId`, `documentLock`, `mayWrite`,
-`documentChanged`). The entry list offers a collection's row actions in each row's menu,
-after its own, on the rows whose `visibleWhen` holds. Columns, bulk actions,
-and blocks at the entry list arrive as data and are not drawn yet.
+`documentChanged`). The entry list draws blocks around its own header (`toolbar`) and its list
+(`table`); declared columns after the collection's own, a `field` column through
+that field's own cell and a component column one cell at a time, each cell
+behind its own boundary and receiving the place's `context` and its `row`; row
+actions in each row's menu, after its own, on the rows whose `visibleWhen`
+holds; and bulk actions in the bar shown while rows are selected, offered when
+the action's `visibleWhen` holds for every selected row.
 
 **Running an action.** An action that `open`s a component draws it with the
 rows it was run on. In a bundled admin, that component resolves only once
