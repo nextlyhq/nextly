@@ -349,6 +349,7 @@ const sheet = (
       fieldId={props.field.id}
       savedFieldIds={new Set(props.mode === "create" ? [] : [props.field.id])}
       readOnly={props.readOnly ?? false}
+      docked={false}
       onFieldChange={() => {}}
       onFieldDelete={() => {}}
       onClose={() => {}}

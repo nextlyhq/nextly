@@ -190,6 +190,27 @@ describe("BuilderPageLayout", () => {
       }
     });
 
+    it("never lays a sheet over the list on a wide screen, even for a moment", () => {
+      const restore = asWideScreen();
+      try {
+        // The page is open, its effects settled inside render's act, before a
+        // field is chosen.
+        const { rerender, props } = renderLayout();
+        rerender(
+          <BuilderPageLayout
+            {...props}
+            active={{ kind: "edit", fieldId: "u1" }}
+          />
+        );
+        // Read straight after the field is chosen, before any effect could
+        // switch a sheet over to the docked panel.
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(screen.getByRole("complementary")).toBeInTheDocument();
+      } finally {
+        restore();
+      }
+    });
+
     it("opens as a sheet on a narrow screen", () => {
       renderLayout({ active: { kind: "edit", fieldId: "u1" } });
       expect(

@@ -93,7 +93,11 @@ export function FieldSettingsPanel({
     const TypeControl = typeSettings?.tabs?.[which];
     const SurfaceControl = surface.extraSettings?.[which];
     return [
-      TypeControl && <TypeControl key="type" {...control} />,
+      TypeControl && (
+        <TypeOwnSettings key="type" readOnly={readOnly}>
+          <TypeControl {...control} />
+        </TypeOwnSettings>
+      ),
       SurfaceControl && <SurfaceControl key="surface" {...surfaceControl} />,
     ].filter(Boolean);
   };
@@ -158,7 +162,13 @@ export function FieldSettingsPanel({
               deriveName={surface.deriveName}
               nameFixedReason={fixedReason(surface.fixed, "name", saved)}
               apiPath={fieldApiPath(ancestors, field)}
-              defining={Defining && <Defining {...control} />}
+              defining={
+                Defining && (
+                  <TypeOwnSettings readOnly={readOnly}>
+                    <Defining {...control} />
+                  </TypeOwnSettings>
+                )
+              }
               definingLabel={`${typeLabel} settings`}
             >
               {typeSettings === undefined && (
@@ -209,5 +219,26 @@ export function FieldSettingsPanel({
         </div>
       </Tabs>
     </section>
+  );
+}
+
+/**
+ * A type's own settings, disabled together while the panel is read-only. The
+ * editors behind them take one callback per setting and no disabled state of
+ * their own, so a fieldset is what greys out every input, switch and button
+ * inside them at once, rather than leaving controls that look editable and
+ * quietly change nothing.
+ */
+function TypeOwnSettings({
+  readOnly,
+  children,
+}: {
+  readOnly: boolean;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <fieldset disabled={readOnly} className="m-0 min-w-0 border-0 p-0">
+      {children}
+    </fieldset>
   );
 }

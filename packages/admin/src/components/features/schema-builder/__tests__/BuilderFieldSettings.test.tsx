@@ -82,6 +82,7 @@ function Builder({
       fieldId={fieldId}
       savedFieldIds={new Set(saved)}
       readOnly={readOnly}
+      docked={false}
       onFieldChange={next => {
         onUpdate(next);
         setFields(all => all.map(f => (f.id === next.id ? next : f)));

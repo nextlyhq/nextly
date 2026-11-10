@@ -18,6 +18,7 @@ import { DndContext, type DragEndEvent } from "@dnd-kit/core";
 import type { JSX, ReactNode } from "react";
 
 import { PageContainer } from "@admin/components/layout/page-container";
+import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { builderAnnouncements } from "@admin/lib/builder/builder-announcements";
 
 import type { BuilderConfig } from "./builder-config";
@@ -137,6 +138,9 @@ export function BuilderPageLayout({
   );
 }
 
+/** Wide enough to dock the settings panel beside the field list. */
+const DOCKED_PANEL_QUERY = "(min-width: 1024px)";
+
 /**
  * The settings panel for the field being edited, if one is: docked beside the
  * list, writing each change straight to the builder, and closing when its
@@ -158,6 +162,9 @@ function EditedFieldSettings({
   | "savedFieldIds"
   | "locked"
 >): JSX.Element | null {
+  // Asked here, where the page keeps it from its first render, so the panel
+  // a field opens in is docked from its first frame on a wide screen.
+  const docked = useMediaQuery(DOCKED_PANEL_QUERY);
   if (active.kind !== "edit") return null;
   const close = () => onActiveChange({ kind: "none" });
   return (
@@ -170,6 +177,7 @@ function EditedFieldSettings({
       fieldId={active.fieldId}
       savedFieldIds={savedFieldIds}
       readOnly={locked}
+      docked={docked}
       onFieldChange={builder.handleFieldUpdate}
       onFieldDelete={fieldId => {
         builder.handleFieldDelete(fieldId);

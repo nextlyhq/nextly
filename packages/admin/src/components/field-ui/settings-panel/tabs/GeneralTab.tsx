@@ -50,8 +50,9 @@ type Props = {
 
 /**
  * The name a field has after its label is edited. It follows the label while
- * it is still the one the label gave it, under either the current derivation
- * or the one before punctuation runs collapsed, compared exactly so a
+ * it is still the one the label gave it, under the surface's derivation or,
+ * on a snake-case surface, the one before punctuation runs collapsed,
+ * compared exactly so a
  * hand-written name is never taken for a derived one. A saved field's name,
  * or one the field may not change, never follows, whatever it looks like.
  */
@@ -69,9 +70,13 @@ function nameAfterRelabel(
   }
 ): string {
   if (saved || nameLocked) return field.name;
+  // The earlier rule is snake case's own, so only a surface naming fields in
+  // snake case can have minted a name under it; elsewhere such a name was
+  // typed by hand.
   const derived =
     field.name === deriveName(field.label) ||
-    field.name === toSnakeName(field.label, "pre-collapse");
+    (deriveName === toSnakeName &&
+      field.name === toSnakeName(field.label, "pre-collapse"));
   return !field.name || derived ? deriveName(label) : field.name;
 }
 
