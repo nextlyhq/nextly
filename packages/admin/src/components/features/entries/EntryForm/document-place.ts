@@ -14,11 +14,18 @@
 import { useMemo } from "react";
 
 import type { PlaceProps } from "@admin/components/shared/target-slot";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import type {
   DocumentPanelSectionProps,
   SidebarSectionProps,
 } from "@admin/lib/plugins/component-registry";
+import {
+  placePanelParts,
+  placedPanelOrder,
+  type PanelOrderEntry,
+  type PlacedPanelSection,
+} from "@admin/lib/plugins/document-surfaces";
 
 /** The place an edit page draws: a collection entry's, or a Single's. */
 export type DocumentPlace =
@@ -89,4 +96,50 @@ export function sidebarSectionProps(
   return place.context === null || documentProps === undefined
     ? undefined
     : { ...documentProps, context: place.context, ...withEntry };
+}
+
+/** The edit page's side panel parts, as both editors draw them. */
+export interface DocumentPanelParts {
+  /** The panel's sections in the order the server placed them, if it did. */
+  panelOrder: PanelOrderEntry[] | undefined;
+  /** The placed sections drawn above the fields instead, on a phone. */
+  sectionsAboveForm: PlacedPanelSection[];
+  /** What each placed section is handed, or none yet. */
+  placedSectionProps: SidebarSectionProps | undefined;
+}
+
+/**
+ * The edit page's side panel: its sections in the order the server placed
+ * them, with the side panel sections plugins declared at the page's place
+ * among them by the rule every place part follows, and what each is handed.
+ * Where the editor is `narrow` (a phone, where the panel is a sheet opened
+ * only from the document's menu), a section declared to sit above the form
+ * moves above the fields, where the author meets it first.
+ *
+ * One hook for both editors, so a Single's page and a collection entry's
+ * cannot come to order or hand their sections differently.
+ */
+export function useDocumentPanelParts(
+  place: DocumentPlace,
+  narrow: boolean,
+  documentProps?: DocumentPanelSectionProps
+): DocumentPanelParts {
+  const { contributions } = useBranding();
+  const { panel, aboveForm } = useMemo(
+    () =>
+      placePanelParts(
+        placedPanelOrder(contributions, place.place, place),
+        narrow
+      ),
+    [contributions, place, narrow]
+  );
+  const placedSectionProps = useMemo(
+    () => sidebarSectionProps(place, documentProps),
+    [place, documentProps]
+  );
+  return {
+    panelOrder: panel,
+    sectionsAboveForm: aboveForm,
+    placedSectionProps,
+  };
 }

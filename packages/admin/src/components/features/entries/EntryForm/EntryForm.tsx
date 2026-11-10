@@ -42,7 +42,6 @@ import {
 } from "@admin/components/features/versions/viewed-version-host";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { toast } from "@admin/components/ui";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
@@ -61,10 +60,6 @@ import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
 import { versionForLanguage } from "@admin/lib/document-version";
-import {
-  placePanelParts,
-  placedPanelOrder,
-} from "@admin/lib/plugins/document-surfaces";
 import { cn } from "@admin/lib/utils";
 import { entryApi } from "@admin/services/entryApi";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
@@ -81,7 +76,7 @@ import { TranslationPanes } from "../TranslationMode/TranslationPanes";
 import { useTranslationSource } from "../TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "../useEntryLocaleContext";
 
-import { sidebarSectionProps, useDocumentPlace } from "./document-place";
+import { useDocumentPanelParts, useDocumentPlace } from "./document-place";
 import type { ContributedAction } from "./DocumentActionBar";
 import {
   DocumentActionsHost,
@@ -1147,28 +1142,15 @@ export function EntryForm({
     onOwnChange: expectOwnChange,
     locale,
   });
-  // The panel's sections in the order the server placed them, with the side
-  // panel sections plugins declared at this page's place among them, each
-  // judged by the rule every place part follows, on the entry as this
-  // reader's read returned it.
-  const { contributions } = useBranding();
-  // On a phone the panel is a sheet opened only from the document's menu, so
-  // a section declared to sit above the form there moves out of the panel
-  // and above the fields, where the author meets it first.
-  const { panel: panelOrder, aboveForm: sectionsAboveForm } = useMemo(
-    () =>
-      placePanelParts(
-        placedPanelOrder(contributions, documentPlace.place, documentPlace),
-        panel.mode === "sheet"
-      ),
-    [contributions, documentPlace, panel.mode]
-  );
-  // What each placed section is handed: the place's context and entry, with
-  // the document's own handles.
-  const placedSectionProps = useMemo(
-    () => sidebarSectionProps(documentPlace, pluginSurfaces.sectionProps),
-    [documentPlace, pluginSurfaces.sectionProps]
-  );
+  // The side panel's sections in the order the server placed them, with the
+  // sections plugins declared at this page's place among them, and what each
+  // is handed: the place's context and entry, with the document's handles.
+  const { panelOrder, sectionsAboveForm, placedSectionProps } =
+    useDocumentPanelParts(
+      documentPlace,
+      panel.mode === "sheet",
+      pluginSurfaces.sectionProps
+    );
 
   const documentActionsInput: DocumentActionBindingsInput = {
     mode,

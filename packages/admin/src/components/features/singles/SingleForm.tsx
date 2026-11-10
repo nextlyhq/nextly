@@ -31,7 +31,7 @@ import { z } from "zod";
 import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFromLanguageScope";
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
 import {
-  sidebarSectionProps,
+  useDocumentPanelParts,
   useDocumentPlace,
 } from "@admin/components/features/entries/EntryForm/document-place";
 import type { ContributedAction } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
@@ -136,7 +136,6 @@ import {
   ViewedVersionBody,
   versionAwareToolbarSlots,
 } from "@admin/components/features/versions/viewed-version-host";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useDiscardSingleWorkingDraft } from "@admin/hooks/queries/useDiscardSingleWorkingDraft";
 import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
@@ -160,11 +159,7 @@ import {
   withoutPlaceholders,
 } from "@admin/lib/form/stored-references";
 import type { SidebarSectionProps } from "@admin/lib/plugins/component-registry";
-import {
-  placePanelParts,
-  placedPanelOrder,
-  type PanelOrderEntry,
-} from "@admin/lib/plugins/document-surfaces";
+import type { PanelOrderEntry } from "@admin/lib/plugins/document-surfaces";
 import { cn } from "@admin/lib/utils";
 import { singleApi } from "@admin/services/singleApi";
 import type { SingleAdminOptions } from "@admin/types/entities";
@@ -1512,24 +1507,11 @@ export function SingleForm({
     { kind: "single", single: schema.slug },
     document
   );
-  // The panel's sections in the order the server placed them, with the side
-  // panel sections plugins declared at the Single's page among them, by the
-  // rule every place part follows. On a phone the panel is a sheet opened
-  // only from the document's menu, so a section declared to sit above the
-  // form there moves above the fields, as on a collection entry's page.
-  const { contributions } = useBranding();
-  const { panel: panelOrder, aboveForm: sectionsAboveForm } = useMemo(
-    () =>
-      placePanelParts(
-        placedPanelOrder(contributions, documentPlace.place, documentPlace),
-        panel.mode === "sheet"
-      ),
-    [contributions, documentPlace, panel.mode]
-  );
-  const placedSectionProps = useMemo(
-    () => sidebarSectionProps(documentPlace),
-    [documentPlace]
-  );
+  // The side panel's sections in the order the server placed them, with the
+  // sections plugins declared at the Single's page among them, as on a
+  // collection entry's page.
+  const { panelOrder, sectionsAboveForm, placedSectionProps } =
+    useDocumentPanelParts(documentPlace, panel.mode === "sheet");
 
   const localeCtx = useEntryLocaleContext({
     locale,
