@@ -75,7 +75,7 @@ function firstImage(images: unknown): PageMetadataImage | undefined {
  * a description and the social card's values. Visibility and the canonical are
  * deliberately not read, since only the answer decides them.
  */
-export function codeValuesOf(code: Metadata | undefined): PageMetadataValues {
+function codeValuesOf(code: Metadata | undefined): PageMetadataValues {
   if (code === undefined) return {};
   const openGraph: Record<string, unknown> = isRecord(code.openGraph)
     ? code.openGraph
