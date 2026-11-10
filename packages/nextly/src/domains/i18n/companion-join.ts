@@ -17,6 +17,10 @@ import { and, eq, inArray, sql, type SQL, type SQLWrapper } from "drizzle-orm";
 
 import { batches } from "../../auth/access/retired-manage-permissions";
 import { isMissingNamedColumnError } from "../../database/missing-column";
+import {
+  lockedForRead,
+  type ReadingAdapter,
+} from "../../shared/lib/read-transaction-scope";
 import { DOCUMENT_REVISION_COLUMN } from "../versions/document-revision";
 import { draftsKeptByPart } from "../versions/part-drafts";
 
@@ -299,13 +303,19 @@ export async function selectEntryWithCompanion(args: {
   companionTable: unknown;
   localeChain: string[];
   idKey?: string;
+  /**
+   * The adapter the read is made through, when it may run inside a read
+   * routed to a transaction: the entry's row is then read with a shared lock
+   * (`lockedForRead`). Absent, nothing is locked.
+   */
+  lockingOn?: ReadingAdapter;
 }): Promise<{
   entry: Record<string, unknown> | undefined;
   companionRows: Record<string, unknown>[];
 }> {
   const main = args.mainTable as Record<string, unknown>;
   const companion = args.companionTable as CompanionTable;
-  const joined = await (args.db as JoinableDb)
+  const read = (args.db as JoinableDb)
     .select({
       entry: args.mainTable,
       translation: args.companionTable,
@@ -323,6 +333,9 @@ export async function selectEntryWithCompanion(args: {
       ) as SQL
     )
     .where(args.where);
+  const joined = await (args.lockingOn
+    ? lockedForRead(read, args.lockingOn, args.mainTable)
+    : read);
   return {
     entry: joined[0]?.entry ?? undefined,
     companionRows: joined.flatMap(row =>

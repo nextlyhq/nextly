@@ -1,10 +1,20 @@
 "use client";
 
+import { Fragment } from "react";
 import type React from "react";
 
 import { Clock, Hash } from "@admin/components/icons";
+import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { Skeleton } from "@admin/components/ui";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import type { DocumentPanelSectionProps } from "@admin/lib/plugins/component-registry";
+import type {
+  PanelOrderEntry,
+  PlacedPanelSection,
+  PluginPanelSectionEntry,
+} from "@admin/lib/plugins/document-surfaces";
+import { cn } from "@admin/lib/utils";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
 
 import { useEntryLocale } from "../../EntryLocaleContext";
@@ -17,9 +27,13 @@ import { PublishingSection } from "./PublishingSection";
 import { StatusSection, type PanelDocumentStatus } from "./StatusSection";
 
 // The document panel's sections, in the one order both editors draw them:
-// Status, then Publishing, then Language, then Details. Each section decides
+// Status, then Publishing, then Language, then Details, then any a plugin
+// adds for the collection. Each section decides
 // whether it applies and draws nothing where it does not, so a document
 // without a lifecycle or languages reads the sections it has, in that order.
+// A side panel section a plugin declares at the `collection.edit` place is
+// drawn where the server placed it among the built-in four (`panelOrder`),
+// and a built-in it replaces is not drawn.
 
 export { pillStateFromForm, PILL_LABEL, type PillState } from "./pill-state";
 
@@ -51,7 +65,32 @@ export interface DocumentPanelProps {
   navigationDisabled?: boolean;
   /** Withholds publishing every language; the same as `actionsDisabled` unless given. */
   publishAllDisabled?: boolean;
+  /**
+   * Sections plugins add for this collection, drawn after Details under the
+   * heading the panel draws for its own sections.
+   */
+  pluginSections?: readonly PluginPanelSectionEntry[];
+  /**
+   * What each plugin section is handed. Absent, none is drawn: a section
+   * needs the document it is about.
+   */
+  pluginSectionProps?: DocumentPanelSectionProps;
+  /**
+   * The panel's sections in the order the server placed them, with the side
+   * panel sections plugins declared at the `collection.edit` place among
+   * them (`panelOrderFor`). Absent, the built-in sections are drawn in their
+   * usual order.
+   */
+  panelOrder?: readonly PanelOrderEntry[];
 }
+
+/** The built-in sections, in the order drawn when nothing places them. */
+const BUILT_IN_ORDER: readonly PanelOrderEntry[] = [
+  { kind: "builtIn", name: "status" },
+  { kind: "builtIn", name: "publishing" },
+  { kind: "builtIn", name: "language" },
+  { kind: "builtIn", name: "details" },
+];
 
 export function DocumentPanel({
   mode,
@@ -64,6 +103,9 @@ export function DocumentPanel({
   actionsDisabled = false,
   navigationDisabled = actionsDisabled,
   publishAllDisabled = actionsDisabled,
+  pluginSections = [],
+  pluginSectionProps,
+  panelOrder = BUILT_IN_ORDER,
 }: DocumentPanelProps): React.ReactElement | null {
   // Nothing to say until the document exists.
   if (mode === "create") return null;
@@ -74,32 +116,146 @@ export function DocumentPanel({
     | Record<string, { translated: boolean; status?: string }>
     | undefined;
 
+  // Each built-in section by the name the server places it under.
+  const builtIn = (name: string): React.ReactNode => {
+    switch (name) {
+      case "status":
+        return hasStatus && documentStatus ? (
+          <StatusSection documentStatus={documentStatus} />
+        ) : null;
+      case "publishing":
+        // A release publishes or unpublishes, so only a document with that
+        // lifecycle has a schedule to read.
+        return hasStatus ? (
+          <PublishingSection document={releaseDocument} />
+        ) : null;
+      case "language":
+        return (
+          <LanguageSection>
+            <DocumentLanguagePanel
+              translations={translations}
+              locale={locale}
+              onLocaleChange={onLocaleChange}
+              hasStatus={hasStatus}
+              actionsDisabled={actionsDisabled}
+              navigationDisabled={navigationDisabled}
+              publishAllDisabled={publishAllDisabled}
+              sharedChangesPending={entry?._sharedChangesPending === true}
+            />
+          </LanguageSection>
+        );
+      case "details":
+        return (
+          <PanelSection title="Details">
+            <dl className="space-y-3">
+              <IdRow id={entry?.id} />
+              <TimestampRows entry={entry} />
+            </dl>
+          </PanelSection>
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className="flex flex-col" data-testid="document-panel-sections">
-      {hasStatus && documentStatus ? (
-        <StatusSection documentStatus={documentStatus} />
-      ) : null}
-      {/* A release publishes or unpublishes, so only a document with that
-          lifecycle has a schedule to read. */}
-      {hasStatus ? <PublishingSection document={releaseDocument} /> : null}
-      <LanguageSection>
-        <DocumentLanguagePanel
-          translations={translations}
-          locale={locale}
-          onLocaleChange={onLocaleChange}
-          hasStatus={hasStatus}
-          actionsDisabled={actionsDisabled}
-          navigationDisabled={navigationDisabled}
-          publishAllDisabled={publishAllDisabled}
-          sharedChangesPending={entry?._sharedChangesPending === true}
+      {panelOrder.map(part =>
+        part.kind === "builtIn" ? (
+          <Fragment key={`built-in:${part.name}`}>
+            {builtIn(part.name)}
+          </Fragment>
+        ) : pluginSectionProps === undefined ? null : (
+          <PlacedSection
+            key={`placed:${part.id}`}
+            part={part}
+            props={pluginSectionProps}
+          />
+        )
+      )}
+      {pluginSectionProps === undefined
+        ? null
+        : pluginSections.map(section => (
+            // The panel's own section, so its heading, padding and divider
+            // are the built-in ones in either scheme; the plugin draws the
+            // body, inside its own error boundary, and a body that draws
+            // nothing for this document leaves no empty heading.
+            <PanelSection
+              key={`${section.plugin}:${section.component}:${section.title}`}
+              title={section.title}
+              collapsesWhenEmpty
+            >
+              {section.loading === true ? (
+                // The panel's own loading look, as the Publishing section
+                // draws it, until the component has arrived.
+                <div aria-busy="true">
+                  <span className="sr-only">Loading {section.title}</span>
+                  <Skeleton className="h-4 w-40" />
+                </div>
+              ) : (
+                <PluginSlot
+                  path={section.component}
+                  props={pluginSectionProps}
+                />
+              )}
+            </PanelSection>
+          ))}
+    </div>
+  );
+}
+
+/**
+ * A section a plugin placed: the panel's own frame, the plugin's body. It
+ * applies to some documents and not others, so it leaves no heading behind
+ * where its component draws nothing. `flush` draws it above the fields
+ * rather than in the panel.
+ */
+function PlacedSection({
+  part,
+  props,
+  flush = false,
+}: {
+  part: PlacedPanelSection;
+  props: DocumentPanelSectionProps;
+  flush?: boolean;
+}): React.ReactElement {
+  return (
+    <PanelSection title={part.title} collapsesWhenEmpty flush={flush}>
+      <PluginSlot path={part.component} props={props} />
+    </PanelSection>
+  );
+}
+
+/**
+ * The placed sections drawn above the fields where the editor is too narrow
+ * to keep the panel beside them (`placePanelParts`), so a section an author
+ * should meet first is on screen without opening the panel. Each keeps its
+ * heading and its landmark, and draws nothing until there is a document.
+ */
+export function PanelSectionsAboveForm({
+  sections,
+  pluginSectionProps,
+  className,
+}: {
+  sections: readonly PlacedPanelSection[];
+  /** What each section is handed. Absent, none is drawn. */
+  pluginSectionProps?: DocumentPanelSectionProps;
+  className?: string;
+}): React.ReactElement | null {
+  if (sections.length === 0 || pluginSectionProps === undefined) return null;
+  return (
+    <div
+      className={cn("flex flex-col", className)}
+      data-testid="document-panel-above-form"
+    >
+      {sections.map(part => (
+        <PlacedSection
+          key={`placed:${part.id}`}
+          part={part}
+          props={pluginSectionProps}
+          flush
         />
-      </LanguageSection>
-      <PanelSection title="Details">
-        <dl className="space-y-3">
-          <IdRow id={entry?.id} />
-          <TimestampRows entry={entry} />
-        </dl>
-      </PanelSection>
+      ))}
     </div>
   );
 }

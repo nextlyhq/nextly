@@ -214,7 +214,7 @@ describe.each(getConfiguredTestDialects())(
       expect((await mainRow(t, PLAIN)).notice).toBe("theirs");
     });
 
-    it("applies a save from the current version, and one that gives none", async () => {
+    it("applies a save from the current version, and refuses one that gives none", async () => {
       const t = await boot(dialect);
       const first = await save(t, PLAIN, { notice: "first", _overwrite: true });
       const second = await save(t, PLAIN, {
@@ -223,8 +223,12 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(second.success, JSON.stringify(second)).toBe(true);
       const unjudged = await save(t, PLAIN, { notice: "third" });
-      expect(unjudged.success, JSON.stringify(unjudged)).toBe(true);
-      expect((await mainRow(t, PLAIN)).notice).toBe("third");
+      expect(unjudged, JSON.stringify(unjudged)).toMatchObject({
+        success: false,
+        statusCode: 428,
+        code: "VERSION_REQUIRED",
+      });
+      expect((await mainRow(t, PLAIN)).notice).toBe("second");
     });
 
     it("refuses with 400 a version that is not one, and an _overwrite that is not true or false", async () => {

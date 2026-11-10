@@ -14,6 +14,8 @@
  * @since v0.0.3-alpha (Plan B)
  */
 
+import { resolve } from "node:path";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
@@ -30,11 +32,21 @@ import { reportDryRun, type DryRunChange, type DryRunPlan } from "../dry-run";
 import { exitWithError, failWithError } from "../errors";
 import { coreDestructiveNeedsTerminal } from "../errors/areas/migrations";
 import { createContext } from "../program";
-import { createCliAdapter, openCommandAdapter } from "../utils/adapter";
+import {
+  createCliAdapter,
+  openCommandAdapter,
+  type CLIDatabaseAdapter,
+} from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
+import { loadConfig } from "../utils/config-loader";
 import { askYesInTerminal } from "../utils/prompt-cancelled";
 
-import { maybeForceUnlock } from "./migrate";
+import {
+  assertAppHistoryHolds,
+  historyRefusalIn,
+  maybeForceUnlock,
+  migrateExitCode,
+} from "./migrate";
 import { dryRunRefusalOf } from "./migrate-create";
 import type {
   RunUpgradeOptions,
@@ -225,6 +237,13 @@ export interface RunReconcileCoreDeps {
   adapter: UpgradeAdapter;
   logger?: UpgradeLogger;
   confirmDestructive: (reasons: string[]) => Promise<boolean>;
+  /**
+   * The app history checks every command that changes core tables makes
+   * before its first write (`assertAppHistoryHolds`), asked under the lock
+   * before the reconcile. Required, so no caller reconciles past a history
+   * this build cannot account for.
+   */
+  checkAppHistory: () => Promise<void>;
 }
 
 /** Injected for tests; defaults to the real reconcileCore. */
@@ -252,6 +271,10 @@ export async function runReconcileCore(
     adapter as unknown as DrizzleAdapter,
     dialect,
     async () => {
+      // Before the reconcile changes core tables, under the lock no other run
+      // changes the ledger past: an older build stops with exit 3, an edited
+      // applied file with exit 2, an unresolved attempt as it says.
+      await deps.checkAppHistory();
       await reconcile({
         ...(await reconcileTarget(adapter)),
         // `confirmDestructive` is an interactive prompt, NOT `allowDestructive`.
@@ -307,6 +330,8 @@ export async function previewReconcileCore(deps: {
   adapter: UpgradeAdapter;
   /** Whether a real run could ask at a terminal. */
   interactive: boolean;
+  /** As `RunReconcileCoreDeps.checkAppHistory`, read-only: recording no checksum. */
+  checkAppHistory: () => Promise<void>;
 }): Promise<DryRunPlan> {
   const { adapter } = deps;
   try {
@@ -316,6 +341,10 @@ export async function previewReconcileCore(deps: {
     if (refusal === undefined) throw error;
     return { changes: [], refusals: [refusal] };
   }
+  // The real run stops on the app's history before its reconcile, so a dry
+  // run reports that refusal and plans nothing past it.
+  const history = await historyRefusalIn(deps.checkAppHistory);
+  if (history !== undefined) return { changes: [], refusals: [history] };
   const plan = await planCoreReconcile(await reconcileTarget(adapter));
   const changes: DryRunChange[] = [
     ...plan.statements.map(statement => ({ action: "run", target: statement })),
@@ -362,6 +391,46 @@ export interface UpgradeCommandOptions {
   dryRun?: boolean;
 }
 
+/** Where the config is read from: the command's global options. */
+interface ConfigOptions {
+  config?: string;
+  cwd?: string;
+  verbose?: boolean;
+}
+
+/**
+ * The app history checks `upgrade --reconcile-core` makes before its
+ * reconcile (`assertAppHistoryHolds`), over the migrations folder the config
+ * names, loaded as `nextly migrate` loads it: a config that cannot load
+ * refuses here, before the lock. `recordChecksums` false for a dry run.
+ */
+async function reconcileHistoryCheck(
+  globalOpts: ConfigOptions,
+  adapter: UpgradeAdapter,
+  logger: ReturnType<typeof createContext>["logger"],
+  recordChecksums: boolean
+): Promise<() => Promise<void>> {
+  const configResult = await loadConfig({
+    configPath: globalOpts.config,
+    cwd: globalOpts.cwd,
+    debug: globalOpts.verbose,
+  });
+  const migrationsDir = resolve(
+    globalOpts.cwd ?? process.cwd(),
+    configResult.config.db.migrationsDir
+  );
+  return () =>
+    assertAppHistoryHolds({
+      adapter: adapter as unknown as CLIDatabaseAdapter,
+      db: adapter.getDrizzle(),
+      dialect: adapter.getCapabilities().dialect,
+      migrationsDir,
+      logger,
+      command: "nextly upgrade --reconcile-core",
+      recordChecksums,
+    });
+}
+
 /** The action of `nextly upgrade`, loaded when it runs. */
 export async function upgradeAction(
   cmdOptions: UpgradeCommandOptions,
@@ -373,7 +442,7 @@ export async function upgradeAction(
   const dbValidation = requireDatabaseEnv(context.logger);
 
   if (cmdOptions.dryRun === true) {
-    await reportUpgradeDryRun(cmdOptions, dbValidation, context);
+    await reportUpgradeDryRun(cmdOptions, dbValidation, context, globalOpts);
     return;
   }
 
@@ -401,6 +470,12 @@ export async function upgradeAction(
     if (cmdOptions.reconcileCore) {
       await runReconcileCore({
         adapter,
+        checkAppHistory: await reconcileHistoryCheck(
+          globalOpts,
+          adapter,
+          context.logger,
+          true
+        ),
         logger: {
           info: msg => context.logger.info(msg),
           warn: msg => context.logger.warn(msg),
@@ -438,8 +513,9 @@ export async function upgradeAction(
       );
     }
   } catch (error) {
-    // Set rather than exited, so the disconnect below still runs.
-    failWithError(context.logger, error);
+    // Set rather than exited, so the disconnect below still runs: 2 for an
+    // edited applied file, 3 for one the folder lacks.
+    failWithError(context.logger, error, migrateExitCode(error));
   } finally {
     await adapter.disconnect?.();
   }
@@ -455,7 +531,8 @@ export async function upgradeAction(
 async function reportUpgradeDryRun(
   cmdOptions: UpgradeCommandOptions,
   dbValidation: ReturnType<typeof requireDatabaseEnv>,
-  context: ReturnType<typeof createContext>
+  context: ReturnType<typeof createContext>,
+  globalOpts: ConfigOptions
 ): Promise<void> {
   let adapter:
     | ({ disconnect?: () => Promise<void> } & UpgradeAdapter)
@@ -475,7 +552,16 @@ async function reportUpgradeDryRun(
     adapter = opened as unknown as typeof adapter & UpgradeAdapter;
     const interactive = canPrompt();
     const plan = cmdOptions.reconcileCore
-      ? await previewReconcileCore({ adapter, interactive })
+      ? await previewReconcileCore({
+          adapter,
+          interactive,
+          checkAppHistory: await reconcileHistoryCheck(
+            globalOpts,
+            adapter,
+            context.logger,
+            false
+          ),
+        })
       : await previewUpgrade(
           {
             confirmBackedUp: cmdOptions.confirmBackedUp,

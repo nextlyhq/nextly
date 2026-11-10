@@ -19,7 +19,8 @@ import type {
   EmailProviderRecord,
 } from "@admin/services/emailProviderApi";
 
-import { EMAIL_PROVIDER_FORM_ID, EmailProviderForm } from "./EmailProviderForm";
+import { EMAIL_PROVIDER_FORM_ID } from "./email-provider-catalog";
+import { EmailProviderForm } from "./EmailProviderForm";
 import type { EmailProviderPayload } from "./schemas/emailProviderSchema";
 
 const ACME: EmailProviderDescriptor = {

@@ -129,6 +129,9 @@ export interface ClassUsageDirectApi {
  */
 const AS_THE_SYSTEM = { overrideAccess: true } as const;
 
+/** The two reads a stored document is resolved through, by id or by slug. */
+type DocumentReadApi = Pick<ClassUsageDirectApi, "findByID" | "findSingle">;
+
 /**
  * Resolve a subject to the document behind it.
  *
@@ -189,7 +192,7 @@ interface UsageDocumentAddress {
  * under the draft subject the first time the two disagreed.
  */
 function classUsageDocumentRowReader(
-  nextly: ClassUsageDirectApi
+  nextly: DocumentReadApi
 ): (address: UsageDocumentAddress) => Promise<unknown> {
   return async address => {
     // `field` is not part of the address and no read below consults it; the
@@ -223,7 +226,7 @@ function classUsageDocumentRowReader(
  * where the never-published case is answered.
  */
 async function readDraft(
-  nextly: ClassUsageDirectApi,
+  nextly: DocumentReadApi,
   subject: ClassUsageSubject
 ): Promise<unknown> {
   const record = await readById(nextly, subject, { draft: true });
@@ -261,7 +264,7 @@ async function readDraft(
  * class a live document still renders, and only one of those is recoverable.
  */
 async function readPublished(
-  nextly: ClassUsageDirectApi,
+  nextly: DocumentReadApi,
   subject: ClassUsageSubject
 ): Promise<unknown> {
   return readById(nextly, subject, {});
@@ -275,7 +278,7 @@ async function readPublished(
  * draft.
  */
 async function readById(
-  nextly: ClassUsageDirectApi,
+  nextly: DocumentReadApi,
   subject: ClassUsageSubject,
   options: { draft?: boolean }
 ): Promise<Record<string, unknown> | undefined> {
@@ -311,7 +314,7 @@ async function readById(
  * index at an exact zero while the Single renders what its defaults place.
  */
 async function readSingle(
-  nextly: ClassUsageDirectApi,
+  nextly: DocumentReadApi,
   subject: ClassUsageSubject,
   options: { draft?: boolean }
 ): Promise<Record<string, unknown> | undefined> {
@@ -398,6 +401,40 @@ function localeOptions(subject: ClassUsageSubject): {
 } {
   if (subject.locale === "") return {};
   return { locale: subject.locale, fallbackLocale: false };
+}
+
+/** One form a document may be stored in: a language, or none, and a variant. */
+export interface StoredDocumentForm {
+  /** The language to read, fallback off, or the empty string for none. */
+  readonly locale: string;
+  readonly variant: ClassUsageSubject["variant"];
+}
+
+/**
+ * Each of the named forms of one document, read as the system through the
+ * same per-subject read the index is maintained by, so a check reading every
+ * form agrees with the index about what each one is: a language with its
+ * fallback off, and the working draft only where one is surfaced. A form the
+ * document does not have is left out. A read that fails throws, so a caller
+ * can refuse rather than take an unread form for one holding nothing.
+ */
+export function storedFormsReader(
+  nextly: DocumentReadApi
+): (
+  document: Pick<UsageDocumentAddress, "scope" | "entity" | "entityKey">,
+  forms: readonly StoredDocumentForm[]
+) => Promise<Record<string, unknown>[]> {
+  const readRow = classUsageDocumentRowReader(nextly);
+  return async (document, forms) => {
+    const found: Record<string, unknown>[] = [];
+    for (const form of forms) {
+      const row = await readRow({ ...document, ...form });
+      if (typeof row === "object" && row !== null) {
+        found.push(row as Record<string, unknown>);
+      }
+    }
+    return found;
+  };
 }
 
 /**

@@ -13,6 +13,7 @@ import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
 import {
   blocksFieldSurvey,
+  type FieldGroupDefinitions,
   singleUsageDeclaration,
 } from "./class-usage-blocks-fields";
 import {
@@ -28,6 +29,7 @@ import {
 import { componentUsageIndex } from "./component-usage";
 import type { SingleToWalk } from "./host-rewrite/site";
 import { lastIdOf } from "./paged-walk";
+import { tokenUsageIndex } from "./token-usage";
 import type { BackfillStateStore } from "./usage-backfill";
 import type { GoneScopeRun, UsageBackfillDeps } from "./usage-backfill-job";
 import {
@@ -85,6 +87,17 @@ export interface BackfillHost {
   collectionSlugs: () => Promise<readonly string[] | undefined>;
   /** The resolved registry record for one slug, or null when it is gone. */
   resolveCollection: (slug: string) => Promise<unknown>;
+  /**
+   * The site's field groups as they are now, by slug, resolved once per survey.
+   *
+   * A reference to a group that holds no blocks field then leaves nothing out
+   * of the index's reach; without it, any field group on the site keeps every
+   * count a floor. A function because a definition changes after boot: a config
+   * reload syncs the registry without running the plugin's `init` again, and an
+   * admin can edit a group there, so a definition captured at install would
+   * call a group blocks-free after it gained a blocks field.
+   */
+  fieldGroups?: () => Promise<FieldGroupDefinitions>;
   /** Whether a resolved collection stores a draft beside its published row. */
   hasDrafts: (collection: unknown) => Promise<boolean> | boolean;
   /**
@@ -109,6 +122,7 @@ export function hostGeneration(host: BackfillHost): string {
     limits: host.limits(),
     classIndex: usageTableOf(classUsageIndex).name,
     componentIndex: usageTableOf(componentUsageIndex).name,
+    tokenIndex: usageTableOf(tokenUsageIndex).name,
   });
 }
 
@@ -202,6 +216,9 @@ export async function backfillSurvey(
   }
 
   const locales = host.locales();
+  // Once per survey, so every reference in this walk is judged against one
+  // reading of the definitions and a site's document count adds no reads.
+  const fieldGroups = await host.fieldGroups?.();
   const scopes: BackfillScope[] = [];
   let unaddressable = false;
 
@@ -213,7 +230,7 @@ export async function backfillSurvey(
     // every scope, as any gone scope's are (`forgetGoneScopes`).
     if (collection === null || collection === undefined) continue;
 
-    const survey = blocksFieldSurvey(collection);
+    const survey = blocksFieldSurvey(collection, fieldGroups);
     const fields = survey.addressable;
     // Recorded before the early return below, so a collection whose ONLY blocks
     // field is nested — which contributes no scope — still reports that the
@@ -241,7 +258,10 @@ export async function backfillSurvey(
     );
   }
   for (const single of singles) {
-    const survey = blocksFieldSurvey(singleUsageDeclaration(single));
+    const survey = blocksFieldSurvey(
+      singleUsageDeclaration(single),
+      fieldGroups
+    );
     if (survey.unaddressable) unaddressable = true;
     // Both forms, whatever the Single's versioning: the registry listing does
     // not say whether a Single keeps a working draft, and the draft read
@@ -298,6 +318,11 @@ export function usageBackfillDeps(host: BackfillHost): UsageBackfillDeps {
           componentIndex: fencedUsageTableStore(
             host.db,
             usageTableOf(componentUsageIndex),
+            write => walk.fenced(write)
+          ),
+          tokenIndex: fencedUsageTableStore(
+            host.db,
+            usageTableOf(tokenUsageIndex),
             write => walk.fenced(write)
           ),
           scope: scope.scope,
@@ -366,6 +391,7 @@ export async function forgetGoneScopes(
   const tables = [
     usageTableOf(classUsageIndex),
     usageTableOf(componentUsageIndex),
+    usageTableOf(tokenUsageIndex),
   ];
   const gone = new Map<string, BackfillScope | null>();
   for (const key of recordedGone) {

@@ -19,6 +19,7 @@ import {
   buildImportMapArtifacts,
   configImportSpecifier,
 } from "./component-import-map";
+import { unbackedContributions, unbackedPaths } from "./unbacked-contributions";
 
 /** Where the files were written, and which of them changed. */
 export interface ComponentMapWrite {
@@ -60,12 +61,18 @@ export async function planComponentMapFiles(
           resolve(cwd, dirname(typesOutputPath)),
           resolve(cwd, config)
         );
+  // A contribution whose module is not there is left out, as the check
+  // leaves it out, so the map never imports a file that would stop the build.
+  const unbacked = unbackedPaths(
+    unbackedContributions(plugins, typesOutputPath, cwd, siteDashboard)
+  );
   const planned = await Promise.all(
     buildImportMapArtifacts(
       plugins,
       typesOutputPath,
       configImport,
-      siteDashboard
+      siteDashboard,
+      unbacked
     ).map(async artifact => {
       const file = resolve(cwd, artifact.path);
       return {

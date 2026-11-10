@@ -1,6 +1,7 @@
-import { expect, type Page } from "@playwright/test";
+import { expect } from "@playwright/test";
 
 import { includingHidden, test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 /**
  * The widget preview page's address, and its read, on a PRODUCTION build.
@@ -17,22 +18,9 @@ import { includingHidden, test } from "../support/visible";
  * @module tests/production/widget-preview
  */
 
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
-
 /** The preview page's address, and one beside it that no route serves. */
 const PREVIEWS = "/admin/dev/widget-previews";
 const UNSERVED = "/admin/dev/no-such-page";
-
-async function signIn(page: Page): Promise<void> {
-  await page.goto("/admin");
-  await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-  // By role, since a label match also finds the "Show password" toggle.
-  await page
-    .getByRole("textbox", { name: /password/i })
-    .fill(DEV_USER.password);
-  await page.getByRole("button", { name: /sign in|log in/i }).click();
-  await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
-}
 
 test.describe("the widget preview page on a production build", () => {
   test("a direct visit is not found, as an unserved address is, and the dashboard offers no way in", async ({

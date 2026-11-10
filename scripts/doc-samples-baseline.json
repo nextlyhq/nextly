@@ -13,8 +13,8 @@
       "compiled": 3
     },
     "docs/api-reference/direct-api.mdx": {
-      "samples": 39,
-      "compiled": 38
+      "samples": 43,
+      "compiled": 42
     },
     "docs/api-reference/rest-api.mdx": {
       "samples": 3,
@@ -37,7 +37,7 @@
       "compiled": 6
     },
     "docs/configuration/fields.mdx": {
-      "samples": 42,
+      "samples": 43,
       "compiled": 3
     },
     "docs/configuration/index.mdx": {
@@ -133,8 +133,8 @@
       "compiled": 9
     },
     "docs/jobs/index.mdx": {
-      "samples": 4,
-      "compiled": 4
+      "samples": 5,
+      "compiled": 5
     },
     "docs/localization/index.mdx": {
       "samples": 4,
@@ -144,13 +144,21 @@
       "samples": 1,
       "compiled": 1
     },
+    "docs/page-builder/compose-through-the-api.mdx": {
+      "samples": 3,
+      "compiled": 3
+    },
     "docs/page-builder/contributed-blocks.mdx": {
-      "samples": 8,
+      "samples": 9,
       "compiled": 5
     },
+    "docs/page-builder/editor.mdx": {
+      "samples": 1,
+      "compiled": 0
+    },
     "docs/page-builder/index.mdx": {
-      "samples": 5,
-      "compiled": 5
+      "samples": 10,
+      "compiled": 8
     },
     "docs/page-builder/layouts.mdx": {
       "samples": 1,
@@ -160,28 +168,36 @@
       "samples": 2,
       "compiled": 2
     },
+    "docs/page-builder/named-queries.mdx": {
+      "samples": 3,
+      "compiled": 3
+    },
     "docs/page-builder/placement.mdx": {
       "samples": 1,
       "compiled": 1
+    },
+    "docs/page-builder/site-code.mdx": {
+      "samples": 4,
+      "compiled": 4
     },
     "docs/permissions/index.mdx": {
       "samples": 11,
       "compiled": 7
     },
     "docs/plugins/admin-ui.mdx": {
-      "samples": 19,
+      "samples": 20,
       "compiled": 13
     },
     "docs/plugins/api-reference.mdx": {
-      "samples": 24,
-      "compiled": 2
+      "samples": 28,
+      "compiled": 3
     },
     "docs/plugins/auth.mdx": {
       "samples": 4,
       "compiled": 4
     },
     "docs/plugins/author-guide.mdx": {
-      "samples": 5,
+      "samples": 7,
       "compiled": 4
     },
     "docs/plugins/commerce/index.mdx": {
@@ -209,8 +225,8 @@
       "compiled": 1
     },
     "docs/plugins/routes.mdx": {
-      "samples": 7,
-      "compiled": 2
+      "samples": 10,
+      "compiled": 5
     },
     "docs/plugins/schema.mdx": {
       "samples": 7,
@@ -229,7 +245,7 @@
       "compiled": 4
     },
     "docs/plugins/services.mdx": {
-      "samples": 9,
+      "samples": 14,
       "compiled": 1
     },
     "docs/plugins/signed-in-people.mdx": {
@@ -252,6 +268,10 @@
       "samples": 3,
       "compiled": 3
     },
+    "docs/webhooks/index.mdx": {
+      "samples": 2,
+      "compiled": 0
+    },
     "docs/webhooks/retention.mdx": {
       "samples": 2,
       "compiled": 1
@@ -259,6 +279,10 @@
     "docs/widgets/index.mdx": {
       "samples": 9,
       "compiled": 7
+    },
+    "packages/adapter-drizzle/README.md": {
+      "samples": 1,
+      "compiled": 1
     },
     "packages/adapter-mysql/README.md": {
       "samples": 1,
@@ -345,7 +369,6 @@
     "docs/getting-started/build-a-blog.mdx": 1,
     "docs/guides/routing-and-seo.mdx": 3,
     "docs/plugins/auth.mdx": 2,
-    "docs/plugins/author-guide.mdx": 2,
     "docs/plugins/distribution.mdx": 1,
     "docs/plugins/lifecycle.mdx": 2,
     "packages/blocks-react/README.md": 1,
@@ -382,12 +405,6 @@
       "#3 error TS2304: Cannot find name 'verifyTotp'.": 1,
       "uninstalled #0 error TS2307: Cannot find module '@acme/nextly-plugin-google' or its corresponding type declarations.": 1
     },
-    "docs/plugins/author-guide.mdx": {
-      "#4 error TS2593: Cannot find name 'describe'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.": 1,
-      "#4 error TS2593: Cannot find name 'it'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.": 1,
-      "reader-file #1 error TS2307: Cannot find module '../package.json' or its corresponding type declarations.": 1,
-      "reader-file #3 error TS2307: Cannot find module '../src' or its corresponding type declarations.": 1
-    },
     "docs/plugins/distribution.mdx": {
       "#0 error TS2552: Cannot find name 'myPlugin'. Did you mean 'Plugin'?": 1
     },
@@ -417,6 +434,7 @@
     },
     "docs/guides/isr-caching.mdx": {
       "#4 error TS18004: No value exists in scope for the shorthand property 'data'. Either declare one or provide an initializer.": 1,
+      "uninstalled #5 error TS2307: Cannot find module '@nextly-config' or its corresponding type declarations.": 1,
       "reader-file #1 error TS2307: Cannot find module '../../../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
     },
@@ -427,11 +445,11 @@
       "context #4 error TS2304: Cannot find name 'slug'.": 1
     },
     "docs/api-reference/direct-api.mdx": {
-      "suppressed #38 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
-      "suppressed #38 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
-      "suppressed #38 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1,
+      "suppressed #42 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
+      "suppressed #42 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
+      "suppressed #42 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1,
       "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #38 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #42 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/getting-started/index.mdx": {
       "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
@@ -458,9 +476,9 @@
       "reader-file #11 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/admin-ui.mdx": {
-      "uninstalled #18 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
+      "uninstalled #19 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
       "reader-file #0 error TS2307: Cannot find module './ReportsView' or its corresponding type declarations.": 1,
-      "reader-file #16 error TS2307: Cannot find module './widgets' or its corresponding type declarations.": 1,
+      "reader-file #17 error TS2307: Cannot find module './widgets' or its corresponding type declarations.": 1,
       "reader-file #1 error TS2882: Cannot find module or type declarations for side-effect import of '../../../types/generated/plugin-admin-imports.generated'.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../types/generated/plugin-admin-components.generated' or its corresponding type declarations.": 1
@@ -542,7 +560,18 @@
     },
     "docs/page-builder/index.mdx": {
       "reader-file #1 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #4 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
+    },
+    "docs/page-builder/named-queries.mdx": {
+      "reader-file #1 error TS2307: Cannot find module './app/named-queries' or its corresponding type declarations.": 1,
+      "reader-file #2 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
+    },
+    "docs/page-builder/site-code.mdx": {
+      "reader-file #1 error TS2882: Cannot find module or type declarations for side-effect import of '@/nextly/cached-read'.": 1
+    },
+    "docs/plugins/author-guide.mdx": {
+      "reader-file #1 error TS2307: Cannot find module '../package.json' or its corresponding type declarations.": 1,
+      "reader-file #5 error TS2307: Cannot find module '../src' or its corresponding type declarations.": 1
     },
     "docs/plugins/testing.mdx": {
       "reader-file #0 error TS2307: Cannot find module '../src' or its corresponding type declarations.": 1

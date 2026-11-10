@@ -38,6 +38,12 @@ import type { RBACAccessControlService } from "../../../domains/auth/services/rb
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
+import {
+  inTransactionHandlersFor,
+  replacedByUpdate,
+  runInTransactionPhaseFor,
+  writtenByUpdate,
+} from "../../../hooks/in-transaction-call";
 import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { keysToSnakeCase, toSnakeCase } from "../../../lib/case-conversion";
 import {
@@ -97,6 +103,10 @@ import {
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
+import {
+  assignRepeaterRowIds,
+  reachesRepeaterField,
+} from "../../../shared/lib/repeater-row-ids";
 import {
   issuesTheReaderMaySee,
   type IssueReader,
@@ -514,14 +524,15 @@ export class SingleMutationService extends BaseService {
    * without languages, which has no shared values apart from its languages'.
    */
   /**
-   * Put back in an update's `data` the stored hash of each password it leaves
-   * out of a container written whole (`carryStoredPasswords`), and return
-   * those hashes for the hashing pass to keep. `stored` is the document as
-   * stored, hashes included; a translated container's stored value is the
-   * write language's row of the translations table.
+   * The stored value an update's containers are written over, for the two
+   * steps that pair what it sends with what is stored: the passwords it keeps
+   * (`carryStoredPasswords`) and the repeater row ids it keeps
+   * (`assignRepeaterRowIds`). `stored` is the document as stored, hashes
+   * included; a translated container's stored value is the write language's
+   * row of the translations table. `undefined` where the fields hold neither
+   * a password nor a repeater, so such an update reads nothing more.
    */
-  private async storedPasswordsCarried(args: {
-    data: Record<string, unknown>;
+  private async storedContainersForWrite(args: {
     stored: Record<string, unknown>;
     fields: Parameters<typeof carryStoredPasswords>[2];
     reach: FieldGroupReach;
@@ -529,8 +540,13 @@ export class SingleMutationService extends BaseService {
     writeLocale: string | undefined;
     documentId: string;
     mainTableName: string;
-  }): Promise<Set<string>> {
-    if (!reachesPasswordField(args.fields, args.reach)) return new Set();
+  }): Promise<Record<string, unknown> | undefined> {
+    if (
+      !reachesPasswordField(args.fields, args.reach) &&
+      !reachesRepeaterField(args.fields, args.reach)
+    ) {
+      return undefined;
+    }
     // Read only once the translations table is there: before its migration,
     // a translated value is still on the Single's own row, in `stored`.
     const companion =
@@ -571,12 +587,7 @@ export class SingleMutationService extends BaseService {
       const value = row?.[field.name] ?? row?.[field.column];
       if (value !== undefined) translated[field.name] = value;
     }
-    return carryStoredPasswords(
-      args.data,
-      { ...args.stored, ...translated },
-      args.fields,
-      args.reach
-    );
+    return { ...args.stored, ...translated };
   }
 
   private translationsOf(
@@ -2232,6 +2243,14 @@ export class SingleMutationService extends BaseService {
       if (accessDenied) {
         return accessDenied;
       }
+      // A conditional write naming a key no update stores is refused here: its
+      // access has been judged, so a caller who may not update is refused
+      // alike whatever it names, and no hook has run.
+      storedFieldRead.refuseUnstoredKeys(
+        options.context,
+        { kind: "single", slug },
+        { tableName: singleMeta.tableName, fields: singleMeta.fields }
+      );
 
       // 2. Resolve the document to write against. When the Single has never been
       // written, build its default in memory but DO NOT persist it yet. The
@@ -2486,29 +2505,38 @@ export class SingleMutationService extends BaseService {
           locale,
         });
       const storedLocales = this.localization?.locales.map(l => l.code) ?? [];
-      await keepDeniedAtStoredOnUpdate({
-        data: currentData,
-        stored: await storedFieldGroupsIn(options.locale),
-        storedIn: {
-          locales: storedLocales,
-          read: locale => storedFieldGroupsIn(locale),
-        },
-        fields: fieldConfigs,
-        source: this.fieldGroupDataService,
-        access: singleWriteAccess,
-        ownRules: document =>
-          applyFieldWriteAccess({
-            kind: "single",
-            slug,
-            data: document,
-            operation: "update",
-            user: options.user,
-            authenticatedScope: options.authenticatedScope,
-            overrideAccess: options.overrideAccess,
-            id: documentId,
-            grants: writeGrants,
-          }),
-      });
+      const storedForAccess = await storedFieldGroupsIn(options.locale);
+      // For a conditional write made whole, what this pass takes out or keeps
+      // is recorded, and refuses it once every hook has run.
+      await storedFieldRead.fieldAccessPass(
+        options.context,
+        { kind: "single", slug },
+        currentData,
+        () =>
+          keepDeniedAtStoredOnUpdate({
+            data: currentData,
+            stored: storedForAccess,
+            storedIn: {
+              locales: storedLocales,
+              read: locale => storedFieldGroupsIn(locale),
+            },
+            fields: fieldConfigs,
+            source: this.fieldGroupDataService,
+            access: singleWriteAccess,
+            ownRules: document =>
+              applyFieldWriteAccess({
+                kind: "single",
+                slug,
+                data: document,
+                operation: "update",
+                user: options.user,
+                authenticatedScope: options.authenticatedScope,
+                overrideAccess: options.overrideAccess,
+                id: documentId,
+                grants: writeGrants,
+              }),
+          })
+      );
       await runFieldHooks({
         kind: "single",
         slug,
@@ -2644,6 +2672,13 @@ export class SingleMutationService extends BaseService {
         operation: "update",
         user: options.user,
       });
+      // Every hook has run: a conditional write made whole is judged here, on
+      // what is about to be persisted, before it is normalized and written.
+      await storedFieldRead.refuseUnlessWhole(
+        options.context,
+        { kind: "single", slug },
+        currentData
+      );
 
       // 6.35. Authorize a change to the single's published state, judged on the
       // post-hook data. Publishing needs `publish-<slug>` and unpublishing
@@ -2806,24 +2841,31 @@ export class SingleMutationService extends BaseService {
       // At every depth, through the field groups held inline in a container:
       // their passwords are stored in that container's value.
       // A password the update leaves out of a container keeps its stored hash.
+      // The same stored value is what its repeater rows keep their ids
+      // against, below.
       const passwordReach = await passwordReachOf(
         fieldConfigs,
         this.fieldGroupDataService
       );
+      const storedContainers = await this.storedContainersForWrite({
+        stored: existingDeserialized,
+        fields: fieldConfigs,
+        reach: passwordReach,
+        companion,
+        writeLocale,
+        documentId: String(documentId),
+        mainTableName: singleMeta.tableName,
+      });
       await hashPasswordFieldValues(
         currentData,
         fieldConfigs,
         passwordReach,
-        await this.storedPasswordsCarried({
-          data: currentData,
-          stored: existingDeserialized,
-          fields: fieldConfigs,
-          reach: passwordReach,
-          companion,
-          writeLocale,
-          documentId: String(documentId),
-          mainTableName: singleMeta.tableName,
-        })
+        carryStoredPasswords(
+          currentData,
+          storedContainers,
+          fieldConfigs,
+          passwordReach
+        )
       );
 
       // 6.5. Normalize upload field values (strip expanded media objects to IDs)
@@ -2833,6 +2875,19 @@ export class SingleMutationService extends BaseService {
       // them to the references they stand for rather than storing a snapshot
       // of the related row.
       normalizeRelationshipFields(currentData, fieldConfigs);
+
+      // 6.6. Every repeater row gets its saved id: after the field rules and
+      // the password pass have decided the value, and after references are
+      // reduced to ids so an unchanged row compares equal to the stored one.
+      // A first write pairs against the default document built in memory.
+      // The field groups placed on the Single were taken off above, and their
+      // own write gives their rows ids.
+      assignRepeaterRowIds(
+        currentData,
+        storedContainers,
+        fieldConfigs,
+        passwordReach
+      );
 
       // 6.6. Coerce date-field strings into `Date` objects so Drizzle can
       // bind them to `timestamp` columns. Without this step the adapter
@@ -2959,9 +3014,23 @@ export class SingleMutationService extends BaseService {
         locale: options.locale,
       });
 
+      // The in-transaction handlers, asked once for this save: the same set
+      // decides whether the documents are assembled and which handlers run,
+      // on every attempt.
+      const inTransactionHandlers = inTransactionHandlersFor(
+        this.hookRegistry,
+        hookCollection
+      );
       try {
         // Retry the whole update+capture transaction on a version_no allocation
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
+        //
+        // The callback is the Single save's whole transaction: the lock, the
+        // held-edit split, the content, companion and component writes, the
+        // version, history, activity and outbox records, and the in-transaction
+        // phase. Its branching is that pipeline's own; it comes down by moving
+        // phases into units of their own, as `assemblesSaveDocuments` is.
+        // fallow-ignore-next-line complexity
         updatedRows = await this.adapter.transaction(async tx => {
           // This attempt's component values. A publish merges the held
           // draft's into them, and a retry after a lost race must start again
@@ -4026,11 +4095,11 @@ export class SingleMutationService extends BaseService {
           // install with neither webhooks nor audit would compare a raw row
           // with nothing, and a component-only edit would read as no change.
           // The webhook payload below stays gated on `recordingEnabled`.
-          const assembleDocuments =
-            recordingEnabled ||
-            willRecordSingleActivity(
-              actorForWrite(options.actor ?? null, options.user)
-            );
+          const assembleDocuments = this.assemblesSaveDocuments(
+            recordingEnabled,
+            actorForWrite(options.actor ?? null, options.user),
+            inTransactionHandlers.length > 0
+          );
 
           const previousDoc =
             assembleDocuments && preRow
@@ -4363,6 +4432,11 @@ export class SingleMutationService extends BaseService {
           // rather than re-derived from the stored document: a second
           // status-less save of different fields would otherwise rebuild from
           // live content and silently revert the first pending edit.
+          // The pending draft a held edit stored, and the one it replaced when
+          // it accumulated onto a draft already there, for the in-transaction
+          // phase below; undefined for a write to the live row.
+          let heldDocument: Record<string, unknown> | undefined;
+          let priorHeldDocument: Record<string, unknown> | undefined;
           if (holdEdit) {
             // A held edit leaves the live row's content alone, but it is a
             // change another editor must not overwrite unseen: the counter
@@ -4683,6 +4757,8 @@ export class SingleMutationService extends BaseService {
                   : {}),
               }
             );
+            heldDocument = pending;
+            priorHeldDocument = existingDraft ? replaces : undefined;
             await this.recordSingleSave(tx, slug, existingDoc.id, options, {
               locale: singleDraftLocale,
               toState: "draft",
@@ -5370,6 +5446,35 @@ export class SingleMutationService extends BaseService {
             locale: rawOptions.locale,
           });
 
+          // Last in the transaction, and so again on each retried attempt:
+          // the documents the outbox event carries, or for a held edit the
+          // pending draft, marked, against the draft it replaced when there
+          // was one. A held draft is shown in ordinary read shape, without
+          // the single-component type tags its snapshot records (a dynamic
+          // zone's row types are read shape, and kept). A Single is only ever
+          // updated, and its handlers are registered under its hook
+          // namespace (`single:<slug>`).
+          const asRead = (document: Record<string, unknown> | undefined) =>
+            document &&
+            stripSingleComponentTags(
+              document,
+              fieldConfigs,
+              componentSlug =>
+                singleComponentSchemas?.get(componentSlug)?.fields
+            );
+          await runInTransactionPhaseFor(inTransactionHandlers, tx, {
+            collection: hookCollection,
+            operation: "update",
+            id: String(existingDoc.id),
+            data: writtenByUpdate(dataDoc, asRead(heldDocument)),
+            originalData: replacedByUpdate(
+              previousDoc,
+              asRead(priorHeldDocument)
+            ),
+            user: options.user,
+            context: sharedContext,
+          });
+
           return rows;
         }, versionConflictRetries());
       } catch (error) {
@@ -5643,6 +5748,24 @@ export class SingleMutationService extends BaseService {
         committed: committedWrite,
       };
     }
+  }
+
+  /**
+   * Whether a save assembles its documents in read shape: for the outbox
+   * event, for the activity trail whenever it will record the save (it names
+   * the fields a save changed by comparing them), and for an in-transaction
+   * handler, which is handed both (`handsInTransaction`: the save took at
+   * least one). Otherwise the raw row stands in, and the per-component reads
+   * are skipped.
+   */
+  private assemblesSaveDocuments(
+    recordingEnabled: boolean,
+    actor: ReturnType<typeof actorForWrite>,
+    handsInTransaction: boolean
+  ): boolean {
+    return (
+      recordingEnabled || willRecordSingleActivity(actor) || handsInTransaction
+    );
   }
 
   /**

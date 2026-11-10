@@ -113,6 +113,13 @@ export interface HookWarning {
   entryId?: string;
 }
 
+/**
+ * An advisory as its producer composes it: a `HookWarning` less its severity,
+ * which recording one sets to `"notice"`. Named so a plugin types the notice
+ * it builds without restating the shape.
+ */
+export type AdvisoryNotice = Omit<HookWarning, "severity">;
+
 /** Reduce a failure to what may cross a public boundary. */
 export function toHookWarning(failure: SideEffectHookFailure): HookWarning {
   return {
@@ -157,9 +164,7 @@ export function recordSideEffectWarning(failure: SideEffectHookFailure): void {
  * producer must not put an identifier in it that the caller could not already
  * see -- the same rule `toHookWarning` enforces for failures by construction.
  */
-export function recordAdvisoryNotice(
-  notice: Omit<HookWarning, "severity">
-): void {
+export function recordAdvisoryNotice(notice: AdvisoryNotice): void {
   const stack = collectorStack.getStore();
   if (!stack) return;
   const entry: HookWarning = { ...notice, severity: "notice" };

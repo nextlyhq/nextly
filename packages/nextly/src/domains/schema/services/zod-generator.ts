@@ -36,6 +36,7 @@ import {
   isChipsField,
   isDataField,
 } from "../../../collections/fields/guards";
+import { declaresOwnId } from "../../../collections/fields/repeater-row-identity";
 import {
   ICON_ID_MAX_LENGTH,
   ICON_ID_PATTERN,
@@ -354,6 +355,9 @@ export class ZodGenerator {
     // Base schema with all fields
     lines.push(`export const ${schemaName}Schema = z.object({`);
     lines.push(`  id: z.string(),`);
+    // The version a read gives, which an update sends back; as the
+    // TypeScript interface states it.
+    lines.push(`  _rev: z.string().optional(),`);
 
     // Add field schemas
     for (const field of collection.fields) {
@@ -391,7 +395,8 @@ export class ZodGenerator {
       lines.push(` */`);
     }
 
-    const omitFields = ["id"];
+    // A create is never judged by version, so it carries none.
+    const omitFields = ["id", "_rev"];
     if (collection.timestamps) {
       omitFields.push("createdAt", "updatedAt");
     }
@@ -416,11 +421,13 @@ export class ZodGenerator {
       lines.push(` */`);
     }
 
+    // An update also says it replaces whatever is stored, when it sends no
+    // version: one of the two it must say.
     lines.push(
-      `export const ${schemaName}UpdateInputSchema = ${schemaName}Schema.partial().required({`
+      `export const ${schemaName}UpdateInputSchema = ${schemaName}Schema.partial()`
     );
-    lines.push(`  id: true,`);
-    lines.push(`});`);
+    lines.push(`  .required({ id: true })`);
+    lines.push(`  .extend({ _overwrite: z.boolean().optional() });`);
 
     return lines.join("\n");
   }
@@ -756,8 +763,13 @@ export class ZodGenerator {
         ? (field.fields as FieldConfig[])
         : [];
 
-    // Build object schema for array items
-    const itemSchema = this.buildNestedObjectSchema(nestedFields);
+    // Build object schema for array items. Each row is saved with an id,
+    // which a write keeps when it is sent back: optional, as a create may
+    // leave it out, and absent where the rows declare an `id` of their own.
+    const itemSchema = this.buildNestedObjectSchema(
+      nestedFields,
+      declaresOwnId(nestedFields) ? [] : ["id: z.string().optional()"]
+    );
     let arraySchema = `z.array(${itemSchema})`;
 
     // Apply min/max rows
@@ -806,8 +818,11 @@ export class ZodGenerator {
    * Derives each nested field's schema from the canonical per-field generator,
    * preserving field-level validation rules across top-level and nested contexts.
    */
-  private buildNestedObjectSchema(fields: FieldConfig[]): string {
-    const fieldSchemas: string[] = [];
+  private buildNestedObjectSchema(
+    fields: FieldConfig[],
+    leading: readonly string[] = []
+  ): string {
+    const fieldSchemas: string[] = [...leading];
 
     for (const field of fields) {
       if (!isDataField(field) && !isPluginDataField(field)) continue;

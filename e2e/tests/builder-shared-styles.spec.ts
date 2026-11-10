@@ -18,6 +18,7 @@ import { expect, type Page } from "@playwright/test";
 import {
   block,
   clickBlock,
+  emptyHomepage,
   openEditorWith,
   pressSave,
 } from "./canvas/editor-driver";
@@ -65,7 +66,9 @@ async function storedClasses(
 
 /** Store the site's shared styles, as a test's starting point or its cleanup. */
 async function storeClasses(page: Page, classes: unknown): Promise<void> {
-  const stored = await page.request.patch(SITE_STYLE, { data: { classes } });
+  const stored = await page.request.patch(SITE_STYLE, {
+    data: { classes, _overwrite: true },
+  });
   expect(
     stored.ok(),
     `storing the shared styles: ${stored.status()} ${await stored.text()}`
@@ -148,6 +151,8 @@ test.describe("shared styles on a block", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
   });
   test.afterEach(async ({ page }) => {
+    // Off the homepage first: a shared style still in use cannot be removed.
+    await emptyHomepage(page);
     await storeClasses(page, before ?? []);
   });
 

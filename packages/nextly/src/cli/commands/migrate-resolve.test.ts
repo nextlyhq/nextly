@@ -21,4 +21,14 @@ describe("registerMigrateResolveCommand", () => {
     expect(longs).toContain("--failed-cleanup");
     expect(longs).toContain("--skip-verify");
   });
+
+  it("registers --removed, taking the file, and --file-missing, a switch", () => {
+    const program = new Command();
+    registerMigrateResolveCommand(program);
+    const cmd = program.commands.find(c => c.name() === "migrate:resolve");
+    const removed = cmd?.options.find(o => o.long === "--removed");
+    const fileMissing = cmd?.options.find(o => o.long === "--file-missing");
+    expect(removed?.required).toBe(true);
+    expect(fileMissing?.required || fileMissing?.optional).toBe(false);
+  });
 });

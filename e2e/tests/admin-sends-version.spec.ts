@@ -212,7 +212,11 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
     const read = await page.request.get(SITE_SETTINGS);
     const { siteName } = (await read.json()) as { siteName?: string | null };
     const seeded = await page.request.patch(SITE_SETTINGS, {
-      data: { tagline: "Stored", siteName: siteName || "Nextly" },
+      data: {
+        tagline: "Stored",
+        siteName: siteName || "Nextly",
+        _overwrite: true,
+      },
     });
     expect(seeded.ok(), await seeded.text()).toBe(true);
     const settingsWrites = recordWrites(page, SITE_SETTINGS);
@@ -235,7 +239,9 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
         props: { text, level: "h2" },
       })),
     };
-    const stored = await page.request.patch(HOMEPAGE, { data: { layout } });
+    const stored = await page.request.patch(HOMEPAGE, {
+      data: { layout, _overwrite: true },
+    });
     expect(stored.ok(), await stored.text()).toBe(true);
     const homepageWrites = recordWrites(page, HOMEPAGE);
     await gotoAdmin(page, "/singles/homepage/builder?field=layout");

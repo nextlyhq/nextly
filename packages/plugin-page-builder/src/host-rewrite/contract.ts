@@ -140,8 +140,25 @@ export interface RewriteReport {
    * on a run whose converting walk did its job.
    */
   readonly caughtByFinalWalk: readonly HostAddress[];
+  /**
+   * In a dry run, each write a real run would make: its host, the value it
+   * writes there, and the status it names where it names one (a public live
+   * row with no pending draft, published again in the state it was read in).
+   * A caller asks with them, before it starts, whether each write as it
+   * would be sent is allowed.
+   */
+  readonly writes?: readonly PlannedHostWrite[];
   /** Whether the run has walked every host to the end, twice. */
   readonly finished: boolean;
+}
+
+/** One write a dry run found a real run would make. */
+export interface PlannedHostWrite {
+  readonly host: HostAddress;
+  /** The value written at the host's top-level field. */
+  readonly value: unknown;
+  /** The status the write names, where it names one. */
+  readonly status?: string;
 }
 
 /** The character joining a key's parts; no slug, id, key or locale holds it. */
@@ -168,4 +185,20 @@ export function documentKeyOf(
   return host.kind === "single"
     ? ["single", host.slug].join(KEY_SEPARATOR)
     : ["collection", host.slug, host.id ?? ""].join(KEY_SEPARATOR);
+}
+
+/**
+ * A host and form as one key, so what a step saw is what its writer writes:
+ * a breakpoint removal keeps what it strips by it, and its undo reads that
+ * back by it.
+ */
+export function formKey(host: HostAddress, form: HostForm): string {
+  return JSON.stringify([
+    host.kind,
+    host.slug,
+    host.id ?? "",
+    host.path,
+    host.locale ?? "",
+    form,
+  ]);
 }

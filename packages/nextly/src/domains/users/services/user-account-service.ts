@@ -27,14 +27,13 @@ import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
+import { parseInterfaceLanguage } from "../interface-language";
 
 import {
   passwordColumns,
   updateUserEndingSessions,
   type PasswordWriteTx,
 } from "./password-write";
-import { parseInterfaceLanguage } from "../interface-language";
-
 import { UserQueryService } from "./user-query-service";
 
 /**

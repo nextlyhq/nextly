@@ -2,6 +2,8 @@
  * The shared styles' routes, against fakes of the store and the usage index:
  * who each asks, what each writes, and what each refuses.
  */
+import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -130,6 +132,7 @@ describe("the shared-style permission", () => {
     expect(declared).toEqual([
       "manage-page-builder-site",
       "lock-page-builder-shared-styles",
+      "manage-template-routing",
     ]);
   });
 
@@ -137,6 +140,7 @@ describe("the shared-style permission", () => {
     const routes = sharedStyleRoutes({
       configClassIds: new Set(),
       usage: () => usageOf(WHOLE).source,
+      limits: DEFAULT_LIMITS,
     });
     const scope = {
       plugin: "@nextlyhq/plugin-page-builder",
@@ -682,7 +686,7 @@ describe("removing unused shared styles", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
-  it("refuses a used, a locked and a code-defined style, naming each", async () => {
+  it("refuses a used, a locked and a code-defined style as a conflict naming each", async () => {
     const { store, write } = storeOf([
       card,
       { ...hero, locked: true },
@@ -702,8 +706,32 @@ describe("removing unused shared styles", () => {
         )
       )
     ).toMatchObject({
-      // A style the index counts as used makes it the in-use refusal, its
-      // one issue naming every reason, as the rescan's refusal does.
+      // Not every reason is a use, so none carries the in-use code: the lock
+      // and the code's style would read as uses otherwise.
+      code: "CONFLICT",
+      publicMessage:
+        "Nothing was removed. hero is locked. code is defined in the site's code. Card is used on 2 documents.",
+    });
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("refuses styles all of whose reasons are uses as the in-use refusal, its one issue naming each", async () => {
+    const { store, write } = storeOf([card, hero]);
+    const { source } = usageOf(WHOLE, {
+      "c-card": [{ collection: "pages", documents: ["p1", "p2"] }],
+      "c-hero": [{ collection: "pages", documents: ["p3"] }],
+    });
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-card", "c-hero"] }),
+          store,
+          source,
+          new Set(),
+          NOT_STILL_USED
+        )
+      )
+    ).toMatchObject({
       code: "VALIDATION_ERROR",
       publicData: {
         errors: [
@@ -711,7 +739,7 @@ describe("removing unused shared styles", () => {
             path: "",
             code: SHARED_STYLE_IN_USE_CODE,
             message:
-              "Nothing was removed. hero is locked. code is defined in the site's code. Card is used on 2 documents.",
+              "Nothing was removed. Card is used on 2 documents. hero is used on 1 document.",
           },
         ],
       },
@@ -897,6 +925,173 @@ describe("the version a shared-style write sends", () => {
     await store.write([card, hero], {}, read);
 
     expect(updates).toEqual([{ classes: [card, hero], _rev: "4" }]);
+  });
+});
+
+/**
+ * A store whose reads answer each list of `reads` in turn, version 1, 2, …,
+ * the last one again after; a write is refused as stale while its read is
+ * not the newest.
+ */
+function changingStoreOf(...reads: Record<string, unknown>[][]) {
+  let at = 0;
+  const read = vi.fn<SharedStyleStore["read"]>(async () => {
+    const entries = reads[Math.min(at, reads.length - 1)] ?? [];
+    at += 1;
+    return { entries, rev: String(Math.min(at, reads.length)) };
+  });
+  const write = vi.fn<SharedStyleStore["write"]>(async (_list, _ctx, from) => {
+    if (from.rev !== String(reads.length)) {
+      throw NextlyError.staleVersion({
+        data: { currentVersion: String(reads.length) },
+      });
+    }
+  });
+  const store: SharedStyleStore = { read, write };
+  return { store, read, write };
+}
+
+describe("a shared-style write refused because the Single was saved meanwhile", () => {
+  const renamedHero = { ...hero, label: "Hero 2" };
+
+  it("locks again on the newest list, changing only the style's lock", async () => {
+    const { store, write } = changingStoreOf([card, hero], [card, renamedHero]);
+    const response = await lockSharedStyle(
+      post({ classId: "c-card", locked: true }),
+      store,
+      new Set()
+    );
+    expect(response.status).toBe(200);
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(write.mock.calls[1]?.[0]).toEqual([
+      { ...card, locked: true },
+      renamedHero,
+    ]);
+    expect(write.mock.calls[1]?.[2]).toMatchObject({ rev: "2" });
+  });
+
+  it("writes nothing more when the newest list already holds the lock asked", async () => {
+    const { store, write } = changingStoreOf(
+      [card, hero],
+      [{ ...card, locked: true }, hero]
+    );
+    const response = await lockSharedStyle(
+      post({ classId: "c-card", locked: true }),
+      store,
+      new Set()
+    );
+    expect(await response.json()).toMatchObject({
+      message: "Card is locked.",
+    });
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a lock on a style removed meanwhile, as one not there", async () => {
+    const { store, write } = changingStoreOf([card, hero], [hero]);
+    expect(
+      await refusal(
+        lockSharedStyle(
+          post({ classId: "c-card", locked: true }),
+          store,
+          new Set()
+        )
+      )
+    ).toMatchObject({ code: "NOT_FOUND" });
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes again from the newest list, keeping a style added meanwhile", async () => {
+    const spare = { id: "c-spare", slug: "spare", orderIndex: 2, styles: {} };
+    const { store, write } = changingStoreOf(
+      [card, hero],
+      [card, renamedHero, spare]
+    );
+    const usage = usageOf(WHOLE);
+    const stillUsed = {
+      uses: vi.fn<StillUsedCheck["uses"]>(async () => []),
+      firstReadable: async () => undefined,
+    };
+    await removeSharedStyles(
+      post({ ids: ["c-hero"] }),
+      store,
+      usage.source,
+      new Set(),
+      stillUsed
+    );
+    expect(write.mock.calls[1]?.[0]).toEqual([card, spare]);
+    // The index and the stored documents are both asked again on the
+    // retry: a page saved meanwhile may use the style the index missed.
+    expect(usage.source.health).toHaveBeenCalledTimes(2);
+    expect(stillUsed.uses).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses on the retry when a page saved meanwhile uses the style", async () => {
+    const { store, write } = changingStoreOf([card, hero], [card, hero]);
+    const usage = usageOf(WHOLE);
+    const stillUsed = {
+      uses: vi
+        .fn<StillUsedCheck["uses"]>()
+        .mockResolvedValueOnce([])
+        .mockResolvedValue([{ kind: "collection", slug: "pages", id: "p1" }]),
+      firstReadable: async () => "Home",
+    };
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-hero"] }),
+          store,
+          usage.source,
+          new Set(),
+          stillUsed
+        )
+      )
+    ).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: { errors: [{ code: "IN_USE" }] },
+    });
+    // The stale first write, and nothing after the second walk refused.
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a removal when the style was locked meanwhile, writing nothing more", async () => {
+    const { store, write } = changingStoreOf(
+      [card, hero],
+      [card, { ...hero, locked: true }]
+    );
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-hero"] }),
+          store,
+          usageOf(WHOLE).source,
+          new Set(),
+          NOT_STILL_USED
+        )
+      )
+    ).toMatchObject({
+      code: "CONFLICT",
+      publicMessage: expect.stringContaining("hero is locked."),
+    });
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers the stale refusal once three writes in all were refused", async () => {
+    const { store, write } = changingStoreOf(
+      [card, hero],
+      [card, hero],
+      [card, hero],
+      [card, hero]
+    );
+    expect(
+      await refusal(
+        lockSharedStyle(
+          post({ classId: "c-card", locked: true }),
+          store,
+          new Set()
+        )
+      )
+    ).toMatchObject({ code: "STALE_VERSION" });
+    expect(write).toHaveBeenCalledTimes(3);
   });
 });
 

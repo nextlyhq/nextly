@@ -2450,12 +2450,19 @@ describe("dragging a number field's label", () => {
 
   it("marks the label as draggable on a field holding one measurement", () => {
     mount({ spacing: true }, withPadding("12px"));
-    expect(side("Block start").label.hasAttribute("data-scrub")).toBe(true);
+    const { label } = side("Block start");
+    expect(label.hasAttribute("data-scrub")).toBe(true);
+    // Out of the admin's `[data-slot="label"]` pointer cursor, which would
+    // hide the resize cursor, and still the field's label.
+    expect(label.hasAttribute("data-slot")).toBe(false);
+    expect(label.tagName).toBe("LABEL");
   });
 
   it("does not mark a label whose value is not one measurement", () => {
     mount({ spacing: true }, withPadding("clamp(1rem, 2vw, 3rem)"));
-    expect(side("Block start").label.hasAttribute("data-scrub")).toBe(false);
+    const { label } = side("Block start");
+    expect(label.hasAttribute("data-scrub")).toBe(false);
+    expect(label.getAttribute("data-slot")).toBe("label");
   });
 
   it("shows the value live while dragging and writes it ONCE, on release", () => {

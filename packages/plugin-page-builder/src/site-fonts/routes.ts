@@ -32,6 +32,7 @@ import { documentVersionOf, withVersionFrom } from "../document-version";
 import type { SiteSettingsRouteContext } from "../site-settings";
 import { checkStoredFonts, unreadableStoredFonts } from "../site-style-record";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
+import { retryOnStale } from "../stale-retry";
 
 import {
   parseCatalogue,
@@ -48,16 +49,37 @@ import {
   type FontCatalogueRead,
 } from "./contract";
 import {
+  claimedFontsFolder,
+  FONTS_FOLDER,
+  fontsFolderClaims,
+  type FontsFolderDatabase,
+  type FontsFolderDialect,
+  type RootFolder,
+} from "./folder";
+import {
   fetchFromCatalogue,
   type CatalogueFetch,
   type CatalogueFetchRules,
 } from "./guarded-fetch";
 import type { ResolvedFontOptions } from "./options";
-import { planFontAdd, readAddFontBody, type PlannedFile } from "./plan";
+import {
+  planFontAdd,
+  readAddFontBody,
+  sameFace,
+  type PlannedFile,
+} from "./plan";
 
-/** A route's context, with the outbound fetch the plugin declared. */
+/**
+ * A route's context, with the outbound fetch the plugin declared, and what
+ * the site's one fonts folder is claimed and tidied through.
+ */
 interface SiteFontsRouteContext extends SiteSettingsRouteContext {
   fetch?: CatalogueFetch;
+  /** The plugin's own tables, where the fonts folder is claimed. */
+  db: FontsFolderDatabase;
+  dialect: FontsFolderDialect;
+  /** The media library, which deletes a folder an add made but lost. */
+  services: { media: { deleteFolder(folderId: string): Promise<unknown> } };
 }
 
 /** The slice of the Direct API an add stores and registers through. */
@@ -81,7 +103,7 @@ export interface SiteFontsDirectApi {
     folders: {
       list(args: {
         overrideAccess: boolean;
-      }): Promise<ReadonlyArray<{ id: string; name: string }>>;
+      }): Promise<ReadonlyArray<RootFolder>>;
       create(args: {
         name: string;
         overrideAccess: boolean;
@@ -121,9 +143,6 @@ const ADD_TIMEOUT_MS = 60_000;
 
 /** How many adds one process runs at once. */
 const MAX_ADDS_IN_FLIGHT = 2;
-
-/** The media folder added fonts are stored in. */
-const FONTS_FOLDER = "Fonts";
 
 /** What an author is told when the catalogue's answer is refused or late. */
 const ADD_MESSAGES = {
@@ -343,10 +362,20 @@ export function siteFontRoutes(setup: SiteFontsRouteSetup): Route[] {
       );
     }
     const downloads = await downloadAll(fetch, plan.files, signal);
-    const added = await storeAll(api, slug, downloads, ctx.user, inTurn);
+    const { added, dropped } = await storeAll(
+      api,
+      slug,
+      downloads,
+      ctx,
+      inTurn
+    );
+    // Faces another add stored meanwhile are skipped as the plan skips them.
+    const skipped = plan.skipped + dropped;
     return respondMutation<AddSiteFontAnswer>(
-      `${meta.family} was added to this site.`,
-      { added, skipped: plan.skipped }
+      added.length === 0
+        ? `${meta.family} is already on this site.`
+        : `${meta.family} was added to this site.`,
+      { added, skipped }
     );
   };
 
@@ -517,7 +546,7 @@ async function bodyOf(req: Request): Promise<unknown> {
  * row this version cannot read, because appending would mean dropping it.
  */
 async function storedFonts(
-  api: SiteFontsDirectApi,
+  api: Pick<SiteFontsDirectApi, "findSingle">,
   slug: string
 ): Promise<{
   raw: readonly unknown[];
@@ -553,31 +582,34 @@ async function storedFonts(
 }
 
 /**
- * The "Fonts" folder's id, made on first use; the media root when either
- * step fails, since where the files sit is a convenience and not a reason to
- * refuse the add.
+ * The site's one "Fonts" folder's id, claimed across every server process
+ * ({@link site-fonts/folder}); the media root when the claim fails, since
+ * where the files sit is a convenience and not a reason to refuse the add.
  */
 async function fontsFolder(
   api: SiteFontsDirectApi,
-  user: { id: string } | null
+  ctx: SiteFontsRouteContext
 ): Promise<string | undefined> {
+  const user = ctx.user;
   try {
-    const folders = await api.media.folders.list({ overrideAccess: true });
-    const found = folders.find(folder => folder.name === FONTS_FOLDER);
-    if (found !== undefined) return found.id;
-    const made = await api.media.folders.create({
-      name: FONTS_FOLDER,
-      overrideAccess: true,
-      ...(user === null ? {} : { user: { id: user.id } }),
-    });
-    return made.id;
+    return await claimedFontsFolder(
+      {
+        list: () => api.media.folders.list({ overrideAccess: true }),
+        create: () =>
+          api.media.folders.create({
+            name: FONTS_FOLDER,
+            overrideAccess: true,
+            ...(user === null ? {} : { user: { id: user.id } }),
+          }),
+        remove: async id => {
+          // Trusted, as the folder was made, and refused unless empty.
+          await ctx.services.media.deleteFolder(id);
+        },
+      },
+      fontsFolderClaims(ctx.db, ctx.dialect)
+    );
   } catch {
-    // Made meanwhile by another surface, perhaps: look once more before
-    // storing the files at the library's root.
-    const again = await api.media.folders
-      .list({ overrideAccess: true })
-      .catch(() => []);
-    return again.find(folder => folder.name === FONTS_FOLDER)?.id;
+    return undefined;
   }
 }
 
@@ -612,8 +644,43 @@ function overAddTotal(): NextlyError {
 }
 
 /**
+ * Append the faces not stored yet to the stored fonts, and answer those
+ * appended. Read just before writing, and appended to rather than replaced,
+ * so a face another surface stored meanwhile is kept; written with the
+ * version of that read, so a save between the two refuses the write rather
+ * than being dropped. A refused write is made again on what is stored then
+ * ({@link retryOnStale}), leaving out a face another add stored meanwhile.
+ */
+export async function appendNewFaces(
+  api: Pick<SiteFontsDirectApi, "findSingle" | "updateSingle">,
+  slug: string,
+  faces: readonly FontFaceDef[],
+  asUser: { user?: { id: string } }
+): Promise<FontFaceDef[]> {
+  return retryOnStale(
+    () => storedFonts(api, slug),
+    async ({ raw, faces: stored, rev }) => {
+      const fresh = faces.filter(
+        face => !stored.some(each => sameFace(each, face))
+      );
+      if (fresh.length === 0) return fresh;
+      await api.updateSingle({
+        slug,
+        data: withVersionFrom({ fonts: [...raw, ...fresh] }, rev),
+        overrideAccess: true,
+        ...asUser,
+      });
+      return fresh;
+    }
+  );
+}
+
+/**
  * Store each file in the site's media, then append its faces to the stored
- * fonts. All or nothing: a failure deletes every file this add stored.
+ * fonts. All or nothing: a failure deletes every file this add stored, and
+ * the file of a face another add stored meanwhile is deleted too, since
+ * nothing points at it. Answers the faces appended, and how many were left
+ * out as already stored.
  *
  * The upload runs trusted: the permission was checked first and the bytes
  * come from the configured catalogue, not from the caller. The caller is
@@ -623,13 +690,14 @@ async function storeAll(
   api: SiteFontsDirectApi,
   slug: string,
   downloads: ReadonlyArray<{ file: PlannedFile; bytes: Uint8Array }>,
-  user: { id: string } | null,
+  ctx: SiteFontsRouteContext,
   inTurn: <T>(work: () => Promise<T>) => Promise<T>
-): Promise<FontFaceDef[]> {
+): Promise<{ added: FontFaceDef[]; dropped: number }> {
+  const user = ctx.user;
   const asUser = user === null ? {} : { user: { id: user.id } };
-  // In turn with the other adds: two that both look before either makes the
-  // folder would each make one.
-  const folder = await inTurn(() => fontsFolder(api, user));
+  // In turn with this process's other adds, so they never race each other
+  // for the claim; the claim itself holds across processes.
+  const folder = await inTurn(() => fontsFolder(api, ctx));
   const created: string[] = [];
   try {
     const added: FontFaceDef[] = [];
@@ -652,21 +720,21 @@ async function storeAll(
         src: [{ url: `/api/media/${media.id}/raw`, format: "woff2" }],
       });
     }
-    // Read again just before writing, and appended to rather than replaced,
-    // so a face another surface stored meanwhile is kept; in turn with the
-    // other adds, so neither writes over the other's.
-    await inTurn(async () => {
-      const { raw, rev } = await storedFonts(api, slug);
-      // With the version of that read, so a save between it and this write
-      // refuses the write rather than dropping what the save stored.
-      await api.updateSingle({
-        slug,
-        data: withVersionFrom({ fonts: [...raw, ...added] }, rev),
-        overrideAccess: true,
-        ...asUser,
-      });
+    // In turn with this process's other adds, so they do not refuse each
+    // other; an add in another process is met by the version check.
+    const appended = await inTurn(() =>
+      appendNewFaces(api, slug, added, asUser)
+    );
+    const unused = created.filter((_id, at) => {
+      const face = added[at];
+      return face === undefined || !appended.includes(face);
     });
-    return added;
+    for (const id of unused) {
+      await api.media
+        .delete({ id, overrideAccess: true })
+        .catch(() => undefined);
+    }
+    return { added: appended, dropped: unused.length };
   } catch (error) {
     for (const id of created) {
       await api.media

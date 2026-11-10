@@ -29,12 +29,26 @@ const INDEX = "class-index";
  * the hook forgot shows as calls that never happened.
  */
 const COMPONENT_INDEX = "component-index";
+/** The VARIABLE index's store, wired like the plugin wires it. */
+const TOKEN_INDEX = "token-index";
 
-/** A document whose single node applies the given classes. */
+/**
+ * A document whose single node applies the given classes, and uses one
+ * variable, so every index has something to derive from it.
+ */
 const documentUsing = (...classes: string[]) => ({
   formatVersion: 1,
   kind: "page",
-  nodes: [{ id: "n1", type: "core/text", version: 1, props: {}, classes }],
+  nodes: [
+    {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+      classes,
+      styles: { base: { base: { color: { $token: "color.brand" } } } },
+    },
+  ],
 });
 
 /** A plugin context that records registrations, plus the handler it captured. */
@@ -82,7 +96,9 @@ function harness(
       // EITHER index collection answers as an index, not as a document read.
       // Keying on the class index alone made the component store receive the
       // document payload and read pages as though they were its own rows.
-      a.collection !== INDEX && a.collection !== COMPONENT_INDEX
+      a.collection !== INDEX &&
+      a.collection !== COMPONENT_INDEX &&
+      a.collection !== TOKEN_INDEX
         ? {
             items: [{ id: "p1", content: documentUsing("hero") }],
             meta: { hasNext: false },
@@ -120,6 +136,7 @@ function harness(
     stores: () => ({
       classIndex: store(INDEX),
       componentIndex: store(COMPONENT_INDEX),
+      tokenIndex: store(TOKEN_INDEX),
     }),
     single: options.single ?? (async () => undefined),
     draftSplit: options.draftSplit ?? (async () => ({ eligible: false })),
@@ -314,6 +331,37 @@ describe("a document that was deleted", () => {
     api.find.mockRejectedValue(new Error("index unreachable"));
 
     await expect(fireDelete()).rejects.toThrow(/could not forget/);
+  });
+});
+
+describe("the variable index", () => {
+  it("forgets a deleted document in the VARIABLE index too", async () => {
+    const { fireDelete, api } = harness();
+
+    await fireDelete();
+
+    expect(api.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: TOKEN_INDEX,
+        where: expect.objectContaining({ entityKey: { equals: "p1" } }),
+      })
+    );
+  });
+
+  it("records the variables a saved document uses in the VARIABLE index", async () => {
+    const { fire, api } = harness();
+
+    await fire();
+
+    expect(api.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: TOKEN_INDEX,
+        data: expect.objectContaining({
+          entityKey: "p1",
+          tokenId: "color.brand",
+        }),
+      })
+    );
   });
 });
 

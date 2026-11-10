@@ -13,6 +13,7 @@ import {
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { useBlockEnvironment } from "@nextlyhq/blocks-react/environment";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -30,8 +31,8 @@ import {
   vi,
 } from "vitest";
 
-import { CHROME_ATTRIBUTE, Canvas } from "./canvas";
-import type { CanvasRegion } from "./canvas-regions";
+import { CHROME_ATTRIBUTE, CONDITIONED_ATTRIBUTE, Canvas } from "./canvas";
+import { CANVAS_REGION_CLASS, type CanvasRegion } from "./canvas-regions";
 
 afterEach(cleanup);
 
@@ -168,6 +169,99 @@ describe("the regions of a page's Layout on the canvas", () => {
     expect(text.indexOf("Bottom")).toBeGreaterThan(text.indexOf("Page body"));
   });
 
+  it("keeps the page's condition badges off a region whose block shares a page block's id", async () => {
+    // Ids are unique within a document, not across the page and its Layout:
+    // the header's block is "t", and so is the page's conditioned one.
+    render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "t",
+                type: "acme/text",
+                version: 1,
+                props: { text: "Conditioned body" },
+                visibility: {
+                  conditions: [[{ field: "tier", op: "exists" }]],
+                },
+              },
+            ],
+          } as unknown as BlockDocument
+        }
+        siteStyles={sheet as never}
+        regions={[regionOf("header", "Top")]}
+        render={{ styleContext: sheet } as never}
+      />
+    );
+    await act(async () => undefined);
+    const marked = Array.from(
+      document.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`)
+    );
+    // CONTROL: the page's own block is marked.
+    expect(marked).toHaveLength(1);
+    expect(marked[0]?.closest(`.${CANVAS_REGION_CLASS}`)).toBeNull();
+  });
+
+  it("draws and marks a conditioned block inside a placed component's definition", async () => {
+    // The page places a component; the component's own block has conditions,
+    // and only appears once the definition is composed into the page.
+    render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "card",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "promo" },
+              },
+            ],
+          } as BlockDocument
+        }
+        siteStyles={sheet as never}
+        render={
+          {
+            styleContext: sheet,
+            definitions: new Map([
+              [
+                "promo",
+                {
+                  formatVersion: 1,
+                  kind: "component",
+                  nodes: [
+                    {
+                      id: "inner",
+                      type: "acme/text",
+                      version: 1,
+                      props: { text: "Members only" },
+                      visibility: {
+                        conditions: [[{ field: "tier", op: "exists" }]],
+                      },
+                    },
+                  ],
+                } as unknown as BlockDocument,
+              ],
+            ]),
+          } as never
+        }
+      />
+    );
+    await act(async () => undefined);
+    // Drawn, where the published page's gating used to leave it out.
+    expect(document.body.textContent).toContain("Members only");
+    const marked = Array.from(
+      document.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`)
+    );
+    expect(marked).toHaveLength(1);
+    expect(marked[0]?.textContent).toContain("Members only");
+  });
+
   it("emits the site sheet once, from the first part drawn", () => {
     renderCanvas([regionOf("header", "Top"), regionOf("footer", "Bottom")]);
     const sheets = document.querySelectorAll("style[data-nx-site-sheet]");
@@ -208,21 +302,132 @@ describe("the regions of a page's Layout on the canvas", () => {
     expect(edit.textContent).toBe("Edit Layout ↗");
   });
 
-  it("opens by keyboard, and Escape closes it and returns focus to the region", () => {
+  it("is reached by one lock named for it, which opens the tag; Escape closes it and returns focus to the lock", () => {
     renderCanvas([regionOf("header", "Top")]);
     const header = screen.getByRole("group", {
       name: "Header, from Layout Main",
     });
-    expect(header.tabIndex).toBe(0);
-    header.focus();
-    fireEvent.keyDown(header, { key: "Enter" });
+    // The region itself is no tab stop; its lock is.
+    expect(header.tabIndex).toBe(-1);
+    const lock = screen.getByRole("button", {
+      name: "Header, from Layout Main, locked",
+    });
+    expect(lock.getAttribute("aria-expanded")).toBe("false");
+    lock.focus();
+    // Enter and Space press a button, which the browser delivers as a click.
+    fireEvent.click(lock);
+    expect(lock.getAttribute("aria-expanded")).toBe("true");
+    const tag = screen.getByRole("status");
+    expect(lock.getAttribute("aria-controls")).toBe(tag.id);
     const edit = screen.getByRole("link", {
       name: "Edit Layout Main (opens in a new tab)",
     });
     edit.focus();
     fireEvent.keyDown(edit, { key: "Escape" });
     expect(screen.queryByRole("status")).toBeNull();
-    expect(document.activeElement).toBe(header);
+    expect(document.activeElement).toBe(lock);
+    // A host showing the region, as Layers does, lands on the lock.
+    lock.blur();
+    header.focus();
+    expect(document.activeElement).toBe(lock);
+  });
+
+  it("rests as a lock, widens into its badge on hover, and opens its tag on a click", () => {
+    renderCanvas([regionOf("header", "Top")]);
+    const header = screen.getByRole("group", {
+      name: "Header, from Layout Main",
+    });
+    expect(header.dataset.state).toBe("rest");
+    // The badge is the lock's words, never its name.
+    const badge = header.querySelector(".nx-canvas-region__badge");
+    expect(badge?.textContent).toBe("Header · from Layout");
+    expect(badge?.getAttribute("aria-hidden")).toBe("true");
+    fireEvent.mouseEnter(header);
+    expect(header.dataset.state).toBe("hover");
+    fireEvent.mouseLeave(header);
+    expect(header.dataset.state).toBe("rest");
+    fireEvent.click(header);
+    expect(header.dataset.state).toBe("open");
+    // The lock closes what it opened.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Header, from Layout Main, locked" })
+    );
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("closes its tag on a press anywhere else, and when the canvas selects something", () => {
+    const props = {
+      document: page,
+      siteStyles: sheet as never,
+      regions: [regionOf("header", "Top")],
+      onSelect: vi.fn(),
+      render: { styleContext: sheet } as never,
+    };
+    const { rerender } = render(<Canvas {...props} />);
+    const header = screen.getByRole("group", {
+      name: "Header, from Layout Main",
+    });
+    fireEvent.click(header);
+    // A press inside keeps it open.
+    fireEvent.pointerDown(screen.getByRole("status"));
+    expect(screen.queryByRole("status")).not.toBeNull();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("status")).toBeNull();
+    fireEvent.click(header);
+    rerender(<Canvas {...props} selectedIds={["p"]} />);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("hangs its mark outside the region, and inside where outside would leave the screen", () => {
+    // A header whose bottom edge is at the foot of the window.
+    const bottom = window.innerHeight - 4;
+    const box = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        // The canvas, as tall as the window: what of it is on screen.
+        if (this.classList.contains("nx-canvas")) {
+          return DOMRect.fromRect({ width: 1280, height: window.innerHeight });
+        }
+        if (this.classList.contains("nx-canvas-region")) {
+          return DOMRect.fromRect({
+            x: 0,
+            y: bottom - 120,
+            width: 1280,
+            height: 120,
+          });
+        }
+        if (this.classList.contains("nx-canvas-region__mark")) {
+          return DOMRect.fromRect({ x: 8, y: 0, width: 300, height: 34 });
+        }
+        return DOMRect.fromRect();
+      });
+    try {
+      renderCanvas([regionOf("header", "Top")]);
+      const mark = document.querySelector(".nx-canvas-region__mark");
+      expect(mark?.getAttribute("data-placement")).toBe("inside");
+      cleanup();
+      // CONTROL: the same header with room below keeps it outside.
+      box.mockImplementation(function (this: HTMLElement) {
+        if (this.classList.contains("nx-canvas")) {
+          return DOMRect.fromRect({ width: 1280, height: window.innerHeight });
+        }
+        if (this.classList.contains("nx-canvas-region")) {
+          return DOMRect.fromRect({ x: 0, y: 0, width: 1280, height: 48 });
+        }
+        if (this.classList.contains("nx-canvas-region__mark")) {
+          return DOMRect.fromRect({ x: 8, y: 0, width: 300, height: 34 });
+        }
+        return DOMRect.fromRect();
+      });
+      renderCanvas([regionOf("header", "Top")]);
+      expect(
+        document
+          .querySelector(".nx-canvas-region__mark")
+          ?.getAttribute("data-placement")
+      ).toBe("outside");
+    } finally {
+      box.mockRestore();
+    }
   });
 
   it("offers no Edit link to someone who may not update the Layout", () => {

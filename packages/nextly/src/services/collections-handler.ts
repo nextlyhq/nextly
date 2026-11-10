@@ -86,6 +86,13 @@ type EveryLanguageLifecycleHandlerParams = {
    * save's are (see the entry service).
    */
   data?: Readonly<Record<string, unknown>>;
+  /**
+   * The HTTP request behind this transition, when one produced it, told to
+   * its hooks.
+   */
+  request?: Request;
+  /** Seeds the context every hook of this transition shares. */
+  context?: Record<string, unknown>;
 };
 
 /**
@@ -368,6 +375,41 @@ export class CollectionsHandler {
   }
 
   /**
+   * Whether this caller may make a write naming `nextStatus` of the entry: the
+   * lifecycle gate an update asks, only where it moves the row into or out of
+   * published, judged without writing. See the mutation service.
+   *
+   * @experimental
+   */
+  async canMoveEntryStatus(params: {
+    collectionName: string;
+    entryId: string;
+    nextStatus: string;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+    locale?: string;
+  }): Promise<boolean> {
+    return this.entryService.canMoveEntryStatus(params);
+  }
+
+  /**
+   * Whether this caller may delete the entry, judged by the delete's own gate
+   * without deleting it or running a hook, on the instance that serves
+   * collection writes, so the decision is the one the delete would take.
+   *
+   * @experimental
+   */
+  async canDeleteEntry(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    /** API-key scope; judges the delete gate on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<boolean> {
+    return this.entryService.canDeleteEntry(params);
+  }
+
+  /**
    * What a release's write of these entries, for its action, would be
    * refused with by validation and field rules, judged without writing — on
    * the instance that serves
@@ -382,6 +424,18 @@ export class CollectionsHandler {
     action: "publish" | "unpublish";
   }): Promise<Map<string, ValidationIssue[]>> {
     return this.entryService.releasePublishIssues(params);
+  }
+
+  /**
+   * Every reason a list read would refuse this caller's query, or none, on the
+   * instance that serves collection reads. See the query service.
+   *
+   * @experimental
+   */
+  async queryReadableProblems(
+    params: Parameters<CollectionEntryService["queryReadableProblems"]>[0]
+  ): ReturnType<CollectionEntryService["queryReadableProblems"]> {
+    return this.entryService.queryReadableProblems(params);
   }
 
   /**

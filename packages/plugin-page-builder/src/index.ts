@@ -26,7 +26,7 @@
  * package registers them. The editor is `@nextlyhq/builder`; blocks render
  * through `@nextlyhq/blocks-react`.
  */
-export { pageBuilder } from "./plugin";
+export { namedQueriesOf, pageBuilder } from "./plugin";
 export type { PageBuilderOptions } from "./plugin";
 export type {
   FontAddLimits,
@@ -109,6 +109,18 @@ export type {
   PageBuilderLayoutsOptions,
   PageBuilderLayoutsProvider,
 } from "./page-layouts";
+// What the site's one content route takes to serve pages and collections'
+// entries from the address store: who holds a path, the addresses to
+// pre-render, and each collection's published template.
+export { pageBuilderContent } from "./page-content";
+export type {
+  ContentAddressHolder,
+  PageBuilderContentDirectApi,
+  PageBuilderContentOptions,
+  PageBuilderContentProvider,
+  PageBuilderContentTemplate,
+} from "./page-content";
+export type { PageBuilderTemplateOptions } from "./templates/template-addresses";
 
 // The class-usage index, the derivation behind it, and the walk that repairs
 // it.
@@ -244,7 +256,19 @@ export type {
   PageAction,
   PageActionRequest,
   PageActionResult,
+  UnbindAnswer,
+  UnbindKeep,
 } from "./composition-actions-contract";
+// The collection template actions: give a collection its template, and
+// publish it, each with a dry run.
+export { TEMPLATE_ACTIONS_ROUTE_PATH } from "./templates/template-actions-contract";
+export type {
+  TemplateAction,
+  TemplateActionRequest,
+  TemplateActionResult,
+  TemplateSummary,
+} from "./templates/template-actions-contract";
+export { TEMPLATES_SLUG } from "./collections/templates";
 export type { ActionBy } from "./component-actions-contract";
 export type { ActionAnswer } from "./composition-route-kit";
 // What a client reads before composing: the site's patterns, components and
@@ -275,4 +299,53 @@ export type {
   SavePatternDryRun,
   SavePatternDryRunResponse,
   StoredPageAddress,
+} from "./library-contract";
+// Site code every published page carries, `@experimental` until it renders:
+// the rules an entry is held to, the sanitiser turning pasted HTML into
+// entries, and the check of a site's Content Security Policy, with the merge
+// a host's proxy adds what the code needs to its policy by.
+export {
+  SITE_CODE_LIMITS,
+  siteCodeEntryProblem,
+  siteCodeScriptKind,
+  siteCodeUrlProblem,
+} from "./site-code/rules";
+export type {
+  SiteCodeAttrs,
+  SiteCodeEntry,
+  SiteCodeSlot,
+} from "./site-code/rules";
+export { normaliseSiteCodeText, sanitiseSiteCode } from "./site-code/sanitise";
+export type { SanitisedSiteCode } from "./site-code/sanitise";
+export {
+  checkSiteCodeAgainstCsp,
+  cspHash,
+  mergeSiteCodeIntoCsp,
+  parseCsp,
+  siteCodeFacts,
+  siteCodePolicyAdditions,
+} from "./site-code/csp";
+export type {
+  CspAddition,
+  CspCheck,
+  CspCheckInput,
+  CspFinding,
+  CspPolicy,
+  SiteCodeFacts,
+  SiteCodeInlineKind,
+  SiteCodeLoad,
+  SiteCodeResourceKind,
+} from "./site-code/csp";
+// Where site code is kept and changed, `@experimental`: the route Settings
+// reads and saves it through, and how a site declares its policy.
+export { SITE_CODE_SLUG } from "./site-code/storage";
+export type { PageBuilderSiteCodeOptions } from "./site-code/route";
+export { SITE_CODE_ROUTE_PATH } from "./library-contract";
+export type {
+  SiteCodeChecked,
+  SiteCodePolicyChecked,
+  SiteCodeRead,
+  SiteCodeRequest,
+  SiteCodeSaved,
+  SiteCodeSlotJudged,
 } from "./library-contract";
