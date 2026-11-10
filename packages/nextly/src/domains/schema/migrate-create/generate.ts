@@ -93,6 +93,10 @@ import type {
   TableSpec,
 } from "../pipeline/diff/types";
 import { withForeignKeysLiftedForTypeChanges } from "../pipeline/foreign-key-lift";
+import {
+  columnsByTable,
+  withKeptScopeFields,
+} from "../pipeline/kept-scope-fields";
 import { operationsToJudge } from "../pipeline/moved-to-companion";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 import { conversionForRename } from "../pipeline/rename-conversion";
@@ -349,7 +353,8 @@ export async function generateMigration(
       args.collections,
       args.singles,
       args.components,
-      args.dialect
+      args.dialect,
+      previous?.data.snapshot
     ),
     tables: args.appStream ?? NO_APP_STREAM_TABLES,
   });
@@ -2272,10 +2277,18 @@ export function buildDesiredSnapshotFromConfig(
   collections: MinimalConfigEntity[],
   singles: MinimalConfigEntity[],
   components: MinimalConfigEntity[],
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /**
+   * The tables as the last migration left them. A field a plugin's scope
+   * holds back from a type switched off keeps its column while these have it
+   * (`kept-scope-fields.ts`). Omitted, nothing held back is kept.
+   */
+  existing?: NextlySchemaSnapshot
 ): NextlySchemaSnapshot {
   const tables: TableSpec[] = [];
-  for (const c of collections) {
+  const kept = columnsByTable(existing ?? { tables: [] });
+  for (const entity of collections) {
+    const c = withKeptScopeFields("collection", entity, kept);
     // Why: forward the entity's Draft/Published flag so the snapshot
     // includes the system status column when enabled. Mirrors the same
     // forwarding pushschema-pipeline.ts already does for the diff path.
@@ -2293,7 +2306,8 @@ export function buildDesiredSnapshotFromConfig(
       )
     );
   }
-  for (const c of singles) {
+  for (const entity of singles) {
+    const c = withKeptScopeFields("single", entity, kept);
     // i18n: singles localize identically to collections — the companion is
     // `single_<slug>_locales` (deriveCompanionSpec derives it from the table name).
     // Omit translatable columns from the main table; the companion (planned below)

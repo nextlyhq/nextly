@@ -269,12 +269,17 @@ export async function runMigrateCheck(
     manifest,
   });
 
-  const desiredSnapshot = buildDesiredSnapshotFromConfig(
-    merged.collections,
-    merged.singles,
-    merged.components,
-    dialect
-  );
+  // Built once the latest snapshot is read, as `migrate:create` builds it:
+  // a field a plugin holds back from a type switched off keeps its column
+  // while that snapshot has it.
+  const desiredSnapshot = (existing: NextlySchemaSnapshot) =>
+    buildDesiredSnapshotFromConfig(
+      merged.collections,
+      merged.singles,
+      merged.components,
+      dialect,
+      existing
+    );
 
   // The app stream's extension schema, compiled exactly as `migrate:create`
   // compiles it. Without it every table an app declared through
@@ -309,8 +314,14 @@ export async function runMigrateCheck(
  */
 export async function runChecks(args: {
   migrationsDir: string;
-  /** What the entities alone describe; the extension schema is `appStream`. */
-  desiredSnapshot: NextlySchemaSnapshot;
+  /**
+   * What the entities alone describe; the extension schema is `appStream`.
+   * Or how to build it from the latest snapshot's tables, which keep the
+   * columns of fields a plugin holds back from a type switched off.
+   */
+  desiredSnapshot:
+    | NextlySchemaSnapshot
+    | ((existing: NextlySchemaSnapshot) => NextlySchemaSnapshot);
   /** The app stream's extension schema. Omitted, there is none. */
   appStream?: AppStreamTables;
   /**
@@ -428,10 +439,14 @@ export async function runChecks(args: {
   let latest: Awaited<ReturnType<typeof loadLatestSnapshot>>;
   try {
     latest = await loadLatestSnapshot(metaDir);
+    const existing = latest?.data.snapshot ?? EMPTY_SNAPSHOT;
     const stream = appStreamSnapshots({
-      previous: latest?.data.snapshot ?? EMPTY_SNAPSHOT,
+      previous: existing,
       previousContributions: latest?.data.contributions ?? {},
-      desired: args.desiredSnapshot,
+      desired:
+        typeof args.desiredSnapshot === "function"
+          ? args.desiredSnapshot(existing)
+          : args.desiredSnapshot,
       tables: args.appStream ?? NO_APP_STREAM_TABLES,
     });
     previousSnapshot = stream.previous;
