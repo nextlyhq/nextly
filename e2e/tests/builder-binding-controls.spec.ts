@@ -85,7 +85,7 @@ test.describe("binding a prop from the inspector", () => {
     ).toBeFocused();
     await expect(picker.getByRole("group", { name: /^This / })).toBeVisible();
     await picker
-      .getByRole("option", { name: new RegExp(`^Title${title}`) })
+      .getByRole("option", { name: new RegExp(`^Title ${title}`) })
       .click();
 
     await expect(

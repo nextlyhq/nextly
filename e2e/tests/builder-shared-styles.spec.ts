@@ -18,6 +18,7 @@ import { expect, type Page } from "@playwright/test";
 import {
   block,
   clickBlock,
+  emptyHomepage,
   openEditorWith,
   pressSave,
 } from "./canvas/editor-driver";
@@ -150,6 +151,8 @@ test.describe("shared styles on a block", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
   });
   test.afterEach(async ({ page }) => {
+    // Off the homepage first: a shared style still in use cannot be removed.
+    await emptyHomepage(page);
     await storeClasses(page, before ?? []);
   });
 

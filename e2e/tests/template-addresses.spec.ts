@@ -25,11 +25,11 @@ import {
 } from "./support/runtime-collection";
 
 // Makes a collection at runtime, as the Schema Builder specs do.
-test.describe.configure({ lock: [LOCK.schema] });
+test.describe.configure({ lock: [LOCK.schema, LOCK.usersRoles] });
 
 const RUN = Date.now().toString(36);
 
-/** The template: the entry's title as its heading. */
+/** The template: the entry's own Summary as its heading. */
 const TEMPLATE = {
   formatVersion: 1,
   kind: "template",
@@ -39,7 +39,7 @@ const TEMPLATE = {
       type: "core/heading",
       version: 1,
       props: { text: "Untitled", level: "h1" },
-      bindings: { text: { $bind: "title", fallback: "Untitled" } },
+      bindings: { text: { $bind: "summary", fallback: "Untitled" } },
     },
   ],
 };
@@ -61,6 +61,43 @@ async function draftTemplate(
   return String(((await created.json()) as { item: { id: string } }).item.id);
 }
 
+/**
+ * Give the public role read of `collection`, as a runtime collection starts
+ * closed to visitors and its entries are served to them. Answers how to take
+ * it back.
+ */
+async function letVisitorsRead(
+  api: APIRequestContext,
+  collection: string
+): Promise<() => Promise<void>> {
+  const roles = await api.get("/admin/api/roles?limit=100");
+  await expectOk(roles, "listing the roles");
+  const { items } = (await roles.json()) as {
+    items: { id: string; builtIn?: string }[];
+  };
+  const publicRole = items.find(role => role.builtIn === "public");
+  if (!publicRole) throw new Error("[e2e] No Public role.");
+  const held = await api.get(`/admin/api/roles/${publicRole.id}/permissions`);
+  await expectOk(held, "reading the Public role");
+  const before = (
+    (await held.json()) as { permissions: { id: string }[] }
+  ).permissions.map(permission => permission.id);
+  const list = await api.get("/admin/api/permissions?page=1&limit=1000");
+  await expectOk(list, "listing the permissions");
+  const read = (
+    (await list.json()) as { items: { id: string; slug: string }[] }
+  ).items.find(permission => permission.slug === `read-${collection}`);
+  if (!read) throw new Error(`[e2e] No read permission for ${collection}.`);
+  const store = async (permissionIds: string[]): Promise<void> => {
+    const stored = await api.patch(`/admin/api/roles/${publicRole.id}`, {
+      data: { permissionIds },
+    });
+    await expectOk(stored, "changing the Public role");
+  };
+  await store([...before, read.id]);
+  return () => store(before);
+}
+
 /** The template form's address input. */
 const addressInput = (page: Page) =>
   page.getByRole("textbox", { name: "Address", exact: true });
@@ -73,17 +110,24 @@ test("serves a Schema Builder collection's entries at the address set in the adm
   const slug = `happenings_${RUN}`;
   const address = `/happenings-${RUN}`;
   const api = page.request;
+  let takeBackRead: (() => Promise<void>) | undefined;
   try {
     await createRuntimeCollection(api, slug, [
       { name: "summary", type: "text", label: "Summary" },
     ]);
     // Saved before the address is set: the template's publish claims it.
-    const before = { title: `Opening night ${RUN}`, slug: `opening-${RUN}` };
+    const before = {
+      title: `Opening night ${RUN}`,
+      slug: `opening-${RUN}`,
+      summary: `Doors at seven ${RUN}`,
+    };
     await createEntry(api, slug, before);
     const template = await draftTemplate(api, slug);
+    takeBackRead = await letVisitorsRead(api, slug);
 
     // The Templates item sits in the page builder's menu.
     await gotoAdmin(page, "/collections/templates");
+    await page.getByRole("link", { name: "Plugins", exact: true }).click();
     await expect(
       page.getByRole("link", { name: "Templates", exact: true }).first()
     ).toBeVisible();
@@ -102,15 +146,21 @@ test("serves a Schema Builder collection's entries at the address set in the adm
         const read = await api.get(
           `/admin/api/collections/templates/entries/${template}`
         );
+        // A read by id answers the entry itself, without an envelope.
         const body = (await read.json()) as {
-          item?: { address?: unknown; status?: unknown };
+          address?: unknown;
+          status?: unknown;
         };
-        return [body.item?.address, body.item?.status];
+        return [body.address, body.status];
       })
       .toEqual([address, "published"]);
 
     // Saved after the address was set: held there by its own save.
-    const after = { title: `Closing night ${RUN}`, slug: `closing-${RUN}` };
+    const after = {
+      title: `Closing night ${RUN}`,
+      slug: `closing-${RUN}`,
+      summary: `Last call at ten ${RUN}`,
+    };
     await createEntry(api, slug, after);
 
     for (const entry of [before, after]) {
@@ -118,9 +168,10 @@ test("serves a Schema Builder collection's entries at the address set in the adm
         headers: { cookie: "" },
       });
       expect(response.status(), `${address}/${entry.slug}`).toBe(200);
-      expect(await response.text()).toContain(entry.title);
+      expect(await response.text()).toContain(entry.summary);
     }
   } finally {
+    await takeBackRead?.();
     await removeMigrationsOf(slug);
   }
 });

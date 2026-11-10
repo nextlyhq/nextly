@@ -2,7 +2,7 @@
  * Binding an image, and a date's format, from the inspector, as an author
  * does.
  *
- * 1. An image's Source row binds it to the `related-links` Single's upload
+ * 1. An image's Source row binds it to the `contact-details` Single's upload
  *    field; the field is empty, so the address set as its Fallback is what
  *    the canvas draws.
  * 2. The same image's Fallback is chosen from the media library: the picker
@@ -24,6 +24,8 @@ import {
   block,
   canvasRoot,
   clickBlock,
+  layerRow,
+  openLayers,
   pressSave,
 } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
@@ -37,7 +39,11 @@ const HEADING = "00000000-0000-4000-8000-0000001000e2";
 const ALT = "Spring banner";
 
 /** The binding the image is seeded with: the Single's empty upload field. */
-const LOGO = { $bind: "logo", source: "single", sourceKey: "related-links" };
+const LOGO = {
+  $bind: "logo",
+  source: "single",
+  sourceKey: "contact-details",
+};
 
 /** A published page holding one node, as given. */
 async function seed(
@@ -63,21 +69,48 @@ async function openAt(page: Page, id: string, nodeId: string): Promise<void> {
   await clickBlock(page, nodeId);
 }
 
+/**
+ * Open a page and select an image with nothing to draw yet. It has no box on
+ * the canvas, so it is selected from Layers, as an author selects one.
+ */
+async function openUndrawnAt(
+  page: Page,
+  id: string,
+  nodeId: string
+): Promise<void> {
+  await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
+  await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
+    timeout: 60_000,
+  });
+  await openLayers(page);
+  await layerRow(page, nodeId).click();
+}
+
 /** The node as the saved page holds it. */
 async function savedNode(
   api: APIRequestContext,
   id: string
 ): Promise<Record<string, unknown> | undefined> {
-  const response = await api.get(`${PAGES}/${id}`);
+  // `draft=true`: a Save on a published page is held as its working draft
+  // until it is published again.
+  const response = await api.get(`${PAGES}/${id}?draft=true`);
   expect(response.ok(), await response.text()).toBe(true);
-  const { item } = (await response.json()) as {
-    item: { content: { nodes: Record<string, unknown>[] } };
+  // A read by id answers the entry itself, without a mutation's envelope.
+  const entry = (await response.json()) as {
+    content: { nodes: Record<string, unknown>[] };
   };
-  return item.content.nodes[0];
+  return entry.content.nodes[0];
 }
 
 test.describe("binding an image and a date's format from the inspector", () => {
   test.describe.configure({ timeout: 240_000 });
+
+  // A Single no one has saved has no document yet, and the picker lists only
+  // those it can read; reading it through the API makes one.
+  test.beforeEach(async ({ page }) => {
+    const single = await page.request.get("/admin/api/singles/contact-details");
+    expect(single.ok(), await single.text()).toBe(true);
+  });
 
   test("binds an image to an upload field and draws its address fallback", async ({
     page,
@@ -91,17 +124,17 @@ test.describe("binding an image and a date's format from the inspector", () => {
       version: 1,
       props: { alt: ALT },
     });
-    await openAt(page, id, IMAGE);
+    await openUndrawnAt(page, id, IMAGE);
 
     await page.getByRole("button", { name: "Bind Image to a field" }).click();
     const picker = page.getByRole("listbox", { name: "Fields for Image" });
     await picker
-      .getByRole("group", { name: "Related links" })
+      .getByRole("group", { name: "Contact details" })
       .getByRole("option", { name: /^Logo/ })
       .click();
     await expect(
       page.getByRole("button", {
-        name: /^Image: bound to Logo of Related links/,
+        name: /^Image: bound to Logo of Contact details/,
       })
     ).toBeVisible();
 
@@ -130,17 +163,17 @@ test.describe("binding an image and a date's format from the inspector", () => {
       version: 1,
       props: { alt: ALT },
     });
-    await openAt(page, id, IMAGE);
+    await openUndrawnAt(page, id, IMAGE);
 
     await page.getByRole("button", { name: "Bind Image to a field" }).click();
     await page
       .getByRole("listbox", { name: "Fields for Image" })
-      .getByRole("group", { name: "Related links" })
+      .getByRole("group", { name: "Contact details" })
       .getByRole("option", { name: /^Logo/ })
       .click();
     await expect(
       page.getByRole("button", {
-        name: /^Image: bound to Logo of Related links/,
+        name: /^Image: bound to Logo of Contact details/,
       })
     ).toBeVisible();
 

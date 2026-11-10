@@ -805,9 +805,16 @@ test.describe("the composition exit tests", () => {
       { kind: "set-layout", layout, noHeaderFooter: true },
       { publish: true }
     );
+    // A page read right after a write can be served its previous entry once.
+    await expect
+      .poll(
+        async () =>
+          (await served(page.request, `/site/through-the-api-${STAMP}`)).drawn,
+        { timeout: 30_000 }
+      )
+      .not.toContain(`API header ${STAMP}`);
     const bare = await served(page.request, `/site/through-the-api-${STAMP}`);
     expect(bare.drawn).toContain(`Set through the API ${STAMP}`);
-    expect(bare.drawn).not.toContain(`API header ${STAMP}`);
 
     // Making a Layout the site's default, as a dry run: answered, and the
     // default is as it was.

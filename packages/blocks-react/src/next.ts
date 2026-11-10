@@ -106,6 +106,7 @@ import {
   listWillRead,
   namedListBase,
 } from "./blocks/list-read";
+import { readWasRefused } from "./blocks/list-read-refusal";
 import { namedQueryFailureLine, readNamedList } from "./blocks/named-read";
 import { url } from "./blocks/props";
 import {
@@ -657,11 +658,13 @@ function publicReaderFor(
   const findSingle = reader.findSingle.bind(reader);
   return {
     find: async query =>
-      await cached(
-        "nextly-public-list",
-        nextlyTags(query.collection),
-        query,
-        async () => await reader.find(query)
+      answerOrRefusal(
+        await cached(
+          "nextly-public-list",
+          nextlyTags(query.collection),
+          query,
+          async () => await keepingListRefusal(() => reader.find(query))
+        )
       ),
     count: async query =>
       await cached(
@@ -682,6 +685,56 @@ function publicReaderFor(
             ),
         }),
   };
+}
+
+/**
+ * A list's read as the cache keeps it: its answer, or the reader's refusal of
+ * it (a sort on a field the collection no longer has or visitors can't see).
+ *
+ * A refusal is kept by value because a `"use cache"` function hands back what
+ * it can serialize: a thrown error arrives without its code and public data,
+ * and a list could then no longer tell a refused sort from a failed read, so
+ * it would draw nothing instead of its entries in id order. Every other error
+ * still throws, so a fault is never kept as an answer.
+ */
+interface RefusedListRead {
+  readonly refusedRead: {
+    readonly message: string;
+    readonly code: unknown;
+    readonly publicData: unknown;
+  };
+}
+
+/** `read`, answering the reader's refusal with the refusal as a value. */
+async function keepingListRefusal<T>(
+  read: () => Promise<T>
+): Promise<T | RefusedListRead> {
+  try {
+    return await read();
+  } catch (error) {
+    if (!readWasRefused(error)) throw error;
+    const { message, code, publicData } = error as {
+      message?: unknown;
+      code?: unknown;
+      publicData?: unknown;
+    };
+    return {
+      refusedRead: {
+        message: typeof message === "string" ? message : "Refused.",
+        code,
+        publicData,
+      },
+    };
+  }
+}
+
+/** A list's kept answer, throwing a kept refusal in the shape a list reads. */
+function answerOrRefusal<T>(kept: T | RefusedListRead): T {
+  if (typeof kept !== "object" || kept === null || !("refusedRead" in kept)) {
+    return kept;
+  }
+  const { message, ...parts } = kept.refusedRead;
+  throw Object.assign(new Error(message), parts);
 }
 
 /**

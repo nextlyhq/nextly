@@ -635,44 +635,50 @@ test.describe("the Components panel", () => {
     }
   });
 
-  test("Edit opens the component alone, says what it reaches, and Back returns", async ({
-    page,
-  }) => {
-    const title = `Promo ${stamp()}`;
-    const component = await createComponent(page.request, title);
-    await placeOnAPublishedPage(page.request, component);
-    const id = await createPage(page.request);
-    await openBuilder(page, id);
-    await openComponents(page);
+  test.describe("editing one", () => {
+    // An account of its own: the tests before it open the editor again and
+    // again, and through the file's account this one met the REST limit.
+    ownSeat(3);
 
-    await page
-      .getByRole("button", { name: `Edit ${title}`, exact: true })
-      .click();
+    test("Edit opens the component alone, says what it reaches, and Back returns", async ({
+      page,
+    }) => {
+      const title = `Promo ${stamp()}`;
+      const component = await createComponent(page.request, title);
+      await placeOnAPublishedPage(page.request, component);
+      const id = await createPage(page.request);
+      await openBuilder(page, id);
+      await openComponents(page);
 
-    await expect(page).toHaveURL(
-      new RegExp(
-        `/admin/collections/components/${component}/builder\\?field=content&return=`
-      )
-    );
-    const banner = page.getByRole("region", { name: "Editing a component" });
-    await expect(banner).toContainText(title);
-    // A published page places it, so the banner counts the page a change
-    // reaches, in pages, never documents.
-    await expect(banner).toContainText(/Changes reach (at least )?1 page/);
+      await page
+        .getByRole("button", { name: `Edit ${title}`, exact: true })
+        .click();
 
-    // The one Back, named for the page it returns to.
-    await banner.getByRole("button", { name: /^Back to / }).click();
-    await expect(page).toHaveURL(
-      new RegExp(`/admin/collections/pages/${id}/builder\\?`)
-    );
-    await expect(banner).toHaveCount(0);
-    // Where the author came from: the page, with Components still open.
-    await expect(railButton(page, "Components")).toHaveAttribute(
-      "aria-pressed",
-      "true",
-      { timeout: 30_000 }
-    );
-    await expect(searchBox(page)).toBeVisible();
+      await expect(page).toHaveURL(
+        new RegExp(
+          `/admin/collections/components/${component}/builder\\?field=content&return=`
+        )
+      );
+      const banner = page.getByRole("region", { name: "Editing a component" });
+      await expect(banner).toContainText(title);
+      // A published page places it, so the banner counts the page a change
+      // reaches, in pages, never documents.
+      await expect(banner).toContainText(/Changes reach (at least )?1 page/);
+
+      // The one Back, named for the page it returns to.
+      await banner.getByRole("button", { name: /^Back to / }).click();
+      await expect(page).toHaveURL(
+        new RegExp(`/admin/collections/pages/${id}/builder\\?`)
+      );
+      await expect(banner).toHaveCount(0);
+      // Where the author came from: the page, with Components still open.
+      await expect(railButton(page, "Components")).toHaveAttribute(
+        "aria-pressed",
+        "true",
+        { timeout: 30_000 }
+      );
+      await expect(searchBox(page)).toBeVisible();
+    });
   });
 
   /*

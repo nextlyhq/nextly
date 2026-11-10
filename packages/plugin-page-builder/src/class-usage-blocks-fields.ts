@@ -182,9 +182,11 @@ export interface BlocksFieldSurvey {
  * computed beside it.
  */
 export function blocksFieldSurvey(
-  collection: BlocksFieldsCollection | null | undefined
+  collection: BlocksFieldsCollection | null | undefined,
+  /** The field groups the site declares, so a reference to one can be read. */
+  fieldGroups?: FieldGroupDefinitions
 ): BlocksFieldSurvey {
-  const reach = blocksFieldReach(collection);
+  const reach = blocksFieldReach(collection, undefined, fieldGroups);
   return {
     addressable: reach.fields
       .filter(field => field.path.length === 1)

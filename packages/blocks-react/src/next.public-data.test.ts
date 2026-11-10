@@ -22,7 +22,10 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 // are registered in this process, so the reader cannot read a schema and would
 // refuse every read. The fake declares no hidden field, which is what its rows
 // hold; the reader's own stripping and refusals still run.
-const cached = vi.hoisted(() => ({ calls: [] as unknown[] }));
+const cached = vi.hoisted(() => ({
+  calls: [] as unknown[],
+  asUseCache: false,
+}));
 vi.mock("nextly/runtime", async importOriginal => {
   const actual = await importOriginal<typeof import("nextly/runtime")>();
   return {
@@ -39,6 +42,14 @@ vi.mock("nextly/runtime", async importOriginal => {
       options: Parameters<typeof actual.cachedFind>[1]
     ) => {
       cached.calls.push(options);
+      if (cached.asUseCache) {
+        // What a `"use cache"` function hands back: its value, and a thrown
+        // error reduced to its message.
+        return read().then(
+          value => JSON.parse(JSON.stringify(value)) as unknown,
+          (error: Error) => Promise.reject(new Error(error.message))
+        );
+      }
       return actual.cachedFind(read, options);
     },
   };
@@ -162,6 +173,34 @@ describe("a routed page's lists", () => {
       collection: "posts",
       limit: 5,
     });
+  });
+
+  it("keep the reader's refusal of a sort through a use-cache read, so a list can fall back to id order", async () => {
+    cached.asUseCache = true;
+    try {
+      const nextly = instance();
+      const context = await renderContext(
+        { collections: ["pages"], field: "content" },
+        nextly
+      );
+      const refusal = Object.assign(new Error("Validation failed."), {
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [{ path: "sort.gone", code: "FIELD_NOT_SORTABLE" }],
+        },
+      });
+      nextly.find.mockImplementationOnce(async () => {
+        throw refusal;
+      });
+      await expect(
+        context.data?.find({ collection: "posts", sort: "gone" })
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: refusal.publicData,
+      });
+    } finally {
+      cached.asUseCache = false;
+    }
   });
 
   it("on a Single page are cached within the Single's own window", async () => {
