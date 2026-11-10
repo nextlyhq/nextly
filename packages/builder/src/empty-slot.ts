@@ -90,7 +90,8 @@ export const EMPTY_TEXT_SELECTOR: string =
   `:is(h1, h2, h3, h4, h5, h6, p, li, blockquote, figcaption, dt, dd, pre):empty`;
 
 /**
- * The block's first declared slot, when it holds nothing.
+ * The block's first declared slot, or the one the canvas draws in its place,
+ * when it holds nothing.
  *
  * FIRST rather than any: a block with several regions has an order, and the
  * one an author means by "inside this" is the one it declares first. Answering
@@ -105,7 +106,13 @@ export function emptySlotOf(
   slots: SlotSource | undefined
 ): string | null {
   const declared = slots?.slotsOf(node.type);
-  const first = declared?.[0];
+  // The region the canvas draws in place of the first, where it draws
+  // another: an empty list's empty state is the region an author sees.
+  const shown = slots?.shownSlotOf?.(node);
+  const first =
+    shown !== undefined && declared?.includes(shown) === true
+      ? shown
+      : declared?.[0];
   if (first === undefined) return null;
   return (node.slots?.[first]?.length ?? 0) === 0 ? first : null;
 }

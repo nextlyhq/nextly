@@ -32,7 +32,7 @@ export const SCHEMA_PREFIX = "page_builder";
  * The schema version the database must have applied before the plugin starts.
  * It moves with every migration module.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /** The columns of {@link usageRuns}, as `defineTable` checks and publishes them. */
 type UsageRunsColumns = {
@@ -344,6 +344,60 @@ export const breakpointRemovals: TableDefinition<
   { indexes: [{ columns: ["openKey"], unique: true }] }
 );
 
+/** The columns of {@link breakpointRemovalFragments}. */
+type BreakpointRemovalFragmentsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly runId: ColumnBuilder<string, false, false>;
+  readonly documentKey: ColumnBuilder<string, false, false>;
+  readonly host: ColumnBuilder<unknown, true, false>;
+  readonly form: ColumnBuilder<string, false, false>;
+  readonly fragment: ColumnBuilder<unknown, false, false>;
+  readonly createdAt: ColumnBuilder<Date, false, true>;
+  readonly updatedAt: ColumnBuilder<Date, false, true>;
+};
+
+/**
+ * What each breakpoint removal took out of the site, kept so it can be put
+ * back: one row per stored value it stripped, written before the strip itself,
+ * so a value that was stripped always has its row.
+ *
+ * - `runId` is the removal ({@link breakpointRemovals}) that stripped it.
+ * - `documentKey` names the document (`host-rewrite/contract`'s
+ *   `documentKeyOf`), or the site style for the shared styles' fragment.
+ * - `host` is the address of the blocks value within it (its field path and
+ *   language), `null` for the shared styles, and `form` which stored form was
+ *   stripped: `published`, `draft`, or `site` for the shared styles.
+ * - `fragment` is what was taken out (`breakpoint-removal/strip`). JSON
+ *   columns, not text: a large page's fragment outgrows MySQL's `TEXT`.
+ * - A value stripped twice (a write brought values back) has a row for each;
+ *   the newest is the latest strip.
+ *
+ * Rows older than the window a removal can be undone in are deleted by the
+ * removal job.
+ */
+export const breakpointRemovalFragments: TableDefinition<
+  "breakpoint_removal_fragments",
+  BreakpointRemovalFragmentsColumns
+> = defineTable<
+  "breakpoint_removal_fragments",
+  BreakpointRemovalFragmentsColumns
+>(
+  "breakpoint_removal_fragments",
+  {
+    id: col.id(),
+    runId: col.char(36),
+    documentKey: col.varchar(512),
+    host: col.json({ nullable: true }),
+    form: col.varchar(16),
+    fragment: col.json(),
+    ...col.timestamps(),
+  },
+  // Read and purged by run; the purge also reads by age.
+  { indexes: [{ columns: ["runId"] }, { columns: ["createdAt"] }] }
+);
+
 /** Every table this plugin declares, in creation order. */
 export const PAGE_BUILDER_TABLES: readonly [
   typeof usageRuns,
@@ -353,6 +407,7 @@ export const PAGE_BUILDER_TABLES: readonly [
   typeof componentDeletionHosts,
   typeof siteOptions,
   typeof breakpointRemovals,
+  typeof breakpointRemovalFragments,
 ] = [
   usageRuns,
   usageProgress,
@@ -361,4 +416,5 @@ export const PAGE_BUILDER_TABLES: readonly [
   componentDeletionHosts,
   siteOptions,
   breakpointRemovals,
+  breakpointRemovalFragments,
 ];

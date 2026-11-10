@@ -13,12 +13,30 @@ import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const readMedia = vi.fn<(id: string) => Promise<unknown>>();
+const identity = vi.fn<() => unknown>(() => null);
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useMediaResolver: () => readMedia,
+  useDocumentIdentity: () => identity(),
+  writePluginRoute: vi.fn(),
 }));
 
-const { useCanvasPageContext } = await import("./canvas-page-context");
+const { listEntryCollectionOf, useCanvasPageContext } = await import(
+  "./canvas-page-context"
+);
+const { canvasListReadsIn } = await import("../list-entries-client");
+
+describe("the collection a document's lists read the entry of", () => {
+  it("is a collection entry's collection, none on a Single, and not known without a document", () => {
+    expect(listEntryCollectionOf({ kind: "collection", slug: "posts" })).toBe(
+      "posts"
+    );
+    // A Single's page has no entry for a related list to read, which the
+    // inspector says as the save refuses it.
+    expect(listEntryCollectionOf({ kind: "single", slug: "home" })).toBeNull();
+    expect(listEntryCollectionOf(null)).toBeUndefined();
+  });
+});
 
 describe("the canvas's page context", () => {
   it("resolves a media id through the admin's media read", async () => {
@@ -50,5 +68,69 @@ describe("the canvas's page context", () => {
     const first = result.current;
     rerender();
     expect(result.current).toBe(first);
+  });
+
+  it("draws a list as an author looks at it, with entries read for the canvas", () => {
+    const { result } = renderHook(() => useCanvasPageContext());
+    expect(result.current.diagnostics).toBe(true);
+    // The canvas can act on a note's action, which a preview cannot.
+    expect(result.current.listNoteActions).toBe(true);
+    // The canvas's own reader, not the stand-in that answers no rows.
+    expect(typeof result.current.data?.find).toBe("function");
+    expect(result.current.listsShowingEmpty).toBeUndefined();
+  });
+
+  it("names the lists shown empty, and is the editor's one object again when none is", () => {
+    const { result, rerender } = renderHook(
+      ({ empty }: { empty: ReadonlySet<string> | undefined }) =>
+        useCanvasPageContext(empty),
+      {
+        initialProps: { empty: undefined } as {
+          empty: ReadonlySet<string> | undefined;
+        },
+      }
+    );
+    const first = result.current;
+    const chosen = new Set(["list"]);
+    rerender({ empty: chosen });
+    expect(result.current).not.toBe(first);
+    expect(result.current.listsShowingEmpty).toBe(chosen);
+    expect(result.current.resolveMedia).toBe(first.resolveMedia);
+    rerender({ empty: new Set() });
+    expect(result.current).toBe(first);
+  });
+
+  it("names the entry the document is stored on, so a list of its related entries reads it", () => {
+    identity.mockReturnValue({
+      kind: "collection",
+      slug: "stories",
+      documentId: "s1",
+    });
+    const { result } = renderHook(() => useCanvasPageContext());
+    expect(result.current.entry).toEqual({ id: "s1" });
+    expect(result.current.entryCollection).toBe("stories");
+    identity.mockReturnValue(null);
+  });
+
+  it("reads its lists in the language being edited, through the reads its count shares", () => {
+    const { result } = renderHook(() => useCanvasPageContext(undefined, "fr"));
+    expect(result.current.locale).toBe("fr");
+    expect(result.current.data).toBe(canvasListReadsIn("fr").data);
+  });
+
+  it("bounds each draw's reads, with a fresh allowance for the next draw", () => {
+    const { result, rerender } = renderHook(() => useCanvasPageContext());
+    const first = result.current;
+    const budget = first.queries;
+    expect(budget).toBeDefined();
+    let taken = 0;
+    while (budget?.take() === true && taken <= 10_000) taken += 1;
+    // The published page's own allowance, then nothing more this draw.
+    expect(taken).toBe(500);
+    rerender();
+    // Drawn again: the same object, which the canvas keeps its blocks by,
+    // with its allowance renewed.
+    expect(result.current).toBe(first);
+    expect(result.current.queries?.take()).toBe(true);
   });
 });

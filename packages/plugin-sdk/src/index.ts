@@ -725,6 +725,17 @@ export {
 } from "nextly";
 
 /**
+ * Entry-list filters a plugin declares (`contributes.admin.filters`): each
+ * option narrows the list by a `where` the list read applies with the
+ * caller's access, and the choice is kept in the page's URL.
+ * @experimental No first-party plugin declares a filter yet (see STABILITY.md).
+ */
+export type {
+  PluginListFilterDeclaration,
+  PluginListFilterOption,
+} from "nextly";
+
+/**
  * Hook types.
  * @public `HookContext` — exercised by `plugin-form-builder`'s collection hook.
  * @experimental `HookType`, `HookContextPhase`, `HookHandler` — the `ctx.hooks`

@@ -971,7 +971,10 @@ export interface IconFieldProps {
   invalid?: boolean;
   /** Describes the button, for a hint or an error beside the field. */
   "aria-describedby"?: string;
-  /** The picker closed, or the value was cleared: the field was left. */
+  /**
+   * The field was left: focus moved from its buttons to somewhere outside
+   * them, the picker closed, or the value was cleared.
+   */
   onBlur?: () => void;
   /**
    * The button that opens the picker, for a form that focuses a field it
@@ -1012,14 +1015,35 @@ export function IconField({
   const missing = resolved.status === "missing";
   const interactive = !disabled && !readOnly;
 
+  const pickerRef = React.useRef<HTMLDivElement | null>(null);
+
   const setOpenAndReport = (next: boolean): void => {
     if (next && !interactive) return;
     setOpen(next);
     if (!next) onBlur?.();
   };
 
+  // Focus leaving the field's buttons for somewhere outside the field reports
+  // the field left. The picker sits in a portal, elsewhere in the document,
+  // so it is checked by its own node; its focus events still bubble here
+  // through React. Focus never leaves the open picker without closing it, and
+  // the close reports, so nothing is reported while it is open or for focus
+  // leaving it.
+  const reportFocusLeft = (event: React.FocusEvent<HTMLDivElement>): void => {
+    const picker = pickerRef.current;
+    if (open || picker?.contains(event.target)) return;
+    const next = event.relatedTarget;
+    if (
+      next instanceof Node &&
+      (event.currentTarget.contains(next) || picker?.contains(next))
+    ) {
+      return;
+    }
+    onBlur?.();
+  };
+
   return (
-    <div className={cn("w-full", className)}>
+    <div className={cn("w-full", className)} onBlur={reportFocusLeft}>
       <IconFieldFrame invalid={invalid} disabled={disabled}>
         <Popover open={open} onOpenChange={setOpenAndReport}>
           <PopoverTrigger asChild>
@@ -1040,6 +1064,7 @@ export function IconField({
             />
           </PopoverTrigger>
           <PopoverContent
+            ref={pickerRef}
             align="start"
             collisionPadding={8}
             aria-label="Choose an icon"

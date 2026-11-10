@@ -461,6 +461,21 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
             ? `Name one of Nextly's admin places instead of "${field(error, "place")}".`
             : `Enable the plugin whose admin slug is "${field(error, "owningPrefix")}" and declare it in the \`dependsOn\` of "${field(error, "plugin")}", or correct the place's name.`,
       })),
+      ...resolved("list-filter-invalid", error => ({
+        what: detail(error),
+        why: "A filter is offered in the entry list's toolbar, so each option needs a value the page's URL can keep, a label, and a well-formed `where`.",
+        next: `Correct the filter in \`contributes.admin.filters\` of "${field(error, "plugin")}" as the line above says.`,
+      })),
+      ...resolved("list-filter-outside-namespace", error => ({
+        what: detail(error),
+        why: "A plugin's filters are named under its admin slug, so no two plugins declare the same one.",
+        next: `Rename the filter "${field(error, "filter")}" so that it starts with "${field(error, "expectedPrefix")}".`,
+      })),
+      ...resolved("list-filter-duplicate", error => ({
+        what: detail(error),
+        why: "A filter is kept in the page's URL by its name, so each name is declared once.",
+        next: `Declare the filter "${field(error, "filter")}" once.`,
+      })),
       ...resolved("principal-kind-invalid", error => {
         const parts = cut(detail(error), " cannot be used: ");
         return {

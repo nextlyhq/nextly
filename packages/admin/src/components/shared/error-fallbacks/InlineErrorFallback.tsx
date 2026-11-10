@@ -3,6 +3,7 @@
 import type React from "react";
 
 import { AlertCircle } from "@admin/components/icons";
+import { useT } from "@admin/lib/i18n/I18nProvider";
 
 /**
  * InlineErrorFallback Component Props
@@ -15,7 +16,7 @@ export interface InlineErrorFallbackProps {
 
   /**
    * Optional custom error message
-   * @default "Error loading content"
+   * @default "Error loading content", in the interface language
    */
   message?: string;
 
@@ -96,15 +97,18 @@ export interface InlineErrorFallbackProps {
  */
 export function InlineErrorFallback({
   error,
-  message = "Error loading content",
+  message,
   showIcon = true,
   className = "",
 }: InlineErrorFallbackProps): React.ReactElement {
+  // The fallback's own strings read in the interface language; a caller's
+  // message is shown as given.
+  const t = useT();
   // In development, show the actual error message if available
   const displayMessage =
     process.env.NODE_ENV === "development" && error
-      ? `Error: ${error.message}`
-      : message;
+      ? t("nextly.errors.inline.development", { message: error.message })
+      : (message ?? t("nextly.errors.inline.message"));
 
   return (
     <div

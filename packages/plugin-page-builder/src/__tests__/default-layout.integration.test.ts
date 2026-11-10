@@ -472,7 +472,7 @@ describe.each(getConfiguredTestDialects())(
         });
         expect(settings).toMatchObject({
           defaultLayout: chosen,
-          defaultLayoutChangedBy: owner,
+          defaultLayoutChangedBy: `user:${owner}`,
         });
       });
 
@@ -900,7 +900,9 @@ describe.each(getConfiguredTestDialects())(
         expect(
           (await makeDefault(await sessionOf(t, owner), chosen)).status
         ).toBe(200);
-        expect((await settingsOf(t)).defaultLayoutChangedBy).toBe(owner);
+        expect((await settingsOf(t)).defaultLayoutChangedBy).toBe(
+          `user:${owner}`
+        );
 
         const manager = await person(t, "manager");
         await grant(t, manager, [
@@ -927,7 +929,7 @@ describe.each(getConfiguredTestDialects())(
         expect(answer.status).toBe(409);
         expect(await settingsOf(t)).toMatchObject({
           defaultLayout: chosen,
-          defaultLayoutChangedBy: owner,
+          defaultLayoutChangedBy: `user:${owner}`,
         });
       });
 

@@ -128,6 +128,7 @@ import type {
 } from "../domains/singles/services/single-registry-service";
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import type { VersionsService } from "../domains/versions/versions-service";
+import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { storedWebhookRecording } from "../domains/webhooks/builder-webhooks";
 import { resetWebhookActivation } from "../domains/webhooks/recording-activation";
 import {
@@ -4558,6 +4559,8 @@ async function initializePlugins(
       | AdapterTransactions
       | JobRegistry
       | JobsPassDatabase
+      | WebhookFastDrainScheduler
+      | null
   > = {
     collectionService: () =>
       services.container.get<CollectionService>("collectionService"),
@@ -4591,6 +4594,15 @@ async function initializePlugins(
     // on the instance its context belongs to.
     jobRegistry: () => services.container.get<JobRegistry>("jobRegistry"),
     jobsDatabase: () => services.container.get<JobsPassDatabase>("adapter"),
+    // Through the same box, so a plugin's committed webhook event is offered
+    // to this registration's drain, never the next one's; null where
+    // webhooks are not registered.
+    webhookFastDrainScheduler: () =>
+      services.container.has("webhookFastDrainScheduler")
+        ? services.container.get<WebhookFastDrainScheduler>(
+            "webhookFastDrainScheduler"
+          )
+        : null,
   };
 
   const getServiceForPlugin = <T extends PluginServiceName>(name: T) =>

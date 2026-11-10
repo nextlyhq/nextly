@@ -254,6 +254,7 @@ export class UsersService extends BaseService {
     changes: {
       name?: string;
       image?: string;
+      interfaceLanguage?: string | null;
     }
   ): Promise<GetUserResponse> {
     return this.accountService.updateCurrentUser(userId, changes);

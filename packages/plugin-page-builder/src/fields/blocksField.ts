@@ -17,6 +17,7 @@
 import {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  LIST_ISSUE_CODES,
   type BlockDocument,
   type BreakpointSet,
   type IssueCode,
@@ -49,6 +50,7 @@ import { blocksOptionsOf, DEFAULT_ACCEPTED_KINDS } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
 import { newBreakpointIssues } from "./breakpoint-reference-judgement";
 import { newClassReferenceIssues } from "./class-reference-judgement";
+import { newListQueryIssues } from "./list-query-judgement";
 import {
   judgesLayersLocks,
   layersLockIssues,
@@ -83,6 +85,9 @@ const PLACEMENT_BREAKS: ReadonlySet<string> = new Set<IssueCode>([
 const STORED_MAY_HOLD: ReadonlySet<string> = new Set<string>([
   ...PLACEMENT_BREAKS,
   "variant-label-clash" satisfies IssueCode,
+  // A collection list's query problems: a list stored before its bounds and
+  // rows were judged keeps saving with a warning until it is edited.
+  ...Object.keys(LIST_ISSUE_CODES),
 ]);
 
 /** The field type id. Was a built-in token; now this plugin's to own. */
@@ -283,10 +288,25 @@ export function blocksFieldType(
       // And against one read of the page as stored, so no reference is let
       // through by a snapshot the other checks did not see.
       const storedForms = onceAsked(async () => storedFormsFor(args));
+      // And the fields each collection list names, against the schema and
+      // what visitors may read, on any write the server can read them for.
+      const listFields = composition?.()?.listFields;
+      const lists = async (): Promise<readonly PluginFieldIssue[]> => {
+        if (emptied || listFields === undefined || args.write === undefined) {
+          return [];
+        }
+        return newListQueryIssues(value, args, label, {
+          fieldsOf: listFields,
+          storedForms,
+          maxNodes: composition?.()?.limits.maxNodes,
+        });
+      };
       const classes = async (): Promise<readonly PluginFieldIssue[]> => {
-        if (emptied || definitions === undefined) return [];
+        const listed = await lists();
+        if (emptied || definitions === undefined) return listed;
         const limits = composition?.()?.limits;
         return [
+          ...listed,
           ...(await newClassReferenceIssues(value, args, label, {
             classIds: async () => (await definitions()).classIds,
             limits,
@@ -303,7 +323,11 @@ export function blocksFieldType(
       // hold a lock, and keeps the answer it always got, synchronously where
       // the rules gave one and nothing else is asked.
       if (!judgesLayersLocks(args)) {
-        if (args.write === undefined || emptied || definitions === undefined) {
+        if (
+          args.write === undefined ||
+          emptied ||
+          (definitions === undefined && listFields === undefined)
+        ) {
           return verdict;
         }
         return Promise.resolve(verdict).then(answered =>

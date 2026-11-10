@@ -23,6 +23,7 @@ import {
   EyeOff,
   Info,
   MoreHorizontal,
+  Plus,
 } from "@admin/components/icons";
 import { SectionErrorFallback } from "@admin/components/shared/error-fallbacks";
 import {
@@ -53,6 +54,8 @@ import type {
   ReleaseReadiness,
 } from "@admin/types/releases";
 
+import { documentKey } from "./add-documents";
+import { AddDocumentsDialog } from "./AddDocumentsDialog";
 import {
   documentLabel,
   documentStatusLine,
@@ -153,6 +156,10 @@ function documentsView({
 export function ReleaseDocuments(props: ReleaseDocumentsProps): JSX.Element {
   const { release, readiness } = props;
   const view = documentsView(props);
+  const [adding, setAdding] = useState(false);
+  // Several documents are added here to an ordinary release the server says
+  // the reader may add to; a single-document release holds its one document.
+  const mayAdd = release.can?.addMember === true && release.kind !== "single";
   return (
     <section
       aria-labelledby="release-documents"
@@ -166,7 +173,19 @@ export function ReleaseDocuments(props: ReleaseDocumentsProps): JSX.Element {
           firstProblemId={view.firstProblem ? FIRST_PROBLEM_ID : null}
         />
       ) : null}
-      <DocumentsHeading total={view.total} actionsLine={view.actionsLine} />
+      <DocumentsHeading
+        total={view.total}
+        actionsLine={view.actionsLine}
+        onAdd={mayAdd ? () => setAdding(true) : undefined}
+      />
+      {mayAdd ? (
+        <AddDocumentsDialog
+          open={adding}
+          onOpenChange={setAdding}
+          release={release}
+          inRelease={new Set(props.members.map(documentKey))}
+        />
+      ) : null}
       <DocumentsBody
         {...props}
         groups={view.groups}
@@ -181,9 +200,12 @@ export function ReleaseDocuments(props: ReleaseDocumentsProps): JSX.Element {
 function DocumentsHeading({
   total,
   actionsLine,
+  onAdd,
 }: {
   total: number;
   actionsLine: string;
+  /** Opens Add documents, where the reader may add to this release. */
+  onAdd?: () => void;
 }) {
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
@@ -201,6 +223,12 @@ function DocumentsHeading({
       </h2>
       {actionsLine ? (
         <p className="text-sm text-muted-foreground">{actionsLine}</p>
+      ) : null}
+      {onAdd ? (
+        <Button type="button" variant="outline" size="sm" onClick={onAdd}>
+          <Plus aria-hidden className="mr-1 h-4 w-4" />
+          Add documents
+        </Button>
       ) : null}
     </div>
   );

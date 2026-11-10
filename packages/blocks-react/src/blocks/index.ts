@@ -106,6 +106,12 @@ export {
   type ContainerTag,
 } from "./container";
 export type { CollectionLoopProps } from "./collection-loop";
+// The editor's count of a list's matching entries, taken from the list's own
+// read, so the count and the list cannot disagree.
+export { listEntryCount, type ListEntryCount } from "./list-read";
+// The engine types a list's props name, so a consumer of the props type can
+// spell its filters and relation source without importing the engine.
+export type { ListFilter, ListRelation } from "@nextlyhq/blocks-engine";
 
 /**
  * Every block in the core library.

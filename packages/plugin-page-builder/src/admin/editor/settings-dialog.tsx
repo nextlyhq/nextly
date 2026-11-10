@@ -20,6 +20,7 @@
  * @module admin/editor/settings-dialog
  */
 import {
+  BASE_DEVICE_LABEL,
   BreakpointManager,
   EDITOR_WORDS,
   type BuilderShellProps,
@@ -82,8 +83,10 @@ import {
   type PublishChoice,
 } from "../publish-offer";
 
+import { RemovalStatusRow, RemovalStepPanel } from "./breakpoint-removal-step";
 import type { SettingsAddress } from "./settings-address";
 import type { SharePreview } from "./share-preview";
+import { useBreakpointRemoval } from "./use-breakpoint-removal";
 
 /** What the shell hands the dialog. */
 type DialogState = Parameters<
@@ -115,11 +118,14 @@ export interface SettingsDialogProps extends DialogState {
    * has no address to read yet.
    */
   address?: SettingsAddress | null;
-  /** The site's breakpoints: what is saved, how to save, whether it is read. */
+  /**
+   * The site's breakpoints: what is saved, how to save, whether it is read,
+   * and how to read the site's style again once a removal has changed it.
+   */
   breakpoints: Pick<
     ComponentProps<typeof BreakpointManager>,
     "value" | "onSave" | "status"
-  >;
+  > & { refresh: () => void };
 }
 
 /**
@@ -224,6 +230,7 @@ export function SettingsDialog({
                   breakpoints={breakpoints}
                   onEditingBreakpoints={leave.setEditing}
                   onSavingBreakpoints={leave.setSaving}
+                  onClose={() => leave.request({ kind: "close" })}
                 />
               </TabsContent>
             ) : null}
@@ -322,11 +329,13 @@ function SiteTab({
   breakpoints,
   onEditingBreakpoints,
   onSavingBreakpoints,
+  onClose,
 }: {
   site: ReturnType<typeof usePluginRoute<SiteSettingsRead>>;
   breakpoints: SettingsDialogProps["breakpoints"];
   onEditingBreakpoints: (editing: boolean) => void;
   onSavingBreakpoints: (saving: boolean) => void;
+  onClose: () => void;
 }): JSX.Element | null {
   if (site.data === undefined) {
     return site.error === null ? null : (
@@ -364,9 +373,11 @@ function SiteTab({
           site.refetch();
           return typeof answer === "string" ? answer : undefined;
         },
+        refresh: breakpoints.refresh,
       }}
       onEditingBreakpoints={onEditingBreakpoints}
       onSavingBreakpoints={onSavingBreakpoints}
+      onClose={onClose}
     />
   );
 }
@@ -524,13 +535,42 @@ function SiteSettings({
   breakpoints,
   onEditingBreakpoints,
   onSavingBreakpoints,
+  onClose,
 }: {
   read: SiteSettingsRead;
   reread: () => void;
   breakpoints: SettingsDialogProps["breakpoints"];
   onEditingBreakpoints: (editing: boolean) => void;
   onSavingBreakpoints: (saving: boolean) => void;
+  onClose: () => void;
 }): JSX.Element {
+  const { refresh, ...manager } = breakpoints;
+  const removal = useBreakpointRemoval({
+    current: manager.value,
+    save: async next => {
+      const answer = await manager.onSave(next);
+      return typeof answer === "string" ? answer : undefined;
+    },
+    removals: read.removals,
+    reread,
+    refreshStyle: refresh,
+  });
+  // The editor's own save is hidden under a removal's steps while they ask
+  // before saving: then leaving waits only on a request a step has out, and
+  // a confirmation on screen can be left, asking first as a draft is.
+  const [editorSaving, setEditorSaving] = useState(false);
+  const saving = removal.takesOver ? removal.inFlight : editorSaving;
+  useEffect(() => {
+    onSavingBreakpoints(saving);
+  }, [saving, onSavingBreakpoints]);
+  // Reloaded, the editor starts again from the stored set, with no draft.
+  const steps = {
+    ...removal,
+    reload: (): void => {
+      onEditingBreakpoints(false);
+      removal.reload();
+    },
+  };
   return (
     <div className="space-y-6 pt-4">
       <Alert variant="warning">
@@ -550,13 +590,35 @@ function SiteSettings({
           Widths your styles can change at. Each applies at that width and
           below.
         </p>
-        <BreakpointManager
-          {...breakpoints}
-          onEditingChange={onEditingBreakpoints}
-          onSavingChange={onSavingBreakpoints}
-        />
+        {removal.takesOver ? (
+          <RemovalStepPanel
+            removal={steps}
+            current={manager.value}
+            baseLabel={BASE_DEVICE_LABEL}
+            onClose={onClose}
+          />
+        ) : (
+          <RemovalStatusRow removal={steps} />
+        )}
+        {/* Kept mounted under a step, so Back returns to the draft as it was. */}
+        <div hidden={removal.takesOver}>
+          <BreakpointManager
+            key={removal.generation}
+            {...manager}
+            onSave={removal.save}
+            {...(removal.blocked === undefined
+              ? {}
+              : { blocked: removal.blocked })}
+            onEditingChange={editing => {
+              onEditingBreakpoints(editing);
+              removal.editing(editing);
+            }}
+            onSavingChange={setEditorSaving}
+          />
+        </div>
       </section>
-      <DefaultLayout read={read} reread={reread} />
+      {/* The step has the tab to itself while it asks or works. */}
+      {removal.takesOver ? null : <DefaultLayout read={read} reread={reread} />}
     </div>
   );
 }

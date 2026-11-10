@@ -70,6 +70,7 @@ interface PluginContributions {
     views?: Record<string, PluginCollectionView>; // list/edit/before*/after*, and @experimental documentViews, by collection slug
     documentViews?: PluginFieldTypeDocumentView[]; // @experimental: views on every collection or Single with a field of one of this plugin's field types, at the top level or inside named groups
     places?: PluginAdminPlaceDeclaration[]; // @experimental: { name, description? }, places on your own pages; your slug and a dot, or boot fails
+    filters?: PluginListFilterDeclaration[]; // @experimental: { name, label, collections?, options: [{ value, label, where }] }, in the entry list's toolbar
   };
 }
 ```
@@ -753,6 +754,45 @@ reserves (`admin-place-reserved-slug`), under one of core's segments
 (`admin-place-reserved`), outside the plugin's slug
 (`admin-place-outside-namespace`), or declared twice (`admin-place-collision`).
 Nothing renders at a place yet.
+
+### Entry-list filters
+
+A plugin can add filters to the entry list's toolbar (`@experimental`). Each
+option narrows the list by a `where`:
+
+```ts
+contributes: {
+  admin: {
+    filters: [
+      {
+        name: "acme-support.state",
+        label: "Ticket state",
+        collections: ["tickets"], // every collection's list when absent
+        options: [
+          { value: "open", label: "Open", where: { state: { equals: "open" } } },
+          { value: "closed", label: "Closed", where: { state: { equals: "closed" } } },
+        ],
+      },
+    ],
+  },
+},
+```
+
+Choosing an option adds its `where` to the list's own request, which the
+server answers with the reader's access, so a filter only ever narrows what
+they can already list. The choice is kept in the page's URL as
+`?pf=acme-support.state:open`; one naming an undeclared filter or option is
+ignored. A collection is named by the slug it was declared with: one a plugin
+contributes follows that plugin's renames, so a filter still reaches it after
+the host renames it.
+
+Boot fails, naming the plugin and the filter, on a name outside the plugin's
+slug (`list-filter-outside-namespace`), one declared twice
+(`list-filter-duplicate`), or one with a key it does not take (a misspelled
+`collection`, say), no label, no options, a collection slug no collection can
+have, an option value a URL can't carry, two options with one value, or a
+`where` the list could not read, malformed or nested too deep once joined to
+the list's own filters (`list-filter-invalid`).
 
 ### Reading what other plugins declared
 

@@ -35,6 +35,9 @@ import {
   type ExposureEditResult,
   type ExposureSources,
   type ExposureTarget,
+  LIST_FILTER_OPS,
+  type ListFilter,
+  type ListRelation,
   type OpPosition,
   type RetiredExposures,
   type VariantEditResult,
@@ -82,6 +85,18 @@ export type PageAction =
       readonly variant: string | null;
     }
   /**
+   * Change a collection list's query: its source, filters, sort, limit and
+   * offset, each part set when given, removed when `null`, and kept as
+   * stored when absent. The write is judged as an editor save is, so a limit
+   * outside 1 to 100, a negative offset, a field the collection lacks or
+   * visitors can't see, and a related list nested too deep are refused.
+   */
+  | {
+      readonly kind: "set-list-query";
+      readonly listId: string;
+      readonly query: ListQueryChange;
+    }
+  /**
    * Choose the page's Layout: a Layout's id, or `null` for the site's default.
    * `noHeaderFooter: true` switches the Layout off for this page; absent, it
    * is turned back on, as choosing a Layout in the editor does.
@@ -91,6 +106,28 @@ export type PageAction =
       readonly layout: string | null;
       readonly noHeaderFooter?: boolean;
     };
+
+/**
+ * The parts of a collection list's query a `set-list-query` action changes:
+ * each one set when given, removed when `null`, kept when absent. Shaped as
+ * the block stores them (`ListQuery` in the engine reads them back).
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export interface ListQueryChange {
+  /** The collection read, or the one a related source's entries are in. */
+  readonly collection?: string | null;
+  /** A to-many relation of the page's entry or of the outer list's item. */
+  readonly relation?: ListRelation | null;
+  /** Rows an entry must all meet. */
+  readonly filters?: readonly ListFilter[] | null;
+  /** Sort keys, comma-separated, `-` for descending: `-publishedAt,title`. */
+  readonly sort?: string | null;
+  /** How many entries to show, 1 to 100. */
+  readonly limit?: number | null;
+  /** How many matching entries to skip, from 0. */
+  readonly offset?: number | null;
+}
 
 /** Which part of a block an exposure targets: a prop, or its visibility. */
 export type ExposureTargetInput =
@@ -145,6 +182,7 @@ const position = z.union([
   }),
 ]);
 const values = z.record(z.string().max(512), z.unknown());
+const filterScalar = z.union([z.string().max(2048), z.number(), z.boolean()]);
 
 /**
  * Each page action's shape, once: the schema is their union, and the kinds a
@@ -173,6 +211,35 @@ const pageActionOptions = [
     kind: z.literal("choose-variant"),
     instanceId: id,
     variant: id.nullable(),
+  }),
+  z.strictObject({
+    kind: z.literal("set-list-query"),
+    listId: id,
+    // The shape the block stores, and no more: what each part may hold (the
+    // bounds, a field the collection has and visitors may read, how deep
+    // related lists go) is the page's blocks field to judge on the write, so
+    // a client is refused in the editor's own words, not by a second set here.
+    query: z.strictObject({
+      collection: z.string().max(512).nullable().optional(),
+      relation: z
+        .strictObject({ of: z.enum(["entry", "item"]), field: id })
+        .nullable()
+        .optional(),
+      filters: z
+        .array(
+          z.strictObject({
+            field: id,
+            op: z.enum(LIST_FILTER_OPS),
+            value: z.union([filterScalar, z.array(filterScalar).max(200)]),
+          })
+        )
+        .max(100)
+        .nullable()
+        .optional(),
+      sort: z.string().max(2048).nullable().optional(),
+      limit: z.number().nullable().optional(),
+      offset: z.number().nullable().optional(),
+    }),
   }),
   z.strictObject({
     kind: z.literal("set-layout"),

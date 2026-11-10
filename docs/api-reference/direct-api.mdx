@@ -635,11 +635,13 @@ profile.user; // current user record (or null)
 
 const updated = await nextly.updateMe({
   user: { id: "user-123" },
-  data: { name: "New Display Name" },
+  data: { name: "New Display Name", interfaceLanguage: "fr" },
 });
 ```
 
 **Returns:** `AuthResult` — `{ user, permissions? }`. Throws `NextlyError` (`NOT_FOUND`) if the user does not exist.
+
+`interfaceLanguage` is the language this person wants the admin in, kept apart from any content language: a language tag spelled as browsers report it (`fr`, `pt-BR`), or `null` to follow the browser, then English. It is the person's own to set, through `updateMe` or `PATCH /admin/api/me`. `users.update` and `PATCH /admin/api/users/:id` refuse it with a `VALIDATION_ERROR` naming the field, and a malformed or non-canonical tag (`pt-br`) is refused the same way. `interfaceLanguage` is also a reserved name for a custom user field.
 
 ### changePassword
 

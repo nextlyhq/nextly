@@ -79,8 +79,9 @@ const dark = card?.variants.find(variant => variant.label === "Dark");
   answers `409`; plan again. An action is also refused with `409` when someone else saves
   the item between the action's read and its write.
 - **`item.by`** says who the action ran as: `{ kind: "user", userId }`, or
-  `{ kind: "api-key", userId, apiKeyId }`. A change made by a signed-in person is
-  recorded against them on the item's content events.
+  `{ kind: "api-key", userId, apiKeyId }`. The item's content events, its history and
+  the webhook and activity trails record the change the same way: against the person,
+  or against the API key itself rather than its owner.
 - **`publish: true`** publishes the item with the change and needs the publish right.
   Without it the change is saved to the item's working draft, as the editor saves it.
 
@@ -113,6 +114,7 @@ drafts saves an edit straight onto the published entry, so there the caller need
 | `set-placement-values` | `instanceId`, `values?`, `reset?`           | Sets a placement's values. `{ "$unset": true }` empties a field; `reset` lists fields to restore.                               |
 | `choose-variant`       | `instanceId`, `variant`                     | Chooses a variant by its id, or `null` for the component's defaults.                                                            |
 | `set-layout`           | `layout`, `noHeaderFooter?`                 | Chooses the page's Layout by id, or `null` for the site default. `noHeaderFooter: true` switches it off. Pages collection only. |
+| `set-list-query`       | `listId`, `query`                           | Changes a Collection list's query: `collection`, `relation`, `filters`, `sort`, `limit`, `offset`. See below.                   |
 
 `at` is `{ "index": 2 }` for the page's top level, or `{ "parentId", "slot", "index" }`
 inside a block; without it the block goes at the end of the page. The answer holds the
@@ -120,6 +122,20 @@ inside a block; without it the block goes at the end of the page. The answer hol
 fields (`layout`), and `insertedId`, the new block's id for the next action to address.
 New blocks get fresh ids on every write, as in the editor, so the ids in a dry run's
 answer are not the ones an apply stores: address what the apply's own answer names.
+
+`set-list-query` changes the query of the Collection list whose id is `listId`. Each part
+of `query` is set when given, removed when `null`, and kept as stored when absent, so
+`{ "sort": "-publishedAt", "offset": null }` sets the sort and stops skipping entries. The
+parts are stored as the block stores them: `collection` is a slug; `relation` is
+`{ "of": "entry" | "item", "field" }`, a to-many relation of the page's entry or of the
+outer list's item; `filters` is a list of `{ "field", "op", "value" }` rows an entry must
+all meet, `op` one of `equals`, `not_equals`, `greater_than`, `greater_than_equal`,
+`less_than`, `less_than_equal`, `contains`, `in`, `not_in` and `exists`, and a day written
+`"2026-09-01"`; `sort` is comma-separated keys, `-` for descending (`"-publishedAt,title"`);
+`limit` is 1 to 100 and `offset` 0 or more. The write is judged as the editor's save is: a
+field the collection lacks or visitors can't see, a filter on a field holding several values
+and a related list nested more than one level deep are refused, in the words the editor
+shows, for example `This list sorts by "rating", which Posts doesn't have. Choose another field.`
 
 ## Change a component's definition
 
@@ -180,7 +196,10 @@ import {
 } from "@nextlyhq/builder/ops";
 import { registryBlockSource } from "@nextlyhq/blocks-engine";
 
-const action = definitionActionSchema.parse({ kind: "add-variant", label: "Dark" });
+const action = definitionActionSchema.parse({
+  kind: "add-variant",
+  label: "Dark",
+});
 // The edit the route would make to this definition, or the planner's refusal.
 const plan = planDefinitionAction(definition, action, {
   definitions: registryBlockSource(),

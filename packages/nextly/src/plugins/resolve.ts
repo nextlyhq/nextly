@@ -16,6 +16,7 @@ import {
 import type { NextlyError } from "../errors/nextly-error";
 import { isReservedEventName } from "../events/event-bus";
 
+import { contributedListFilters } from "./admin-filters";
 import { collectAdminPlaces } from "./admin-places-registry";
 import { validateCapabilities, validateRequires } from "./capabilities";
 import { collectHookPoints, publishHookPoints } from "./hook-points";
@@ -187,6 +188,10 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // it. Checked only: nothing keeps the result, and a reader computes the
   // places from the plugin list the app committed.
   collectAdminPlaces(plugins);
+  // Entry-list filters, for the same reason: a malformed one would
+  // otherwise be offered in the toolbar and fail when chosen. Checked only;
+  // the admin meta is built from the same reduction.
+  contributedListFilters(plugins);
 }
 
 /**

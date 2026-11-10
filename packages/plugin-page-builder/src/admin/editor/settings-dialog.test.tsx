@@ -72,9 +72,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 // when editing starts, as the real one does.
 vi.mock("@nextlyhq/builder/shell", async importOriginal => ({
   // The editor's real words, so the dialog's title reads as an author sees it.
-  EDITOR_WORDS: (
-    await importOriginal<typeof import("@nextlyhq/builder/shell")>()
-  ).EDITOR_WORDS,
+  ...(({ EDITOR_WORDS, BASE_DEVICE_LABEL }) => ({
+    EDITOR_WORDS,
+    BASE_DEVICE_LABEL,
+  }))(await importOriginal<typeof import("@nextlyhq/builder/shell")>()),
   BreakpointManager: ({
     status,
     onEditingChange,
@@ -153,6 +154,7 @@ function show(
           value: { viewport: [], container: [] },
           onSave: vi.fn(),
           status: "ready",
+          refresh: vi.fn(),
         }}
       />
     </form>
@@ -665,6 +667,7 @@ describe("the Settings dialog", () => {
           value: { viewport: [], container: [] },
           onSave: vi.fn(),
           status: "ready",
+          refresh: vi.fn(),
         }}
       />
     );

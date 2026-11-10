@@ -14,6 +14,7 @@
  * @module index
  */
 export type {
+  AccordionTitleLevel,
   BindingIssuesHandler,
   BlockHostPolicy,
   BlockRenderArgs,
@@ -37,7 +38,9 @@ export type {
 } from "./context";
 export {
   createDefaultDataProvider,
+  createQueryBudget,
   createStandaloneContext,
+  DEFAULT_MAX_QUERIES,
   defineBlock,
   emptyDataProvider,
 } from "./context";
@@ -120,10 +123,12 @@ export { BlockBoundary, BlockList } from "./block-boundary";
 //
 // `SLOTS_ATTRIBUTE` is public for the same reason: an editor looking for a
 // container to draw an affordance on asks this attribute rather than keeping
-// its own copy of the string the renderer emits.
+// its own copy of the string the renderer emits. `LIST_ACTION_ATTRIBUTE` too:
+// the editor's canvas acts on the action a list's note offers by it.
 export {
   EDITOR_NAMESPACE,
   INSTANCE_ATTRIBUTE,
+  LIST_ACTION_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PROP_ATTRIBUTE,
   SLOTS_ATTRIBUTE,

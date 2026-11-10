@@ -147,6 +147,12 @@ function catalogOfferables(): Offerable[] {
             : [];
       for (const keyword of keywords)
         add({ cssProperty: leaf.cssProperty, keyword });
+      // The declarations a keyword writes beside its own reach a page just
+      // the same, so each property they use is held to the same bar.
+      if (leaf.kind === "keyword") {
+        for (const expansion of Object.values(leaf.expands ?? {}).flat())
+          add({ cssProperty: expansion.property });
+      }
     }
   }
   return out;

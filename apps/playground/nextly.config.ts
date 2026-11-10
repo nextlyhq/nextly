@@ -31,6 +31,7 @@ import { defineCollection, defineConfig, text } from "nextly/config";
 import { Authors } from "./src/collections/authors";
 import { BlockPages } from "./src/collections/block-pages";
 import { BoundEntries } from "./src/collections/bound-entries";
+import { ListStories } from "./src/collections/list-stories";
 import { Categories } from "./src/collections/categories";
 import { DevReloadProbe } from "./src/collections/dev-reload-probe";
 import { HistoryNotes } from "./src/collections/history-notes";
@@ -44,6 +45,7 @@ import { LinkCard, LinkQuote } from "./src/field-groups/related-link-groups";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
 import { blockFixturePlugin } from "./src/plugins/block-fixture/plugin";
+import { contributionsFixturePlugin } from "./src/plugins/contributions-fixture/plugin";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
 import { slowWidgetFixturePlugin } from "./src/plugins/slow-widget-fixture/plugin";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
@@ -161,6 +163,10 @@ export default defineConfig({
     // fields include one the public may not read; registered for the e2e run
     // only, by the same switch.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [BoundEntries] : []),
+    // The browser test of a collection list's related source needs a public,
+    // page-built entry holding a public to-many relation; registered for the
+    // e2e run only, by the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [ListStories] : []),
     // The collection the SEO plugin extends, by the plugin's own switch.
     ...(seoPluginEnabled ? [SeoPages] : []),
   ],
@@ -244,6 +250,12 @@ export default defineConfig({
     // editor through the committed component map. Offered only in the Add
     // panel, named as test fixtures, for plugin-blocks.spec.ts.
     blockFixturePlugin,
+    // Always on: the plugin contributions a page offers (today one entry-list
+    // filter on Posts) appear only in its menus until someone chooses them,
+    // and their screenshots, and the browser tests to come, need them in every
+    // build.
+    // Named as a fixture, and inert: no tables, routes, jobs or hooks.
+    contributionsFixturePlugin,
     // The SEO plugin as it ships, for the browser test of its dashboard card
     // and its Needs attention line, by the switch above. No sitemap: a public
     // route is not what that test is about.

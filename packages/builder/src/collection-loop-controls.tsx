@@ -22,6 +22,7 @@
  * @module collection-loop-controls
  */
 
+import { listKindSortable } from "@nextlyhq/blocks-engine";
 import {
   Button,
   Label,
@@ -36,9 +37,10 @@ import { ChoiceList, type ListedChoice } from "./choice-list";
 import type {
   ContentControlProps,
   LoopCollection,
-  LoopSortField,
+  LoopListField,
 } from "./content-controls";
 import { propLabel } from "./inspector";
+import { firstDirection } from "./list-query-model";
 import { readSort, restKeys, writeSort, type SortKey } from "./loop-sort";
 
 type ListLoopCollections = NonNullable<
@@ -46,7 +48,7 @@ type ListLoopCollections = NonNullable<
 >;
 
 /** The host's answer, as the controls hold it. */
-type LoopCollections =
+export type LoopCollections =
   | { readonly kind: "loading" }
   | { readonly kind: "ready"; readonly collections: readonly LoopCollection[] }
   | { readonly kind: "failed" };
@@ -79,7 +81,7 @@ function readShared(
 }
 
 /** The collections, or `undefined` when the host lends no way to list them. */
-function useLoopCollections(
+export function useLoopCollections(
   list: ListLoopCollections | undefined
 ): LoopCollections | undefined {
   const [found, setFound] = React.useState<{
@@ -130,64 +132,55 @@ interface LoopChoice extends ListedChoice {
  * The button that shows a loop prop's value, and the list it opens: searched
  * once long. Its name is the field's label and its value together, so a
  * screen reader hears "Collection, Blog posts".
+ *
+ * Shared by a collection list's own controls, which add groups to the list
+ * (related sources above collections), a line above or below it, an icon
+ * before the value, and an invalid state for a value a save would refuse.
  */
-function LoopPicker({
+export function LoopPicker<C extends ListedChoice>({
   id,
   labelId,
-  shown,
-  state,
+  value,
   disabled,
-  choices,
-  currentKey,
-  listLabel,
-  searchLabel,
-  noMatch,
-  searchFrom,
+  list,
+  around,
+  defaultOpen,
   onPick,
 }: {
   id: string;
   labelId: string;
-  /** The words the button shows. */
-  shown: string;
-  /** Whether they are a prompt, or a stored value the list does not hold. */
-  state: "value" | "prompt" | "unknown";
+  /** What the button shows, and how it is marked. */
+  value: PickerValue;
   disabled: boolean;
-  choices: readonly LoopChoice[];
-  currentKey: string;
-  listLabel: string;
-  searchLabel: string;
-  noMatch: string;
-  searchFrom?: number;
-  onPick: (choice: LoopChoice) => void;
+  /** What the open list holds. */
+  list: PickerList<C>;
+  /** Drawn in the open list above and below its rows. */
+  around?: {
+    /** A group with nothing to offer, said under the search, above the rows. */
+    readonly above?: React.ReactNode;
+    /** What the list leaves out. */
+    readonly below?: React.ReactNode;
+  };
+  /** Opened as soon as it is drawn, as a new filter's field menu is. */
+  defaultOpen?: boolean;
+  onPick: (choice: C) => void;
 }): React.JSX.Element {
-  const [open, setOpen] = React.useState(false);
+  const [open, setOpen] = React.useState(defaultOpen === true);
   const valueId = `${id}-value`;
+  const { choices, currentKey, label, searchLabel, noMatch, ...optional } =
+    list;
   return (
-    <div
-      className="nx-font-pick"
-      data-unknown={state === "unknown" ? "" : undefined}
-    >
+    <div className="nx-font-pick" {...pickerMarks(value)}>
       <Popover open={open} onOpenChange={setOpen} modal={false}>
         <PopoverTrigger asChild>
-          <button
-            type="button"
+          <PickerButton
             id={id}
-            className="nx-font-pick__trigger"
-            aria-haspopup="listbox"
-            aria-expanded={open}
-            aria-labelledby={`${labelId} ${valueId}`}
+            labelledBy={`${labelId} ${valueId}`}
+            valueId={valueId}
+            shown={value}
+            open={open}
             disabled={disabled}
-          >
-            <span
-              id={valueId}
-              className="nx-font-pick__value"
-              data-placeholder={state === "prompt" ? "" : undefined}
-              title={shown}
-            >
-              {shown}
-            </span>
-            <ChevronDown aria-hidden="true" size={14} />
-          </button>
+          />
         </PopoverTrigger>
         {/* Aligned to the control's right edge, as the font list is: the list
             may be wider than the control, at the window's right edge. */}
@@ -201,20 +194,109 @@ function LoopPicker({
             <ChoiceList
               choices={choices}
               currentKey={currentKey}
-              label={listLabel}
+              label={label}
               searchLabel={searchLabel}
               noMatch={noMatch}
-              {...(searchFrom === undefined ? {} : { searchFrom })}
+              // Given only where the caller said, so the list's own defaults hold.
+              {...definedOnly({ ...optional, leading: around?.above })}
               onPick={choice => {
                 setOpen(false);
                 onPick(choice);
               }}
             />
+            {around?.below}
           </div>
         </PopoverContent>
       </Popover>
     </div>
   );
+}
+
+/** What a picker's button shows, and how it is marked. */
+export interface PickerValue {
+  /** The words the button shows. */
+  readonly words: string;
+  /** Whether they are a prompt, or a stored value the list does not hold. */
+  readonly state: "value" | "prompt" | "unknown";
+  /** Drawn before the value, such as the mark of a related source. */
+  readonly icon?: React.ReactNode;
+  /** A value the save would refuse, marked as the field's error. */
+  readonly invalid?: boolean;
+  /** The id of the text describing the value, such as its error. */
+  readonly describedBy?: string | undefined;
+}
+
+/** What a picker's open list holds. */
+export interface PickerList<C extends ListedChoice> {
+  readonly choices: readonly C[];
+  readonly currentKey: string;
+  readonly label: string;
+  readonly searchLabel: string;
+  readonly noMatch: string;
+  readonly searchFrom?: number;
+  /** The list's group headings, in order, for a list of grouped rows. */
+  readonly groups?: ReadonlyArray<{ group: string; heading: string }>;
+  readonly renderChoice?: (choice: C) => React.ReactNode;
+}
+
+/** The button a picker opens from: its value, named with its field's label. */
+const PickerButton = React.forwardRef<
+  HTMLButtonElement,
+  {
+    id: string;
+    labelledBy: string;
+    valueId: string;
+    shown: PickerValue;
+    open: boolean;
+    disabled: boolean;
+  } & React.ButtonHTMLAttributes<HTMLButtonElement>
+>(function PickerButton(
+  { id, labelledBy, valueId, shown, open, disabled, ...trigger },
+  ref
+) {
+  return (
+    <button
+      {...trigger}
+      ref={ref}
+      type="button"
+      id={id}
+      className="nx-font-pick__trigger"
+      aria-haspopup="listbox"
+      aria-expanded={open}
+      aria-labelledby={labelledBy}
+      aria-invalid={shown.invalid === true || undefined}
+      aria-describedby={shown.describedBy}
+      disabled={disabled}
+    >
+      {shown.icon}
+      <span
+        id={valueId}
+        className="nx-font-pick__value"
+        data-placeholder={shown.state === "prompt" ? "" : undefined}
+        title={shown.words}
+      >
+        {shown.words}
+      </span>
+      <ChevronDown aria-hidden="true" size={14} />
+    </button>
+  );
+});
+
+/** The marks on a picker: a stored value the list lacks, a refused one. */
+function pickerMarks(value: PickerValue): Record<string, string> {
+  return {
+    ...(value.state === "unknown" ? { "data-unknown": "" } : {}),
+    ...(value.invalid === true ? { "data-invalid": "" } : {}),
+  };
+}
+
+/** The entries of `options` that hold a value, for props that must be absent. */
+function definedOnly<T extends Record<string, unknown>>(
+  options: T
+): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(options).filter(([, value]) => value !== undefined)
+  ) as Partial<T>;
 }
 
 /**
@@ -259,7 +341,7 @@ function withLoopCollections(
 }
 
 /** The collections in the order the list offers them: by name, ignoring case. */
-function alphabetical(
+export function alphabetical(
   collections: readonly LoopCollection[]
 ): LoopCollection[] {
   return [...collections].sort(
@@ -327,15 +409,16 @@ function CollectionField({
       <LoopPicker
         id={id}
         labelId={labelId}
-        shown={shown.words}
-        state={shown.state}
+        value={shown}
         disabled={disabled || listed.kind === "loading"}
-        choices={choices}
-        currentKey={stored ?? ""}
-        listLabel="Collections"
-        searchLabel="Search collections"
-        noMatch="No collection matches."
-        searchFrom={COLLECTIONS_SEARCH_FROM + 1}
+        list={{
+          choices,
+          currentKey: stored ?? "",
+          label: "Collections",
+          searchLabel: "Search collections",
+          noMatch: "No collection matches.",
+          searchFrom: COLLECTIONS_SEARCH_FROM + 1,
+        }}
         onPick={choice => {
           if (choice.value !== stored) onCommit(prop.name, choice.value);
         }}
@@ -351,18 +434,23 @@ function CollectionField({
 export const CollectionControl: (props: LoopControlProps) => React.JSX.Element =
   withLoopCollections(CollectionField);
 
-/** A collection's sortable fields as the menu lists them: dates first. */
-function datesFirst(fields: readonly LoopSortField[]): LoopSortField[] {
+/**
+ * A collection's fields a list may sort by, as the menu lists them: dates
+ * first. A relation sorts by its stored id, which the engine's
+ * `listKindSortable` leaves out.
+ */
+function datesFirst(fields: readonly LoopListField[]): LoopListField[] {
+  const sortable = fields.filter(field => listKindSortable(field.kind));
   return [
-    ...fields.filter(field => field.date),
-    ...fields.filter(field => !field.date),
+    ...sortable.filter(field => field.kind === "date"),
+    ...sortable.filter(field => field.kind !== "date"),
   ];
 }
 
 /** A key's field in words: its label where the collection has it. */
 function fieldWords(
   field: string,
-  fields: readonly LoopSortField[]
+  fields: readonly LoopListField[]
 ): string | undefined {
   return fields.find(each => each.name === field)?.label;
 }
@@ -380,10 +468,10 @@ function sortedCollection(
 function sortFieldsFor(
   listed: DrawnCollections,
   collection: string | undefined
-): LoopSortField[] {
+): LoopListField[] {
   if (listed.kind !== "ready") return [];
   const found = listed.collections.find(each => each.slug === collection);
-  return datesFirst(found?.sortFields ?? []);
+  return datesFirst(found?.fields ?? []);
 }
 
 /** What the sort button shows for the stored first key. */
@@ -391,7 +479,7 @@ function sortShown(
   waiting: boolean,
   first: SortKey | undefined,
   collection: string | undefined,
-  fields: readonly LoopSortField[]
+  fields: readonly LoopListField[]
 ): Shown {
   if (waiting) return { words: "Loading fields…", state: "prompt" };
   if (first === undefined) {
@@ -417,12 +505,15 @@ function sortShown(
  */
 function pickedKey(
   picked: string | undefined,
-  fields: readonly LoopSortField[],
+  fields: readonly LoopListField[],
   first: SortKey | undefined
 ): SortKey | undefined {
   const field = fields.find(each => each.name === picked);
   if (field === undefined) return undefined;
-  return { field: field.name, descending: first?.descending ?? field.date };
+  return {
+    field: field.name,
+    descending: first?.descending ?? firstDirection(field.kind),
+  };
 }
 
 /** The direction toggle beside the sort menu: pressed is descending. */
@@ -468,7 +559,7 @@ function FurtherKeys({
   fields,
 }: {
   keys: readonly SortKey[];
-  fields: readonly LoopSortField[];
+  fields: readonly LoopListField[];
 }): React.JSX.Element | null {
   if (keys.length === 0) return null;
   let lost = false;
@@ -532,8 +623,7 @@ function SortField({
         <LoopPicker
           id={id}
           labelId={labelId}
-          shown={shown.words}
-          state={shown.state}
+          value={shown}
           // A stored sort stays reachable without a collection, so it can be
           // cleared; with neither, there is nothing to choose from yet.
           disabled={
@@ -541,11 +631,13 @@ function SortField({
             waiting ||
             (collection === undefined && first === undefined)
           }
-          choices={choices}
-          currentKey={first?.field ?? ""}
-          listLabel="Fields to sort by"
-          searchLabel="Search fields"
-          noMatch="No field matches."
+          list={{
+            choices,
+            currentKey: first?.field ?? "",
+            label: "Fields to sort by",
+            searchLabel: "Search fields",
+            noMatch: "No field matches.",
+          }}
           onPick={choice => commit(pickedKey(choice.value, fields, first))}
         />
         <DirectionToggle

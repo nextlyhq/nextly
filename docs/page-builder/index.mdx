@@ -17,7 +17,12 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 - **20 blocks out of the box.** Layout (section, box, columns, column, card, accordion,
   accordion item, spacer, divider), content (heading, paragraph, rich text, list, quote,
   image, gallery, button, embed, form), and one that reads from your content
-  ([collection loop](#reading-content-into-a-page)).
+  ([Collection list](#reading-content-into-a-page)).
+- **Accordion titles and icons.** An accordion's **Titles as** (Content tab) draws each
+  section's title as text or as a heading from level 2 to 6, and its **Icon** and
+  **Position** (Style tab) choose a chevron, a plus, no icon or the browser's own triangle,
+  before or after the title. Some screen readers announce a section title as the button's
+  text rather than as a heading; the section still opens and closes as normal.
 - **Your own blocks**, defined in code, which the page renderer takes beside the
   built-in ones.
 - **Per-breakpoint styling.** Style a block separately for each breakpoint: the Style tab
@@ -30,11 +35,11 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 
 ## Availability
 
-| | |
-|---|---|
-| Package | `@nextlyhq/plugin-page-builder`, plus `@nextlyhq/blocks-react` in your app |
-| Status | Alpha. The block model, the registries, the render pipeline and the editor can all still change |
-| Permission | Editing a page requires update access to the collection holding it |
+|            |                                                                                                 |
+| ---------- | ----------------------------------------------------------------------------------------------- |
+| Package    | `@nextlyhq/plugin-page-builder`, plus `@nextlyhq/blocks-react` in your app                      |
+| Status     | Alpha. The block model, the registries, the render pipeline and the editor can all still change |
+| Permission | Editing a page requires update access to the collection holding it                              |
 
 ## Install
 
@@ -135,9 +140,9 @@ export default ContentPage;
 ```
 
 <Callout type="warn">
-Without a breakpoint set the renderer emits class names with no CSS behind them, and
-pages come out structurally correct and visually bare. Declare at least a `base`
-breakpoint.
+  Without a breakpoint set the renderer emits class names with no CSS behind
+  them, and pages come out structurally correct and visually bare. Declare at
+  least a `base` breakpoint.
 </Callout>
 
 ### Public sites read differently
@@ -145,7 +150,7 @@ breakpoint.
 `createBlocksPage` reads **access-enforced** content, so it needs no database during
 `next build`. A wholly public site calls `createPublicBlocksPage` instead: it reads
 trusted, pre-renders, and returns a `generateStaticParams` to export alongside the other
-two. Which one you call *is* the security posture — there is no option to flip.
+two. Which one you call _is_ the security posture — there is no option to flip.
 
 ## Draw the canvas in your site's layout
 
@@ -345,10 +350,33 @@ export const Homepage = defineSingle({
 
 ## Reading content into a page
 
-The **collection loop** block queries one of your collections and repeats its child
-blocks once per entry — a post list, a team grid, a product row — without anyone writing
-a query. The developer decides which collections are available to it; the editor decides
-what each repeated item looks like.
+The **Collection list** block (stored as `core/collection-loop`) queries one of your
+collections and repeats its child blocks once per entry — a post list, a team grid, a
+product row — without anyone writing a query. The developer decides which collections are
+available to it; the editor decides which entries it shows and what each one looks like.
+
+In the editor, the list's Content tab edits its query:
+
+- **Source**: a collection, or a to-many relation of the page's entry (on a collection's
+  entry) or of each item of the list around it, such as a post's categories.
+- **Filters**: rows an entry must all meet, each read as one sentence, for example
+  Title contains "build" or Published is on or after 1 Sept 2026. Only fields visitors can
+  see are offered, and none holding several values.
+- **Sort**: one row per key, each with its direction in words (Newest first, A–Z, Highest
+  first). Entries with the same values keep a fixed order, and entries with no value come
+  last.
+- **How many**: Number of items (1 to 100) and Skip the first. Under Number of items the
+  selected list says how many entries match and how many show, for example "4 entries
+  match, so 3 show.", counted as a visitor reads them.
+- **When nothing matches**: Canvas shows Entries or When empty, to design the list's empty
+  state, which visitors see when no entry matches.
+
+The canvas draws each list with the entries a visitor would see. When a stored sort falls
+back to id order or the read fails, the canvas says so in a note only the author sees; a
+fallen-back sort's note has a **Choose a field** button that takes the author to the sort.
+Near midnight the canvas may differ from the published page for a day filter: the canvas
+compares days in UTC, the published page in the site's time zone. The same query can be
+set through the API with [`set-list-query`](/docs/page-builder/compose-through-the-api).
 
 The loop reads through the route's **public reader**, which every blocks route binds to each
 render. With no `data` option the loop reads through it directly, so a published page lists
@@ -374,7 +402,7 @@ cached like the page and tagged with its collection, so publishing a post refres
 that list it. A change to a collection's access rule is not a write, so a page cached before it
 shows the old answer until it revalidates.
 
-A loop always sends a sort, so a list with none comes back in id order. If the reader refuses
+A list always sends a sort, so a list with none comes back in id order. If the reader refuses
 a loop's stored sort (a field since removed, or one the public may not read), the loop lists in
 id order instead of going empty.
 
@@ -432,9 +460,10 @@ Two more reads sit beside it in `nextly/runtime`, both `@experimental`:
 The settings and the shapes read the process's running instance, as `requireNextly` does.
 
 <Callout type="warn">
-Field bindings inside a loop are stored but not resolved yet. Each repeated item shows
-the text its blocks were given in the editor, not the entry's own fields. See
-[Block document format](/docs/api-reference/block-document-format).
+  Field bindings inside a loop are stored but not resolved yet. Each repeated
+  item shows the text its blocks were given in the editor, not the entry's own
+  fields. See [Block document
+  format](/docs/api-reference/block-document-format).
 </Callout>
 
 ## Related

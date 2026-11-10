@@ -20,11 +20,12 @@ import {
   type RemotePattern,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
-import type { PageStyleCascade } from "@nextlyhq/blocks-react";
+import type { PageBindings, PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
   DEFAULT_PREFERENCES,
   fallbackBreakpoint,
   registrySlotSource,
+  slotsShowingEmpty,
   type SlotSource,
 } from "@nextlyhq/builder";
 import {
@@ -62,6 +63,7 @@ import { siteSheet, type SiteStyleData } from "../../site-style";
 import { readSiteStyleRecord } from "../../site-style-record";
 import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
 import { useSiteStyle } from "../site-style-client";
+import { useStoredSiteStyle } from "../site-style-read";
 
 import { useCanvasPageContext } from "./canvas-page-context";
 import { useSharedStyleVerb, type SharedStyleVerb } from "./shared-style-verb";
@@ -215,6 +217,12 @@ export function useSiteStyleInputs(
    * while a second is also refused fixes one and is refused again.
    */
   const saveBreakpoints = useBreakpointWriter(configSiteStyle);
+  // Read again after a breakpoint removal, which writes the site style
+  // through its own route rather than this editor's writes.
+  const { refetch: rereadSiteStyle } = useStoredSiteStyle();
+  const refreshSiteStyle = useCallback(() => {
+    void rereadSiteStyle();
+  }, [rereadSiteStyle]);
 
   return {
     configSiteStyle,
@@ -228,6 +236,7 @@ export function useSiteStyleInputs(
     remotePatterns,
     stylePolicy,
     saveBreakpoints,
+    refreshSiteStyle,
   };
 }
 
@@ -245,6 +254,8 @@ export type SiteStyleInputs = {
   remotePatterns: readonly RemotePattern[] | undefined;
   stylePolicy: HostFetchPolicy;
   saveBreakpoints: (next: BreakpointSet) => Promise<string | undefined>;
+  /** Read the stored site style again. */
+  refreshSiteStyle: () => void;
 };
 
 /** The canvas's render context, as `useCanvasRender` returns it. */
@@ -253,6 +264,12 @@ type CanvasRender = {
   classSummaryContext: StyleCompileContext;
 };
 
+/**
+ * The canvas's binding sources: none read for the page, one object for the
+ * editor's life so the pass is not a new input on every render.
+ */
+const CANVAS_BINDINGS: PageBindings = Object.freeze({});
+
 /** The render context the canvas is compiled under, and what is read off it. */
 function useCanvasRender({
   clientConfig,
@@ -260,7 +277,12 @@ function useCanvasRender({
   componentLibrary,
   canvasSiteStyle,
   stylePolicy,
-}: Pick<EditorMount, "clientConfig" | "documentLimits" | "componentLibrary"> &
+  editor,
+  locale,
+}: Pick<
+  EditorMount,
+  "clientConfig" | "documentLimits" | "componentLibrary" | "editor" | "locale"
+> &
   Pick<SiteStyleInputs, "canvasSiteStyle" | "stylePolicy">): CanvasRender {
   /*
    * What the canvas hands `PageRenderer` beyond the document and the sheet.
@@ -324,7 +346,9 @@ function useCanvasRender({
 
   // The canvas's own page context, one object for the editor's life: see
   // `canvas-page-context.ts`.
-  const canvasContext = useCanvasPageContext();
+  // The lists the author chose to see empty, drawn so on the canvas, and
+  // every list read in the language being edited.
+  const canvasContext = useCanvasPageContext(editor.listsShowingEmpty, locale);
   const canvasRender = useMemo(
     () => ({
       ...pageRenderInputs({
@@ -341,6 +365,11 @@ function useCanvasRender({
         definitions: componentLibrary.definitions,
       }),
       context: canvasContext,
+      // The binding pass, with no source read for the page: a list item's
+      // bindings fill from the entry the canvas drew it with, as on the
+      // published page, and a binding to a source the canvas did not read
+      // keeps the block's own value (or its fallback), as it always drew.
+      bindings: CANVAS_BINDINGS,
     }),
     [
       canvasSiteStyle,
@@ -582,7 +611,12 @@ function useCanvasWiring({
    * and a block would behave differently depending on how the author reached
    * it.
    */
-  const slots = useMemo(registrySlotSource, []);
+  // Inside a list the canvas shows empty, a block goes to its empty state.
+  const showingEmpty = editor.listsShowingEmpty;
+  const slots = useMemo(
+    () => slotsShowingEmpty(registrySlotSource(), showingEmpty),
+    [showingEmpty]
+  );
   const nesting = useMemo(registryNestingSource, []);
   // The canvas root, published by `Canvas` below and read by the drag when a
   // gesture begins somewhere that is not the canvas — a palette row, whose

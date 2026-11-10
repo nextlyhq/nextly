@@ -341,6 +341,35 @@ export interface ComponentInsertEntry {
 export interface SlotSource {
   /** The names of the child regions this block type declares, in order. */
   slotsOf(type: string): readonly string[] | undefined;
+  /**
+   * The region the canvas draws for this block in place of its first, when
+   * it draws another: a collection list whose empty state is shown. Adding
+   * inside such a block adds to the region the author sees.
+   */
+  shownSlotOf?(node: BlockNode): string | undefined;
+}
+
+/** The slot a list's empty state is drawn from. */
+const EMPTY_STATE_SLOT = "empty";
+
+/**
+ * `slots`, naming the empty-state slot as the one drawn for each list the
+ * canvas shows empty (see `EditorState.listsShowingEmpty`), so a block added
+ * inside it, from the canvas or the Add panel, lands where it is seen.
+ */
+export function slotsShowingEmpty(
+  slots: SlotSource,
+  showingEmpty: ReadonlySet<string> | undefined
+): SlotSource {
+  if (showingEmpty === undefined || showingEmpty.size === 0) return slots;
+  return {
+    slotsOf: type => slots.slotsOf(type),
+    shownSlotOf: node =>
+      showingEmpty.has(node.id) &&
+      slots.slotsOf(node.type)?.includes(EMPTY_STATE_SLOT) === true
+        ? EMPTY_STATE_SLOT
+        : slots.shownSlotOf?.(node),
+  };
 }
 
 /**
@@ -1348,7 +1377,9 @@ function insideCandidates(
   const container = findNode(document.nodes, insideId);
   if (container === undefined) return [];
   const slot =
-    emptySlotOf(container, slots) ?? Object.keys(container.slots ?? {})[0];
+    emptySlotOf(container, slots) ??
+    slots?.shownSlotOf?.(container) ??
+    Object.keys(container.slots ?? {})[0];
   if (slot === undefined) return [];
   const held = container.slots?.[slot] ?? [];
   return [

@@ -57,6 +57,11 @@ export interface ChoiceListProps<C extends ListedChoice> {
    * needs a figure of its own rather than the pickers' shared one.
    */
   readonly searchFrom?: number;
+  /**
+   * Drawn between the search and the rows: a group with nothing to offer,
+   * said where its rows would be.
+   */
+  readonly leading?: React.ReactNode;
 }
 
 /**
@@ -95,6 +100,7 @@ export function ChoiceList<C extends ListedChoice>({
   choiceStyle,
   choiceClassName,
   searchFrom = SEARCH_FROM,
+  leading,
 }: ChoiceListProps<C>): React.JSX.Element {
   const listId = React.useId();
   const [query, setQuery] = React.useState("");
@@ -190,6 +196,7 @@ export function ChoiceList<C extends ListedChoice>({
           />
         </div>
       ) : null}
+      {leading}
       <ul
         ref={list}
         id={listId}

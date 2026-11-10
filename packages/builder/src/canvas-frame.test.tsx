@@ -244,6 +244,11 @@ describe("the canvas frame", () => {
     ).toBe("");
     // A token the editor does not declare is not invented.
     expect(handed(words, "--nx-builder-accent")).toBe(undefined);
+    // A list's note to its author holds the admin's words alone, so it takes
+    // the admin's face; a list showing its empty state holds the site's
+    // content, so it takes none of a name a site may share.
+    expect(handed("[data-nx-list-diagnostic]", "--font-sans")).toBe("Inter");
+    expect(handed("[data-nx-list-shows]", "--font-sans")).toBe(undefined);
 
     // The admin switches its theme on its own root; the chrome follows.
     border = "rgb(4, 5, 6)";

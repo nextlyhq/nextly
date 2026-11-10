@@ -180,7 +180,7 @@ pageBuilder({
 Blocks have no outer margin of their own. The space between two blocks comes from the
 block that holds them:
 
-- **Section, Box, Card, Column**, an accordion item and a collection loop put a gap above
+- **Section, Box, Card, Column**, an accordion item and a Collection list put a gap above
   every block after the first. Set the container to flex or grid and the same gap
   becomes its `gap`.
 - **Columns** and **Gallery** space their columns and images with a wider gap.
@@ -229,8 +229,9 @@ whole site is spaced:
 - **From each block's margins (classic)**: the spacing pages had before container
   gaps. Headings carry 1.5em above and 0.5em below, paragraphs 1em below, Divider
   and Quote 1.5em above and below; Section and Card have no padding; Columns,
-  Gallery and Accordion keep the `space.4` gap; a Button is padded 0.5rem × 1rem;
-  and no container puts a gap between its blocks. The variables in the table above
+  Gallery and Accordion keep the `space.4` gap; an Accordion's sections keep the
+  browser's own triangle (its Icon is **Browser default**); a Button is padded
+  0.5rem × 1rem; and no container puts a gap between its blocks. The variables in the table above
   are not used.
 
 A site that already had a page, a component or a Layout of its own when it first

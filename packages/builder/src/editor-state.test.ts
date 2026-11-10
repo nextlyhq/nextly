@@ -2257,3 +2257,39 @@ describe("a block locked in Layers, asked and applied", () => {
     });
   });
 });
+
+describe("the lists the canvas shows empty", () => {
+  it("names a list shown empty and forgets it again, as editor state outside the history", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("list")]) })
+    );
+    const none = result.current.listsShowingEmpty;
+    expect(none?.size).toBe(0);
+    act(() => result.current.showListEmpty?.("list", true));
+    expect([...(result.current.listsShowingEmpty ?? [])]).toEqual(["list"]);
+    expect(result.current.canUndo).toBe(false);
+    // Asked again for what already holds, the set is the same one, so the
+    // canvas, which draws per set, draws nothing again.
+    const shown = result.current.listsShowingEmpty;
+    act(() => result.current.showListEmpty?.("list", true));
+    expect(result.current.listsShowingEmpty).toBe(shown);
+    act(() => result.current.showListEmpty?.("list", false));
+    expect(result.current.listsShowingEmpty?.size).toBe(0);
+  });
+});
+
+describe("a list's sort, asked for from its canvas note", () => {
+  it("selects the list and counts each ask, outside the history", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a"), node("list")]) })
+    );
+    expect(result.current.sortFieldAsked).toBeUndefined();
+    act(() => result.current.askSortField?.("list"));
+    expect(result.current.selectedId).toBe("list");
+    expect(result.current.sortFieldAsked).toEqual({ id: "list", seq: 1 });
+    // A second press asks again, though the list is already selected.
+    act(() => result.current.askSortField?.("list"));
+    expect(result.current.sortFieldAsked).toEqual({ id: "list", seq: 2 });
+    expect(result.current.canUndo).toBe(false);
+  });
+});

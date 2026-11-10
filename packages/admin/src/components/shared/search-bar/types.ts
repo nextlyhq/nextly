@@ -6,7 +6,7 @@ export type SearchBarProps = {
   value?: string;
   /** Callback when search value changes (debounced) */
   onChange: (value: string) => void;
-  /** Placeholder text for the input */
+  /** Placeholder text for the input; "Search...", in the interface language, when absent */
   placeholder?: string;
   /** Debounce delay in milliseconds (default: 300ms) */
   debounceDelay?: number;

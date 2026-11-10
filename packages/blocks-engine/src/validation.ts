@@ -38,6 +38,11 @@ import {
   MAX_NODES,
 } from "./limits";
 import type { DocumentLimits } from "./limits";
+import {
+  LIST_ISSUE_CODES,
+  listQueryIssues,
+  type ListFieldSource,
+} from "./list-query";
 import { boundedLimit, surveyDocument } from "./measure-bytes";
 import type { DocumentSurvey } from "./measure-bytes";
 import { canBeRoot, canNest, canNestInSlot } from "./nesting";
@@ -240,6 +245,15 @@ export interface ValidationContext {
   bindingSchema?: BindingSchemaSource;
   /** Which source an `entry` binding reads, for {@link bindingSchema}. */
   bindingEntry?: BindingSchemaRef;
+  /**
+   * The fields each collection declares and the public may read, for judging
+   * what a collection list filters and sorts by (`list-query`).
+   *
+   * Absent means a list is judged by its shape and nesting only, on the same
+   * terms as {@link bindingSchema}. A list related to the page's entry looks
+   * its relation up in the collection {@link bindingEntry} names.
+   */
+  listFields?: ListFieldSource;
 }
 
 /** The validator's own codes, before the binding codes are added. */
@@ -369,7 +383,10 @@ const DOCUMENT_ISSUE_CODES = {
 } as const;
 
 /** A stable validation issue code. */
-export type IssueCode = keyof typeof DOCUMENT_ISSUE_CODES | BindingIssueCode;
+export type IssueCode =
+  | keyof typeof DOCUMENT_ISSUE_CODES
+  | BindingIssueCode
+  | keyof typeof LIST_ISSUE_CODES;
 
 /**
  * The stable issue-code vocabulary, each with a one-line description. Tests
@@ -383,6 +400,9 @@ export type IssueCode = keyof typeof DOCUMENT_ISSUE_CODES | BindingIssueCode;
 export const ISSUE_CODES: { readonly [Code in IssueCode]: string } = {
   ...DOCUMENT_ISSUE_CODES,
   ...BINDING_ISSUE_CODES,
+  // A collection list's query codes, from the module that reads the query, so
+  // the editor, the API and the renderer name a list's problem alike.
+  ...LIST_ISSUE_CODES,
 };
 
 /**
@@ -620,6 +640,31 @@ export function validateDocument(
   }
 
   validateNodeForest(envelope.nodes, state, survey.limits.maxNodes);
+
+  // Each collection list's query: its bounds, filter rows, sort and related
+  // source, and the fields it names when the caller can answer for them.
+  // Under the survey's node cap, and skipped past the limits as the per-value
+  // work above is. A problem a stored form already held stays a warning, so a
+  // list a schema change broke does not make its page unsavable.
+  if (!overLimits) {
+    const entry = ctx.bindingEntry;
+    issues.push(
+      // As validation issues: the path names the list, so the block's id the
+      // judgement also carries is left to the editor that asks for it.
+      ...listQueryIssues(envelope.nodes, {
+        ...(ctx.listFields === undefined ? {} : { fields: ctx.listFields }),
+        // A Single's page is no collection's entry: its renderer has no
+        // entry to read a relation of.
+        ...(entry === undefined
+          ? {}
+          : {
+              entryCollection: "collection" in entry ? entry.collection : null,
+            }),
+        ...(ctx.stored === undefined ? {} : { stored: ctx.stored }),
+        maxNodes: survey.limits.maxNodes,
+      }).map(({ nodeId: _nodeId, ...issue }) => issue)
+    );
+  }
 
   return { issues, survey };
 }

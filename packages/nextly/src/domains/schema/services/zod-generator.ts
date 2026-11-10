@@ -475,9 +475,14 @@ export class ZodGenerator {
     }
     // Icon fields: the id's shape only ("lucide:star"), no longer than its
     // column. Whether the set and the icon exist is a runtime question, so an
-    // unknown id still parses.
+    // unknown id still parses. An optional field also takes "", the value the
+    // admin clears it to and the entry validator treats as left out; a
+    // required one still refuses it.
     else if (isIconField(field)) {
-      zodSchema = `z.string().max(${String(ICON_ID_MAX_LENGTH)}).regex(${String(ICON_ID_PATTERN)})`;
+      const idShape = `z.string().max(${String(ICON_ID_MAX_LENGTH)}).regex(${String(ICON_ID_PATTERN)})`;
+      zodSchema = fieldAdmitsNull(field)
+        ? `${idShape}.or(z.literal(""))`
+        : idShape;
     }
     // Number fields
     else if (isNumberField(field)) {

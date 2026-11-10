@@ -208,6 +208,9 @@ vi.mock("./publish-offer", () => ({
   usePublishOffer: () => null,
   useFormPublishOffer: () => null,
 }));
+vi.mock("./removal-hold-client", () => ({
+  useRemovalHold: () => null,
+}));
 
 /** Asking the stored style again, as the editor does after a save. */
 const refetchStoredStyle = async () => ({ isError: false });

@@ -47,7 +47,11 @@ import {
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 
-import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import {
+  INSTANCE_ATTRIBUTE,
+  LIST_ACTION_ATTRIBUTE,
+  NODE_ID_ATTRIBUTE,
+} from "@nextlyhq/blocks-react";
 
 import { markedElementOf } from "./style-subject";
 
@@ -2344,5 +2348,69 @@ describe("the site's ground and text on the canvas root", () => {
     const root = rootOf(false);
     expect(root?.style.getPropertyValue("--nx-canvas-site-ground")).toBe("");
     expect(root?.hasAttribute("data-nx-site-dark-ground")).toBe(false);
+  });
+});
+
+describe("a list note's action", () => {
+  beforeAll(() => {
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          name: "acme/noted",
+          version: 1,
+          description: "A list with a note to its author.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement(
+              "div",
+              { className },
+              createElement(
+                "div",
+                { "data-nx-list-diagnostic": "sort-fallback" },
+                createElement("span", { "data-testid": "words" }, "Fell back."),
+                createElement(
+                  "button",
+                  {
+                    type: "button",
+                    [LIST_ACTION_ATTRIBUTE]: "choose-sort-field",
+                  },
+                  "Choose a field"
+                )
+              )
+            ),
+        },
+      ] as never,
+      { source: "canvas-list-action-test" }
+    );
+  });
+
+  afterAll(clearBlocks);
+
+  it("asks the host to take the author to the list's sort, in place of a plain selection", () => {
+    const onSelect = vi.fn();
+    const onListSortField = vi.fn();
+    render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "list", type: "acme/noted", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        onSelect={onSelect as never}
+        onListSortField={onListSortField}
+      />
+    );
+    // A button's Enter and Space arrive as this same click.
+    fireEvent.click(screen.getByRole("button", { name: "Choose a field" }));
+    expect(onListSortField).toHaveBeenCalledWith("list");
+    expect(onSelect).not.toHaveBeenCalled();
+    // Anywhere else in the note selects the list, as before.
+    fireEvent.click(screen.getByTestId("words"));
+    expect(onSelect).toHaveBeenCalledWith("list", "replace");
+    expect(onListSortField).toHaveBeenCalledTimes(1);
   });
 });

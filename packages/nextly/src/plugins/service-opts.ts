@@ -2,8 +2,13 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { runWithAccessMemo } from "../auth/access/request-memo";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
-import { effectiveCallerScope, runWithCallerScope } from "../auth/caller-scope";
+import {
+  currentRouteActor,
+  effectiveCallerScope,
+  runWithCallerScope,
+} from "../auth/caller-scope";
 import { runAsPrincipal } from "../auth/principal-scope";
+import type { RequestActor } from "../auth/request-actor";
 import { buildUserContext } from "../auth/user-context";
 import { buildMutationMessage } from "../direct-api/namespaces/helpers";
 import type { MutationResult } from "../direct-api/types/shared";
@@ -215,6 +220,7 @@ export async function resolveServiceOpts(
   request?: Request;
   locale?: string;
   fallbackLocale?: string | false;
+  actor?: RequestActor;
 }> {
   const { as, user } = opts;
   // `?locale=` with nothing after it reaches a route as the empty string, and
@@ -302,6 +308,7 @@ export async function resolveServiceOpts(
       ),
       ...carried,
       ...(authenticatedScope ? { authenticatedScope } : {}),
+      ...requestActorFor(user),
     };
   }
   // The plugin acting as itself, beside a person it names: still trusted, and
@@ -319,6 +326,20 @@ export async function resolveServiceOpts(
     };
   }
   return { overrideAccess: true, ...carried };
+}
+
+/**
+ * The actor a write made as `user` is recorded under, when it is the plugin
+ * route request's own user: the API key itself when one authenticated, as a
+ * REST write records it. A write as anybody else, or made outside a route's
+ * request (a job, boot, the system), names none and is recorded as before,
+ * by its user or as the system.
+ */
+function requestActorFor(user: AuthUser): { actor?: RequestActor } {
+  const route = currentRouteActor();
+  return route !== undefined && route.userId === user.id
+    ? { actor: route.actor }
+    : {};
 }
 
 /**

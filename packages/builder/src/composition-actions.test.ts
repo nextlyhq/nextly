@@ -105,6 +105,7 @@ describe("the page action schema", () => {
       { kind: "place-component", componentId: "c", variant: "dark" },
       { kind: "set-placement-values", instanceId: "i", reset: ["title"] },
       { kind: "choose-variant", instanceId: "i", variant: null },
+      { kind: "set-list-query", listId: "l", query: { limit: null } },
       { kind: "set-layout", layout: null },
     ];
     expect(accepted.map(action => action.kind)).toEqual(PAGE_ACTION_KINDS);

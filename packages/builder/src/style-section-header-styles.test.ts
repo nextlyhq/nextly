@@ -690,3 +690,12 @@ describe("the inspector's Content and Style tabs", () => {
     );
   });
 });
+
+describe("a passage field that cannot be edited here", () => {
+  it("is drawn muted, not as a field waiting for input", () => {
+    // Held while the canvas edits the same passage, or with no editor.
+    const held = ruleBody('.nx-inspector__rich-text[aria-readonly="true"]');
+    expect(held).toContain("background: var(--nx-muted)");
+    expect(held).toContain("border-color: var(--nx-border)");
+  });
+});

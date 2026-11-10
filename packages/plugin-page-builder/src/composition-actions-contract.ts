@@ -46,6 +46,7 @@ export type {
   ActionPosition,
   DefinitionAction,
   ExposureTargetInput,
+  ListQueryChange,
   PageAction,
 } from "@nextlyhq/builder/ops";
 

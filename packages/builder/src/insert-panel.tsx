@@ -121,6 +121,7 @@ import {
   paletteGroups,
   patternEntriesFrom,
   registrySlotSource,
+  slotsShowingEmpty,
   UNCATEGORISED,
   type BlockInsertEntry,
   type ComponentInsertEntry,
@@ -960,7 +961,12 @@ export function useInsertOffers({
     [palette, patterns, components, componentDefinitions, source]
   );
 
-  const slotSource = React.useMemo(registrySlotSource, []);
+  // Inside a list the canvas shows empty, a block goes to its empty state.
+  const showingEmpty = editor.listsShowingEmpty;
+  const slotSource = React.useMemo(
+    () => slotsShowingEmpty(registrySlotSource(), showingEmpty),
+    [showingEmpty]
+  );
 
   // Derived from the SAME snapshot the catalog is, so the row an author sees
   // and the subtree an insert builds cannot come from two different readings.

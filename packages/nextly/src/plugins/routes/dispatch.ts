@@ -5,7 +5,11 @@ import {
   apiKeyScopeFrom,
   type AuthenticatedScope,
 } from "../../auth/authenticated-scope";
-import { runWithCallerScope } from "../../auth/caller-scope";
+import {
+  runWithCallerScope,
+  runWithRouteActor,
+  type RouteActor,
+} from "../../auth/caller-scope";
 import { withoutRefreshCookie } from "../../auth/cookies/refresh-token-cookie";
 import { readCsrfBody } from "../../auth/csrf/read-csrf-body";
 import { carriesBearerToken } from "../../auth/csrf/validate";
@@ -16,6 +20,7 @@ import {
 } from "../../auth/middleware";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { beginSessionConsultation } from "../../auth/plugin-auth-api";
+import { actorFromAuthContext } from "../../auth/request-actor";
 import { getSession } from "../../auth/session/get-session";
 import { NextlyError } from "../../errors/nextly-error";
 import { runWithRequestScope } from "../../hooks/request-scope";
@@ -97,6 +102,11 @@ interface RouteAuth {
   principal: Principal | null;
   /** How the caller actually authenticated, for the CSRF decision. */
   credential: CallerCredential;
+  /**
+   * Who the handler's writes as this caller are recorded under: the API key
+   * itself when one authenticated. Attribution only; it admits nothing.
+   */
+  routeActor?: RouteActor;
 }
 
 /**
@@ -271,6 +281,12 @@ function authenticatedCaller(
     caller: buildPluginRouteCaller(authResult, self.name),
     principal: null,
     credential: authResult.authMethod === "session" ? "cookie" : "bearer",
+    // Derived as the REST route handler derives its actor, so a key's write
+    // through a plugin route is recorded as the key, as it is through REST.
+    routeActor: Object.freeze({
+      userId: user.id,
+      actor: Object.freeze(actorFromAuthContext(authResult)),
+    }),
   };
 }
 
@@ -968,7 +984,13 @@ export async function runPluginRoute(
     const response = await session.run(() =>
       runWithRequestScope(req, () =>
         runWithPrincipalAnswers(req, () =>
-          runWithCallerScope(auth.authenticatedScope, () => run(req, ctx))
+          runWithCallerScope(auth.authenticatedScope, () =>
+            // The actor, too: a write the handler makes as this caller is
+            // recorded under the key that authenticated, not its owner. It
+            // is not a `RequestCaller`, which would tell services a gate
+            // already ran for the write and let them skip their own.
+            runWithRouteActor(auth.routeActor, () => run(req, ctx))
+          )
         )
       )
     );
