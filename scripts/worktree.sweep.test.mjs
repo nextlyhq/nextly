@@ -65,9 +65,10 @@ import {
   removeIfStillFree,
   writtenSince,
 } from "./worktree-sweep.mjs";
+import { INTEGRATION_BASE, INTEGRATION_BRANCH } from "./integration-branch.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SCRIPTS = ["worktree.mjs", "worktree-sweep.mjs", "bounded.mjs", "local-limits.mjs", "jsonc.mjs"];
+const SCRIPTS = ["worktree.mjs", "worktree-sweep.mjs", "bounded.mjs", "local-limits.mjs", "jsonc.mjs", "integration-branch.mjs"];
 
 /**
  * The scratch repository's turbo config: `dist` for every package, as the
@@ -121,11 +122,11 @@ function scratch() {
   );
   writeFileSync(join(world.repo, "index.js"), "export const a = 1;\n");
   git(world, dir, "init", "-q", "--bare", world.origin);
-  git(world, world.repo, "init", "-q", "-b", "main");
+  git(world, world.repo, "init", "-q", "-b", INTEGRATION_BRANCH);
   git(world, world.repo, "add", ".");
   git(world, world.repo, "commit", "-q", "-m", "base");
   git(world, world.repo, "remote", "add", "origin", world.origin);
-  git(world, world.repo, "push", "-q", "origin", "main");
+  git(world, world.repo, "push", "-q", "origin", INTEGRATION_BRANCH);
   return world;
 }
 
@@ -150,10 +151,10 @@ function git(world, cwd, ...args) {
   }).trim();
 }
 
-/** A checkout on its own branch at `main`, to be left alone for `days`. */
+/** A checkout on its own branch at the integration branch, to be left alone for `days`. */
 function checkout(world, branch, days = 10) {
   const path = join(world.dir, branch);
-  git(world, world.repo, "worktree", "add", "-q", "-b", branch, path, "main");
+  git(world, world.repo, "worktree", "add", "-q", "-b", branch, path, INTEGRATION_BRANCH);
   return { path, branch, age: () => leaveAlone(world, path, days) };
 }
 
@@ -498,7 +499,7 @@ describe.runIf(process.platform !== "win32")("worktree sweep on real checkouts",
     writeFileSync(join(world.repo, "main.js"), "export const m = 1;\n");
     git(world, world.repo, "add", "main.js");
     git(world, world.repo, "commit", "-q", "-m", "main work");
-    git(world, world.repo, "push", "-q", "origin", "main");
+    git(world, world.repo, "push", "-q", "origin", INTEGRATION_BRANCH);
     ahead.age();
     const before = treeHash(world.dir);
 
@@ -508,7 +509,7 @@ describe.runIf(process.platform !== "win32")("worktree sweep on real checkouts",
     // The controls: there was something it would have removed, and the
     // branch with its own work was compared with main.
     expect(stdout).toContain(`would remove ${merged.path}`);
-    expect(stdout).toContain(`skipped ${ahead.path}: 1 commit(s) on no remote and not in origin/main`);
+    expect(stdout).toContain(`skipped ${ahead.path}: 1 commit(s) on no remote and not in ${INTEGRATION_BASE}`);
     expect(treeHash(world.dir)).toBe(before);
   }, 60_000);
 
@@ -535,7 +536,7 @@ describe.runIf(process.platform !== "win32")("worktree sweep on real checkouts",
     // The same change lands on main as a different commit, and is pushed.
     writeFileSync(join(world.repo, "index.js"), "export const a = 2;\n");
     git(world, world.repo, "commit", "-q", "-am", "change (#1)");
-    git(world, world.repo, "push", "-q", "origin", "main");
+    git(world, world.repo, "push", "-q", "origin", INTEGRATION_BRANCH);
     squashed.age();
 
     const { code, stdout } = worktreeCommand(world, "sweep", "--stale", "--apply");
@@ -574,7 +575,7 @@ describe.runIf(process.platform !== "win32")("worktree sweep on real checkouts",
     expect(existsSync(merged.path), stdout).toBe(false);
     expect(existsSync(ahead.path)).toBe(true);
     expect(git(world, ahead.path, "log", "-1", "--format=%s")).toBe("unpushed");
-    expect(stdout).toContain(`skipped ${ahead.path}: 1 commit(s) on no remote and not in origin/main`);
+    expect(stdout).toContain(`skipped ${ahead.path}: 1 commit(s) on no remote and not in ${INTEGRATION_BASE}`);
   }, 60_000);
 
   it("leaves a checkout a process is running in, beside one it does remove", () => {
@@ -694,7 +695,7 @@ describe.runIf(process.platform !== "win32")("worktree sweep on real checkouts",
 
     expect(existsSync(merged.path), stdout).toBe(false);
     expect(existsSync(join(quoted.path, "café.js"))).toBe(true);
-    expect(stdout).toContain(`skipped ${quoted.path}: 1 commit(s) on no remote and not in origin/main`);
+    expect(stdout).toContain(`skipped ${quoted.path}: 1 commit(s) on no remote and not in ${INTEGRATION_BASE}`);
   }, 60_000);
 
   it("removes the output a package's own build declares, and keeps the same name in a package that does not", () => {

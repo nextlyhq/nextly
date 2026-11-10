@@ -8,6 +8,9 @@ import type { Principal, PluginRoutePrincipal } from "../principals/types";
 
 import type { PluginRoutePermissionResolver } from "./route-permission";
 
+/** @experimental The most rows one request to an action's route may name. */
+export const MAX_ACTION_ROWS = 100;
+
 /**
  * @public HTTP methods a plugin route may declare.
  */

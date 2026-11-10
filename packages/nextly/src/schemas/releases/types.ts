@@ -166,8 +166,6 @@ export const RELEASE_CANCELLABLE_FROM: readonly ReleaseState[] = [
  * off by cancelling first; and never `published`, which is the record of what
  * went live and stays. The repository's delete is fenced on this list and the
  * `delete` capability is read from it, so the control and the write agree.
- *
- * @experimental
  */
 export const RELEASE_DELETABLE_FROM: readonly ReleaseState[] = [
   "draft",
@@ -195,8 +193,6 @@ export const RELEASE_ASSEMBLABLE_FROM: readonly ReleaseState[] = [
  * Only a release that has not run and is not stopped. A stopped release is
  * fixed and then scheduled again, so the fix is checked before it goes out; a
  * published or cancelled one is final and is never run again.
- *
- * @experimental
  */
 export const RELEASE_PUBLISHABLE_NOW_FROM: readonly ReleaseState[] = [
   "draft",
@@ -206,8 +202,6 @@ export const RELEASE_PUBLISHABLE_NOW_FROM: readonly ReleaseState[] = [
 /**
  * The FINAL states: a release in one of them has run or was called off, and
  * takes no further change. To try again, a new release is made.
- *
- * @experimental
  */
 export const RELEASE_FINAL_STATES: readonly ReleaseState[] = [
   "published",
@@ -311,22 +305,16 @@ export interface ReleaseCapabilities {
   /**
    * Run it now. True only for a draft or scheduled release: a stopped one is
    * fixed and scheduled again, and a published or cancelled one is final.
-   *
-   * @experimental
    */
   publishNow: boolean;
   /**
    * Rename it or change its description, in any state: the title is a label,
    * and a published release keeps its record whatever it is called.
-   *
-   * @experimental
    */
   update: boolean;
   /**
    * Delete it. True only for a draft, or a cancelled release that was never
    * scheduled ({@link RELEASE_DELETABLE_FROM}).
-   *
-   * @experimental
    */
   delete: boolean;
 }

@@ -29,7 +29,7 @@
  * only with `--apply` (`worktree-sweep.mjs` says what, and what it never does).
  *
  * Usage:
- *   node scripts/worktree.mjs new <branch> [--from <ref>] [--root <dir>]
+ *   node scripts/worktree.mjs new <branch> [--from <ref>] [--root <dir>]   # --from defaults to origin/dev
  *   node scripts/worktree.mjs list [--sizes]
  *   node scripts/worktree.mjs remove <branch|path> [--keep-branch] [--force]
  *   node scripts/worktree.mjs provision
@@ -75,6 +75,7 @@ import {
   removeIfStillFree,
   staleReasons,
 } from "./worktree-sweep.mjs";
+import { INTEGRATION_BASE } from "./integration-branch.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -1312,7 +1313,7 @@ function main() {
       console.error("worktree: new <branch> [--from <ref>] [--root <dir>]");
       process.exit(2);
     }
-    return commandNew(branch, flag("from") ?? "origin/main", resolve(flag("root") ?? join(root, "..")));
+    return commandNew(branch, flag("from") ?? INTEGRATION_BASE, resolve(flag("root") ?? join(root, "..")));
   }
   if (command === "remove") {
     const target = rest[0];

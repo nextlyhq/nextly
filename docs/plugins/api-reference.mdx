@@ -128,7 +128,7 @@ interface PluginContext {
   };
   db: PluginDatabase & { raw: PluginRawDatabase }; // typed, owner-checked; .raw = Drizzle builder + transaction, the live instance only with capabilities.db.rawSql AND db.rawSqlPlugins
   dialect: SupportedDialect; // "postgresql" | "mysql" | "sqlite"; read when accessed; @experimental
-  auth: PluginAuthApi; // always present; completeLogin needs capabilities.auth.login
+  auth: PluginAuthApi; // always present; completeLogin needs the boot's login grant: capabilities.auth.login or a determineUser hook, AND the auth.loginPlugins listing
   settings?: PluginSettingsApi; // with contributes.settings
   fetch?: typeof fetch; // with a non-empty capabilities.net.outbound
   audit?: PluginAuditApi; // with contributes.audit
@@ -585,6 +585,58 @@ field, or pass none at all. Note that these options reach type generation but
 are not persisted, so a field read back from the database after boot carries
 none of them.
 
+## Providing page metadata
+
+One plugin can work out the head of every page the site serves: its title, description,
+canonical address, whether search engines may list it, its social card and its language links.
+It declares the `page-metadata` capability and contributes its resolver as the `pageMetadata`
+service:
+
+```ts
+import { definePlugin, type PageMetadataResolver } from "@nextlyhq/plugin-sdk";
+
+const resolver: PageMetadataResolver = {
+  resolve: input => ({
+    title: input.code.title ?? input.derived.title,
+    description: input.code.description ?? input.derived.description,
+    robots: { index: true, follow: true },
+  }),
+  // What the answer depends on beyond the page's own document.
+  tags: () => ["acme-seo:settings"],
+};
+
+export default definePlugin({
+  name: "@acme/nextly-plugin-seo",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.74",
+  provides: ["page-metadata"],
+  contributes: { services: { pageMetadata: () => resolver } },
+});
+```
+
+The route helpers in `nextly/runtime` and `@nextlyhq/blocks-react/next` then ask it for every
+page they serve, with no change to the site's routes. `resolve` is told:
+
+| Field     | What it holds                                                                                                                                   |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`    | The address the page was served at, from `/`. Absent for a Single route, which is never told where the app mounts it.                           |
+| `locale`  | The language the route read the page in, when the route states one.                                                                             |
+| `source`  | The document: `{ kind: "entry", collection, entry }` or `{ kind: "single", slug, document }`, as read for this request.                         |
+| `code`    | The title, description and social values the route's own `buildMetadata` or `metadata` set. A route never supplies visibility or the canonical. |
+| `derived` | What the page's content offers, such as the title, description and picture a Page Builder page's blocks show.                                   |
+
+It answers a `PageMetadataAnswer`: `title`, `description`, `canonical`, `robots`, `social` and
+`languages`, each optional. The route turns the answer into Next.js `Metadata`. Whatever else the
+route's own metadata set, such as an Open Graph `type`, is kept.
+
+The answer is cached with the page: it expires when the page's document changes, and when any tag
+`tags` names is expired, so a change to the plugin's settings reaches every page without a
+redeploy. If `resolve` throws, the error is logged and the page is served with the route's own
+metadata.
+
+Only one plugin may provide `page-metadata`, and boot refuses a plugin that declares it without a
+`pageMetadata` service. The types are `@experimental`.
+
 ## Secrets
 
 ```ts
@@ -668,8 +720,11 @@ goes in `actorPrincipal` or `targetPrincipal`, never in the user ids.
 
 ### `ctx.auth`
 
-Always present. `completeLogin` requires `capabilities.auth.login` and a
-strategy name beginning with the plugin's own slug.
+Always present. `completeLogin` requires the boot's login grant — the plugin
+declares `capabilities.auth.login` or contributes a `determineUser` hook, and
+the app lists it in `auth.loginPlugins` (an unlisted login-capable plugin
+refuses the boot naming the line to add) — and a strategy name beginning with
+the plugin's own slug.
 
 ```ts
 return ctx.auth.completeLogin(user.id, {
@@ -763,8 +818,9 @@ reserves (`admin-place-reserved-slug`), under one of core's segments
 (`admin-place-reserved`), outside the plugin's slug
 (`admin-place-outside-namespace`), or declared twice (`admin-place-collision`).
 
-Settings, a user's detail page, the entry form and the login page draw what is
-sent to them; the other core places draw nothing yet. A plugin draws its own
+Every core place draws what is sent to it: settings, a user's detail page, the
+account page, the entry form, the login page, both edit pages, the dashboard
+and the entry list. A plugin draws its own
 place on one of its pages with `TargetSlot` and `PlaceTabs` from
 `@nextlyhq/plugin-sdk/admin` (`@experimental`), the parts core's pages use:
 
@@ -791,8 +847,10 @@ and receives the place's `context` (and `entry`, where the page passes one).
 Pass `context={null}` while the page does not know its ids yet: nothing
 contributed is drawn until it does, so no contribution is handed a wrong id.
 With no tab sent, `PlaceTabs` draws its children alone; with one, they are the
-first tab, under `contentLabel`. A plugin's place has no built-in parts, so the
-page draws its own content beside the slot.
+first tab, under `contentLabel`. `className` styles the strip and the
+contributed tabs' panels, never the children, so a page that insets its
+content can line them up with it. A plugin's place has no built-in parts, so
+the page draws its own content beside the slot.
 
 ### Entry-list filters
 
@@ -891,13 +949,45 @@ contributions' order allows, and straight after A when nothing competes, and
 them keeps its place there. A contribution may take a
 built-in part's place with `replaces`. The edit page's side panel names its
 four built-in sections, in order: `status`, `publishing`, `language` and
-`details`. Among blocks, settings and a user's detail page name the page's own
-content `content`, the entry form names its fields `fields`, and the login page
-names the sign-in form `form`. A plugin that replaces the login page's `form`
+`details`. Among blocks, the edit pages name the document bar, with the
+banners under it, `document-bar`, and the editor, the fields with the side
+panel, `editor`; settings and a user's detail page name the page's own
+content `content`, the account page names its profile card `profile`, the
+entry form names its fields `fields`, the entry list names its header
+`toolbar` and its list `table`, and the login page names the sign-in form
+`form`. A plugin that replaces the login page's `form`
 takes over sign-in for the site.
 
-**On a phone.** Where a collection entry's editor is too narrow to keep the
-side panel beside the fields, the panel opens only when asked for. A side
+**The dashboard.** Its blocks stand around the page's own two, the welcome
+header `welcome` and the grid of cards `widgets`. A block placed by nothing
+goes below the grid:
+
+```ts
+{
+  id: "acme-support.queue",
+  kind: "block",
+  place: "dashboard",
+  component: "@acme/support/admin#Queue",
+}
+```
+
+and one placed before the grid goes between the header and the cards:
+
+```ts
+{
+  id: "acme-support.alerts",
+  kind: "block",
+  place: "dashboard",
+  component: "@acme/support/admin#Alerts",
+  before: "widgets", // or after: "welcome"
+}
+```
+
+The grid is each person's own arrangement of their cards, so a block may stand
+beside it but never replace it. `welcome` may be replaced.
+
+**On a phone.** Where an edit page is too narrow to keep the side panel
+beside the fields, the panel opens only when asked for. A side
 panel section declared with `narrow: "above-form"` (`@experimental`) is drawn
 there under the title, above the fields, and left out of the panel, so an
 author meets it without opening the panel. Without it, the section stays in
@@ -919,13 +1009,87 @@ only what they may see:
   contribution whose rule names such a field is not sent to that reader at
   all.
 
-The admin draws blocks and tabs at settings, a user's detail page, the entry
-form and the login page, in the order sent, each behind its own error boundary;
-a contributed tab follows the page's own content, which stays as it was when no
-tab is sent. The entry list offers a collection's row actions in each row's
-menu, after its own, on the rows whose `visibleWhen` holds. Columns, bulk
-actions, side panel sections, and blocks and tabs at the other places arrive as
-data and are not drawn yet.
+The admin draws blocks and tabs at settings, a user's detail page, the account
+page, the entry form, the login page, both edit pages and the dashboard, in the order sent,
+each behind its own error boundary; a contributed tab follows the page's own content, which
+stays as it was when no tab is sent. On an edit page the tabs head the field
+column, and the document bar and the side panel stay whichever tab is open.
+The side panel draws contributed sections among its own, each under its
+label, and a section whose component draws nothing for a document leaves no
+heading behind. A section's component receives `SidebarSectionProps`
+(`@experimental`, from `@nextlyhq/plugin-sdk/admin`): the place's `context`
+and `entry`, as every contributed component does, and on a collection entry's
+page also the document's handles a `panelSections` section is given
+(`collectionSlug`, `entryId`, `documentLock`, `mayWrite`,
+`documentChanged`).
+
+A contributed tab's component receives `PlaceTabProps` (`@experimental`): the
+place's `context` and `entry`, and `setBadge`, which shows a count beside the
+tab's label, or none with `null`. It stays mounted while another tab is open,
+so what it holds is kept and its count stays current. On an edit page it
+receives `DocumentTabProps` (`@experimental`): those, the document form's
+`control`, and the `documentLock` a side panel section is told, on a saved
+entry, a new one and a Single alike. A tab reads what the author has typed and
+not saved, and what it writes through `control` is stored by the bar's Save
+and Publish with everything else. The open tab is kept in the address as
+`?tab=<id>`, so a reload or a shared link opens it again.
+
+```tsx
+import { useEffect } from "react";
+import { useWatch } from "react-hook-form";
+import type { DocumentTabProps } from "@nextlyhq/plugin-sdk/admin";
+
+export function TitleCheckTab({ control, setBadge }: DocumentTabProps) {
+  // What the author has typed, saved or not.
+  const title = useWatch({ control, name: "title" });
+  const tooLong = typeof title === "string" && title.length > 60;
+  useEffect(() => {
+    setBadge(
+      tooLong ? { count: 1, label: "1 thing to fix", tone: "attention" } : null
+    );
+  }, [tooLong, setBadge]);
+  return (
+    <p>
+      {tooLong
+        ? "The title is longer than a results page shows."
+        : "The title fits."}
+    </p>
+  );
+}
+```
+
+Any component a plugin draws inside an edit page, a block, a side panel
+section or a tab, can read the document as it is being typed with
+`useDocumentValues` and `useDocumentField` (`@experimental`, from
+`@nextlyhq/plugin-sdk/admin`). A place's `entry` prop is the document as it
+was read; these are the values before any save. `useDocumentValues(paths)`
+answers the named fields by their dot paths and draws again only when one of
+them changes. `useDocumentField(path)` answers one field's `value`, whether it
+is `writable` now, and `set(next)`, which writes as the author typing would
+and marks the document changed. While the document's content is held (a past
+version on screen, a colleague editing it, a page the reader may only read),
+`set` writes nothing and answers `false`. `set(null)` returns a field to its
+automatic value. Both read the editor's own form, so a component with a form
+of its own still reads the document, and both answer `null` outside an editor.
+
+```tsx
+import { useDocumentField } from "@nextlyhq/plugin-sdk/admin";
+
+export function TitleLength() {
+  const title = useDocumentField("title");
+  if (title === null) return null;
+  const length = typeof title.value === "string" ? title.value.length : 0;
+  return <p>{length} characters</p>;
+}
+```
+
+The entry list draws blocks around its own header (`toolbar`) and its list
+(`table`); declared columns after the collection's own, a `field` column through
+that field's own cell and a component column one cell at a time, each cell
+behind its own boundary and receiving the place's `context` and its `row`; row
+actions in each row's menu, after its own, on the rows whose `visibleWhen`
+holds; and bulk actions in the bar shown while rows are selected, offered when
+the action's `visibleWhen` holds for every selected row.
 
 **Running an action.** An action that `open`s a component draws it with the
 rows it was run on. In a bundled admin, that component resolves only once
@@ -971,8 +1135,10 @@ plugin's slug (`admin-contribution-outside-namespace`), one declared twice
 (`admin-contribution-kind-not-accepted`), a reference to nothing there
 (`contribution-order-unknown`), contributions ordered before each other
 (`contribution-order-cycle`, naming every one), a built-in part that is not
-there (`contribution-replace-unknown`) or replaced twice
-(`contribution-replace-twice`), and one that is malformed
+there (`contribution-replace-unknown`), replaced twice
+(`contribution-replace-twice`), or kept whatever is contributed, as the
+dashboard's `widgets` is (`contribution-replace-not-allowed`), and one that
+is malformed
 (`admin-contribution-invalid`): a key its kind does not take, no label or
 component, an action that names none of the plugin's own routes, or a route
 that is public, a signed-in person's, or answers `GET`, a permission

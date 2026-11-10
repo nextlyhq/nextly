@@ -177,8 +177,6 @@ const RELEASE_DOCUMENT = z
  * its action. Strict, so a field this route does not read is refused rather
  * than ignored. How many, and whether one is named twice, is the service's
  * to say, as for the Direct API.
- *
- * @experimental
  */
 const RELEASE_MEMBERS_BODY = z
   .object({ members: z.array(RELEASE_DOCUMENT) })
@@ -198,8 +196,6 @@ const RELEASE_TITLE = z
  * documents accepted with it (each going live, so they name no action), and
  * how it goes out, chosen by `into`. The instant and the zone are parsed as
  * scheduling parses them, below.
- *
- * @experimental
  */
 const SCHEDULE_DOCUMENT_BODY = z.discriminatedUnion(
   "into",
@@ -640,8 +636,6 @@ async function decorateListPage(
  * On the REST list only, as the capabilities are: it is what a list screen
  * shows beside each release, and a Direct API caller asks `memberCounts` for
  * it when it wants it.
- *
- * @experimental
  */
 async function withMemberCounts<Row extends { id: string }>(
   rows: Row[],
@@ -669,8 +663,6 @@ async function withMemberCounts<Row extends { id: string }>(
  * Shown to anyone who may read the release, as a version's author is shown to
  * anyone who may read the document: naming who made a thing the reader can
  * already see discloses no more than the thing itself.
- *
- * @experimental
  */
 async function withOwners<Row extends { createdBy: string | null }>(
   rows: Row[]
@@ -679,7 +671,7 @@ async function withOwners<Row extends { createdBy: string | null }>(
   return rows.map(row => ({ ...row, owner: ownerOf(row.createdBy, people) }));
 }
 
-/** A release's owner, by id and name only. @experimental */
+/** A release's owner, by id and name only. */
 interface ReleaseOwner {
   id: string;
   name: string | null;
@@ -1001,8 +993,6 @@ const RELEASE_OPERATIONS: Record<
   /**
    * Several documents added in one step, all or none, answered as the
    * release the step left and its new members.
-   *
-   * @experimental
    */
   addReleaseMembers: async ({ request, caller, releases, releaseId }) => {
     const parsed = RELEASE_MEMBERS_BODY.safeParse(await jsonObject(request));
@@ -1025,8 +1015,6 @@ const RELEASE_OPERATIONS: Record<
   /**
    * A document scheduled in one step, its path chosen by the body: on its
    * own, with an existing release, or in a new one. All or nothing.
-   *
-   * @experimental
    */
   scheduleDocument: async ({ request, caller, releases }) => {
     const body = await jsonObject(request);

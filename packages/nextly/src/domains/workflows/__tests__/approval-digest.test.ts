@@ -86,6 +86,18 @@ describe("approvalDigest", () => {
     ).not.toBe(base);
   });
 
+  it("reads a field holding no value as one that is absent, as a recorded version may hold either", () => {
+    // A version recorded at create leaves out a translated field never set; one recorded by a
+    // later save holds it as null. The same content, so the same digest.
+    expect(approvalDigest({ ...CONTENT, subtitle: null }, "collection")).toBe(
+      approvalDigest(CONTENT, "collection")
+    );
+    // A value is still content.
+    expect(
+      approvalDigest({ ...CONTENT, subtitle: "Sub" }, "collection")
+    ).not.toBe(approvalDigest(CONTENT, "collection"));
+  });
+
   it("reads a snapshot stored as JSON text as the value it holds", () => {
     expect(approvalDigest(JSON.stringify(CONTENT), "collection")).toBe(
       approvalDigest(CONTENT, "collection")

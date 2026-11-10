@@ -31,6 +31,7 @@ import {
 } from "../../collections/config/define-config";
 import type { NextlyServiceConfig } from "../../di/register";
 import { emailRetentionAfterTransform } from "../../domains/email/retention-config";
+import { judgeFieldGroupCyclesAtStart } from "../../domains/field-groups/field-group-cycles";
 import { adoptPerLanguageStorage } from "../../domains/i18n/per-language-storage";
 import {
   clearFieldTypes,
@@ -81,8 +82,27 @@ import {
   CONFIG_SEARCH_DIRS,
   findConfigFile,
 } from "../../shared/lib/config-file";
+import { consoleLogger } from "../../shared/types";
 
 import { bundleAndRequire } from "./config-bundler";
+
+/**
+ * The Builder's entities from the app's ui-schema file, empty when there is none. A malformed file
+ * is surfaced by migrate:create and migrate:check, which load it again; loading the configuration
+ * for any other command does not fail on it.
+ */
+async function readBuilderEntities(
+  projectRoot: string,
+  uiSchemaFile: Parameters<typeof loadUiSchema>[0]["uiSchemaFile"]
+): Promise<BuilderEntities> {
+  try {
+    return manifestToBuilderEntities(
+      await loadUiSchema({ projectRoot, uiSchemaFile })
+    );
+  } catch {
+    return {};
+  }
+}
 
 /** Builder collection slugs (the only valid relationTo targets among Builder entities). */
 function builderCollectionSlugs(builder: BuilderEntities): string[] {
@@ -642,6 +662,14 @@ async function loadConfigInternal(
     // later Builder saves would keep treating the type as registered.
     clearFieldTypes();
 
+    // The Builder's field groups, set by the plugin block, which reads them anyway.
+    let builderFieldGroups:
+      | {
+          stored: NonNullable<BuilderEntities["components"]>;
+          registered: NonNullable<BuilderEntities["components"]>;
+        }
+      | undefined;
+
     if (plugins.length > 0) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let transformedConfig: any = setupTransformerInput(config, plugins);
@@ -694,6 +722,10 @@ async function loadConfigInternal(
       // entities are DEFERRED (candidate Builder/UI-schema targets) rather than
       // thrown, so a plugin may extend/relate to a Builder-made collection
       // (P8/D3/R2).
+      // The configuration's per-language storage choice, adopted before the fold judges a
+      // transform of another plugin's entity by where its fields keep their values. The same
+      // adoption runs again once the config is installed, and agrees.
+      adoptPerLanguageStorage(config.perLanguageStorage);
       const folded = applyPluginSchemaContributionsDeferred(
         transformedConfig,
         transformedPlugins
@@ -720,22 +752,24 @@ async function loadConfigInternal(
       // runs (D50). Eager fail-fast is preserved: a target in NEITHER code/plugin
       // NOR the Builder set still throws. ui-schema is optional (empty manifest
       // when absent), so non-Builder apps behave exactly as before.
-      let builderEntities: BuilderEntities = {};
-      try {
-        const manifest = await loadUiSchema({
-          projectRoot: cwd,
-          uiSchemaFile: config.db?.uiSchemaFile,
-        });
-        builderEntities = manifestToBuilderEntities(manifest);
-      } catch {
-        // A malformed ui-schema is surfaced by migrate-create/-check (which
-        // re-load it); loading config for other commands shouldn't hard-fail here.
-      }
+      const builderEntities = await readBuilderEntities(
+        cwd,
+        config.db?.uiSchemaFile
+      );
       // One slug, one kind, now that the Builder's entities are readable: the
       // fold could not see them, and the runtime boot makes the same check
       // against the registry rows (register.ts), so the two paths agree (D50).
       assertRegisteredKeepTheirKind(config, builderEntities);
-      resolveBuilderExtends(folded.deferredExtends, builderEntities);
+      // Kept for the cycle judgement below: the Builder's field groups as stored, and with each
+      // plugin's extension onto them, as the boot judges them.
+      const extended = resolveBuilderExtends(
+        folded.deferredExtends,
+        builderEntities
+      );
+      builderFieldGroups = {
+        stored: builderEntities.components ?? [],
+        registered: extended.components ?? [],
+      };
       finalizeRelationTargets(
         collectUnresolvedRelationTargets(
           config as unknown as NextlyServiceConfig
@@ -763,6 +797,22 @@ async function loadConfigInternal(
         `Applied config transformers from ${plugins.length} plugin(s)`
       );
     }
+
+    // Field groups placed in a cycle are judged over code and the Builder's field groups whether
+    // or not a plugin is configured, as the boot judges them, so a command does not pass what a
+    // start refuses. Without plugins nothing above read the Builder's field groups.
+    if (builderFieldGroups === undefined) {
+      const stored =
+        (await readBuilderEntities(cwd, config.db?.uiSchemaFile)).components ??
+        [];
+      builderFieldGroups = { stored, registered: stored };
+    }
+    judgeFieldGroupCyclesAtStart({
+      code: config.fieldGroups ?? [],
+      registered: builderFieldGroups.registered,
+      stored: builderFieldGroups.stored,
+      warn: message => consoleLogger.warn(message),
+    });
 
     debugLog(options, "Config loaded successfully");
     debugLog(options, "Dependencies:", dependencies);

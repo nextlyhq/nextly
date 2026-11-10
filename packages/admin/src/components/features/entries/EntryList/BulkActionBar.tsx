@@ -51,6 +51,19 @@ export interface BulkActionBarProps {
   onClear: () => void;
   /** Singular/plural label used in the selected-count text */
   itemLabel?: string;
+  /**
+   * Plugins' declared bulk actions, in the order delivered, each already
+   * judged against the selection: drawn after the built-in actions, before
+   * the destructive one.
+   */
+  declaredActions?: readonly {
+    id: string;
+    label: string;
+    disabled: boolean;
+    /** Why it is held back, shown beside the bar's actions. */
+    note?: string;
+    onSelect: () => void;
+  }[];
 }
 
 // ============================================================================
@@ -86,6 +99,7 @@ export function BulkActionBar({
   isPublishing = false,
   onClear,
   itemLabel = "entry",
+  declaredActions = [],
 }: BulkActionBarProps): JSX.Element {
   // Each action is offered on its own permission, as the server answers it:
   // a user may hold one without the others. Publish / Unpublish are only
@@ -110,7 +124,9 @@ export function BulkActionBar({
     <div
       role="region"
       aria-label="Bulk actions"
-      className="flex items-center justify-between gap-3 rounded-md border border-border bg-primary/[0.07] px-4 py-2.5"
+      // Wrapping at every width: the actions, the plugins' among them, are
+      // more than a narrow bar holds on one line.
+      className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-primary/[0.07] px-4 py-2.5"
     >
       {/* Selection info */}
       <span className="text-sm font-medium text-foreground">
@@ -118,7 +134,7 @@ export function BulkActionBar({
       </span>
 
       {/* Actions */}
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           variant="ghost"
           size="sm"
@@ -163,6 +179,31 @@ export function BulkActionBar({
             )}
           </>
         )}
+
+        {/* Why a declared action is held back, said once per action. */}
+        {declaredActions.map(action =>
+          action.note ? (
+            <span
+              key={`${action.id}:note`}
+              className="text-xs text-muted-foreground"
+            >
+              {action.note}
+            </span>
+          ) : null
+        )}
+
+        {/* Plugins' declared bulk actions, run on the selected rows. */}
+        {declaredActions.map(action => (
+          <Button
+            key={action.id}
+            variant="outline"
+            size="sm"
+            onClick={action.onSelect}
+            disabled={action.disabled}
+          >
+            {action.label}
+          </Button>
+        ))}
 
         {/* Delete selected, only for a caller who may delete here. */}
         {offered.delete && (

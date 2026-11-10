@@ -63,6 +63,7 @@ import { compileAndPublishExtensionSchema } from "../domains/schema/extension/pu
 import { registerExtensionTables } from "../domains/schema/extension/register-tables";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
+import { hasRelationSwitches } from "../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url";
 import { desiredCollectionTable } from "../domains/schema/pipeline/desired-collection-table";
 import { buildDesiredTableFromFields } from "../domains/schema/pipeline/diff/build-from-fields";
@@ -85,6 +86,13 @@ import {
   noopMigrationJournal,
   noopPreRenameExecutor,
 } from "../domains/schema/pipeline/pushschema-pipeline-stubs";
+import {
+  holdRecordedAtStart,
+  recordFieldsOnto,
+  registryRows,
+  takeRecordedAtStart,
+  type RecordedAtStart,
+} from "../domains/schema/pipeline/recorded-fields";
 import {
   isCodeOwned,
   mergeRegisteredCollectionsSafely,
@@ -2264,6 +2272,9 @@ async function applyReloadHolding(
   // a field leaving translation whose main column an earlier reload added
   // before it stopped: the move below is what finishes it.
   let hasChanges = startsAsChange(extensionSchemaChanged, leaving.entries);
+  // The rows a development start held, once this reload takes them (`recordRegistryHistory`), so a
+  // refused apply can hold them again.
+  const held: { atStart?: RecordedAtStart } = {};
   // True when a real schema diff existed but was NOT applied this cycle (an
   // unsafe change needing review, or a diff that threw). In that state the
   // registry's `fields` would disagree with the physical table, so the no-DDL
@@ -2450,6 +2461,29 @@ async function applyReloadHolding(
       deferredSchemaChange = true;
       deferredEntities.add(`fieldGroup:${target.slug}`);
     }
+  }
+
+  // What each code-first entity's registry row records from before this apply
+  // (`recordRegistryHistory`), so a relation switched between storage shapes is planned from it.
+  held.atStart = await recordRegistryHistory({
+    collections: desiredCollections,
+    singles: desiredSingles,
+    components: desiredComponents,
+    resolve,
+    adapter,
+  });
+
+  // A relation switched between storage shapes is a change to apply even where the gate above
+  // saw none: SQLite keeps every shape as text, and a translated relation's column is on its
+  // companion, which the gate does not diff.
+  if (
+    hasRelationSwitches({
+      collections: desiredCollections,
+      singles: desiredSingles,
+      components: desiredComponents,
+    })
+  ) {
+    hasChanges = true;
   }
 
   // No schema (DDL) changes to apply. Registry-only metadata (versions,
@@ -2811,6 +2845,11 @@ async function applyReloadHolding(
     "code",
     { promptChannel: "terminal" }
   );
+  // A refused apply leaves the tables as they were, so the rows a start held still say what the
+  // fields were: held again, for the reload that retries it once the cause is fixed.
+  if (!applyResult.success && held.atStart !== undefined) {
+    holdRecordedAtStart(held.atStart);
+  }
 
   if (applyResult.success) {
     // Create the `_locales` companion of every localized entity, now that the apply
@@ -3318,6 +3357,70 @@ async function applyReloadHolding(
   }
 }
 
+/**
+ * Gives each code-first entity the fields its registry row records from before this apply, which
+ * the registry sync after it replaces: on SQLite a relationship switched between one related entry
+ * and many is told by nothing else. A development start has already synced the rows, so it held
+ * them from before that sync (`holdRecordedAtStart`), and its apply takes those.
+ */
+async function recordRegistryHistory(args: {
+  collections: Record<string, DesiredCollection>;
+  singles: Record<string, DesiredSingle>;
+  components: Record<string, DesiredFieldGroup>;
+  resolve: (name: string) => unknown;
+  adapter: AdapterLike;
+}): Promise<RecordedAtStart | undefined> {
+  const atStart = takeRecordedAtStart();
+  // Whether a registry table is there, so a registry that cannot be read refuses the reload while
+  // one not created yet reads as empty (`registryRows`).
+  let tableNames: Promise<string[]> | undefined;
+  const registryTableExists = async (name: string): Promise<boolean> => {
+    tableNames ??= args.adapter.listTables();
+    return (await tableNames).some(table => table.toLowerCase() === name);
+  };
+  recordFieldsOnto(
+    args.collections,
+    atStart?.collections ??
+      (await registryRows(
+        async () =>
+          (
+            (await args.resolve(
+              "collectionRegistryService"
+            )) as CollectionRegistrySurface
+          )?.getAllCollections?.(),
+        { kind: "collections", tableExists: registryTableExists }
+      ))
+  );
+  recordFieldsOnto(
+    args.components,
+    atStart?.components ??
+      (await registryRows(
+        async () =>
+          (
+            (await args.resolve(
+              "fieldGroupRegistryService"
+            )) as ComponentRegistrySurface
+          )?.getAllComponents?.(),
+        { kind: "components", tableExists: registryTableExists }
+      ))
+  );
+  recordFieldsOnto(
+    args.singles,
+    atStart?.singles ??
+      (await registryRows(
+        async () =>
+          (
+            (await args.resolve(
+              "singleRegistryService"
+            )) as SingleRegistrySurface
+          )?.getAllSingles?.(),
+        { kind: "singles", tableExists: registryTableExists }
+      ))
+  );
+  // What a start held, for a refused apply to hold again.
+  return atStart;
+}
+
 // Decides whether a collection's ops can be auto-applied from code-first.
 //
 // Most destructive ops now flow into the pipeline's Classifier +
@@ -3327,7 +3430,8 @@ async function applyReloadHolding(
 // resolution UX:
 //
 //   - drop_table: no destructive-confirm event exists for tables yet.
-//   - change_column_type: only emits a warning, no resolution.
+//   - change_column_type: only emits a warning, no resolution. A relation
+//     switched from one related entry to many is not held: it keeps every value.
 //   - change_column_nullable (NOT NULL adds on existing rows): pipeline
 //     classifier emits add_not_null_with_nulls + asks the user, BUT
 //     only when there are actually NULL rows. Tables with no NULLs flow
@@ -3347,7 +3451,12 @@ function classifyForCodeFirst(
   for (const op of operations) {
     if (op.type === "drop_table") {
       reasons.push(`drops table '${op.tableName}'`);
-    } else if (op.type === "change_column_type") {
+    } else if (
+      op.type === "change_column_type" &&
+      op.conversion !== "referenceList"
+    ) {
+      // A relation switched from one related entry to many keeps every value, each id as a
+      // one-item list, so it is not held back for review as a plain retype is.
       reasons.push(
         `changes column '${op.columnName}' type from '${op.fromType}' to '${op.toType}'`
       );

@@ -1,5 +1,12 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { getColumns, inArray, sql, type SQL } from "drizzle-orm";
+import {
+  getColumns,
+  inArray,
+  sql,
+  type Column,
+  type SQL,
+  type Table,
+} from "drizzle-orm";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
@@ -1275,8 +1282,6 @@ function relatedRowSnapshotKey(
  * caller asking what a document links to gets the documents a read would
  * populate, and no others. Empty for a field with no target, and for a value
  * that names none.
- *
- * @experimental
  */
 export function relationshipTargetsOf(
   field: FieldDefinition,
@@ -2093,11 +2098,12 @@ export class CollectionRelationshipService extends BaseService {
    * and their translations in the same statement when the target keeps its translatable values in
    * a companion that is there to join to: one round trip where reading them after the rows took
    * two. A target with no companion, a system entity, or a read with no language reads its rows
-   * alone, and its translations, if any, are filled after.
+   * alone, and its translations, if any, are filled after. `schema` is the target's table itself,
+   * a collection's runtime table or a system entity's, since its columns are selected from it.
    */
   private async selectTargetRows(
     targetCollection: string,
-    schema: DynamicSchema,
+    schema: Table & { id: Column },
     ids: unknown[],
     match: SQL<number> | undefined,
     access: RelatedRowAccess

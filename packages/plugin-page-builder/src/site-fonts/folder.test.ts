@@ -104,6 +104,22 @@ describe("the site's fonts folder", () => {
     expect(held.map(folder => folder.id)).toEqual(["theirs"]);
   });
 
+  it("takes the winner's folder when the library refused its own as a duplicate", async () => {
+    const { source, held } = libraryOf();
+    const { claims, row } = claimRow();
+    // Another process made its folder between this call's list and its
+    // create, so the library refuses a second root "Fonts" folder; that
+    // process has not claimed it yet.
+    source.create.mockImplementationOnce(async () => {
+      held.push({ id: "theirs", name: FONTS_FOLDER });
+      return null;
+    });
+    expect(await claimedFontsFolder(source, claims)).toBe("theirs");
+    expect(row.value).toBe("theirs");
+    expect(held.map(folder => folder.id)).toEqual(["theirs"]);
+    expect(source.remove).not.toHaveBeenCalled();
+  });
+
   it("keeps the folder it made when the winner claimed that very folder", async () => {
     const { source, held } = libraryOf();
     const { claims, row } = claimRow();

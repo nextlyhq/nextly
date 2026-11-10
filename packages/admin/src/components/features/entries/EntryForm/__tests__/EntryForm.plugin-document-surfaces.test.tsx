@@ -118,6 +118,7 @@ import {
 
 import { EntryForm } from "../EntryForm";
 import { useDocumentLocale } from "../EntryFormContext";
+import { useDocumentValues } from "../document-values";
 import { useDocumentActions } from "../useDocumentActionHooks";
 
 const REMOVE = "test/layouts#RemoveLayoutDialog";
@@ -130,7 +131,8 @@ const replacement: { current: DocumentActionReplacementProps | null } = {
 const drawnIn: {
   locale: ReturnType<typeof useDocumentLocale>;
   actions: boolean;
-} = { locale: null, actions: false };
+  values: ReturnType<typeof useDocumentValues>;
+} = { locale: null, actions: false, values: null };
 const section: { current: DocumentPanelSectionProps | null } = {
   current: null,
 };
@@ -139,6 +141,7 @@ function RemoveLayoutDialog(props: DocumentActionReplacementProps) {
   replacement.current = props;
   drawnIn.locale = useDocumentLocale();
   drawnIn.actions = useDocumentActions() !== null;
+  drawnIn.values = useDocumentValues(["title"]);
   return <div role="dialog" aria-label="Remove layout" />;
 }
 
@@ -294,6 +297,8 @@ describe("a plugin's document actions", () => {
 
     expect(drawnIn.locale).toMatchObject({ code: "es" });
     expect(drawnIn.actions).toBe(true);
+    // And the document's live values, as any surface of the editor reads them.
+    expect(drawnIn.values).toEqual({ title: "Site layout" });
   });
 
   it("answers every caller of a replacement that is already open, once it closes", async () => {

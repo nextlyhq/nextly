@@ -2,17 +2,19 @@ name: Sweep pull request caches
 
 # Every hour, deletes the Actions caches of open pull requests that no run
 # will read again: a family's older keys on a pull request's ref, once a newer
-# push has saved it, and a pull request's copy of a key `main` also holds.
-# Until eviction reached them they held the repository's cache allowance, and
-# eviction removed `main`'s caches as readily. Nothing outside a pull
+# push has saved it, and a pull request's copy of a key its base branch
+# (`dev`, or `main` for a promotion) also holds. Until eviction reached them
+# they held the repository's cache allowance, and eviction removed those
+# branches' caches as readily. Nothing outside a pull
 # request's merge ref is touched: `scripts/sweep-pull-request-caches.mjs` has
 # the rule. A closed pull request's caches go when it closes
 # (`cancel-closed-pull-request-runs.yml`).
 #
 # Scheduled, never on a pull request's event: this job holds `actions: write`,
-# and only the default branch's code runs with it. A dispatch can name any
-# branch, whose own copy of this file and the script would then run, so the job
-# refuses every ref but `main`.
+# and only code that has merged runs with it: the schedule runs the default
+# branch, `dev`. A dispatch can name any branch, whose own copy of this file and
+# the script would then run, so the job refuses every ref but `dev` and `main`,
+# the two that hold merged code alone.
 on:
   schedule:
     - cron: "41 * * * *"
@@ -27,7 +29,7 @@ concurrency:
 jobs:
   sweep:
     name: Delete pull request caches nothing reads
-    if: github.repository == 'nextlyhq/nextly' && github.ref == 'refs/heads/main'
+    if: github.repository == 'nextlyhq/nextly' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

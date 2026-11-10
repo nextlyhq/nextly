@@ -67,6 +67,7 @@ import {
   type PreviewDeclaration,
 } from "../domains/collections/services/preview-url-resolver";
 import { resolvePreviewViewports } from "../domains/collections/services/preview-viewports";
+import { contentDiffersByLanguage } from "../domains/i18n/per-language-storage";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
 import { resolvePreviewSiteUrl } from "../domains/preview/site-url";
 import { NextlyError } from "../errors/nextly-error";
@@ -648,7 +649,13 @@ async function singleFacts(
   // is the dangerous one: it accepts an omitted locale and signs a token whose
   // absent claim covers every translation.
   return {
-    localized: authored?.localized === true || stored?.localized === true,
+    // Whether its values differ by language: translated, or kept per language under
+    // `experimental.perLanguageStorage` with a translatable value to keep so, where a token with
+    // no locale would cover each of them.
+    localized: contentDiffersByLanguage({
+      localized: authored?.localized === true || stored?.localized === true,
+      fields: authored?.fields ?? stored?.fields ?? [],
+    }),
     hasStatus: authored?.status === true || stored?.status === true,
   };
 }

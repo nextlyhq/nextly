@@ -327,6 +327,8 @@ export {
   type DocumentActionReplacementProps,
   type DocumentChangeResult,
   type DocumentPanelSectionProps,
+  type DocumentTabProps,
+  type SidebarSectionProps,
   type DocumentViewProps,
 } from "./lib/plugins/component-registry";
 // The app's generated component map registers through this, not a plugin:
@@ -413,6 +415,20 @@ export {
 // catalogs it declared in `contributes.translations`. Re-exported by
 // `@nextlyhq/plugin-sdk/admin`.
 export { usePluginTranslate } from "./lib/i18n/I18nProvider";
+
+// The shared settings panel that adds and edits a field, configured per
+// surface. Re-exported by `@nextlyhq/plugin-sdk/admin` as experimental.
+export { FieldSettingsPanel } from "./components/field-ui";
+export type {
+  FieldSettingsControlProps,
+  FieldSettingsField,
+  FieldSettingsPanelProps,
+  FieldSettingsSurface,
+  FieldSettingsSurfaceControlProps,
+  FieldSettingsTab,
+  FieldTypeSettings,
+  FixedFieldSetting,
+} from "./components/field-ui";
 
 export {
   FieldPicker,
@@ -544,10 +560,18 @@ export { useSuppressAdminChrome } from "./components/layout/ChromeSuppression";
  * plugin's own page draws the contributions sent to a place it declared with
  * the parts core's pages use.
  */
+// A document's live values, for a plugin's component inside the editor.
+export {
+  useDocumentField,
+  useDocumentValues,
+  type DocumentField,
+} from "./components/features/entries/EntryForm/document-values";
 export { PlaceTabs, TargetSlot } from "./components/shared/target-slot";
 export type {
   PlaceContributionProps,
   PlaceProps,
+  PlaceTabBadge,
+  PlaceTabProps,
   PlaceTabsProps,
   TargetSlotProps,
 } from "./components/shared/target-slot";

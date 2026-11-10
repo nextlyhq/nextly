@@ -29,8 +29,12 @@ describeEachDialect("making another language the default", dialect => {
     vi.unstubAllEnvs();
   });
 
-  async function boot() {
-    current = await createTestNextly({ dialect, collections: [] });
+  async function boot(perLanguageStorage = false) {
+    current = await createTestNextly({
+      dialect,
+      collections: [],
+      perLanguageStorage,
+    });
     const registry = current.getService("languageRegistry") as LanguageRegistry;
     return {
       registry,
@@ -38,15 +42,21 @@ describeEachDialect("making another language the default", dialect => {
     };
   }
 
-  /** A translated collection holding one entry, in English and in French. */
-  async function seedTranslated(t: TestNextly): Promise<string> {
+  /**
+   * A collection holding one entry, in English and in French: translated, or kept per language
+   * only by `experimental.perLanguageStorage` when `localized` is false.
+   */
+  async function seedTranslated(
+    t: TestNextly,
+    localized = true
+  ): Promise<string> {
     const handler = t.getService(
       "collectionsHandler"
     ) as unknown as CollectionsHandler;
     const created = await handler.createCollection({
       name: "posts",
       label: "Post",
-      localized: true,
+      localized,
       fields: [{ name: "heading", type: "text" }],
     });
     expect(created.success, JSON.stringify(created)).toBe(true);
@@ -88,6 +98,18 @@ describeEachDialect("making another language the default", dialect => {
     expect(registry.current()?.defaultLocale).toBe("fr");
     expect(
       (await settings.previewDefaultChange("en")).translationsPerLanguage
+    ).toEqual({ en: 1, fr: 1 });
+  });
+
+  // Under `experimental.perLanguageStorage` an untranslated collection keeps its translatable
+  // values per language too, so they are in the summary of what the change touches.
+  it("counts the translations of a collection the site keeps per language under the setting", async () => {
+    const { settings } = await boot(true);
+    await settings.change({ kind: "add", code: "fr", label: "French" });
+    await seedTranslated(current!, false);
+
+    expect(
+      (await settings.previewDefaultChange("fr")).translationsPerLanguage
     ).toEqual({ en: 1, fr: 1 });
   });
 
