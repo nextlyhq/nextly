@@ -764,8 +764,9 @@ reserves (`admin-place-reserved-slug`), under one of core's segments
 (`admin-place-reserved`), outside the plugin's slug
 (`admin-place-outside-namespace`), or declared twice (`admin-place-collision`).
 
-Settings, a user's detail page, the entry form, the login page and both edit
-pages draw what is sent to them; the other core places draw nothing yet. A plugin draws its own
+Settings, a user's detail page, the entry form, the login page, both edit pages
+and the dashboard draw what is sent to them; the other core places draw nothing
+yet. A plugin draws its own
 place on one of its pages with `TargetSlot` and `PlaceTabs` from
 `@nextlyhq/plugin-sdk/admin` (`@experimental`), the parts core's pages use:
 
@@ -901,6 +902,34 @@ content `content`, the entry form names its fields `fields`, and the login page
 names the sign-in form `form`. A plugin that replaces the login page's `form`
 takes over sign-in for the site.
 
+**The dashboard.** Its blocks stand around the page's own two, the welcome
+header `welcome` and the grid of cards `widgets`. A block placed by nothing
+goes below the grid:
+
+```ts
+{
+  id: "acme-support.queue",
+  kind: "block",
+  place: "dashboard",
+  component: "@acme/support/admin#Queue",
+}
+```
+
+and one placed before the grid goes between the header and the cards:
+
+```ts
+{
+  id: "acme-support.alerts",
+  kind: "block",
+  place: "dashboard",
+  component: "@acme/support/admin#Alerts",
+  before: "widgets", // or after: "welcome"
+}
+```
+
+The grid is each person's own arrangement of their cards, so a block may stand
+beside it but never replace it. `welcome` may be replaced.
+
 **On a phone.** Where an edit page is too narrow to keep the side panel
 beside the fields, the panel opens only when asked for. A side
 panel section declared with `narrow: "above-form"` (`@experimental`) is drawn
@@ -925,8 +954,8 @@ only what they may see:
   all.
 
 The admin draws blocks and tabs at settings, a user's detail page, the entry
-form, the login page and both edit pages, in the order sent, each behind its
-own error boundary; a contributed tab follows the page's own content, which
+form, the login page, both edit pages and the dashboard, in the order sent,
+each behind its own error boundary; a contributed tab follows the page's own content, which
 stays as it was when no tab is sent. On an edit page the tabs head the field
 column, and the document bar and the side panel stay whichever tab is open.
 The side panel draws contributed sections among its own, each under its
@@ -938,8 +967,7 @@ page also the document's handles a `panelSections` section is given
 (`collectionSlug`, `entryId`, `documentLock`, `mayWrite`,
 `documentChanged`). The entry list offers a collection's row actions in each row's menu,
 after its own, on the rows whose `visibleWhen` holds. Columns, bulk actions,
-and blocks at the entry list and the dashboard arrive as data and are not
-drawn yet.
+and blocks at the entry list arrive as data and are not drawn yet.
 
 **Running an action.** An action that `open`s a component draws it with the
 rows it was run on. In a bundled admin, that component resolves only once
@@ -985,8 +1013,10 @@ plugin's slug (`admin-contribution-outside-namespace`), one declared twice
 (`admin-contribution-kind-not-accepted`), a reference to nothing there
 (`contribution-order-unknown`), contributions ordered before each other
 (`contribution-order-cycle`, naming every one), a built-in part that is not
-there (`contribution-replace-unknown`) or replaced twice
-(`contribution-replace-twice`), and one that is malformed
+there (`contribution-replace-unknown`), replaced twice
+(`contribution-replace-twice`), or kept whatever is contributed, as the
+dashboard's `widgets` is (`contribution-replace-not-allowed`), and one that
+is malformed
 (`admin-contribution-invalid`): a key its kind does not take, no label or
 component, an action that names none of the plugin's own routes, or a route
 that is public, a signed-in person's, or answers `GET`, a permission
