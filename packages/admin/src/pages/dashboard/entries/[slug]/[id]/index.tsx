@@ -13,7 +13,6 @@
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
-import { useMemo } from "react";
 
 import { usePinAction } from "@admin/components/features/dashboard/pin-action";
 import { entryTitleValue } from "@admin/components/features/entries/entry-title";
@@ -56,7 +55,6 @@ import { useAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
@@ -68,7 +66,6 @@ import {
 import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
 import { entryKeys } from "@admin/services/entryApi";
 import { getCollectionFields } from "@admin/types/collection";
-import type { ApiCollection } from "@admin/types/entities";
 
 // ============================================================================
 // Types
@@ -390,15 +387,6 @@ export default function EditEntryPage({
     locale: translateFrom ?? defaultLocale,
     enabled: isNonDefaultLocale || !!translateFrom,
   });
-
-  // Auto-register plugin components when collection is loaded
-  // Auto-register plugin components when collection is loaded
-  // This ensures custom Edit view components are available before rendering
-  const collectionsForRegistration = useMemo(
-    () => (collection ? [collection as unknown as ApiCollection] : undefined),
-    [collection]
-  );
-  usePluginAutoRegistration(collectionsForRegistration);
 
   const isLoading = isLoadingCollection || isLoadingEntry;
   const error = collectionError || entryError;

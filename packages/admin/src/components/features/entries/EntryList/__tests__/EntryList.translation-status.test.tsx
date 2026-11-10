@@ -41,9 +41,6 @@ vi.mock("@admin/hooks/useCanRequest", () => ({
   useDefaultLanguageAsksTranslationStatus: () => answers.defaultLanguage,
 }));
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => false }));
-vi.mock("@admin/hooks/usePluginAutoRegistration", () => ({
-  usePluginAutoRegistration: () => undefined,
-}));
 vi.mock("../EntryTable", () => ({
   EntryTable: (props: { collection: { localized?: boolean } }) => {
     tableCollection(props.collection);

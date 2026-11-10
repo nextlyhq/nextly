@@ -44,17 +44,39 @@ function isDeclaredAction(entry: unknown): entry is DeclaredAction {
   );
 }
 
+/**
+ * The actions of one kind this collection's list offers, in their declared
+ * order: the one filter row and bulk actions share, so the two cannot come to
+ * disagree about which collections an action is offered on.
+ */
+function declaredActionsOfKind(
+  contributions: AdminContributionsMeta | undefined,
+  collection: string,
+  kind: DeclaredAction["kind"]
+): DeclaredAction[] {
+  return (contributions?.["collection.list"]?.[kind] ?? []).filter(
+    (entry): entry is DeclaredAction =>
+      isDeclaredAction(entry) &&
+      entry.kind === kind &&
+      (entry.collections === undefined ||
+        entry.collections.includes(collection))
+  );
+}
+
 /** The row actions this collection's list offers, in their declared order. */
 export function declaredRowActionsFor(
   contributions: AdminContributionsMeta | undefined,
   collection: string
 ): DeclaredAction[] {
-  return (contributions?.["collection.list"]?.rowAction ?? []).filter(
-    (entry): entry is DeclaredAction =>
-      isDeclaredAction(entry) &&
-      (entry.collections === undefined ||
-        entry.collections.includes(collection))
-  );
+  return declaredActionsOfKind(contributions, collection, "rowAction");
+}
+
+/** The bulk actions this collection's list offers, in their declared order. */
+export function declaredBulkActionsFor(
+  contributions: AdminContributionsMeta | undefined,
+  collection: string
+): DeclaredAction[] {
+  return declaredActionsOfKind(contributions, collection, "bulkAction");
 }
 
 /** Whether an action is offered on a row as listed: its rule holds there. */

@@ -25,7 +25,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { SQL } from "drizzle-orm";
 
-import type { CollectionHooks } from "../collections/config/define-collection";
+import type {
+  CollectionConfig,
+  CollectionHooks,
+} from "../collections/config/define-collection";
 import { loadBuilderEntities } from "../di/load-dynamic-tables";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { CollectionDbOptions } from "../domains/collections/services/collection-db-options";
@@ -1871,7 +1874,13 @@ async function applyReloadHolding(
       // the reloaded config declares them, so a plugin added or changed in
       // development is rewritten into the map without a restart. The site
       // dashboard with them, as the loader carries it after every setup().
-      setAdminComponentPlugins(newConfig.plugins, newConfig.admin?.dashboard);
+      setAdminComponentPlugins(
+        newConfig.plugins,
+        newConfig.admin?.dashboard,
+        // The loader's collections, which this function's own type reads only
+        // in part: the check lists the views their `admin` names.
+        newConfig.collections as readonly CollectionConfig[] | undefined
+      );
     }
     publishCollectionDbOptions(
       buildCollectionSyncPayload(newConfig.collections ?? [])
