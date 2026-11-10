@@ -242,6 +242,44 @@ function cases(dialect: TestDialect): void {
     ).toBe("dc_authors");
   });
 
+  it("refuses a many-to-many added to the renamed collection itself, changing nothing", async () => {
+    await renamedTarget(dialect);
+    const tablesBefore = await t().adapter.listTables();
+
+    // Its links would be read from a junction spelled from `writers`, while one created for it is
+    // spelled from the table it kept, so it is refused with nothing created.
+    await expect(
+      dispatchCollections(
+        {} as ServiceContainer,
+        "updateCollection",
+        { collectionName: "writers" },
+        {
+          fields: [
+            { name: "name", type: "text" },
+            {
+              name: "favourites",
+              type: "relationship",
+              options: { relationType: "manyToMany", target: "posts" },
+            },
+          ],
+        }
+      )
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "fields.favourites",
+            code: "MANY_TO_MANY_ON_RENAMED_COLLECTION",
+          }),
+        ],
+      },
+    });
+    expect((await t().adapter.listTables()).sort()).toEqual(
+      tablesBefore.sort()
+    );
+  });
+
   it("refuses a save made from the schema as it was before the rename rewrote it", async () => {
     handle = await builderInstance(dialect);
     await seedBuilderCollection(handle.adapter, {

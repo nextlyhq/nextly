@@ -90,6 +90,7 @@ import {
 import { DynamicCollectionSchemaService } from "./dynamic-collection-schema-service";
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
 import { namesKeptFromStored } from "./field-names";
+import { refuseNewJunctionsOnRenamedCollection } from "./junctions-on-renamed-collections";
 import { refusalsForCollectionSave } from "./save-preconditions";
 
 export interface CollectionArtifacts {
@@ -1542,6 +1543,14 @@ export class DynamicCollectionService extends BaseService {
       const oldUserFields = (collection.fields || []).filter(
         (f: FieldDefinition) => !RESERVED_FIELD_NAMES.includes(f.name)
       );
+
+      // A many-to-many added to a renamed collection would get a junction its reads can't find.
+      refuseNewJunctionsOnRenamedCollection({
+        slug: collectionName,
+        tableName: collection.tableName,
+        oldFields: oldUserFields,
+        newFields: userDefinedFields,
+      });
 
       // Asked here rather than in the generator, because only this side can
       // ask the database. The generator refuses a move onto a table this
