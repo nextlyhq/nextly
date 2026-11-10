@@ -465,3 +465,88 @@ describe("teardownEntityComponentData case-distinct catalogs", () => {
     expect(result.tablesTouched).toContain("seo_meta");
   });
 });
+
+describe("teardownEntityComponentData follows a deep chain without rescanning every table", () => {
+  it("reads below the entity only the tables its definitions place, however deep the chain", async () => {
+    // Six field groups, each placing the next directly, beside ten that place nothing and that
+    // nothing places. One row per level belongs to the entity.
+    const chain = ["l1", "l2", "l3", "l4", "l5", "l6"];
+    const others = Array.from({ length: 10 }, (_, i) => `x${i}`);
+    const parentOf = new Map(
+      chain.map((slug, i) => [
+        `comp_${slug}`,
+        i === 0 ? "dc_posts" : `comp_${chain[i - 1]}`,
+      ])
+    );
+    const reads = new Map<string, number>();
+    const deleted: string[] = [];
+    const adapter = {
+      dialect: "postgresql" as const,
+      listTables: vi
+        .fn()
+        .mockResolvedValue([
+          ...chain.map(slug => `comp_${slug}`),
+          ...others.map(slug => `comp_${slug}`),
+          "dynamic_components",
+        ]),
+      tableExists: vi.fn().mockResolvedValue(false),
+      delete: vi.fn(async (table: string) => {
+        deleted.push(table);
+        return 1;
+      }),
+      executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+      select: vi.fn(
+        async (
+          table: string,
+          options?: { where?: { and?: { column: string; value: unknown }[] } }
+        ) => {
+          if (table === "dynamic_components") {
+            return [
+              ...chain.map((slug, i) => ({
+                slug,
+                table_name: `comp_${slug}`,
+                fields:
+                  i + 1 < chain.length
+                    ? [
+                        {
+                          name: chain[i + 1],
+                          type: "component",
+                          component: chain[i + 1],
+                        },
+                      ]
+                    : [],
+              })),
+              ...others.map(slug => ({
+                slug,
+                table_name: `comp_${slug}`,
+                fields: [],
+              })),
+            ];
+          }
+          reads.set(table, (reads.get(table) ?? 0) + 1);
+          const parent = options?.where?.and?.find(
+            condition => condition.column === "_parent_table"
+          )?.value;
+          return parent !== undefined && parentOf.get(table) === parent
+            ? [{ id: `${table}-1` }]
+            : [];
+        }
+      ),
+    };
+
+    await teardownEntityComponentData({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+
+    // Every level of the chain went.
+    expect(new Set(deleted)).toEqual(
+      new Set(chain.map(slug => `comp_${slug}`))
+    );
+    // A table nothing places is read for the entity's own level and its probe, never again: a
+    // sweep that read every table at every level would read each once per level of the chain.
+    for (const slug of others) {
+      expect(reads.get(`comp_${slug}`) ?? 0).toBeLessThanOrEqual(2);
+    }
+  });
+});
