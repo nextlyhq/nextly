@@ -239,7 +239,7 @@ function PlacedSection({
       flush={flush}
       // Kept on the section itself, with no wrapper inside it, so a body that
       // draws nothing still leaves the section empty to collapse.
-      {...containedContributionEvents}
+      containedEvents={containedContributionEvents}
     >
       <PluginSlot
         path={part.component}
