@@ -79,7 +79,11 @@ async function boot(
   dialect: TestDialect,
   probe: Probe,
   where: "field" | "collection"
-): Promise<{ entries: CollectionEntryService; t: TestNextly }> {
+): Promise<{
+  entries: CollectionEntryService;
+  handler: CollectionsHandler;
+  t: TestNextly;
+}> {
   const rule = ruleOf(probe);
   current = await createTestNextly({
     dialect,
@@ -121,11 +125,13 @@ async function boot(
   for (const action of ["update", "publish"]) {
     await grantTo(current, BOSS.id, action, [POSTS, PREFS]);
   }
+  // The handler is the REST route's way in: only it takes `routeAuthorized`,
+  // the route's word that it already authorized the publisher.
+  const handler = current.getService("collectionsHandler");
   return {
     t: current,
-    entries: (
-      current.getService("collectionsHandler") as CollectionsHandler
-    ).getEntryService() as CollectionEntryService,
+    handler,
+    entries: handler.getEntryService(),
   };
 }
 
@@ -177,11 +183,11 @@ describe.each(getConfiguredTestDialects())(
   dialect => {
     it("ends a collection publish naming the field whose rule could not run, and keeps the change", async () => {
       const probe: Probe = { armed: false, does: "query", calls: 0 };
-      const { entries, t } = await boot(dialect, probe, "field");
+      const { entries, handler, t } = await boot(dialect, probe, "field");
       const id = await heldEntry(entries);
 
       probe.armed = true;
-      const published = await entries.updateEntry(
+      const published = await handler.updateEntry(
         {
           collectionName: POSTS,
           entryId: id,
@@ -208,7 +214,7 @@ describe.each(getConfiguredTestDialects())(
       // Nothing remembered the rule's failure: the retry asks it afresh, and
       // with the rule answering, the kept change goes live.
       probe.does = "answer";
-      const retried = await entries.updateEntry(
+      const retried = await handler.updateEntry(
         {
           collectionName: POSTS,
           entryId: id,
@@ -298,11 +304,11 @@ describe.each(getConfiguredTestDialects())(
 
     it("publishes when the rule answers without querying", async () => {
       const probe: Probe = { armed: false, does: "answer", calls: 0 };
-      const { entries } = await boot(dialect, probe, "field");
+      const { entries, handler } = await boot(dialect, probe, "field");
       const id = await heldEntry(entries);
 
       probe.armed = true;
-      const published = await entries.updateEntry(
+      const published = await handler.updateEntry(
         {
           collectionName: POSTS,
           entryId: id,

@@ -220,7 +220,7 @@ import type { CollectionsHandler } from "./services/collections-handler";
 import type { GeneralSettingsService } from "./services/general-settings/general-settings-service";
 import { resolveRoleSlugs } from "./services/lib/permissions";
 import {
-  builderDisabledError,
+  builderRefusal,
   isBuilderEnabled,
   isBuilderRoute,
 } from "./shared/builder-access";
@@ -1524,15 +1524,19 @@ async function serveServiceRequest(
   if (refusedBuiltIn) return refusedBuiltIn;
 
   // The builder writes DDL straight to the live database, so it is off in
-  // production by default. Refuse its routes here, at the one point every
-  // dispatched request passes through — hiding the navigation would still
-  // leave these reachable by URL. Entry CRUD is untouched, and boot-time
-  // code-first sync goes through the registry services, not this dispatcher.
+  // production whatever the configuration says, and off wherever showBuilder
+  // is false. Refuse its routes here, at the one point every dispatched
+  // request passes through — hiding the navigation would still leave these
+  // reachable by URL. Entry CRUD is untouched, and boot-time code-first sync
+  // goes through the registry services, not this dispatcher.
   //
   // Returned rather than thrown: this runs outside the dispatcher's
   // NextlyError-to-response mapping, so a throw would surface as a 500.
-  if (isBuilderRoute(service, method) && !isBuilderEnabled()) {
-    const err = builderDisabledError(`${service}.${method}`);
+  const builderRefused = isBuilderRoute(service, method)
+    ? builderRefusal(`${service}.${method}`)
+    : null;
+  if (builderRefused) {
+    const err = builderRefused;
     const requestId = readOrGenerateRequestId(req);
     return new Response(
       JSON.stringify({ error: err.toResponseJSON(requestId) }),
