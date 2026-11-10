@@ -90,9 +90,11 @@ export interface AppMigrationInputsArgs {
    */
   held?: readonly UiSchemaEntity[];
   /**
-   * The one collection a save writes its migration for: the address and
-   * sibling-field checks judge it alone, since the migration changes nothing
-   * else. Absent, every entity is judged, as `migrate:create` judges them.
+   * The one collection a save writes its migration for: the address check
+   * judges it alone as new, against every other entity's address, and the
+   * sibling-field check judges its fields alone, since the migration changes
+   * nothing else. Absent, every entity is judged, as `migrate:create` judges
+   * them.
    */
   judged?: string;
   /** Absolute path to the migrations folder. */
@@ -275,9 +277,13 @@ export async function appMigrationInputs(
   });
 
   // A new address is judged by the one address rule before anything is written.
+  // A scoped save judges its own collection against every address the project
+  // uses, the configuration's entities no snapshot records yet included: the
+  // next full migration or start judges them all, and would refuse a pair the
+  // save let through.
   const judgedAgainst = withHeld(latest, input.held ?? []);
+  assertMigrationAddresses(merged, judgedAgainst, logger, input.judged);
   const judgedEntities = onlyJudged(merged, input.judged);
-  assertMigrationAddresses(judgedEntities, judgedAgainst, logger);
   // And each new pair of sibling fields, against the fields the latest snapshot records.
   assertMigrationSiblingFields(judgedEntities, judgedAgainst, logger);
   // The rows as the previous snapshot recorded each Builder entity, for a
