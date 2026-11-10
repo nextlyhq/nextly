@@ -5,7 +5,9 @@ import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { cn } from "@admin/lib/utils";
 
+import { useSuppressedChrome } from "../ChromeSuppression";
 import { usePanelFold } from "../PanelFold";
+import { RailAccount } from "../sidebar/RailAccount";
 
 import { pluginHeaderItems } from "./header-visibility";
 import { HeaderTrail } from "./HeaderTrail";
@@ -32,6 +34,10 @@ interface DashboardHeaderProps {
  * some draw nothing and register what a page needs, so it is mounted for as
  * long as the bar is.
  *
+ * A surface that takes the rail away but keeps the bar (translation mode)
+ * would take the Inbox and the account menu with it, so while the rail is
+ * suppressed they are drawn at the bar's right end instead.
+ *
  * Its height is `--admin-bar-height`, which whatever measures against the bar
  * reads too.
  */
@@ -40,6 +46,7 @@ export function DashboardHeader({
   onOpenMenu,
 }: DashboardHeaderProps): JSX.Element {
   const pluginItems = pluginHeaderItems(useBranding()?.plugins);
+  const railSuppressed = useSuppressedChrome().has("primaryRail");
   return (
     <header
       className={cn(
@@ -83,6 +90,7 @@ export function DashboardHeader({
           ))}
         </div>
       )}
+      {railSuppressed && <RailAccount placement="bar" />}
     </header>
   );
 }

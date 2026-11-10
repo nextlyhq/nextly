@@ -31,10 +31,18 @@ import { shellAnswersMarker } from "../lib/shell-answers";
 import { useNextDevOverlay } from "./use-next-dev-overlay";
 import { UserProfileDropdown } from "./UserProfileDropdown";
 
+/**
+ * Where the Inbox and the account menu are drawn: the rail's foot, or the top
+ * bar's right end while a surface has taken the rail away and kept the bar.
+ */
+export type AccountPlacement = "rail" | "bar";
+
 export function RailAccount({
   className,
+  placement = "rail",
 }: {
   className?: string;
+  placement?: AccountPlacement;
 }): JSX.Element {
   const branding = useBranding();
   const hidden = computeHiddenHeaderButtons(branding?.plugins);
@@ -44,11 +52,13 @@ export function RailAccount({
   return bellOffered ? (
     <AwaitingPermissions
       className={className}
+      placement={placement}
       workspacePending={workspacePending}
     />
   ) : (
     <RailAccountItems
       className={className}
+      placement={placement}
       pending={{ workspace: workspacePending, permissions: false }}
       bellOffered={false}
     />
@@ -61,27 +71,61 @@ export function RailAccount({
  */
 function AwaitingPermissions({
   className,
+  placement,
   workspacePending,
 }: {
   className?: string;
+  placement: AccountPlacement;
   workspacePending: boolean;
 }): JSX.Element {
   const { isLoading } = useCurrentUserPermissions();
   return (
     <RailAccountItems
       className={className}
+      placement={placement}
       pending={{ workspace: workspacePending, permissions: isLoading }}
       bellOffered
     />
   );
 }
 
+/**
+ * How the controls sit in each place. In the rail they stack and open to its
+ * right, and keep the foot clear below the avatar for Next.js's development
+ * badge (bottom-left by default). In the bar they sit in a row and open
+ * downwards, lined up with the bar's right edge, nowhere near the badge.
+ */
+const ACCOUNT_LAYOUT = {
+  rail: {
+    flow: "flex flex-col items-center gap-2",
+    side: "right",
+    devSpace: "pb-16",
+    testId: "rail-account",
+  },
+  bar: {
+    flow: "flex items-center gap-1",
+    side: "bottom",
+    devSpace: undefined,
+    testId: "bar-account",
+  },
+} as const satisfies Record<
+  AccountPlacement,
+  {
+    flow: string;
+    side: "right" | "bottom";
+    devSpace: string | undefined;
+    testId: string;
+  }
+>;
+
 function RailAccountItems({
   className,
+  placement,
   pending,
   bellOffered,
 }: {
   className?: string;
+  placement: AccountPlacement;
   pending: HeaderAnswersPending;
   bellOffered: boolean;
 }): JSX.Element {
@@ -96,28 +140,19 @@ function RailAccountItems({
   // Next.js draws its development badge in the bottom-left corner, over the
   // rail's foot, while the host runs `next dev`.
   const devOverlay = useNextDevOverlay();
+  const { flow, side, devSpace, testId } = ACCOUNT_LAYOUT[placement];
 
   return (
     <div
-      className={cn(
-        "flex flex-col items-center gap-2",
-        // In development the rail keeps its foot clear below the avatar, so
-        // Next.js's development badge (bottom-left by default) sits in that
-        // space instead of over the avatar.
-        devOverlay && "pb-16",
-        className
-      )}
-      data-testid="rail-account"
+      className={cn(flow, devOverlay && devSpace, className)}
+      data-testid={testId}
       data-shell-answers={shellAnswersMarker(settled)}
     >
-      <div
-        hidden={!settled}
-        className={settled ? "flex flex-col items-center gap-2" : undefined}
-      >
+      <div hidden={!settled} className={settled ? flow : undefined}>
         {bellOffered && (
           <NotificationBell
             journalOffered={journalOffered}
-            side="right"
+            side={side}
             align="end"
           />
         )}
@@ -127,7 +162,7 @@ function RailAccountItems({
             void logout();
           }}
           hidden={hidden}
-          side="right"
+          side={side}
           align="end"
         />
       </div>

@@ -138,6 +138,26 @@ describe("the rail's account foot", () => {
   });
 });
 
+describe("the account controls drawn in the top bar", () => {
+  afterEach(() => {
+    document.querySelectorAll("nextjs-portal").forEach(node => node.remove());
+  });
+
+  it("sit in a row, open downwards and keep no development space", () => {
+    document.body.append(document.createElement("nextjs-portal"));
+    mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
+    render(<RailAccount placement="bar" />);
+    const foot = screen.getByTestId("bar-account");
+    expect(foot.className).not.toContain("flex-col");
+    expect(foot.className).not.toContain("pb-16");
+    expect(screen.getByTestId("bell")).toHaveAttribute("data-side", "bottom");
+    expect(screen.getByTestId("account-menu")).toHaveAttribute(
+      "data-side",
+      "bottom"
+    );
+  });
+});
+
 describe("the rail's account foot while its answers arrive", () => {
   it("draws nothing visible, and says so, while the workspace answer is pending", () => {
     mockWorkspacePending = true;
