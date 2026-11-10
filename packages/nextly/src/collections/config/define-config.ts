@@ -41,6 +41,7 @@ import {
   isFieldGroupFieldType,
 } from "../../domains/field-groups/storage/field-group-field-type";
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
+import { assertConfiguredPublicAddresses } from "../../domains/public-addresses/distinct-public-addresses";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { workflowAttachmentsOf } from "../../domains/workflows/attachments";
 import { NextlyError } from "../../errors";
@@ -307,6 +308,10 @@ function validateNextlyConfig(config: NextlyConfig): void {
 
     slugs.add(slug);
   }
+
+  // Each Single is one page at one address, so two at the same address are
+  // refused here, naming both, as the boot refuses them once plugins join.
+  assertConfiguredPublicAddresses(config);
 
   assertNoLegacyFieldGroupKey(config, "defineConfig");
 

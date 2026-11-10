@@ -61,6 +61,7 @@ import {
   validateFieldBasicsShared,
   validateSiblingFieldsShared,
 } from "../../shared/base-validator";
+import { declaredPublicAddressProblem } from "../../domains/public-addresses/public-address-template";
 import { isPlainObject } from "../../shared/lib/plain-copy";
 import {
   RESERVED_SLUGS,
@@ -154,7 +155,9 @@ export type ValidationErrorCode =
   | "DB_OPTION_UNKNOWN"
   | "DB_ID_TYPE_INVALID"
   | "DB_ALLOW_ID_ON_CREATE_INVALID"
-  | "DB_SLUG_PATHS_INVALID";
+  | "DB_SLUG_PATHS_INVALID"
+  // Public address errors
+  | "PUBLIC_ADDRESS_INVALID";
 
 /**
  * A single validation error with path and context.
@@ -824,6 +827,21 @@ export function validateCollectionConfig(
   validateAccess(config.access, errors);
 
   validateDbOptions(config.db, errors);
+
+  // Judged by the rule every public address is, so a template a plugin
+  // supplies for a Builder type and one declared here never disagree.
+  const addressProblem = declaredPublicAddressProblem(
+    config.publicAddress,
+    "collection",
+    Array.isArray(config.fields) ? config.fields : []
+  );
+  if (addressProblem !== null) {
+    errors.push({
+      path: "publicAddress",
+      code: "PUBLIC_ADDRESS_INVALID",
+      message: addressProblem,
+    });
+  }
 
   return {
     valid: errors.length === 0,
