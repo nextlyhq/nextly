@@ -136,11 +136,14 @@ async function panelSections(page: Page): Promise<string[]> {
     );
 }
 
-/** The row of Posts' list holding `title`. */
+/**
+ * The row of Posts' list holding `title`. By its element rather than its role:
+ * a row that opens its entry is exposed as a button, not as a row.
+ */
 const rowOf = (page: Page, title: string) =>
   page
     .getByRole("table", { name: "Entries table" })
-    .getByRole("row")
+    .locator("tbody tr")
     .filter({ hasText: title });
 
 /** The labels in `title`'s row menu, read and then closed. */
