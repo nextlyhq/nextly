@@ -215,6 +215,50 @@ describe("orderContributions", () => {
     });
   });
 
+  it("refuses to replace a built-in part the place keeps, naming the plugin and the part", () => {
+    expect(
+      refusalOf(() =>
+        orderContributions(
+          [c("acme-support.grid", { replaces: "widgets" })],
+          ["welcome", "widgets"],
+          { place: "dashboard", kind: "block" },
+          ["widgets"]
+        )
+      )
+    ).toMatchObject({
+      reason: "contribution-replace-not-allowed",
+      logContext: {
+        plugin: "@acme/support",
+        contribution: "acme-support.grid",
+        replaces: "widgets",
+        place: "dashboard",
+        kind: "block",
+      },
+    });
+  });
+
+  it("orders a contribution beside a part the place keeps, and lets the others be replaced", () => {
+    expect(
+      names(
+        orderContributions(
+          [
+            c("acme-support.above", { before: "widgets" }),
+            c("acme-support.below"),
+            c("acme-support.hello", { replaces: "welcome" }),
+          ],
+          ["welcome", "widgets"],
+          { place: "dashboard", kind: "block" },
+          ["widgets"]
+        )
+      )
+    ).toEqual([
+      "acme-support.hello>welcome",
+      "+acme-support.above",
+      "widgets",
+      "+acme-support.below",
+    ]);
+  });
+
   it("refuses two contributions each ordered before the other, naming both", () => {
     expect(
       refusalOf(() =>

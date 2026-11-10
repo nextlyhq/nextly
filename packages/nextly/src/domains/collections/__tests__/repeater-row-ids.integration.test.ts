@@ -81,7 +81,7 @@ function idlessEntry(tag: string): Doc {
       { label: "a", items: [{ text: "a1" }, { text: "a2" }] },
       { label: "b", items: [{ text: "b1" }] },
     ],
-    box: { inner: [{ note: "n1" }, { note: "n2" }] },
+    box: { notes: [{ note: "n1" }, { note: "n2" }] },
   };
 }
 
@@ -120,7 +120,7 @@ describe.each(getConfiguredTestDialects())(
               group({
                 name: "box",
                 fields: [
-                  repeater({ name: "inner", fields: [text({ name: "note" })] }),
+                  repeater({ name: "notes", fields: [text({ name: "note" })] }),
                 ],
               }),
               repeater({
@@ -293,7 +293,7 @@ describe.each(getConfiguredTestDialects())(
           true
         );
         expect(
-          distinctIds(idsOf((parsed(row.box) as Doc | undefined)?.inner))
+          distinctIds(idsOf((parsed(row.box) as Doc | undefined)?.notes))
         ).toBe(true);
       });
 
@@ -308,8 +308,8 @@ describe.each(getConfiguredTestDialects())(
         expect(rowsOf(after.lines).map(line => idsOf(line.items))).toEqual(
           rowsOf(before.lines).map(line => idsOf(line.items))
         );
-        expect(idsOf((parsed(after.box) as Doc).inner)).toEqual(
-          idsOf((parsed(before.box) as Doc).inner)
+        expect(idsOf((parsed(after.box) as Doc).notes)).toEqual(
+          idsOf((parsed(before.box) as Doc).notes)
         );
       });
 
