@@ -231,6 +231,8 @@ import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
 import {
   applyPluginSchemaContributionsDeferred,
   assertRegisteredKeepTheirKind,
+  leftAloneWarnings,
+  type LeftAloneExtend,
 } from "../plugins/schema/apply-contributions";
 import { reconcileBuilderContributions } from "../plugins/schema/reconcile-builder-contributions";
 import {
@@ -876,6 +878,7 @@ async function registerServicesOnce(
     transformedPlugins,
     deferredExtends,
     pluginGrants,
+    leftAlone,
   } = await resolveBootConfig(config);
   const {
     unresolvedRelations,
@@ -919,6 +922,9 @@ async function registerServicesOnce(
   const resolvedBasePath = basePath ?? process.cwd();
 
   logRegisteredPlugins(transformedConfig, resolvedLogger);
+  for (const warning of leftAloneWarnings(leftAlone)) {
+    resolvedLogger.warn?.(warning);
+  }
 
   // Said once per boot, whatever plugins are present: an app on an edge that
   // reports the client, with security.trustProxy unset, rate-limits sign-in
@@ -1378,6 +1384,8 @@ interface ResolvedBootConfig {
   deferredExtends: DeferredExtends;
   /** What `resolveBootPlugins` granted the plugins of `transformedConfig`. */
   pluginGrants: PluginGrants;
+  /** Configured types a plugin scope left as they were; warned of at boot. */
+  leftAlone: LeftAloneExtend[];
 }
 
 /**
@@ -1416,11 +1424,14 @@ async function resolveBootConfig(
   // refuses to change it. A site restarted over the database it laid out would otherwise register
   // its tables as if the setting were off, naming translatable columns its main tables lack.
   setPerLanguageStorage(transformedSetupConfig.perLanguageStorage === true);
-  const { config: contributedConfig, deferredExtends } =
-    applyPluginSchemaContributionsDeferred(
-      transformedSetupConfig,
-      transformedPlugins
-    );
+  const {
+    config: contributedConfig,
+    deferredExtends,
+    leftAlone,
+  } = applyPluginSchemaContributionsDeferred(
+    transformedSetupConfig,
+    transformedPlugins
+  );
 
   return {
     transformedConfig: withResolvedPreview(
@@ -1429,6 +1440,7 @@ async function resolveBootConfig(
     transformedPlugins,
     deferredExtends,
     pluginGrants,
+    leftAlone,
   };
 }
 
@@ -1888,7 +1900,7 @@ async function reconcileBuilderTargets<T>(
   // a message naming neither the other kind nor its owner -- and where, for
   // a permission named `read-<slug>` and a code rule resolved by slug alone,
   // the install would be ambiguous even if both could be stored.
-  const { entities, unresolved } = reconcileBuilderContributions(
+  const { entities, unresolved, leftAlone } = reconcileBuilderContributions(
     args.deferredExtends,
     builderEntities
   );
@@ -1896,6 +1908,7 @@ async function reconcileBuilderTargets<T>(
   if (unresolved.length > 0) {
     handleUnresolvedExtends(unresolved, transformedConfig, logger);
   }
+  for (const warning of leftAloneWarnings(leftAlone)) logger.warn?.(warning);
 
   // A field extended onto a Builder-owned entity is not in the transformed
   // config — it was deferred until the Builder set could be read — so the
