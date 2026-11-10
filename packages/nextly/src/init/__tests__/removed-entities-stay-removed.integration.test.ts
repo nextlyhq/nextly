@@ -58,6 +58,7 @@ import {
   getConfiguredTestDialects,
   type TestDialect,
 } from "../../plugins/test-nextly";
+import { recordStatements } from "../../__tests__/helpers/record-statements";
 import { _resetEnvCache } from "../../shared/lib/env";
 import { runBootTimeApplyIfDev } from "../boot-apply";
 import { reloadNextlyConfig } from "../reload-config";
@@ -201,92 +202,6 @@ async function openDatabase(dialect: TestDialect): Promise<CaseDatabase> {
       await server.executeQuery(dropDatabaseStatement(dialect, name));
       await server.disconnect();
     },
-  };
-}
-
-/** The statement text a driver call carries, whatever form it was passed in. */
-function statementText(arg: unknown): string | undefined {
-  if (typeof arg === "string") return arg;
-  if (arg && typeof arg === "object") {
-    const shaped = arg as { text?: unknown; sql?: unknown };
-    if (typeof shaped.text === "string") return shaped.text;
-    if (typeof shaped.sql === "string") return shaped.sql;
-  }
-  return undefined;
-}
-
-/** The prototype in `start`'s chain that defines `method` itself. */
-function ownerOf(start: object, method: string): Record<string, unknown> {
-  let proto: object | null = start;
-  while (proto && !Object.prototype.hasOwnProperty.call(proto, method)) {
-    proto = Object.getPrototypeOf(proto) as object | null;
-  }
-  if (!proto) throw new Error(`no ${method} on the driver`);
-  return proto as Record<string, unknown>;
-}
-
-/**
- * Record every statement the driver under `adapter` is handed.
- *
- * Patched on the driver's prototype, which every connection of the pool shares:
- * `pg`'s client `query`, `mysql2`'s connection `query` and `execute`, and
- * `better-sqlite3`'s `prepare` and `exec`.
- */
-async function recordStatements(
-  adapter: DrizzleAdapter,
-  dialect: TestDialect
-): Promise<{ statements: string[]; uninstall(): void }> {
-  const client = (adapter.getDrizzle() as { $client: unknown }).$client;
-  let instance: object;
-  let methods: string[];
-  if (dialect === "postgresql") {
-    const pool = client as {
-      connect(): Promise<{ release(): void } & object>;
-    };
-    const connection = await pool.connect();
-    connection.release();
-    instance = connection;
-    methods = ["query"];
-  } else if (dialect === "mysql") {
-    // The callback pool, which the promise wrapper carries as `pool`.
-    type CorePool = {
-      getConnection(
-        callback: (error: unknown, connection: { release(): void }) => void
-      ): void;
-    };
-    const wrapped = client as { pool?: CorePool };
-    const pool = wrapped.pool ?? (client as CorePool);
-    const connection = await new Promise<{ release(): void } & object>(
-      (resolve, reject) =>
-        pool.getConnection((error, conn) =>
-          error ? reject(error) : resolve(conn)
-        )
-    );
-    connection.release();
-    instance = connection;
-    methods = ["query", "execute"];
-  } else {
-    instance = client as object;
-    methods = ["prepare", "exec"];
-  }
-
-  const statements: string[] = [];
-  const restores: Array<() => void> = [];
-  for (const method of methods) {
-    const owner = ownerOf(instance, method);
-    const original = owner[method] as (...args: unknown[]) => unknown;
-    owner[method] = function (this: unknown, ...args: unknown[]): unknown {
-      const text = statementText(args[0]);
-      if (text !== undefined) statements.push(text);
-      return original.apply(this, args);
-    };
-    restores.push(() => {
-      owner[method] = original;
-    });
-  }
-  return {
-    statements,
-    uninstall: () => restores.forEach(restore => restore()),
   };
 }
 
