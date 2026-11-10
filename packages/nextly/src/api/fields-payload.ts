@@ -17,7 +17,10 @@
 import { z } from "zod";
 
 import { NextlyError } from "../errors/nextly-error";
-import { uiSchemaFieldSchema } from "../schemas/_zod/ui-schema";
+import {
+  BUILDER_FIELD_NAME_RE,
+  uiSchemaFieldSchema,
+} from "../schemas/_zod/ui-schema";
 import { pluginFieldOptionIssues } from "../shared/lib/plugin-field-options";
 
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
@@ -109,6 +112,7 @@ export function assertValidFieldsPayload(
     throw nextlyValidationFromZod(parsed.error);
   }
   assertValidPluginFieldOptions(fields);
+  assertBuilderFieldNames(fields as readonly FieldName[], "");
   if (opts.kind === "collection" && Array.isArray(fields)) {
     fields.forEach((field, index) => {
       const name = (field as { name?: unknown } | null)?.name;
@@ -125,4 +129,41 @@ export function assertValidFieldsPayload(
       }
     });
   }
+}
+
+/** A field as its name and nested fields are read here. */
+interface FieldName {
+  name?: unknown;
+  fields?: readonly FieldName[];
+}
+
+/**
+ * Refuses a field, at any depth, whose name is not the Builder's own
+ * (`BUILDER_FIELD_NAME_RE`). The definition file's schema takes a camelCase
+ * name a plugin or the API declared; the Builder's payload does not.
+ */
+function assertBuilderFieldNames(
+  fields: readonly FieldName[],
+  path: string
+): void {
+  fields.forEach((field, index) => {
+    const at = `${path}${index}`;
+    if (
+      typeof field.name === "string" &&
+      !BUILDER_FIELD_NAME_RE.test(field.name)
+    ) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `${at}.name`,
+            code: "INVALID_FIELD_NAME",
+            message: `field name must match ${BUILDER_FIELD_NAME_RE.source}`,
+          },
+        ],
+      });
+    }
+    if (Array.isArray(field.fields)) {
+      assertBuilderFieldNames(field.fields, `${at}.fields.`);
+    }
+  });
 }

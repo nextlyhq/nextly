@@ -368,50 +368,6 @@ describe.each(getConfiguredTestDialects())(
       return adapter;
     };
 
-    it("answers a camelCase field made required by its own name: filled, or made optional", async () => {
-      const adapter = await articlesWithARow();
-
-      await applyFields(
-        "articles",
-        [
-          { name: "body", type: "text" },
-          { name: "firstName", type: "text", required: true },
-          { name: "lastName", type: "text", required: true },
-        ],
-        {
-          eventResolutions: [
-            {
-              kind: "provide_default",
-              eventId: "add_required_field_no_default:dc_articles.first_name",
-              value: "Ann",
-            },
-            {
-              kind: "make_optional",
-              eventId: "add_required_field_no_default:dc_articles.last_name",
-            },
-          ],
-        }
-      );
-
-      const rows = (await adapter.executeQuery(
-        "SELECT first_name FROM dc_articles"
-      )) as unknown as { first_name: string }[];
-      expect(rows.map(r => r.first_name)).toEqual(["Ann"]);
-      const definition = JSON.parse(
-        readFileSync(join(t.basePath, "schema", "builder.json"), "utf-8")
-      ) as {
-        collections: {
-          slug: string;
-          fields: { name: string; required?: boolean }[];
-        }[];
-      };
-      const fields = definition.collections.find(
-        c => c.slug === "articles"
-      )?.fields;
-      expect(fields?.find(f => f.name === "firstName")?.required).toBe(true);
-      expect(fields?.find(f => f.name === "lastName")?.required).toBe(false);
-    });
-
     it("refuses an answer this save does not ask, and writes nothing", async () => {
       const adapter = await articlesWithARow();
       const folder = join(t.basePath, "database", "history");

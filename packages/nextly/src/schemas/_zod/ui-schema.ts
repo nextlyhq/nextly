@@ -266,6 +266,14 @@ export type FieldNode = {
  * enforces. One validator for both writers is what keeps the DB and the
  * committed manifest from ever disagreeing about what a legal field is.
  */
+/**
+ * The name the Schema Builder gives a field: snake case. The definition file
+ * takes a camelCase name too (a plugin's or the API's collection may declare
+ * one, and the file records it as the registry does), but the Builder's own
+ * payload keeps this rule (`assertValidFieldsPayload`).
+ */
+export const BUILDER_FIELD_NAME_RE = /^[a-z][a-z0-9_]*$/;
+
 export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
   z
     .object({
