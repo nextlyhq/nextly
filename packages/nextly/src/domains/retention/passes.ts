@@ -17,6 +17,10 @@ import {
   type PreviewLinksPruneAdapter,
 } from "../../auth/preview/preview-link-records";
 import {
+  PLUGIN_EVENTS_SWEEP_INTERVAL_MS,
+  prunePluginEvents,
+} from "../plugin-events/prune";
+import {
   ONE_TIME_SECRETS_SWEEP_INTERVAL_MS,
   pruneOneTimeSecrets,
 } from "../../plugins/security/one-time-secrets-prune";
@@ -60,6 +64,7 @@ import {
   EMAIL_RETENTION_GATE_KEY,
   NOTICES_RETENTION_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_GATE_KEY,
+  PLUGIN_EVENTS_RETENTION_GATE_KEY,
   PREVIEW_LINKS_RETENTION_GATE_KEY,
   RECEIVED_WEBHOOKS_RETENTION_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
@@ -72,8 +77,8 @@ export interface RetentionPassInput {
   adapter: AuditPruneAdapter &
     PruneDeps["adapter"] &
     EmailPruneAdapter &
-    // What the one-purpose secrets' and received-webhook claims' sweeps
-    // both take.
+    // What the one-purpose secrets', received-webhook claims' and plugin
+    // events' sweeps all take.
     PruneInBatchesAdapter &
     NoticesPruneDb &
     ContentEventsPruneDb &
@@ -94,6 +99,8 @@ export interface RetentionPassInput {
   oneTimeSecrets?: boolean;
   /** Sweep plugins' received-webhook claims past their retention. */
   receivedWebhooks?: boolean;
+  /** Sweep plugins' durable events finished past their retention. */
+  pluginEvents?: boolean;
   /** Sweep recorded preview links long past their end. */
   previewLinks?: boolean;
   /** Prune cache tag expiries older than the ledger keeps them. */
@@ -276,6 +283,31 @@ export function buildRetentionPasses(
     });
 
   // On wherever a configuration reached the call site, as the secrets sweep
+  // is: an event finished long ago is owed nothing, so there is no policy to
+  // set, only the fixed keeping time the sweep documents. An event with a
+  // delivery still owed has no finish time, and is never swept.
+  if (input.pluginEvents)
+    passes.push({
+      key: PLUGIN_EVENTS_RETENTION_GATE_KEY,
+      intervalMs: () => PLUGIN_EVENTS_SWEEP_INTERVAL_MS,
+      run: async maxBatches => {
+        try {
+          await prunePluginEvents(
+            input.adapter,
+            (input.now ?? (() => new Date()))(),
+            { maxBatches }
+          );
+        } catch (error) {
+          // Quietly, as the secrets sweep: a logger throwing here would reach
+          // the write that offered the pass.
+          warnQuietly(input.logger, "Plugin events retention pass failed", {
+            error: error instanceof Error ? error.message : "unknown error",
+          });
+        }
+      },
+    });
+
+  // On wherever a configuration reached the call site, as the secrets sweep
   // is: a link long past its end answers nothing, so there is no policy to
   // set, only the fixed keeping time the store documents. Without it the table
   // grows by one row per link for ever.
@@ -359,6 +391,7 @@ export function retentionPoliciesFrom(
   | "emailPolicy"
   | "oneTimeSecrets"
   | "receivedWebhooks"
+  | "pluginEvents"
   | "previewLinks"
   | "cacheTagExpiries"
 > {
@@ -372,6 +405,8 @@ export function retentionPoliciesFrom(
     oneTimeSecrets: true,
     // So does every received-webhook claim, on a fixed retention.
     receivedWebhooks: true,
+    // And every finished durable event.
+    pluginEvents: true,
     // The same holds for recorded preview links.
     previewLinks: true,
     // And for the cache tag expiry ledger.
