@@ -83,6 +83,7 @@ interface CompanionFieldLike {
   name: string;
   type: string;
   localized?: boolean;
+  unique?: boolean;
 }
 
 /**
@@ -125,6 +126,25 @@ export interface CompanionSchema {
  */
 function toColumn(name: string): string {
   return toCanonicalSnakeCase(name);
+}
+
+/**
+ * The translatable fields of `fields`, each with its companion column, and
+ * marked where it is unique, so a read never fills it from another language
+ * (`LocalizedFieldRef.unique`). The one mapping every companion schema is
+ * built with.
+ */
+export function localizedFieldRefs(
+  fields: readonly CompanionFieldLike[]
+): LocalizedFieldRef[] {
+  const unique = new Set(
+    fields.filter(field => field.unique === true).map(field => field.name)
+  );
+  return resolveLocalizedFieldNames([...fields], true).map(name => ({
+    name,
+    column: toColumn(name),
+    ...(unique.has(name) ? { unique: true } : {}),
+  }));
 }
 
 /**
@@ -183,10 +203,7 @@ function companionSchemaOf(args: {
   dialect: SupportedDialect;
   status?: boolean;
 }): CompanionSchema | null {
-  const localizedFields: LocalizedFieldRef[] = resolveLocalizedFieldNames(
-    args.fields,
-    true
-  ).map(name => ({ name, column: toColumn(name) }));
+  const localizedFields = localizedFieldRefs(args.fields);
   if (localizedFields.length === 0) return null;
 
   const companion = buildCompanionRuntimeTable({

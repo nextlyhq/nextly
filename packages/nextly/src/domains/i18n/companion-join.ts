@@ -44,6 +44,13 @@ export interface LocalizedFieldRef {
   name: string;
   /** Physical companion column — snake_case (e.g. `meta_title`). Used for SQL/lookup. */
   column: string;
+  /**
+   * The field is unique. A unique value identifies one document in one
+   * language, so it is read in the requested language alone and never filled
+   * from a fallback language: filled, a read would show a value its own
+   * language's lookup can never find.
+   */
+  unique?: boolean;
 }
 
 /** Blank = "not translated": null, undefined, or empty string fall back. 0/false are real values. */
@@ -452,14 +459,17 @@ export function fillCompanionFields(args: {
     args.statusValues
   );
 
+  // A unique field is read in the requested language alone (`LocalizedFieldRef.unique`).
+  const ownLanguage = args.localeChain.slice(0, 1);
   for (const row of args.rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
     for (const field of args.localizedFields) {
+      const chain = field.unique === true ? ownLanguage : args.localeChain;
       const perLocaleValue: Record<string, unknown> = {};
-      for (const code of args.localeChain) {
+      for (const code of chain) {
         perLocaleValue[code] = perLocaleRows[code]?.[field.column];
       }
-      row[field.name] = resolveLocalizedValue(perLocaleValue, args.localeChain);
+      row[field.name] = resolveLocalizedValue(perLocaleValue, chain);
     }
   }
 }
