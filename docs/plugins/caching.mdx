@@ -25,6 +25,9 @@ to whatever caches the read:
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { unstable_cache } from "next/cache";
 
+// Your plugin's own read, from its settings or its own table.
+declare function readDefaults(ctx: PluginContext): Promise<unknown>;
+
 export function siteDefaults(ctx: PluginContext) {
   return unstable_cache(() => readDefaults(ctx), ["my-plugin", "defaults"], {
     tags: [ctx.cache.tag("defaults")],
