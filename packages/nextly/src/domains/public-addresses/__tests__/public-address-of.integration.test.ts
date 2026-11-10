@@ -147,7 +147,10 @@ describe.each(getConfiguredTestDialects())(
       });
 
       expect(
-        await publicAddressOf({ kind: "collection", slug: "posts" }, created)
+        await publicAddressOf(
+          { kind: "collection", slug: "posts" },
+          created.item
+        )
       ).toEqual({ status: "resolved", path: "/blog/hello" });
     });
 
@@ -159,7 +162,10 @@ describe.each(getConfiguredTestDialects())(
       });
 
       expect(
-        await publicAddressOf({ kind: "collection", slug: "docs" }, created)
+        await publicAddressOf(
+          { kind: "collection", slug: "docs" },
+          created.item
+        )
       ).toEqual({ status: "resolved", path: "/guides/install" });
     });
 
@@ -194,7 +200,7 @@ describe.each(getConfiguredTestDialects())(
       });
 
       expect(
-        await publicAddressOf({ kind: "collection", slug: "notes" }, note)
+        await publicAddressOf({ kind: "collection", slug: "notes" }, note.item)
       ).toEqual({ status: "none" });
       expect(await publicAddressOf({ kind: "single", slug: "footer" })).toEqual(
         { status: "none" }
@@ -304,10 +310,16 @@ describe.each(getConfiguredTestDialects())(
       });
 
       expect(
-        await publicAddressOf({ kind: "collection", slug: "posts" }, created)
+        await publicAddressOf(
+          { kind: "collection", slug: "posts" },
+          created.item
+        )
       ).toEqual({ status: "resolved", path: "/blog/hello" });
       expect(
-        await publicAddressOf({ kind: "collection", slug: "notes" }, created)
+        await publicAddressOf(
+          { kind: "collection", slug: "notes" },
+          created.item
+        )
       ).toEqual({ status: "none" });
       expect(await publicAddressOf({ kind: "single", slug: "footer" })).toEqual(
         { status: "none" }
