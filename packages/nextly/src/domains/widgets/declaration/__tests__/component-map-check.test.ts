@@ -141,7 +141,9 @@ describe("in development", () => {
       expect.any(String),
       process.cwd(),
       undefined,
-      dashboard
+      dashboard,
+      // And no collections of the site's own.
+      undefined
     );
     expect(info).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -159,11 +161,42 @@ describe("in development", () => {
       process.cwd(),
       // No config file here, so the map is written without the config's check, as before.
       undefined,
-      // And no widgets of the site's own.
+      // And no widgets or collections of the site's own.
+      undefined,
       undefined
     );
     expect(info).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "admin-component-map-regenerated" })
+    );
+  });
+
+  it("writes the map again with the views the site's own collections name", async () => {
+    const collections = [
+      {
+        slug: "orders",
+        fields: [],
+        admin: {
+          components: {
+            views: { Edit: { Component: "@acme/site/views#OrderEditor" } },
+          },
+        },
+      },
+    ];
+    const withViews = { ...config, collections } as unknown as typeof config;
+
+    // A map without the view is out of date, and is written again with the
+    // site's collections, so the rewrite keeps it.
+    await checkAdminComponents({
+      config: withViews,
+      registeredComponentPaths: BOTH,
+    });
+    expect(writeComponentMapFiles).toHaveBeenCalledWith(
+      [shop],
+      expect.any(String),
+      process.cwd(),
+      undefined,
+      undefined,
+      collections
     );
   });
 
@@ -319,6 +352,7 @@ describe("where the map is", () => {
       join(root, "types/generated/nextly-types.ts"),
       root,
       join(root, "nextly.config.ts"),
+      undefined,
       undefined
     );
 
@@ -362,6 +396,7 @@ describe("the config a development rewrite checks against", () => {
       join(root, "src/types/generated/nextly-types.ts"),
       root,
       join(root, "config/site.config.mjs"),
+      undefined,
       undefined
     );
   });
@@ -405,7 +440,8 @@ describe("the config a development rewrite checks against", () => {
       join(root, "src/types/generated/nextly-types.ts"),
       root,
       join(root, "nextly.config.ts"),
-      notesDashboard
+      notesDashboard,
+      undefined
     );
   });
 
@@ -441,33 +477,29 @@ describe("a site collection's own views", () => {
   beforeEach(() => vi.stubEnv("NODE_ENV", "development"));
 
   // `generate:types` lists the views the site's own collections name, and the
-  // development check does not collect them yet: it reads them as obsolete and
-  // its rewrite would remove them. Held as an expected failure, and a plain
-  // `it` once the check collects them too.
-  it.fails(
-    "leaves alone a map listing a site collection's custom edit view",
-    async () => {
-      const withViews = {
-        ...config,
-        collections: [
-          {
-            slug: "orders",
-            fields: [],
-            admin: {
-              components: {
-                views: { Edit: { Component: "./views/orders#OrderEditor" } },
-              },
+  // development check collects them too: read as obsolete, its rewrite would
+  // remove them.
+  it("leaves alone a map listing a site collection's custom edit view", async () => {
+    const withViews = {
+      ...config,
+      collections: [
+        {
+          slug: "orders",
+          fields: [],
+          admin: {
+            components: {
+              views: { Edit: { Component: "./views/orders#OrderEditor" } },
             },
           },
-        ],
-      } as unknown as Parameters<typeof checkAdminComponents>[0]["config"];
+        },
+      ],
+    } as unknown as Parameters<typeof checkAdminComponents>[0]["config"];
 
-      await checkAdminComponents({
-        config: withViews,
-        registeredComponentPaths: [...BOTH, "./views/orders#OrderEditor"],
-      });
+    await checkAdminComponents({
+      config: withViews,
+      registeredComponentPaths: [...BOTH, "./views/orders#OrderEditor"],
+    });
 
-      expect(writeComponentMapFiles).not.toHaveBeenCalled();
-    }
-  );
+    expect(writeComponentMapFiles).not.toHaveBeenCalled();
+  });
 });

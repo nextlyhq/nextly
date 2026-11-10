@@ -39,6 +39,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
+import type { CollectionConfig } from "../../../collections/config/define-collection";
 import { getNextly } from "../../../init";
 import { getNextlyLogger } from "../../../observability/logger";
 import {
@@ -68,6 +69,14 @@ import {
   adminSiteDashboard,
 } from "./component-map-store";
 
+/** What the site's own config declares beside its plugins, which the map lists too. */
+interface SiteDeclarations {
+  /** The site dashboard the boot registered. */
+  readonly siteDashboard: unknown;
+  /** The site's own collections, whose own views the map lists. */
+  readonly siteCollections: readonly CollectionConfig[] | undefined;
+}
+
 /** What the admin's server layout hands the check. */
 export interface AdminComponentCheckInput {
   /** The app's config, as `nextly.config.ts` exports it. */
@@ -95,6 +104,10 @@ export async function checkAdminComponents(
   // boot registered them: after every plugin's setup(), which may add one the
   // config as written does not hold.
   const siteDashboard = adminSiteDashboard();
+  // And the views the site's own collections name, as `generate:types` lists
+  // them: left out here, the map holding them would read as out of date and
+  // be written again without them.
+  const siteCollections = input.config.collections;
   const place = mapFolder(input.config);
   // Every use, not one per path: two widgets drawn with one missing component
   // are both named. A contribution whose module is not there is left out, as
@@ -103,6 +116,7 @@ export async function checkAdminComponents(
   const uses = componentUses(
     plugins,
     siteDashboard,
+    siteCollections,
     unbackedPaths(
       unbackedContributions(
         plugins,
@@ -123,7 +137,12 @@ export async function checkAdminComponents(
   const obsolete = [...registered].filter(path => !declared.has(path));
   const otherConfig =
     missing.length === 0 && obsolete.length === 0
-      ? await configDisagreement(plugins, siteDashboard, uses, place)
+      ? await configDisagreement(
+          plugins,
+          { siteDashboard, siteCollections },
+          uses,
+          place
+        )
       : undefined;
   if (missing.length === 0 && obsolete.length === 0 && !otherConfig) return;
 
@@ -132,7 +151,12 @@ export async function checkAdminComponents(
     warnStale(stale, place, "write-off");
     return;
   }
-  await rewriteInDevelopment(plugins, siteDashboard, place, stale);
+  await rewriteInDevelopment(
+    plugins,
+    { siteDashboard, siteCollections },
+    place,
+    stale
+  );
 }
 
 /**
@@ -146,7 +170,7 @@ export async function checkAdminComponents(
  */
 async function configDisagreement(
   plugins: readonly PluginDefinition[],
-  siteDashboard: unknown,
+  site: SiteDeclarations,
   uses: readonly ComponentMapEntry[],
   place: MapFolder
 ): Promise<ComponentMapAgreement["otherConfig"]> {
@@ -158,7 +182,8 @@ async function configDisagreement(
       place.typesOutputPath,
       process.cwd(),
       config,
-      siteDashboard
+      site.siteDashboard,
+      site.siteCollections
     );
     return found.otherConfig;
   } catch {
@@ -275,7 +300,7 @@ interface Stale {
 /** Write the map again from the config, and warn instead where it cannot be written. */
 async function rewriteInDevelopment(
   plugins: readonly PluginDefinition[],
-  siteDashboard: unknown,
+  site: SiteDeclarations,
   place: MapFolder,
   stale: Stale
 ): Promise<void> {
@@ -286,7 +311,8 @@ async function rewriteInDevelopment(
       place.typesOutputPath,
       process.cwd(),
       await heldConfig(place),
-      siteDashboard
+      site.siteDashboard,
+      site.siteCollections
     );
     getNextlyLogger().info({
       kind: "admin-component-map-regenerated",
