@@ -11,7 +11,6 @@ import {
   CardCollapseContext,
   type CardCollapse,
 } from "@admin/components/features/widgets/frame/collapse";
-import { CardGrowContext } from "@admin/components/features/widgets/frame/grow";
 import { cardBodyHeightPx } from "@admin/components/features/widgets/frame/measures";
 import { CardHeightContext } from "@admin/components/features/widgets/frame/tier";
 import { WIDGET_QUERIES_KEY } from "@admin/hooks/queries/widget-queries-key";
@@ -105,7 +104,6 @@ const readInPlace = () =>
 /** The card as the dashboard draws it, for `render` or a `rerender` with new data. */
 function tree(
   data: SetupCardData,
-  grow?: (px: number | undefined) => void,
   collapse?: CardCollapse,
   /** A newer answer is on its way, as the frame says while the card's data is read again. */
   refreshing = false
@@ -121,21 +119,15 @@ function tree(
       retry={retry}
     />
   );
-  const grown =
-    grow === undefined ? (
-      body
-    ) : (
-      <CardGrowContext.Provider value={grow}>{body}</CardGrowContext.Provider>
-    );
   // At the size core declares for it, 12 × 2, as the dashboard draws it.
   return (
     <CardHeightContext.Provider value={2}>
       {inFrame(
         collapse === undefined ? (
-          grown
+          body
         ) : (
           <CardCollapseContext.Provider value={collapse}>
-            {grown}
+            {body}
           </CardCollapseContext.Provider>
         ),
         "Set up your project"
@@ -144,12 +136,8 @@ function tree(
   );
 }
 
-function draw(
-  data: SetupCardData,
-  grow?: (px: number | undefined) => void,
-  collapse?: CardCollapse
-) {
-  return render(tree(data, grow, collapse));
+function draw(data: SetupCardData, collapse?: CardCollapse) {
+  return render(tree(data, collapse));
 }
 
 /** "N of M done", as the frame's header draws it beside the title. */
@@ -301,8 +289,7 @@ describe("the setup card", () => {
   });
 
   it("opens a short list of the Singles on choosing that tile, each with its state and link", () => {
-    const grow = vi.fn();
-    draw(dataOf(), grow);
+    draw(dataOf());
     const open = screen.getByRole("button", {
       name: "Open: Fill in your Singles",
     });
@@ -333,44 +320,6 @@ describe("the setup card", () => {
     for (const tile of tiles()) expect(tile).toHaveClass(SETUP_TILE.className);
     // Nothing but the bar, the row and nothing else is drawn in the body at rest.
     expect(body.children).toHaveLength(2);
-  });
-
-  it("asks the frame for no growth at rest, and grows only while the reader has the Singles' list open", () => {
-    const grow = vi.fn();
-    draw(dataOf(), grow);
-    // At rest the card keeps its two rows: nothing moves as the dashboard loads.
-    expect(grow).not.toHaveBeenCalledWith(expect.any(Number));
-    fireEvent.click(
-      screen.getByRole("button", { name: "Open: Fill in your Singles" })
-    );
-    expect(grow).toHaveBeenLastCalledWith(expect.any(Number));
-    fireEvent.click(
-      screen.getByRole("button", { name: "Hide: Fill in your Singles" })
-    );
-    expect(grow).toHaveBeenLastCalledWith(undefined);
-  });
-
-  it("asks no growth at rest even where its body measures taller than its rows, so it never grows a frame after its first paint", () => {
-    // What a body taller than 12 × 2 holds measures, as two rows of wrapped tiles did (124 px): a
-    // card that asked for it at rest was painted at its two rows and grew a frame later, moving
-    // every card under it on a phone.
-    const offsetHeight = vi
-      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
-      .mockImplementation(function (this: HTMLElement) {
-        return this.dataset.testid === "setup-card" ? 124 : 0;
-      });
-    try {
-      const grow = vi.fn();
-      draw(dataOf(), grow);
-      expect(grow).not.toHaveBeenCalledWith(expect.any(Number));
-      // The positive control: the reader's own action is measured and asked for.
-      fireEvent.click(
-        screen.getByRole("button", { name: "Open: Fill in your Singles" })
-      );
-      expect(grow).toHaveBeenLastCalledWith(124);
-    } finally {
-      offsetHeight.mockRestore();
-    }
   });
 
   it("links Add your first entry to a new entry of the first creatable collection, not the collections index", () => {
@@ -437,13 +386,13 @@ describe("the setup card", () => {
     );
   });
 
-  it("draws the collapsed card as the frame's header alone, its title, N of M done and its controls, one row tall", () => {
+  it("draws the collapsed card as the frame's header alone, its title, N of M done and its controls, one line tall", () => {
     const setCollapsed = vi.fn();
-    draw(dataOf({ collapsed: true }), undefined, {
+    draw(dataOf({ collapsed: true }), {
       collapsed: true,
       setCollapsed,
     });
-    // Asked of the frame before the paint, so the card is one row from its first frame.
+    // Asked of the frame before the paint, so the card is one line from its first frame.
     expect(setCollapsed).toHaveBeenLastCalledWith(true);
     expect(header()).toHaveTextContent("Set up your project");
     expect(headerCount()).toHaveTextContent("1 of 5 done");
@@ -457,14 +406,14 @@ describe("the setup card", () => {
     expect(screen.queryByTestId("setup-card")).toBeNull();
     expect(screen.getByTestId("widget-card-body")).toBeEmptyDOMElement();
     expect(screen.queryByRole("list", { name: "Setup steps" })).toBeNull();
-    // Opened, the frame draws the card at its own rows again.
+    // Opened, the frame draws the whole card again.
     fireEvent.click(screen.getByRole("button", { name: "Expand setup" }));
     expect(setCollapsed).toHaveBeenLastCalledWith(false);
   });
 
   it("never asks the frame to collapse a card that is all set or could not check setup", () => {
     const setCollapsed = vi.fn();
-    draw(dataOf({ collapsed: true, setup: { known: false } }), undefined, {
+    draw(dataOf({ collapsed: true, setup: { known: false } }), {
       collapsed: false,
       setCollapsed,
     });
@@ -771,10 +720,10 @@ describe("the setup card", () => {
     );
     // Landed: the card's data is asked for again, and the read is on its way.
     await waitFor(() => expect(retry).toHaveBeenCalled());
-    rerender(tree(dataOf(), undefined, undefined, true));
+    rerender(tree(dataOf(), undefined, true));
     expect(screen.queryByRole("list", { name: "Setup steps" })).toBeNull();
     // The read answers expanded: another device expanded it after this write landed.
-    rerender(tree(dataOf({ collapsed: false }), undefined, undefined, false));
+    rerender(tree(dataOf({ collapsed: false }), undefined, false));
     expect(
       screen.getByRole("list", { name: "Setup steps" })
     ).toBeInTheDocument();

@@ -14,25 +14,18 @@ import { describe, expect, it } from "vitest";
 import {
   AS_SIZED_FROM_PX,
   COLUMN_GAP_PX,
-  CONTENT_ROWS_GRID_CLASS,
   GRID_CLASS,
   ROW_GAP_PX,
-  ROW_HEIGHT_PX,
   SPAN_CLASSES,
   TWO_UP_FROM_PX,
   WIDE_COLUMN_GAP_PX,
   WIDE_GAP_FROM_PX,
-  cardHeightPx,
-  cardRowStyle,
   cardSpanClass,
   columnGapPx,
   columnsName,
-  dashboardGridClass,
   drawnSize,
   drawnSpan,
-  heightChoices,
   isOneColumn,
-  rowsName,
   sizeName,
   widthChoiceName,
   widthChoices,
@@ -182,53 +175,25 @@ describe("span classes", () => {
   });
 
   it("writes every class out in full, because Tailwind scans source text", () => {
-    for (const value of [
-      ...Object.values(SPAN_CLASSES),
-      GRID_CLASS,
-      CONTENT_ROWS_GRID_CLASS,
-    ]) {
+    for (const value of [...Object.values(SPAN_CLASSES), GRID_CLASS]) {
       expect(value).not.toMatch(/[$`{}]/);
     }
   });
 });
 
-describe("rows, gaps and a card's height", () => {
-  it("spans a card's h rows with a style the band never changes", () => {
-    expect(cardRowStyle(3)).toEqual({ gridRow: "span 3 / span 3" });
-  });
-
-  it("makes a card h x 72 px plus the 16 px gaps between its rows", () => {
-    expect(ROW_HEIGHT_PX).toBe(72);
-    expect(ROW_GAP_PX).toBe(16);
-    expect(cardHeightPx(2)).toBe(160);
-    expect(cardHeightPx(3)).toBe(248);
-    expect(cardHeightPx(4)).toBe(336);
-    expect(cardHeightPx(6)).toBe(512);
-  });
-
-  it("draws the grid twelve columns wide in rows of 72 px, in order, never dense", () => {
+describe("rows and gaps", () => {
+  it("draws the grid twelve columns wide in rows as tall as their cards, in order, never dense", () => {
     const classes = GRID_CLASS.split(" ");
     expect(classes).toContain("grid-cols-12");
-    expect(classes).toContain("auto-rows-[72px]");
     expect(classes).toContain("grid-flow-row");
+    // 🔴 Rows take their tallest card's height: a fixed row height would clip or pad every card.
+    expect(classes).toContain("auto-rows-auto");
+    expect(classes.filter(name => name.startsWith("auto-rows-"))).toEqual([
+      "auto-rows-auto",
+    ]);
     // 🔴 A dense grid backfills a gap with a later card, so the drawn order would leave the
     // saved order the reading and Tab order follow.
     expect(GRID_CLASS).not.toMatch(/dense/);
-  });
-
-  it("draws fixed rows while customising and rows as tall as their cards at rest, the columns and gaps the same", () => {
-    // 🔴 Fails with fixed rows at rest, where a card can never be drawn shorter than its stored
-    // size; and with content rows while customising, where a card is resized by its rows.
-    const editing = dashboardGridClass(true).split(" ");
-    const resting = dashboardGridClass(false).split(" ");
-    expect(dashboardGridClass(true)).toBe(GRID_CLASS);
-    expect(editing).toContain("auto-rows-[72px]");
-    expect(resting).toContain("auto-rows-auto");
-    expect(resting).not.toContain("auto-rows-[72px]");
-    // Everything but the rows is shared, so a card lands in the same row and columns in both.
-    const withoutRows = (classes: string[]) =>
-      classes.filter(name => !name.startsWith("auto-rows-")).sort();
-    expect(withoutRows(resting)).toEqual(withoutRows(editing));
   });
 
   it("gaps 16 px across below a 1,280 px dashboard and 24 px from it, 16 px down at every width", () => {
@@ -237,6 +202,7 @@ describe("rows, gaps and a card's height", () => {
     expect([COLUMN_GAP_PX, WIDE_COLUMN_GAP_PX, WIDE_GAP_FROM_PX]).toEqual([
       16, 24, 1280,
     ]);
+    expect(ROW_GAP_PX).toBe(16);
     // The class text says the same, answering to the dashboard's container.
     const classes = GRID_CLASS.split(" ");
     expect(classes).toContain("gap-x-[16px]");
@@ -275,41 +241,22 @@ describe("the sizes the card menu offers", () => {
     ).toEqual([4, 6, 8]);
   });
 
-  it("offers every height within the bounds", () => {
-    expect(
-      heightChoices(bounds({ w: 3, h: 2 }, { w: 6, h: 3 }, { w: 12, h: 5 }))
-    ).toEqual([2, 3, 4, 5]);
-    expect(
-      heightChoices(bounds({ w: 3, h: 3 }, { w: 6, h: 3 }, { w: 12, h: 3 }))
-    ).toEqual([3]);
-  });
-
-  it("never offers more heights than the grid's twelve rows, whatever the bounds say", () => {
-    // 🔴 Bounds that reached the admin unchecked must not become thousands of menu items, or a
-    // RangeError from an array as long as the maximum.
-    const huge = heightChoices(
-      bounds({ w: 3, h: 2 }, { w: 6, h: 3 }, { w: 12, h: 1e9 })
-    );
-    expect(huge).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-  });
-
   it("never offers a size past the bounds", () => {
     const range = bounds({ w: 4, h: 2 }, { w: 6, h: 3 }, { w: 8, h: 4 });
     for (const w of widthChoices(range)) {
       expect(w).toBeGreaterThanOrEqual(4);
       expect(w).toBeLessThanOrEqual(8);
     }
-    expect(Math.max(...heightChoices(range))).toBe(4);
-    expect(Math.min(...heightChoices(range))).toBe(2);
   });
 
-  it("names a size by its share of the row and its rows", () => {
+  it("names a size by its share of the row alone, its stored rows unsaid", () => {
     expect(columnsName(1)).toBe("1 column");
     expect(columnsName(6)).toBe("6 columns");
-    expect(rowsName(4)).toBe("4 rows");
-    expect(sizeName({ w: 6, h: 4 })).toBe("50% wide by 4 rows");
+    // A stored `h` sets no height, so two sizes of one width are named alike.
+    expect(sizeName({ w: 6, h: 4 })).toBe("50% wide");
+    expect(sizeName({ w: 6, h: 9 })).toBe("50% wide");
     // A width that is no named one is said by its own share, rounded.
-    expect(sizeName({ w: 5, h: 3 })).toBe("42% wide by 3 rows");
+    expect(sizeName({ w: 5, h: 3 })).toBe("42% wide");
   });
 
   it("offers a named width by its percent, its columns beneath", () => {

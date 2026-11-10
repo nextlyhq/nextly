@@ -13,44 +13,40 @@ import { describe, expect, it } from "vitest";
 import {
   dropLineFor,
   finalPositionAt,
+  gridPlacements,
   keyboardStep,
   type DrawnCard,
 } from "../drop-geometry";
 
 /**
- * Two rows on a 1200 px grid with 16 px gaps, each card three rows (248 px)
- * high: a half and a half, then a third, a third and a third. Rects are
- * relative to the grid, rounded to whole pixels.
+ * Two rows on a 1200 px grid with 16 px gaps, each card 248 px tall: a half
+ * and a half, then a third, a third and a third. Rects are relative to the
+ * grid, rounded to whole pixels.
  */
 const CARDS: DrawnCard[] = [
   {
     id: "a",
     span: 6,
-    rows: 3,
     rect: { left: 0, top: 0, right: 592, bottom: 248 },
   },
   {
     id: "b",
     span: 6,
-    rows: 3,
     rect: { left: 608, top: 0, right: 1200, bottom: 248 },
   },
   {
     id: "c",
     span: 4,
-    rows: 3,
     rect: { left: 0, top: 264, right: 389, bottom: 512 },
   },
   {
     id: "d",
     span: 4,
-    rows: 3,
     rect: { left: 405, top: 264, right: 795, bottom: 512 },
   },
   {
     id: "e",
     span: 4,
-    rows: 3,
     rect: { left: 811, top: 264, right: 1200, bottom: 512 },
   },
 ];
@@ -82,13 +78,11 @@ describe("finalPositionAt: which position the pointer is over", () => {
       {
         id: "x",
         span: 12,
-        rows: 3,
         rect: { left: 0, top: 0, right: 1200, bottom: 248 },
       },
       {
         id: "y",
         span: 12,
-        rows: 3,
         rect: { left: 0, top: 264, right: 1200, bottom: 512 },
       },
     ];
@@ -131,54 +125,82 @@ describe("dropLineFor: where the line is drawn", () => {
     });
   });
 
-  it("places a card beside a taller one, under a shorter one, as the grid does", () => {
-    // 🔴 A tall half (four rows) and a short half (two rows), then a half moved after them.
-    // The grid puts it in the right-hand columns under the short half, beside the tall one's
-    // lower rows. Counting columns alone, it starts a row of its own after twelve columns and
-    // the line runs across the whole grid, below cards the card does not go below.
-    const cards: DrawnCard[] = [
+  describe("rows as tall as their tallest card, in the order after the move", () => {
+    /**
+     * Two halves side by side, 200 and 300 px tall, then two halves 150 and 100 px tall on the
+     * row below, which is drawn at 316 px (300 and the 16 px gap).
+     */
+    const MIXED: DrawnCard[] = [
+      { id: "x", span: 6, rect: { left: 0, top: 0, right: 592, bottom: 200 } },
       {
-        id: "tall",
+        id: "y",
         span: 6,
-        rows: 4,
-        rect: { left: 0, top: 0, right: 592, bottom: 336 },
+        rect: { left: 608, top: 0, right: 1200, bottom: 300 },
       },
       {
-        id: "short",
+        id: "z",
         span: 6,
-        rows: 2,
-        rect: { left: 608, top: 0, right: 1200, bottom: 160 },
+        rect: { left: 0, top: 316, right: 592, bottom: 466 },
       },
       {
-        id: "moved",
+        id: "w",
         span: 6,
-        rows: 2,
-        rect: { left: 0, top: 352, right: 592, bottom: 512 },
-      },
-      {
-        id: "last",
-        span: 6,
-        rows: 2,
-        rect: { left: 608, top: 352, right: 1200, bottom: 512 },
+        rect: { left: 608, top: 316, right: 1200, bottom: 416 },
       },
     ];
-    // `last` to just after `short`: it lands under `short`, at row three, column seven.
-    expect(dropLineFor(cards, 3, 2, GRID_WIDTH)).toEqual({
-      orientation: "vertical",
-      x: 600,
-      top: 176,
-      length: 160,
+
+    it("puts the line above a row below the first row's tallest card", () => {
+      // 🔴 `w` to before `z` starts the second row: the gap above it is under `y`, the taller of
+      // the first row's cards, at 300 + 16 / 2. The first card's height would put it at 208,
+      // and the moved card's own at 108.
+      expect(dropLineFor(MIXED, 3, 2, GRID_WIDTH)).toEqual({
+        orientation: "horizontal",
+        y: 300 + 16 - 8,
+        x: 0,
+        length: GRID_WIDTH,
+      });
     });
-    // The must-differ half: two full-height halves leave no room beside them, so the next half
-    // starts a row, and that line does run across the grid.
-    const even = cards.map(card =>
-      card.id === "short" ? { ...card, rows: 4 } : card
-    );
-    expect(dropLineFor(even, 3, 2, GRID_WIDTH)).toEqual({
-      orientation: "horizontal",
-      y: 344,
-      x: 0,
-      length: GRID_WIDTH,
+
+    it("draws a vertical line as tall as its row will be once the card has moved", () => {
+      // `z` to between `x` and `y`: `y` goes down a row, so the first row holds `x` and `z`, and
+      // is 200 px tall, not the 300 `y` made it before, nor `z`'s own 150.
+      expect(dropLineFor(MIXED, 2, 1, GRID_WIDTH)).toEqual({
+        orientation: "vertical",
+        x: 600,
+        top: 0,
+        length: 200,
+      });
+      // `x` to the end: `y` and `z` share the first row (300 px), so the second starts at 316,
+      // and `w` and `x` make it 200 px tall.
+      expect(dropLineFor(MIXED, 0, 3, GRID_WIDTH)).toEqual({
+        orientation: "vertical",
+        x: 600,
+        top: 316,
+        length: 200,
+      });
+    });
+
+    it("sizes a row by each card's content, not the height its old row stretched it to", () => {
+      // As a page draws them: `x` stretched to its row's 300 px, its content 200 px tall. `z` to
+      // between `x` and `y` leaves `x` and `z` in the first row, which is then 200 px tall, as
+      // `x`'s content is, not the 300 its old row stretched it to.
+      const stretched: DrawnCard[] = MIXED.map(card =>
+        card.id === "x"
+          ? { ...card, contentHeight: 200, rect: { ...card.rect, bottom: 300 } }
+          : card.id === "w"
+            ? {
+                ...card,
+                contentHeight: 100,
+                rect: { ...card.rect, bottom: 466 },
+              }
+            : card
+      );
+      expect(dropLineFor(stretched, 2, 1, GRID_WIDTH)).toEqual({
+        orientation: "vertical",
+        x: 600,
+        top: 0,
+        length: 200,
+      });
     });
   });
 
@@ -203,6 +225,35 @@ describe("dropLineFor: where the line is drawn", () => {
       x: 0,
       length: GRID_WIDTH,
     });
+  });
+});
+
+describe("gridPlacements: where the grid places each card", () => {
+  it("places each card one row high, beside the last while its span fits, else at the next row's start", () => {
+    expect(
+      gridPlacements([
+        { span: 6 },
+        { span: 4 },
+        { span: 4 },
+        { span: 12 },
+        { span: 3 },
+      ])
+    ).toEqual([
+      { column: 0, row: 0 },
+      { column: 6, row: 0 },
+      { column: 0, row: 1 },
+      { column: 0, row: 2 },
+      { column: 0, row: 3 },
+    ]);
+  });
+
+  it("never backfills a gap with a later card", () => {
+    // 🔴 A dense grid would put the third card in the four columns left beside the first.
+    expect(gridPlacements([{ span: 8 }, { span: 6 }, { span: 4 }])).toEqual([
+      { column: 0, row: 0 },
+      { column: 0, row: 1 },
+      { column: 6, row: 1 },
+    ]);
   });
 });
 

@@ -180,18 +180,14 @@ beforeEach(() => vi.clearAllMocks());
 
 describe("the quick popover of core's cards", () => {
   it.each([
-    [CORE_WIDGET_ID.count, "Count", ["Collection", "Width", "Height"]],
+    [CORE_WIDGET_ID.count, "Count", ["Collection", "Width"]],
     [
       CORE_WIDGET_ID.overTime,
       "Over time",
-      ["Collection", "Date range", "Width", "Height"],
+      ["Collection", "Date range", "Width"],
     ],
-    [
-      CORE_WIDGET_ID.recentEntries,
-      "Recent entries",
-      ["Collection", "Width", "Height"],
-    ],
-    [CORE_WIDGET_ID.note, "Note", ["Width", "Height"]],
+    [CORE_WIDGET_ID.recentEntries, "Recent entries", ["Collection", "Width"]],
+    [CORE_WIDGET_ID.note, "Note", ["Width"]],
   ])(
     "for %s holds its Collection, its quick setting and its Size, then More settings",
     async (id, title, expected) => {

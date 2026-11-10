@@ -207,6 +207,23 @@ describe("the preview while the panel's filters match nothing", () => {
     expect(onClearFilters).toHaveBeenCalledTimes(1);
   });
 
+  it("sizes its room to the notice, never clipping it to the scaled card's height", async () => {
+    // A wide card scaled into a narrow panel stands far shorter than the notice's text and
+    // button; the room must not be held at the scaled card's height.
+    preview({
+      w: 12,
+      cardWidth: 1400,
+      draft: { collection: "posts", where: { title: { equals: "nothing" } } },
+      onClearFilters: () => {},
+    });
+    await screen.findByText(NO_FILTER_MATCH, {}, { timeout: 3000 });
+    const notice = screen.getByTestId("settings-preview-no-match");
+    expect(notice).not.toHaveClass("absolute");
+    expect(screen.getByTestId("settings-preview-room").style.height).toBe("");
+    // The card it stands in for is drawn out of the room's flow, so only the notice sizes it.
+    expect(screen.getByTestId("settings-preview")).toHaveClass("absolute");
+  });
+
   it("says so too for a filter its widget sets by default, which the stored settings leave out", async () => {
     // Stored settings hold only what departs from a default, so a default filter is absent from
     // them while the card still reads by it.

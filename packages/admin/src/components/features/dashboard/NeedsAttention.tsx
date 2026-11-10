@@ -3,17 +3,15 @@
 import { Button } from "@nextlyhq/ui";
 import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
-import { useContext, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { AlertTriangle } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
 import { EntityRow, ENTITY_LEADING_CLASS } from "../widgets/frame/entity-row";
-import { leavesRowsEmpty, useCardFitsContent } from "../widgets/frame/fit";
 import { useRowFold, type RowFold } from "../widgets/frame/fold";
 import { CardFooterContent } from "../widgets/frame/footer-slot";
 import { LIST_ROW_HEIGHT_CLASS } from "../widgets/frame/geometry";
-import { CardHeightContext } from "../widgets/frame/tier";
 import { useCardTitleCount } from "../widgets/frame/title-count";
 import { useRevealedWhileViewed } from "../widgets/hidden-while-empty";
 
@@ -62,7 +60,6 @@ export const NeedsAttention: React.FC<DeclaredComponentProps> = ({
   const rows = useMemo(() => attentionRows(data), [data]);
   const fold = useRowFold(rows.length);
   useCardTitleCount(rows.length);
-  useFitsItsItems(fold, rows.length);
   const arrival = useArrivalAnnouncement(
     useRevealedWhileViewed(placementId),
     rows.length
@@ -128,22 +125,6 @@ export const NeedsAttention: React.FC<DeclaredComponentProps> = ({
 };
 
 NeedsAttention.displayName = "NeedsAttention";
-
-/**
- * Asks the card's cell for the height of its `count` items while they leave a whole row of its
- * stored body empty (`frame/fit`). Never while the fold holds rows back: those rows are folded
- * because the body it measured is too short for them, as when their text wraps, and a card drawn
- * at the folded rows' height would be measured again with them all drawn and grow, then fold them
- * again.
- */
-function useFitsItsItems(fold: RowFold, count: number): void {
-  const storedRows = useContext(CardHeightContext);
-  useCardFitsContent(
-    fold.listRef,
-    leavesRowsEmpty(count, storedRows, "default") && fold.shown >= count,
-    count
-  );
-}
 
 /**
  * The rows the reader's "Show N more" revealed, while they are shown: focus moves to the first of

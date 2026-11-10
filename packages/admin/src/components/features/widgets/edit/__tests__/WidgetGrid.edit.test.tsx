@@ -275,16 +275,13 @@ async function choose(
   await user.click(within(menu).getByRole("menuitem", { name: item }));
 }
 
-/** Opens a card's Width or Height submenu and returns it. */
+/** Opens a card's Width submenu and returns it. */
 async function openSizes(
   user: ReturnType<typeof userEvent.setup>,
-  title: string,
-  axis: "Width" | "Height" = "Width"
+  title: string
 ) {
   const menu = await openMenu(user, title);
-  await user.click(
-    within(menu).getByRole("menuitem", { name: new RegExp(axis) })
-  );
+  await user.click(within(menu).getByRole("menuitem", { name: /Width/ }));
   return waitFor(() => {
     const menus = screen.getAllByRole("menu");
     expect(menus.length).toBe(2);
@@ -365,7 +362,8 @@ describe("the dashboard is one ordered list", () => {
     await screen.findByTestId("dashboard-edit-begin");
     const cell = screen.getByTestId("widget-cell-core/a");
     expect(cell).toHaveClass("@min-[1024px]/dashboard:col-span-3");
-    expect(cell.style.gridRow).toBe("span 5 / span 5");
+    // Its stored rows set no height: no row span, the card as tall as its content.
+    expect(cell.style.gridRow).toBe("");
   });
 
   it("draws a stored size outside its widget's bounds at the nearest size inside them", async () => {
@@ -382,11 +380,9 @@ describe("the dashboard is one ordered list", () => {
     await screen.findByTestId("dashboard-edit-begin");
     const clamped = screen.getByTestId("widget-cell-core/a");
     expect(clamped).toHaveClass("@min-[1024px]/dashboard:col-span-8");
-    expect(clamped.style.gridRow).toBe("span 4 / span 4");
-    // Each direction only as far as it must: too narrow is widened, its rows kept.
+    // Too narrow is widened.
     const widened = screen.getByTestId("widget-cell-core/b");
     expect(widened).toHaveClass("@min-[1024px]/dashboard:col-span-4");
-    expect(widened.style.gridRow).toBe("span 2 / span 2");
   });
 
   it("does not draw a removed card", async () => {
@@ -418,8 +414,8 @@ describe("entering customise mode", () => {
     await beginEditing();
     const labels = screen.getAllByTestId("card-size-label");
     expect(labels.map(label => label.textContent)).toEqual([
-      "50%50% wide by 3 rows",
-      "25%25% wide by 4 rows",
+      "50%50% wide",
+      "25%25% wide",
     ]);
   });
 
@@ -538,26 +534,9 @@ describe("choosing a size", () => {
     expect(within(half).getByText("6 columns")).toBeInTheDocument();
   });
 
-  it("lists every height within the widget's bounds, the current one checked", async () => {
-    renderGrid();
-    const user = await beginEditing();
-
-    const heights = await openSizes(user, "Widget core/a", "Height");
-    const items = within(heights).getAllByRole("menuitemradio");
-    expect(items.map(i => i.textContent)).toEqual([
-      "2 rows",
-      "3 rows",
-      "4 rows",
-    ]);
-    expect(
-      within(heights).getByRole("menuitemradio", { name: "3 rows" })
-    ).toHaveAttribute("aria-checked", "true");
-  });
-
-  it("offers no Height for a widget of one height", async () => {
-    mockBranding = branding(["core/a", "core/b", "core/c"], {
-      "core/a": { size: { default: { w: 6, h: 3 } } },
-    });
+  it("offers no Height, though the widget's bounds allow several", async () => {
+    // 🔴 `core/a` may be two to six rows high: a card is as tall as its content, so its stored
+    // rows are not offered to change.
     renderGrid();
     const user = await beginEditing();
     const menu = await openMenu(user, "Widget core/a");
@@ -567,7 +546,7 @@ describe("choosing a size", () => {
     ).toBeInTheDocument();
   });
 
-  it("applies a width at once, keeping the rows, and says so", async () => {
+  it("applies a width at once, keeping the stored h, and says so by the width alone", async () => {
     renderGrid();
     const user = await beginEditing();
 
@@ -580,36 +559,15 @@ describe("choosing a size", () => {
     expect(screen.getByTestId("widget-cell-core/a")).toHaveClass(
       "@min-[1024px]/dashboard:col-span-4"
     );
-    expect(live()).toHaveTextContent(
-      "Widget core/a set to 33% wide by 3 rows."
-    );
-    expect(screen.getByTestId("card-size-label")).toHaveTextContent(
-      "33%33% wide by 3 rows"
+    expect(live()).toHaveTextContent("Widget core/a set to 33% wide.");
+    expect(screen.getByTestId("card-size-label").textContent).toBe(
+      "33%33% wide"
     );
     // Nothing written until Save.
     expect(api.put).not.toHaveBeenCalled();
     await user.click(screen.getByTestId("dashboard-edit-save"));
     await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
     expect(putBody().placements[0]).toMatchObject({ w: 4, h: 3 });
-  });
-
-  it("applies a height at once, keeping the columns", async () => {
-    renderGrid();
-    const user = await beginEditing();
-
-    const heights = await openSizes(user, "Widget core/a", "Height");
-    within(heights).getByRole("menuitemradio", { name: "4 rows" }).focus();
-    await user.keyboard("{Enter}");
-
-    expect(screen.getByTestId("widget-cell-core/a").style.gridRow).toBe(
-      "span 4 / span 4"
-    );
-    expect(live()).toHaveTextContent(
-      "Widget core/a set to 50% wide by 4 rows."
-    );
-    await user.click(screen.getByTestId("dashboard-edit-save"));
-    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
-    expect(putBody().placements[0]).toMatchObject({ w: 6, h: 4 });
   });
 
   it("checks the DRAWN size when the stored one is outside the bounds, and saves it unchanged", async () => {
@@ -1699,30 +1657,20 @@ describe("at one column", () => {
 
     const menu = await openMenu(user, "Widget core/a");
     expect(screen.queryByTestId("card-width-menu")).toBeNull();
-    expect(screen.queryByTestId("card-height-menu")).toBeNull();
     expect(
       within(menu)
         .getAllByRole("menuitemradio")
         .map(item => item.getAttribute("aria-label"))
-    ).toEqual([
-      "33% width",
-      "50% width",
-      "66% width",
-      "2 rows",
-      "3 rows",
-      "4 rows",
-    ]);
+    ).toEqual(["33% width", "50% width", "66% width"]);
     expect(
       within(menu).getByRole("menuitemradio", { name: "50% width" })
     ).toHaveAttribute("aria-checked", "true");
 
     within(menu).getByRole("menuitemradio", { name: "33% width" }).focus();
     await user.keyboard("{Enter}");
-    expect(live()).toHaveTextContent(
-      "Widget core/a set to 33% wide by 3 rows."
-    );
-    expect(screen.getByTestId("card-size-label")).toHaveTextContent(
-      "33%33% wide by 3 rows"
+    expect(live()).toHaveTextContent("Widget core/a set to 33% wide.");
+    expect(screen.getByTestId("card-size-label").textContent).toBe(
+      "33%33% wide"
     );
   });
 
