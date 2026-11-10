@@ -1293,6 +1293,9 @@ const COLLECTIONS_METHODS: Record<
         // disables fallback. Non-localized collections ignore both.
         locale: p.locale,
         fallbackLocale: p["fallback-locale"],
+        // `?fallback=document`: answer in the first published language of the
+        // chain where the entry is not published in the requested one.
+        wholeDocumentFallback: parseFallbackParam(p.fallback),
         // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
         translationStatus: isTruthyParam(p["translation-status"]),
       });
@@ -1624,3 +1627,22 @@ export const formatToastSummaryForTest = formatToastSummary;
 // Test seam for the hint-receipt decision helper. The behavioural
 // contract is "non-empty renames map -> log; everything else -> silent".
 export const shouldLogF14HintReceiptForTest = shouldLogF14HintReceipt;
+
+/**
+ * `?fallback=`: `document` opts a read in to whole-document fallback, and
+ * absent leaves it off. Any other value is refused rather than ignored, so a
+ * read never goes ahead without the fallback its caller asked for.
+ */
+function parseFallbackParam(value: unknown): boolean {
+  if (value === undefined || value === null || value === "") return false;
+  if (value === "document") return true;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "fallback",
+        code: "INVALID_VALUE",
+        message: 'fallback must be "document".',
+      },
+    ],
+  });
+}

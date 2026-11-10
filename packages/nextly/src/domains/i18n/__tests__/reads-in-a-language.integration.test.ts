@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../../config";
+import { createDynamicHandlers } from "../../../routeHandler";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -28,6 +29,9 @@ afterEach(async () => {
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    // The boot's seeding, so a visitor's REST read is judged by the Public
+    // role, which the `read` rule below grants.
+    seedPublic: true,
     collections: [
       defineCollection({
         slug: DOCS,
@@ -72,6 +76,24 @@ async function publishIn(
     locale,
     data: { ...data, status: "published", _overwrite: true },
   });
+}
+
+/** A visitor's REST read of one document, with `query` (`?locale=…`). */
+async function restRead(
+  id: string,
+  query: string
+): Promise<{ status: number; json: Record<string, unknown> }> {
+  const path = ["collections", DOCS, "entries", id];
+  const res = await createDynamicHandlers().GET(
+    new Request(`http://localhost/api/${path.join("/")}${query}`, {
+      headers: { origin: "http://localhost" },
+    }),
+    { params: Promise.resolve({ params: path }) }
+  );
+  return {
+    status: res.status,
+    json: (await res.json()) as Record<string, unknown>,
+  };
 }
 
 /** A public reader's read of one document in `locale`. */
@@ -188,6 +210,33 @@ describe.each(getConfiguredTestDialects())(
         wholeDocumentFallback: true,
       })) as Record<string, unknown>;
       expect(own).toMatchObject({ title: "A en español", _locale: "es" });
+    }, 90_000);
+
+    // The same two answers through REST, to a visitor: not found by default,
+    // and with `?fallback=document` the first published language, named.
+    it("answers a visitor's REST read the same way, with ?fallback=document to opt in", async () => {
+      const t = await boot(dialect);
+      const englishOnly = await publishedInEnglish(t, {
+        title: "B in English",
+        slug: "b",
+      });
+
+      const missing = await restRead(englishOnly, "?locale=es");
+      expect(missing.status, JSON.stringify(missing.json)).toBe(404);
+
+      const fellBack = await restRead(
+        englishOnly,
+        "?locale=es&fallback=document"
+      );
+      expect(fellBack.status, JSON.stringify(fellBack.json)).toBe(200);
+      expect(fellBack.json).toMatchObject({
+        title: "B in English",
+        _locale: "en",
+      });
+
+      // A fallback the API does not know is refused, never ignored.
+      const unknown = await restRead(englishOnly, "?locale=es&fallback=field");
+      expect(unknown.status, JSON.stringify(unknown.json)).toBe(400);
     }, 90_000);
   }
 );
