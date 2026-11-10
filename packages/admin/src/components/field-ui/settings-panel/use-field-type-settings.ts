@@ -31,7 +31,11 @@ export type FieldTypeSettingsLookup =
  * The type's settings. A plugin's are made once per declared list, so the
  * controls keep their identity while a person types.
  */
-export function useFieldTypeSettings(type: string): FieldTypeSettingsLookup {
+export function useFieldTypeSettings(
+  type: string,
+  // The surface's own settings by type, which win over the core table's.
+  surfaceTypes?: Readonly<Partial<Record<string, FieldTypeSettings>>>
+): FieldTypeSettingsLookup {
   const declared = pluginFieldTypeSettings(useBranding().plugins, type);
   const { isPending, isUnavailable, retry } = useBrandingStatus();
   const fromPlugin = useMemo(
@@ -39,6 +43,8 @@ export function useFieldTypeSettings(type: string): FieldTypeSettingsLookup {
     [declared]
   );
 
+  const own = surfaceTypes?.[type];
+  if (own) return { status: "known", settings: own };
   const core = coreFieldTypeSettings(type);
   if (core) return { status: "known", settings: core };
   if (fromPlugin) return { status: "known", settings: fromPlugin };

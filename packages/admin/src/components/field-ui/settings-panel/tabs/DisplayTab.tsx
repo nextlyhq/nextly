@@ -15,6 +15,8 @@ type Props = {
   field: BuilderField;
   readOnly?: boolean;
   onChange: (next: BuilderField) => void;
+  /** Whether "Read only" and "Hidden" are offered; the surface decides. */
+  switches?: boolean;
   /** The type's and the surface's own display settings. */
   children?: ReactNode;
 };
@@ -31,12 +33,16 @@ const TYPES_WITH_PLACEHOLDER = new Set([
   "password",
   "number",
   "code",
+  // The forms and user-fields surfaces' own text-like inputs.
+  "url",
+  "phone",
 ]);
 
 export function DisplayTab({
   field,
   readOnly = false,
   onChange,
+  switches = true,
   children,
 }: Props): JSX.Element {
   const a = field.admin ?? {};
@@ -57,22 +63,26 @@ export function DisplayTab({
         </div>
       )}
 
-      <SwitchRow
-        ariaLabel="Read only"
-        label="Read only"
-        help="Displayed but cannot be edited."
-        checked={a.readOnly === true}
-        disabled={readOnly}
-        onChange={v => setA({ readOnly: v })}
-      />
-      <SwitchRow
-        ariaLabel="Hidden"
-        label="Hidden"
-        help="Not shown in the record editor."
-        checked={a.hidden === true}
-        disabled={readOnly}
-        onChange={v => setA({ hidden: v })}
-      />
+      {switches && (
+        <>
+          <SwitchRow
+            ariaLabel="Read only"
+            label="Read only"
+            help="Displayed but cannot be edited."
+            checked={a.readOnly === true}
+            disabled={readOnly}
+            onChange={v => setA({ readOnly: v })}
+          />
+          <SwitchRow
+            ariaLabel="Hidden"
+            label="Hidden"
+            help="Not shown in the record editor."
+            checked={a.hidden === true}
+            disabled={readOnly}
+            onChange={v => setA({ hidden: v })}
+          />
+        </>
+      )}
 
       {children}
     </div>

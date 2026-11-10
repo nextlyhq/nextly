@@ -204,8 +204,16 @@ const OPTIONS: FieldTypeSettings = { defining: OptionsSettings };
  * because it reaches the Builder as a stored type without being one the picker
  * offers.
  */
+/**
+ * The built-in types only some surfaces offer (forms and user fields): plain
+ * inputs with no settings of their own, listed so the panel knows them as
+ * built in rather than waiting for, or failing to find, a plugin that declares
+ * them.
+ */
+type SurfaceOnlyType = "url" | "phone" | "time" | "hidden" | "file";
+
 const CORE_FIELD_TYPE_SETTINGS: Readonly<
-  Record<FieldPrimitiveType | "blocks", FieldTypeSettings>
+  Record<FieldPrimitiveType | "blocks" | SurfaceOnlyType, FieldTypeSettings>
 > = {
   text: {},
   textarea: {},
@@ -227,6 +235,11 @@ const CORE_FIELD_TYPE_SETTINGS: Readonly<
   group: { tabs: { display: GroupSettings } },
   component: { defining: FieldGroupSettings },
   blocks: { defining: BlocksSettings },
+  url: {},
+  phone: {},
+  time: {},
+  hidden: {},
+  file: {},
 };
 
 /**
