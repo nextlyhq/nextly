@@ -1,4 +1,9 @@
-export { PlaceTabs, type PlaceTabsProps } from "./PlaceTabs";
+export {
+  PlaceTabs,
+  type PlaceTabBadge,
+  type PlaceTabProps,
+  type PlaceTabsProps,
+} from "./PlaceTabs";
 export {
   TargetSlot,
   type PlaceContributionProps,
