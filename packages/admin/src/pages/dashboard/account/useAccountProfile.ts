@@ -57,8 +57,13 @@ export function useAccountProfile(user: DashboardUser | null): AccountProfile {
 
   function save(): void {
     if (nameMissing || nameTooLong || !changed) return;
+    // Only what was edited: a field resent unchanged would be checked again,
+    // and one stored before today's limits would refuse the whole save.
     update.mutate(
-      { name: name.trim(), image },
+      {
+        ...(name !== savedName ? { name: name.trim() } : {}),
+        ...(image !== savedImage ? { image } : {}),
+      },
       {
         onSuccess: () => toast.success(t("nextly.account.saved")),
         onError: error =>

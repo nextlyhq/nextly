@@ -17,11 +17,15 @@ import {
 import { useApi } from "@admin/hooks/useApi";
 import { currentUserKey } from "@admin/hooks/useDashboardUser";
 
-/** What the account page changes of the person's own profile. */
+/**
+ * What the account page changes of the person's own profile: only the fields
+ * it changed. `/me` writes the fields a body names and leaves the rest, so a
+ * field left out keeps what is stored, and is not checked again.
+ */
 export interface OwnProfileChanges {
-  name: string;
+  name?: string;
   /** The avatar's URL; an empty string removes it. */
-  image: string;
+  image?: string;
 }
 
 export function useUpdateOwnProfile(): UseMutationResult<

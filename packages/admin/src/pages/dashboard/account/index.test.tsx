@@ -28,9 +28,17 @@ vi.mock("@admin/hooks/useApi", () => ({
     api: {
       protected: {
         get: async () => ({ ...state.me, interfaceLanguage: null }),
-        patch: async (path: string, body: { name: string; image: string }) => {
+        // As `/me` writes: only the fields the body names.
+        patch: async (
+          path: string,
+          body: { name?: string; image?: string }
+        ) => {
           state.written.push([path, body]);
-          state.me = { ...state.me, name: body.name, image: body.image };
+          state.me = {
+            ...state.me,
+            ...(body.name !== undefined ? { name: body.name } : {}),
+            ...(body.image !== undefined ? { image: body.image } : {}),
+          };
           return { message: "Profile updated.", item: {} };
         },
       },
@@ -159,9 +167,7 @@ describe("the account page", () => {
     await user.click(save);
 
     await waitFor(() =>
-      expect(state.written).toEqual([
-        ["/me", { name: "Ada Lovelace", image: "" }],
-      ])
+      expect(state.written).toEqual([["/me", { name: "Ada Lovelace" }]])
     );
     // Read again after the save: the form shows the stored, trimmed name.
     await waitFor(() =>
@@ -169,6 +175,25 @@ describe("the account page", () => {
         "Ada Lovelace"
       )
     );
+  });
+
+  it("saves a name edit without resending an avatar it did not change", async () => {
+    // An avatar address stored before `/me` held it to 255 characters: a
+    // save that resent it would be refused, though only the name changed.
+    const longImage = `https://cdn.example.com/${"a".repeat(300)}.png`;
+    state.me = { ...state.me, image: longImage };
+    const user = userEvent.setup();
+    render(<AccountPage />);
+
+    const name = await screen.findByLabelText("Name");
+    await user.clear(name);
+    await user.type(name, "Ada Lovelace");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() =>
+      expect(state.written).toEqual([["/me", { name: "Ada Lovelace" }]])
+    );
+    expect(state.me.image).toBe(longImage);
   });
 
   it("offers no save for an empty name", async () => {
