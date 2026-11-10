@@ -11,6 +11,8 @@
 import type { JSX } from "react";
 import { FormProvider, type UseFormReturn } from "react-hook-form";
 
+import { DocumentFormSource } from "./document-values";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -32,6 +34,13 @@ export interface EntryFormProviderProps {
    * own toast says so to everyone.
    */
   recovering?: boolean;
+  /**
+   * Whether the document's content is held now (a past version on screen, a
+   * colleague's claim, a reader's page, a recovery), as its fields are. A
+   * plugin's write into the form through `useDocumentField` waits on it, so
+   * every form says it.
+   */
+  contentHeld: boolean;
 }
 
 // ============================================================================
@@ -64,20 +73,25 @@ export function EntryFormProvider({
   className,
   formId = "entry-form",
   recovering = false,
+  contentHeld,
 }: EntryFormProviderProps): JSX.Element {
   return (
     <FormProvider {...form}>
-      <form
-        id={formId}
-        onSubmit={e => {
-          void onSubmit(e);
-        }}
-        className={className}
-        noValidate // Use Zod validation instead of browser validation
-        aria-busy={recovering || undefined}
-      >
-        {children}
-      </form>
+      {/* The document's own form, for a plugin's component to read the live
+          values from whatever form it sits in itself. */}
+      <DocumentFormSource form={form} contentHeld={contentHeld}>
+        <form
+          id={formId}
+          onSubmit={e => {
+            void onSubmit(e);
+          }}
+          className={className}
+          noValidate // Use Zod validation instead of browser validation
+          aria-busy={recovering || undefined}
+        >
+          {children}
+        </form>
+      </DocumentFormSource>
     </FormProvider>
   );
 }

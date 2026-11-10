@@ -1776,6 +1776,7 @@ export function SingleForm({
                         <SaveActionFormProvider
                           form={form}
                           recovering={recovering}
+                          contentHeld={contentHeld}
                         >
                           <CopyFromLanguageScope>
                             {/* The bar, the banners under it and the row of

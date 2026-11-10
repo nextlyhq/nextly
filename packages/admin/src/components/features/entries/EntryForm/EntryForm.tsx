@@ -1237,6 +1237,7 @@ export function EntryForm({
         <EntryFormProvider
           form={form}
           recovering={recovering}
+          contentHeld={contentHeld}
           // The quick-edit form submits natively and reports through its own
           // toasts, so what the save came to is not read here. A caller who
           // may not save sends nothing: Enter in a field submits even with
@@ -1463,6 +1464,7 @@ export function EntryForm({
                         <SaveActionFormProvider
                           form={form}
                           recovering={recovering}
+                          contentHeld={contentHeld}
                         >
                           <CopyFromLanguageScope>
                             {/* The bar, the banners under it and the row of
