@@ -133,7 +133,8 @@ describe("the statements a reference-list conversion runs", () => {
 
   it("restates NOT NULL on MySQL when the column keeps it", () => {
     const statements = referenceConversionStatements(
-      { ...mysqlOp, nullable: false },
+      // NOT NULL before and after: the live nullability is what each MODIFY restates.
+      { ...mysqlOp, nullable: false, fromNullable: false },
       "mysql"
     );
     expect(statements[0]).toMatch(/text NOT NULL$/);
@@ -253,5 +254,37 @@ describe("the generated DOWN of a relation switched from many to one", () => {
     expect(statement).toMatch(
       /^ALTER TABLE "dc_posts" ALTER COLUMN "author" SET DATA TYPE jsonb USING CASE/
     );
+  });
+});
+
+describe("MySQL's conversion keeps the column's live nullability", () => {
+  // The conversion runs before the apply's pre-cleanup, which fills or removes the rows a column
+  // becoming NOT NULL would refuse. Restating NOT NULL in the conversion's MODIFY would refuse them
+  // first; the separate nullability change tightens the column afterwards.
+  const op = (
+    conversion: "referenceList" | "referenceScalar"
+  ): ChangeColumnTypeOp => ({
+    type: "change_column_type",
+    tableName: "dc_posts",
+    columnName: "author",
+    fromType: conversion === "referenceList" ? "varchar(36)" : "json",
+    toType: conversion === "referenceList" ? "json" : "varchar(36)",
+    nullable: false,
+    fromNullable: true,
+    conversion,
+  });
+
+  it("restates the live NULL on each MODIFY, in both directions", () => {
+    for (const conversion of ["referenceList", "referenceScalar"] as const) {
+      const modifies = referenceConversionStatements(
+        op(conversion),
+        "mysql"
+      ).filter(statement => statement.includes("MODIFY COLUMN"));
+      expect(modifies.length).toBeGreaterThan(0);
+      for (const statement of modifies) {
+        expect(statement).toMatch(/ NULL$/);
+        expect(statement).not.toMatch(/NOT NULL/);
+      }
+    }
   });
 });

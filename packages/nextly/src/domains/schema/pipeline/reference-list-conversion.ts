@@ -145,7 +145,7 @@ export function referenceConversionStatements(
     const c = quoteIdent(op.columnName, dialect);
     // MODIFY restates the whole definition, so the column's nullability travels with each retype.
     // The column carries no default: a relationship column is never given one.
-    const nullability = op.nullable === false ? "NOT NULL" : "NULL";
+    const nullability = liveNullability(op);
     return [
       // Wide enough for a list: a JSON list of one uuid is already longer than varchar(36).
       `ALTER TABLE ${table} MODIFY COLUMN ${c} text ${nullability}`,
@@ -246,19 +246,11 @@ function requireEmptyStatements(
     ];
   }
   if (dialect === "sqlite") {
-    const probe = '"nextly_require_empty"';
-    const trigger = '"nextly_require_empty_guard"';
-    return [
-      `CREATE TEMP TABLE IF NOT EXISTS ${probe} ("x" integer)`,
-      `DROP TRIGGER IF EXISTS temp.${trigger}`,
-      `CREATE TEMP TRIGGER ${trigger} BEFORE INSERT ON ${probe} ` +
-        `WHEN EXISTS (SELECT 1 FROM main.${table} WHERE ${c} IS NOT NULL ` +
-        `AND trim(${c}) NOT IN ('', '[]', 'null')) ` +
-        `BEGIN SELECT RAISE(ABORT, ${literal}); END`,
-      `INSERT INTO ${probe} VALUES (1)`,
-      `DROP TRIGGER temp.${trigger}`,
-      `DROP TABLE temp.${probe}`,
-    ];
+    return sqliteGuardStatements(
+      tableName,
+      `${c} IS NOT NULL AND trim(${c}) NOT IN ('', '[]', 'null')`,
+      message
+    );
   }
   throw unsupportedDialect({
     type: "change_column_type",
@@ -310,7 +302,7 @@ function referenceScalarStatements(
       `chk_one_ref_${op.tableName}_${op.columnName}`.slice(0, 64),
       dialect
     );
-    const nullability = op.nullable === false ? "NOT NULL" : "NULL";
+    const nullability = liveNullability(op);
     return [
       `ALTER TABLE ${table} ADD CONSTRAINT ${guard} CHECK (${c} IS NULL OR JSON_LENGTH(${c}) <= 1)`,
       `ALTER TABLE ${table} DROP CHECK ${guard}`,
@@ -324,7 +316,54 @@ function referenceScalarStatements(
     ];
   }
   if (dialect === "sqlite") {
-    return [sqliteReferenceScalarRewrite(op.tableName, op.columnName)];
+    // SQLite has no statement that fails on a value, so a guard refuses a longer list before the
+    // rewrite, as the other dialects' statements do: a generated migration runs no count first.
+    const c = quoteIdent(op.columnName, dialect);
+    return [
+      ...sqliteGuardStatements(
+        op.tableName,
+        `CASE WHEN json_valid(${c}) THEN json_type(${c}) = 'array' AND json_array_length(${c}) > 1 ELSE 0 END`,
+        `Column ${op.tableName}.${op.columnName} cannot change to one related entry while a row ` +
+          `holds more than one. Remove the extra entries first, or keep it holding many.`
+      ),
+      sqliteReferenceScalarRewrite(op.tableName, op.columnName),
+    ];
   }
   throw unsupportedDialect(op);
+}
+
+/**
+ * The nullability MySQL's MODIFY restates during a conversion: the column's live one. The
+ * conversion runs before the apply's pre-cleanup, which fills or removes the rows a column becoming
+ * NOT NULL would refuse, so restating NOT NULL here would refuse them first; the separate
+ * nullability change tightens the column afterwards.
+ */
+function liveNullability(op: ChangeColumnTypeOp): "NULL" | "NOT NULL" {
+  return (op.fromNullable ?? op.nullable) === false ? "NOT NULL" : "NULL";
+}
+
+/**
+ * SQLite's guard: a statement that raises `message` while a row of `tableName` meets `condition`,
+ * and changes nothing either way. SQLite raises only from a trigger, so a temporary trigger on a
+ * temporary table is fired by one insert, then both are dropped. Each statement can run again.
+ */
+function sqliteGuardStatements(
+  tableName: string,
+  condition: string,
+  message: string
+): string[] {
+  const table = quoteIdent(tableName, "sqlite");
+  const probe = '"nextly_relation_guard"';
+  const trigger = '"nextly_relation_guard_check"';
+  const literal = `'${message.replace(/'/g, "''")}'`;
+  return [
+    `CREATE TEMP TABLE IF NOT EXISTS ${probe} ("x" integer)`,
+    `DROP TRIGGER IF EXISTS temp.${trigger}`,
+    `CREATE TEMP TRIGGER ${trigger} BEFORE INSERT ON ${probe} ` +
+      `WHEN EXISTS (SELECT 1 FROM main.${table} WHERE ${condition}) ` +
+      `BEGIN SELECT RAISE(ABORT, ${literal}); END`,
+    `INSERT INTO ${probe} VALUES (1)`,
+    `DROP TRIGGER temp.${trigger}`,
+    `DROP TABLE temp.${probe}`,
+  ];
 }

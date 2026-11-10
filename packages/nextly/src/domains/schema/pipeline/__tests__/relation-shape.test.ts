@@ -220,7 +220,7 @@ describe("the SQLite statements, run twice over every stored shape", () => {
       db.exec(`CREATE TABLE "dc_posts" ("n" integer, "author" text)`);
       const insert = db.prepare(`INSERT INTO "dc_posts" VALUES (?, ?)`);
       values.forEach((value, n) => insert.run(n, value));
-      const [statement] = referenceConversionStatements(
+      const statements = referenceConversionStatements(
         {
           type: "change_column_type",
           tableName: "dc_posts",
@@ -231,12 +231,12 @@ describe("the SQLite statements, run twice over every stored shape", () => {
         },
         "sqlite"
       );
-      db.exec(statement);
+      for (const statement of statements) db.exec(statement);
       const once = db
         .prepare(`SELECT "author" FROM "dc_posts" ORDER BY "n"`)
         .pluck()
         .all() as Array<string | null>;
-      db.exec(statement);
+      for (const statement of statements) db.exec(statement);
       const twice = db
         .prepare(`SELECT "author" FROM "dc_posts" ORDER BY "n"`)
         .pluck()
@@ -273,17 +273,40 @@ describe("the SQLite statements, run twice over every stored shape", () => {
     ]);
   });
 
-  it("unwraps a one-item list, empties an empty one, and never cuts a longer list down", () => {
+  it("unwraps a one-item list, empties an empty one, and unquotes a quoted id", () => {
     expect(
-      convert("referenceScalar", [
-        null,
-        '["a"]',
-        "[]",
-        '["a","b"]',
-        "3f2a",
-        '"3f2a"',
-      ])
-    ).toEqual([null, "a", null, '["a","b"]', "3f2a", "3f2a"]);
+      convert("referenceScalar", [null, '["a"]', "[]", "3f2a", '"3f2a"'])
+    ).toEqual([null, "a", null, "3f2a", "3f2a"]);
+  });
+
+  // A generated migration runs no count before its statements, so the file itself refuses a list
+  // one reference cannot hold, before it rewrites any row, as PostgreSQL's and MySQL's do.
+  it("refuses a longer list before rewriting any row, naming the column", () => {
+    const db = new Database(":memory:");
+    try {
+      db.exec(`CREATE TABLE "dc_posts" ("n" integer, "author" text)`);
+      const insert = db.prepare(`INSERT INTO "dc_posts" VALUES (?, ?)`);
+      ['["a"]', '["a","b"]'].forEach((value, n) => insert.run(n, value));
+      const statements = referenceConversionStatements(
+        {
+          type: "change_column_type",
+          tableName: "dc_posts",
+          columnName: "author",
+          fromType: "text",
+          toType: "text",
+          conversion: "referenceScalar",
+        },
+        "sqlite"
+      );
+      expect(() => {
+        for (const statement of statements) db.exec(statement);
+      }).toThrow(/dc_posts\.author/);
+      expect(
+        db.prepare(`SELECT "author" FROM "dc_posts" ORDER BY "n"`).pluck().all()
+      ).toEqual(['["a"]', '["a","b"]']);
+    } finally {
+      db.close();
+    }
   });
 });
 
