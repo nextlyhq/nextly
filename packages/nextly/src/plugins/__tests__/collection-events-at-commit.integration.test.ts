@@ -12,7 +12,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../config";
+import { defineCollection, json, text } from "../../config";
 import { deriveCompanionSpec } from "../../domains/i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../domains/i18n/migration/generate-up";
 import { registerHook, unregisterHook } from "../../hooks";
@@ -362,5 +362,71 @@ describe.each(DIALECTS)("publishing every language on %s", dialect => {
     expect(log[0]).toBe("event.updated");
     expect(log).toContain("hook.afterUpdate");
     expect(log.filter(line => line === "event.updated")).toHaveLength(1);
+  });
+});
+
+describe.each(DIALECTS)("what a listener is handed on %s", dialect => {
+  it("is detached from what the after-hooks are handed", async () => {
+    current = await createTestNextly({
+      dialect,
+      collections: [
+        defineCollection({
+          slug: "docs",
+          fields: [text({ name: "title" }), json({ name: "meta" })],
+        }),
+      ],
+    });
+    // A listener runs before the after-hooks, and changes what it is handed.
+    for (const action of ACTIONS) {
+      current.events.on<{
+        data: { meta?: unknown };
+        user?: { name?: unknown };
+      }>(`collection.docs.${action}`, e => {
+        const meta = e.payload.data.meta;
+        if (meta && typeof meta === "object") {
+          (meta as { tag?: unknown }).tag = "changed by a listener";
+        }
+        if (e.payload.user) e.payload.user.name = "changed by a listener";
+      });
+    }
+    const seen: Array<{ meta: unknown; user: unknown }> = [];
+    for (const phase of PHASES) {
+      const hook: HookHandler = context => {
+        seen.push({
+          meta: (context.data as { meta?: unknown }).meta,
+          user: (context.user as { name?: unknown } | undefined)?.name,
+        });
+      };
+      registerHook(phase, "docs", hook);
+      unregister.push(() => unregisterHook(phase, "docs", hook));
+    }
+    const user = { id: "u-1", email: "editor@example.com", name: "Editor" };
+
+    const created = await current.nextly.create({
+      collection: "docs",
+      data: { title: "a", meta: { tag: "as written" } },
+      user,
+    });
+    const id = (created.item as { id: string }).id;
+    await current.nextly.update({
+      collection: "docs",
+      id,
+      data: { meta: { tag: "as written" }, _overwrite: true },
+      user,
+    });
+    await current.nextly.delete({ collection: "docs", id, user });
+    await current.events.settle();
+
+    expect(seen).toHaveLength(3);
+    for (const { meta, user: name } of seen) {
+      // A JSON column comes back as text on SQLite and as a value elsewhere.
+      const tag =
+        typeof meta === "string"
+          ? (JSON.parse(meta) as { tag?: unknown }).tag
+          : (meta as { tag?: unknown }).tag;
+      expect(tag).toBe("as written");
+      expect(name).toBe("Editor");
+    }
+    expect(user.name).toBe("Editor");
   });
 });

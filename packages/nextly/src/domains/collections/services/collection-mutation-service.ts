@@ -477,9 +477,35 @@ export { isWriteIntegrityFailure };
  * holds it for that transaction's commit (`announceAtCommit`); its after*
  * hooks run inline, before the commit, so there they come first. Use a hook
  * (in-transaction) to modify/abort; use this to react.
+ *
+ * Listeners are handed detached copies of the row and the user: they are
+ * called synchronously, before the after-hooks, and a listener that changed a
+ * nested value it was handed would otherwise change what those hooks, and the
+ * write's caller, are handed.
  */
 function emitCollectionEvent(
-  action: "created" | "updated" | "deleted",
+  action: CollectionEventAction,
+  collection: string,
+  data: Record<string, unknown>,
+  user: unknown
+): void {
+  deliverCollectionEvent(
+    action,
+    collection,
+    detachedForListeners(data),
+    detachedForListeners(user)
+  );
+}
+
+type CollectionEventAction = "created" | "updated" | "deleted";
+
+/**
+ * Put the event on the bus, handed `data` and `user` as they are: the caller
+ * has detached them already (`emitCollectionEvent` at once, `announceAtCommit`
+ * when the write registers the event).
+ */
+function deliverCollectionEvent(
+  action: CollectionEventAction,
   collection: string,
   data: Record<string, unknown>,
   user: unknown
@@ -487,12 +513,26 @@ function emitCollectionEvent(
   try {
     getEventBus().emit(`collection.${collection}.${action}`, {
       collection,
-      id: (data as { id?: unknown }).id,
+      id: data.id,
       data,
       user,
     });
   } catch {
     // Best-effort — never surface event-dispatch failures to the caller.
+  }
+}
+
+/**
+ * A copy of `value` sharing nothing with it, for an event's listeners. A
+ * value the structured clone refuses (one holding a function, say) is copied
+ * one level deep instead, which still keeps a listener from replacing or
+ * removing its fields.
+ */
+function detachedForListeners<T>(value: T): T {
+  try {
+    return structuredClone(value);
+  } catch {
+    return value !== null && typeof value === "object" ? { ...value } : value;
   }
 }
 
@@ -8049,12 +8089,12 @@ export class CollectionMutationService extends BaseService {
       // rolls back; see `afterCommitOver` for what they are handed.
       await this.afterCommitOver(entry, async committed => {
         // Post-commit reaction event (D8/D51), first: it announces the commit,
-        // so no after-hook comes between the two. A copy, so a hook that
-        // changes the row it is handed does not change the event's payload.
+        // so no after-hook comes between the two. Its listeners get detached
+        // copies, so neither side can change what the other is handed.
         emitCollectionEvent(
           "created",
           params.collectionName,
-          { ...committed },
+          committed,
           params.user
         );
 
@@ -18375,12 +18415,11 @@ export class CollectionMutationService extends BaseService {
       // After the removal is durable: inside an enclosing SQLite transaction,
       // once it commits, and never for a deletion it rolls back.
       await this.afterCommit(async () => {
-        // Post-commit reaction event (D8/D51), first, as on create. A copy, so
-        // a hook that changes the row it is handed does not change the event.
+        // Post-commit reaction event (D8/D51), first, as on create.
         emitCollectionEvent(
           "deleted",
           params.collectionName,
-          { ...deleted },
+          deleted,
           params.user
         );
 
@@ -19210,19 +19249,21 @@ export class CollectionMutationService extends BaseService {
    *
    * Called once the write itself is done (its row, outbox event and
    * in-transaction handlers), so the event goes with exactly the rows the
-   * outbox event goes with. The row is copied now: what the write does to it
-   * afterwards (the response's parsing and redaction) is not what subscribers
-   * are handed.
+   * outbox event goes with. The row and the user are detached now: what the
+   * write and its inline hooks do to them afterwards (the response's parsing
+   * and redaction) is not what subscribers are handed, and what a subscriber
+   * does to its copy reaches neither the caller nor anything else.
    */
   private announceAtCommit(
-    action: "created" | "updated" | "deleted",
+    action: CollectionEventAction,
     collectionName: string,
     row: Record<string, unknown>,
     user: unknown
   ): Promise<void> {
-    const committed = { ...row };
+    const committed = detachedForListeners(row);
+    const by = detachedForListeners(user);
     return this.afterCommit(() =>
-      emitCollectionEvent(action, collectionName, committed, user)
+      deliverCollectionEvent(action, collectionName, committed, by)
     );
   }
 
