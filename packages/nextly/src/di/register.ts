@@ -69,6 +69,7 @@ import {
   getEmailProviderRegistry,
   resetEmailProviderRegistry,
 } from "../domains/email/services/email-provider-registry";
+import { judgeFieldGroupCyclesAtStart } from "../domains/field-groups/field-group-cycles";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import {
   resolveFieldGroupRegistryName,
@@ -1933,6 +1934,14 @@ async function reconcileBuilderTargets<T>(
     builderEntities,
     table => adapter.tableExists(table)
   );
+  // Field groups placed in a cycle, judged over code and the Builder's field groups as this start
+  // reconciled them, plugin extensions included, before anything below writes.
+  judgeFieldGroupCyclesAtStart({
+    code: transformedConfig.fieldGroups ?? [],
+    registered: entities.components ?? [],
+    stored: builderEntities.components ?? [],
+    warn: message => logger.warn(message),
+  });
 
   // Only touch the DB for entities whose merged field set actually differs
   // from what's persisted — keeps an unchanged/plugin-free boot write-free and
