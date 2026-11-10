@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CompleteLoginDeps } from "../../auth/plugin-auth-api";
 import { NextlyError } from "../../errors/nextly-error";
+import type { PluginGrants } from "../plugin-consent";
 import {
   getPluginAuthApi,
   getPluginAuthApiFor,
@@ -57,7 +58,7 @@ describe("the dependencies behind ctx.auth", () => {
 
 /**
  * `completeLogin` signs in whichever account a plugin names, so it answers to
- * the plugin's manifest, and the audit trail can say which plugin used it.
+ * the boot's login grant, and the audit trail can say which plugin used it.
  */
 describe("ctx.auth.completeLogin for one plugin", () => {
   const declared = {
@@ -76,17 +77,28 @@ describe("ctx.auth.completeLogin for one plugin", () => {
       trustProxy: false,
       trustedProxyIps: [],
     }) as unknown as CompleteLoginDeps;
-  const login = (strategy: string, plugin: object = declared) =>
-    getPluginAuthApiFor(plugin as never).completeLogin("u1", {
+  /** The verdict a boot that listed this plugin decided. */
+  const granted = (name: string): PluginGrants => ({
+    rawSql: [],
+    login: [name],
+  });
+  const login = (
+    strategy: string,
+    plugin: object = declared,
+    grants?: PluginGrants
+  ) =>
+    getPluginAuthApiFor(plugin as never, grants).completeLogin("u1", {
       request: anonymous(),
       strategy,
     });
 
-  it("is refused to a plugin that did not declare capabilities.auth.login", async () => {
+  it("is refused to a plugin the boot did not grant", async () => {
+    // No grants passed: a context built outside a boot holds no verdict, so
+    // a declared-but-ungranted plugin is refused exactly as an undeclared
+    // one. A plugin flipping its own manifest on cannot add itself to the
+    // frozen list, so a post-boot mutation grants nothing either.
     setPluginAuthDepsResolver(refusingDeps);
-    await expect(
-      login("acme-google-auth:google", { ...declared, capabilities: {} })
-    ).rejects.toSatisfy(
+    await expect(login("acme-google-auth:google")).rejects.toSatisfy(
       (err: unknown) =>
         NextlyError.is(err) &&
         (err.logContext as { reason?: string }).reason ===
@@ -98,7 +110,9 @@ describe("ctx.auth.completeLogin for one plugin", () => {
     "refuses the strategy %s, which does not name the plugin",
     async strategy => {
       setPluginAuthDepsResolver(refusingDeps);
-      await expect(login(strategy)).rejects.toSatisfy(
+      await expect(
+        login(strategy, declared, granted(declared.name))
+      ).rejects.toSatisfy(
         (err: unknown) => NextlyError.is(err) && err.code === "VALIDATION_ERROR"
       );
     }
@@ -109,14 +123,20 @@ describe("ctx.auth.completeLogin for one plugin", () => {
     // the start would let it through, and a plugin with two ways in would
     // record both as the same nameless strategy.
     setPluginAuthDepsResolver(refusingDeps);
-    await expect(login("acme-google-auth:")).rejects.toSatisfy(
+    await expect(
+      login("acme-google-auth:", declared, granted(declared.name))
+    ).rejects.toSatisfy(
       (err: unknown) => NextlyError.is(err) && err.code === "VALIDATION_ERROR"
     );
   });
 
-  it("reaches the shared login with a declared plugin and its own strategy", async () => {
+  it("reaches the shared login with a granted plugin and its own strategy", async () => {
     setPluginAuthDepsResolver(refusingDeps);
-    const res = await login("acme-google-auth:google");
+    const res = await login(
+      "acme-google-auth:google",
+      declared,
+      granted(declared.name)
+    );
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe(
       "/admin/login?error=signin-failed"

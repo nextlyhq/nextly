@@ -189,6 +189,14 @@ export type {
   DataFromFieldGroupSlug,
 } from "./direct-api/types";
 
+// The site's languages as generated types know them: what a read's `locale` and
+// `fallbackLocale` take, for a caller annotating its own values with them.
+export type {
+  FallbackLocaleOption,
+  Locale,
+  LocaleOption,
+} from "./direct-api/types/locales";
+
 // Direct API types - the `nextly.fieldGroups.*` namespace. Exported from the
 // root because they are the argument and result types of a public namespace:
 // without them a caller cannot annotate a variable holding what it returns.
@@ -573,6 +581,8 @@ export {
   type PluginTransaction,
   type PluginHookPointDeclaration,
   type PluginSettingsApi,
+  type PluginCacheApi,
+  pluginCacheTag,
   type PluginDeclaration,
   type PluginDefinition,
   type PluginPermission,
@@ -666,6 +676,16 @@ export {
   type AdminPlaces,
   type CoreAdminPlaceId,
 } from "./plugins";
+
+// "Every content type except these", one answer for each reader of a scope.
+// @experimental
+export {
+  isContentTypeScope,
+  typesReachedBy,
+  type ContentTypeCandidate,
+  type ContentTypeKind,
+  type ContentTypeScope,
+} from "./plugins/content-type-scope";
 
 // The plugin limiter: `contributes.limits` rules and `ctx.limits`.
 // @experimental

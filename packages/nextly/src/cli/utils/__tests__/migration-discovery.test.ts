@@ -234,8 +234,9 @@ describe("migration-discovery", () => {
     });
 
     // A snapshot that cannot be checked is not a missing one: reading it as
-    // absent would set the file aside as an old Builder file.
-    it.skipIf(process.getuid?.() === 0)(
+    // absent would set the file aside as an old Builder file. Windows ignores
+    // the mode, and root reads past it, so neither can make the folder unreadable.
+    it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       "refuses when whether a snapshot exists cannot be told",
       async () => {
         const meta = path.join(testDir, "meta");
@@ -253,7 +254,7 @@ describe("migration-discovery", () => {
 
     // A folder that cannot be listed is not an empty one: read as empty, every
     // mark would name a deleted file and a changed marked file would go unseen.
-    it.skipIf(process.getuid?.() === 0)(
+    it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       "refuses when the folder cannot be listed",
       async () => {
         await fs.chmod(testDir, 0o000);

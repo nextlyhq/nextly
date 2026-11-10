@@ -24,6 +24,7 @@ import { runReadsInTransaction } from "../../../shared/lib/read-transaction-scop
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { collectionTablesBySlug } from "../../dynamic-collections/services/collection-tables";
 import type { UnregisteredCollectionRow } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import type { CollectionArtifacts } from "../../dynamic-collections/services/dynamic-collection-service";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
@@ -1411,14 +1412,21 @@ export class CollectionMetadataService extends BaseService {
 
       // Holder first, so no database refuses a drop over a key another
       // member of the set still holds; refused here, still before anything
-      // is removed, when no such order exists (`collection-drop-order`).
+      // is removed, when no such order exists (`collection-drop-order`). A key
+      // to a renamed member references the table it kept, which the registry
+      // names, so the keys are described against the registry's tables.
+      const targetTables = await collectionTablesBySlug(
+        this.adapter,
+        collections.flatMap(collection => collection.fields ?? [])
+      );
       const order = dropOrder(
         slugs.map((slug, index) => ({
           slug,
           tableName: collections[index].tableName,
           keys: this.collectionService.relationshipForeignKeys(
             collections[index].tableName,
-            collections[index].fields ?? []
+            collections[index].fields ?? [],
+            targetTables
           ),
         }))
       );

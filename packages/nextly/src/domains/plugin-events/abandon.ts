@@ -38,7 +38,11 @@ export interface AbandonedDelivery {
 }
 
 /** The statuses a delivery may be abandoned from: any not yet finished. */
-const OPEN = { column: "status", op: "IN" as const, value: ["pending", "held", "failed"] };
+const OPEN = {
+  column: "status",
+  op: "IN" as const,
+  value: ["pending", "held", "failed"],
+};
 /** Deliveries read, and abandoned, per page at most. */
 const ABANDON_PAGE = 500;
 

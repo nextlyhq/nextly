@@ -157,9 +157,32 @@ export class StatementCursor {
  */
 export function cursorOf(
   statement: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  options: {
+    /**
+     * Read a quoted name not written in lower case as no name: PostgreSQL
+     * keeps a quoted name's case, so `"DC_POSTS"` is not `dc_posts`, and a
+     * reader judging whose table a statement changes fails closed on it.
+     */
+    exactQuotedNames?: boolean;
+  } = {}
 ): StatementCursor {
   const tokens = statementTokens(statement, dialect);
   while (tokens.length > 0 && tokens[tokens.length - 1] === ";") tokens.pop();
-  return new StatementCursor(tokens);
+  return new StatementCursor(
+    options.exactQuotedNames === true ? tokens.map(lowerCaseQuotedOnly) : tokens
+  );
+}
+
+/** A quoted name written in another case than lower, as no name; any other token as it is. */
+function lowerCaseQuotedOnly(token: StatementToken): StatementToken {
+  if (
+    typeof token === "string" ||
+    token.kind !== "name" ||
+    token.written === undefined ||
+    token.written === token.written.toLowerCase()
+  ) {
+    return token;
+  }
+  return { ...token, name: undefined };
 }

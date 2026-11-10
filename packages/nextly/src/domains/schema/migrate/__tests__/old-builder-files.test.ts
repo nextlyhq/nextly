@@ -658,3 +658,45 @@ describe("an index whose column holds an underscore", () => {
     });
   });
 });
+
+// A junction's table is named after the tables it joins, so another collection's main table can
+// read as one: `posts-dc-comments-secret` makes `dc_posts_dc_comments_secret`, which reads as a
+// junction of `dc_posts`. While that table is declared, it is that collection's, not a junction.
+describe("a junction-shaped name that is another collection's table", () => {
+  const update = (declaredTables?: Set<string>) =>
+    classifyMigrationFile(
+      facts({
+        name: "1730000000018_update_posts.sql",
+        content: `ALTER TABLE "dc_posts_dc_comments_secret" ADD COLUMN "x" text;`,
+        ...(declaredTables ? { declaredTables } : {}),
+      })
+    );
+
+  it("is not the entity's while that table is declared", () => {
+    expect(
+      update(new Set(["dc_posts", "dc_posts_dc_comments_secret"]))
+    ).toEqual({ kind: "partial", lacks: ["scope"] });
+  });
+
+  it("is the entity's junction while no collection declares that table", () => {
+    expect(update(new Set(["dc_posts"]))).toEqual({
+      kind: "old-builder",
+      entity: "posts",
+    });
+  });
+});
+
+// A quoted name in another case is another table on PostgreSQL: a file altering "DC_POSTS" is not
+// the posts collection's.
+describe("a quoted table name in another case", () => {
+  it("makes an update file partial", () => {
+    expect(
+      classifyMigrationFile(
+        facts({
+          name: "1730000000019_update_posts.sql",
+          content: `ALTER TABLE "DC_POSTS" ADD COLUMN "x" text;`,
+        })
+      )
+    ).toEqual({ kind: "partial", lacks: ["scope"] });
+  });
+});

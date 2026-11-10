@@ -13,7 +13,7 @@ name: Preview release
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 # The GITHUB_TOKEN is unused: the pkg.pr.new app authenticates the publish
 # and writes the PR comment itself.

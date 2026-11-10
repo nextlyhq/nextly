@@ -13,6 +13,7 @@ import { expect, type Page, type Response } from "@playwright/test";
 import { STORAGE_STATE } from "../global-setup";
 
 import { gotoAdmin } from "./support/admin";
+import { expectNoAxeViolations } from "./support/axe";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
 import {
   cancel,
@@ -87,6 +88,28 @@ test("offers Publish now and Schedule… on the Publish split", async ({
   await expect(
     page.getByRole("menuitem", { name: /add to release/i })
   ).toHaveCount(0);
+});
+
+test("holds focus in the Schedule dialog, gives it back on Escape, and passes axe", async ({
+  page,
+}) => {
+  const stamp = stamped();
+  const id = await post(page, stamp);
+  const title = `Release e2e ${stamp}`;
+  await openPost(page, title, id);
+  const arrow = page.getByRole("button", { name: "More ways to publish" });
+  const dialog = await openSchedule(page, title);
+  await expect
+    .poll(() =>
+      dialog.evaluate(element => element.contains(document.activeElement))
+    )
+    .toBe(true);
+  await expectNoAxeViolations(page, { include: '[role="dialog"]' });
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  // Back where the reader was: the arrow that opened the menu it came from.
+  await expect(arrow).toBeFocused();
 });
 
 test("schedules the post on its own, named after its saved title", async ({

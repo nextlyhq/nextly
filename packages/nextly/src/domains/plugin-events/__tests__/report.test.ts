@@ -35,13 +35,21 @@ describe("createStuckWarnings", () => {
 
   it("leaves out a held delivery whose subscriber is registered again", async () => {
     const select = vi.fn(async () => [
-      { subscriber: "@acme/back:award", subscriberKey: "k-back", status: "held" },
+      {
+        subscriber: "@acme/back:award",
+        subscriberKey: "k-back",
+        status: "held",
+      },
       {
         subscriber: "@acme/back:award",
         subscriberKey: "k-back",
         status: "failed",
       },
-      { subscriber: "@acme/gone:award", subscriberKey: "k-gone", status: "held" },
+      {
+        subscriber: "@acme/gone:award",
+        subscriberKey: "k-gone",
+        status: "held",
+      },
     ]);
     const warned: string[] = [];
     await createStuckWarnings({

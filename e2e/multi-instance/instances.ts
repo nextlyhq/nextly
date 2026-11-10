@@ -250,6 +250,17 @@ async function buildAndStart(
     log("migrate"),
     STEP_MS
   );
+  // The fixture's plugin is installed on the database, as a deployment's are,
+  // or the instances refuse to start with it configured.
+  run(
+    "nextly plugins install",
+    NEXTLY,
+    ["plugins", "install", "fixture-cache"],
+    appA,
+    env,
+    log("plugins-install"),
+    STEP_MS
+  );
   run(
     "seeding the note",
     TSX,

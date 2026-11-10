@@ -58,6 +58,7 @@ import type {
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import { assertAddressAllowed } from "../../../shared/address-rule";
 import type { Logger } from "../../../shared/types";
+import { collectionTablesBySlug } from "../../dynamic-collections/services/collection-tables";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { appLocalization } from "../../i18n/configured-locales";
@@ -1007,6 +1008,8 @@ export class SingleMetadataService {
           isSingle: true,
           hasStatus,
           localized: isLocalized,
+          // A relationship to a renamed collection keys the table it kept.
+          targetTables: await collectionTablesBySlug(adapter, fields),
         }),
         fields,
         previousFields,
@@ -1101,6 +1104,11 @@ export class SingleMetadataService {
           columnsContainingNull: liveFacts.columnsContainingNull,
           columnsAbsentFromTable: liveFacts.columnsAbsentFromTable,
           liveColumnTypes: liveFacts.liveColumnTypes,
+          // A key this save adds or changes references the table a renamed target kept.
+          targetTables: await collectionTablesBySlug(adapter, [
+            ...previousFields,
+            ...fields,
+          ]),
           ...groupMigration,
           onSqliteNullability: (column, required) =>
             sqliteNullability.set(column, required),
@@ -2224,7 +2232,16 @@ export class SingleMetadataService {
       // the companion `<table>_locales`, provisioned separately. `isSingle` skips the slug column
       // and adds `updated_at`; `hasStatus` adds the column the runtime schema expects when the user
       // opted into Draft/Published.
-      { isSingle: true, hasStatus, localized: isLocalized }
+      {
+        isSingle: true,
+        hasStatus,
+        localized: isLocalized,
+        // A relationship to a renamed collection keys the table it kept. With no adapter the
+        // statements are never run, and each target's table is spelled from its slug.
+        targetTables: this.adapter
+          ? await collectionTablesBySlug(this.adapter, fields)
+          : undefined,
+      }
     );
 
     return { migrationSQL, fields, isLocalized, hasStatus };

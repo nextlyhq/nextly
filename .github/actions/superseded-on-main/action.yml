@@ -1,13 +1,15 @@
-name: Superseded on main
+name: Superseded on main or dev
 description: >
-  Whether a newer push to `main` already has a run of this workflow, and which
-  earlier commit was the last this workflow actually tested. A run that finds
-  a newer one skips its jobs rather than repeating work the newer run will do.
+  Whether a newer push to the same branch (`main` or `dev`) already has a run
+  of this workflow, and which earlier commit was the last this workflow
+  actually tested there. A run that finds a newer one skips its jobs rather
+  than repeating work the newer run will do.
 
 # Why a run skips itself instead of being cancelled.
 #
-# `main` groups its runs per commit, so nothing cancels anything and every
-# commit keeps a verdict of its own. At the merge rate this repository sees that
+# `main` and `dev`, the branch pull requests merge into, group their runs per
+# commit, so nothing cancels anything and every commit keeps a verdict of its
+# own. Each branch is asked about its own runs only. At the merge rate this repository sees that
 # queue could not drain: each Integration run is three dialects for half an
 # hour, and fifty runs sat queued with nothing on `main` able to report.
 #
@@ -43,12 +45,12 @@ inputs:
 
 outputs:
   superseded:
-    description: "`true` when a newer push to `main` already has a run of this workflow."
+    description: "`true` when a newer push to the same branch already has a run of this workflow."
     value: ${{ steps.ask.outputs.superseded }}
   last-tested-sha:
     description: >
-      The head commit of the newest completed run of this workflow on `main`
-      whose substantive job reached a verdict. Empty when none is found or the
+      The head commit of the newest completed run of this workflow on the same
+      branch whose substantive job reached a verdict. Empty when none is found or the
       history could not be read, in which case a caller that narrows its work
       by diff should run everything: diffing against `github.event.before`
       instead would reopen the hole this output closes.
@@ -72,16 +74,20 @@ runs:
       run: |
         set -uo pipefail
 
-        # Only a push to main can be superseded. A pull request run answers for
-        # its own head and nothing else.
-        if [ "$EVENT" != "push" ] || [ "$REF" != "refs/heads/main" ]; then
+        # Only a push to main or dev can be superseded. A pull request run
+        # answers for its own head and nothing else.
+        case "$REF" in
+          refs/heads/main | refs/heads/dev) branch="${REF#refs/heads/}" ;;
+          *) branch="" ;;
+        esac
+        if [ "$EVENT" != "push" ] || [ -z "$branch" ]; then
           echo "superseded=false" >> "$GITHUB_OUTPUT"
           echo "last_tested_sha=" >> "$GITHUB_OUTPUT"
-          echo "not a push to main; nothing to ask"
+          echo "not a push to main or dev; nothing to ask"
           exit 0
         fi
 
-        # The most recent runs of THIS workflow on main, newest first. Run
+        # The most recent runs of THIS workflow on this branch, newest first. Run
         # numbers are per-workflow and monotonic, so "newer" is a number
         # comparison rather than a timestamp one, and a run that has not
         # started yet still counts. One page: a newer run is by definition on
@@ -89,9 +95,9 @@ runs:
         # through the workflow's whole history would cost a request per fifty
         # runs to read nothing.
         # A push and a catch-up run (`workflow_dispatch`, from
-        # main-catch-up.yml) both test a commit of main, so both are read.
+        # main-catch-up.yml) both test a commit of the branch, so both are read.
         runs=$(gh api \
-          "repos/$REPO/actions/workflows/$WORKFLOW/runs?branch=main&per_page=100" \
+          "repos/$REPO/actions/workflows/$WORKFLOW/runs?branch=$branch&per_page=100" \
           --jq '.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch") | {n: .run_number, sha: .head_sha, id: .id, status: .status, conclusion: .conclusion}' 2>/dev/null) || runs=""
 
         if [ -z "$runs" ]; then
@@ -99,7 +105,7 @@ runs:
           # repository or a transient API failure should, and say so.
           echo "superseded=false" >> "$GITHUB_OUTPUT"
           echo "last_tested_sha=" >> "$GITHUB_OUTPUT"
-          echo "::warning::could not list runs of $WORKFLOW on main; running everything"
+          echo "::warning::could not list runs of $WORKFLOW on $branch; running everything"
           exit 0
         fi
 
@@ -110,7 +116,7 @@ runs:
         # one skipped cannot be undone here; the recovery is the next push,
         # whose diff base is the last commit that actually reached a verdict
         # (below), so the whole untested range is tested then. Until that
-        # push, the cancelled run is the newest thing on main and reads as
+        # push, the cancelled run is the newest thing on the branch and reads as
         # what it is.
         newer=$(printf '%s\n' "$runs" | jq -r --argjson me "$THIS_RUN" --arg sha "$THIS_SHA" \
           'select(.n > $me and .sha != $sha)
@@ -120,7 +126,7 @@ runs:
         if [ -n "$newer" ]; then
           echo "superseded=true" >> "$GITHUB_OUTPUT"
           echo "last_tested_sha=" >> "$GITHUB_OUTPUT"
-          echo "::notice::superseded: $newer already has a newer run of $WORKFLOW on main; skipping"
+          echo "::notice::superseded: $newer already has a newer run of $WORKFLOW on $branch; skipping"
           exit 0
         fi
 
@@ -128,7 +134,7 @@ runs:
         # walking completed runs newest-first and asking each whether its
         # substantive job reached a verdict. Only `success` and `failure` are
         # verdicts: both mean the job ran to its end and judged the commit,
-        # and a failed one is red on main where someone will look. A job that
+        # and a failed one is red on the branch where someone will look. A job that
         # was skipped (its run superseded or inert), cancelled, or timed out
         # judged nothing, and a docs-only push diffing against it would read
         # as inert and leave that commit's code untested.
@@ -155,7 +161,7 @@ runs:
         echo "superseded=false" >> "$GITHUB_OUTPUT"
         echo "last_tested_sha=$last" >> "$GITHUB_OUTPUT"
         if [ -n "$last" ]; then
-          echo "last commit $WORKFLOW actually tested on main: $last"
+          echo "last commit $WORKFLOW actually tested on $branch: $last"
         else
           echo "::notice::no earlier tested commit found for $WORKFLOW; a caller that diffs should run everything"
         fi
