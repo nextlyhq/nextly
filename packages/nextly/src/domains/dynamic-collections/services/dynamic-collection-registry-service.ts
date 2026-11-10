@@ -15,6 +15,7 @@ import type {
   StoredWebhookRecording,
 } from "../../../schemas/dynamic-collections/types";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
+import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import { BaseService } from "../../../shared/base-service";
 import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import type { Logger } from "../../../shared/types";
@@ -350,9 +351,13 @@ export class DynamicCollectionRegistryService extends BaseService {
     }
 
     const targetSlug = updates.slug ?? existing[0].slug;
-    await this.ensureGlobalSlugUniqueness(targetSlug, {
-      currentCollectionId: existing[0].id,
-    });
+    // A rename's new address is judged by the one address rule, inside the schema lock, in the
+    // rename branch below. Any other update keeps the slug it has and is checked as before.
+    if (targetSlug === existing[0].slug) {
+      await this.ensureGlobalSlugUniqueness(targetSlug, {
+        currentCollectionId: existing[0].id,
+      });
+    }
 
     const updateData: Record<string, unknown> = { ...updates };
 
@@ -393,9 +398,20 @@ export class DynamicCollectionRegistryService extends BaseService {
         // together or neither does; otherwise the renamed collection would lose
         // them and the next collection created under the old slug would inherit
         // them.
+        //
+        // The new address is judged inside the schema lock `renameEntity` holds for the rename,
+        // so a collection or Single that takes the same snake_case form while this waits is seen,
+        // and one that tries while the rename holds the lock is refused. The rule is the one
+        // every road applies (reserved names, routes, a taken slug, and a same snake_case form
+        // among collections and Singles).
         const renamed = await renameEntity(this.adapter, {
           dialect: this.dialect,
           move,
+          judgeTarget: () =>
+            assertGlobalResourceSlugAvailable(this.adapter, targetSlug, {
+              currentResourceType: "collection",
+              currentResourceId: existing[0].id,
+            }),
           writeRegistry: async tx => {
             const written = await writeRow(
               tx.drizzleWithRelations<DatabaseAdapter["db"]>(
