@@ -225,6 +225,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "useDocumentValues (value)",
   "useEntryFieldsPanel (value)",
   "useFieldAddress (value)",
+  "useFoldedPanel (value)",
   "useMediaItem (value)",
   "useMediaResolver (value)",
   "useMediaSearcher (value)",

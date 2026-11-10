@@ -71,6 +71,7 @@ import {
   settledRailItems,
 } from "./lib/settled-rail";
 import { standalonePluginsVisibleTo } from "./lib/standalone-plugins-visible-to";
+import { RailAccount } from "./RailAccount";
 import type {
   MainMenuCategory,
   MainMenuItem,
@@ -609,6 +610,10 @@ export function DualSidebar({
             );
           })}
         </nav>
+
+        {/* The rail's foot: the reader's Inbox and account menu, the same on
+            every page. */}
+        <RailAccount className="mt-4" />
       </aside>
 
       {/* 2. Sub Sidebar (Detail Menu) */}

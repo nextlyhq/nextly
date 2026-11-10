@@ -1,10 +1,10 @@
 /**
- * The header and the notification bell read the same permissions answer, and the hook asks again
- * whenever a new reader of it mounts with no request in flight. So a cold load asks once only if
- * every reader in the header has mounted while the first request is still out: a bell mounted after
- * the answer arrives asks a second time, one round trip after the first. Where no control waits
- * on the permissions, the header asks for none: the hook asks again each time a reader of it
- * mounts, and the bar is drawn again whenever an editor's own mode hands it back.
+ * The rail's account foot and the notification bell read the same permissions answer, and the
+ * hook asks again whenever a new reader of it mounts with no request in flight. So a cold load
+ * asks once only if every reader in the foot has mounted while the first request is still out: a
+ * bell mounted after the answer arrives asks a second time, one round trip after the first. Where
+ * no item waits on the permissions, the foot asks for none: the hook asks again each time a
+ * reader of it mounts, and the foot is drawn again whenever the shell is.
  *
  * The hook is the real one, so the count is the requests it sends; only the network below it is
  * replaced.
@@ -90,18 +90,18 @@ vi.mock("@admin/hooks/useDashboardUser", () => ({
 vi.mock("@admin/hooks/useLogout", () => ({
   useLogout: () => () => {},
 }));
-vi.mock("../sidebar/UserProfileDropdown", () => ({
+vi.mock("../UserProfileDropdown", () => ({
   UserProfileDropdown: () => <div data-testid="account-menu" />,
 }));
 
-import { DashboardHeader } from "./DashboardHeader";
+import { RailAccount } from "../RailAccount";
 
 afterEach(() => {
   server.asked.length = 0;
   workspace.hideBell = false;
 });
 
-describe("DashboardHeader on a cold load", () => {
+describe("the rail's account foot on a cold load", () => {
   it("asks for the reader's permissions once, though the bell reads them too", async () => {
     let release = (): void => {};
     server.permissionsGate = new Promise(done => {
@@ -113,7 +113,7 @@ describe("DashboardHeader on a cold load", () => {
 
     render(
       <QueryClientProvider client={client}>
-        <DashboardHeader />
+        <RailAccount />
       </QueryClientProvider>
     );
     // The first request is out and unanswered: the cold load.
@@ -137,22 +137,18 @@ describe("DashboardHeader on a cold load", () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const header = (
+    const foot = (
       <QueryClientProvider client={client}>
-        <DashboardHeader />
+        <RailAccount />
       </QueryClientProvider>
     );
 
-    // Drawn, and drawn again as it is when an editor's own mode hands the bar back.
-    const { unmount } = render(header);
-    expect(
-      await screen.findByRole("button", { name: "Choose theme" })
-    ).toBeInTheDocument();
+    // Drawn, and drawn again, as the shell redraws it.
+    const { unmount } = render(foot);
+    expect(await screen.findByTestId("account-menu")).toBeInTheDocument();
     unmount();
-    render(header);
-    expect(
-      await screen.findByRole("button", { name: "Choose theme" })
-    ).toBeInTheDocument();
+    render(foot);
+    expect(await screen.findByTestId("account-menu")).toBeInTheDocument();
     await waitFor(() => expect(client.isFetching()).toBe(0));
 
     expect(server.asked).not.toContain("/me/permissions");
