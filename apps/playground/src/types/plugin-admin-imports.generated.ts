@@ -7,7 +7,7 @@ import { registerComponents } from "@nextlyhq/admin";
 import { registerBlockEditorModules } from "@nextlyhq/plugin-page-builder/admin";
 import * as _p0 from "../../src/dashboard/site-notes";
 import * as _p1 from "@/plugins/block-fixture/editor";
-import * as _p2 from "@/plugins/contributions-fixture/contribution";
+import * as _p2 from "@/plugins/contributions-fixture/components";
 import * as _p3 from "@/plugins/widget-kit-fixture/admin";
 import * as _p4 from "@nextlyhq/plugin-form-builder/admin";
 import * as _p5 from "@nextlyhq/plugin-page-builder/admin";
@@ -18,7 +18,13 @@ import type * as siteConfig from "../../nextly.config";
 const registered = {
   "./src/dashboard/site-notes#SiteNotesCard": _p0.SiteNotesCard, // widget "playground/site-notes" of the site config
   "@/plugins/block-fixture/editor#FixtureInspector": _p1.FixtureInspector,
-  "@/plugins/contributions-fixture/contribution#FixtureContribution": _p2.FixtureContribution,
+  "@/plugins/contributions-fixture/components#FixtureActionDialog": _p2.FixtureActionDialog,
+  "@/plugins/contributions-fixture/components#FixtureBlock": _p2.FixtureBlock,
+  "@/plugins/contributions-fixture/components#FixtureCell": _p2.FixtureCell,
+  "@/plugins/contributions-fixture/components#FixtureGatedBlock": _p2.FixtureGatedBlock,
+  "@/plugins/contributions-fixture/components#FixtureReplacement": _p2.FixtureReplacement,
+  "@/plugins/contributions-fixture/components#FixtureSection": _p2.FixtureSection,
+  "@/plugins/contributions-fixture/components#FixtureTab": _p2.FixtureTab,
   "@/plugins/widget-kit-fixture/admin#KitCard": _p3.KitCard, // widget "widget-kit-fixture/kit" of plugin "widget-kit-fixture"
   "@/plugins/widget-kit-fixture/admin#ThrowingCard": _p3.ThrowingCard, // widget "widget-kit-fixture/throws" of plugin "widget-kit-fixture"
   "@/plugins/widget-kit-fixture/admin#UnlabelledControlCard": _p3.UnlabelledControlCard, // widget "widget-kit-fixture/unlabelled-control" of plugin "widget-kit-fixture"
