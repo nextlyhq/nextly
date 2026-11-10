@@ -95,6 +95,7 @@ export type FieldGroupValidationErrorCode =
   | "FIELD_NAME_REQUIRED"
   | "FIELD_NAME_INVALID_FORMAT"
   | "FIELD_NAME_SQL_KEYWORD"
+  | "FIELD_NEVER_TRANSLATABLE"
   | "FIELD_NAME_DUPLICATE"
   // A name that snake-cases onto a column this group's table already carries. The same code the
   // collection and single validators report, because it is the same mistake with the same fix.

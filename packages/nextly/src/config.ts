@@ -108,6 +108,7 @@ export type {
 export {
   isFieldLocalized,
   defaultLocalizedForType,
+  neverTranslatable,
   resolveLocalizedFieldNames,
 } from "./domains/i18n/classify-fields";
 

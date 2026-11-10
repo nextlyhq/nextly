@@ -101,6 +101,7 @@ export type ValidationErrorCode =
   | "FIELD_NAME_REQUIRED"
   | "FIELD_NAME_INVALID_FORMAT"
   | "FIELD_NAME_SQL_KEYWORD"
+  | "FIELD_NEVER_TRANSLATABLE"
   | "FIELD_NAME_DUPLICATE"
   | "FIELD_NAME_RESERVED"
   // A name that reaches a system column under a different spelling. Allowed only as the
