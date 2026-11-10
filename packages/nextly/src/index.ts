@@ -667,6 +667,16 @@ export {
   type CoreAdminPlaceId,
 } from "./plugins";
 
+// "Every content type except these", one answer for each reader of a scope.
+// @experimental
+export {
+  isContentTypeScope,
+  typesReachedBy,
+  type ContentTypeCandidate,
+  type ContentTypeKind,
+  type ContentTypeScope,
+} from "./plugins/content-type-scope";
+
 // The plugin limiter: `contributes.limits` rules and `ctx.limits`.
 // @experimental
 export type { LimitRule } from "./domains/limits/limit-rules";

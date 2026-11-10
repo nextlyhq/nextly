@@ -218,9 +218,10 @@ describe("extend with a scope — Schema Builder types", () => {
     expect(fieldNames(find(out.entities.components, "card"))).toEqual([
       "label",
     ]);
-    expect(
-      fieldNames(find(out.entities.collections, "case-studies"))
-    ).toEqual(["title", "seo"]);
+    expect(fieldNames(find(out.entities.collections, "case-studies"))).toEqual([
+      "title",
+      "seo",
+    ]);
     expect(out.unresolved).toEqual([]);
   });
 
@@ -260,7 +261,9 @@ describe("extend with a scope — Schema Builder types", () => {
       siteConfig(),
       [seoPlugin()]
     );
-    expect(() => finalizeDeferredExtendTargets(deferredExtends, [])).not.toThrow();
+    expect(() =>
+      finalizeDeferredExtendTargets(deferredExtends, [])
+    ).not.toThrow();
     expect(() =>
       resolveBuilderExtends(deferredExtends, {
         collections: [],

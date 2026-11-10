@@ -36,9 +36,10 @@ describe("typesReachedBy", () => {
     expect(slugsOf(typesReachedBy({ every: ["single"] }, types))).toEqual([
       "homepage",
     ]);
-    expect(slugsOf(typesReachedBy({ every: ["collection"] }, types))).toEqual(
-      ["posts", "pages"]
-    );
+    expect(slugsOf(typesReachedBy({ every: ["collection"] }, types))).toEqual([
+      "posts",
+      "pages",
+    ]);
   });
 
   it("never reaches a plugin's own types", () => {
@@ -76,9 +77,9 @@ describe("typesReachedBy", () => {
 
   it("reaches a type made later the same way, so a list of slugs is never needed", () => {
     const later = [...types, site("case-studies")];
-    expect(
-      slugsOf(typesReachedBy({ every: ["collection"] }, later))
-    ).toContain("case-studies");
+    expect(slugsOf(typesReachedBy({ every: ["collection"] }, later))).toContain(
+      "case-studies"
+    );
   });
 
   it("ignores an excepted slug no type has", () => {

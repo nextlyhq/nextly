@@ -26,16 +26,16 @@ import type { NextlyServiceConfig } from "../../di/register";
 import { NextlyError } from "../../errors";
 import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
 import {
+  typesReachedBy,
+  type ContentTypeCandidate,
+  type ContentTypeScope,
+} from "../content-type-scope";
+import {
   transformWithLedgers,
   type TransformContribution,
   type TransformableEntity,
   type TransformedEntities,
 } from "../entity-transforms";
-import {
-  typesReachedBy,
-  type ContentTypeCandidate,
-  type ContentTypeScope,
-} from "../content-type-scope";
 import type { PluginDefinition } from "../plugin-context";
 import {
   extendFieldDuplicateError,
@@ -223,6 +223,21 @@ export interface LeftAloneExtend {
   owner: string;
 }
 
+/**
+ * What the boot says of each type a scope left alone, so the site's owner
+ * learns why the plugin's field is missing there and which field it kept.
+ */
+export function leftAloneWarnings(
+  leftAlone: readonly LeftAloneExtend[]
+): string[] {
+  return leftAlone.map(
+    left =>
+      `[plugins] "${left.owner}" did not add "${left.field}" to "${left.target}", ` +
+      `which already has a field of that name. The type keeps its own field; ` +
+      `rename it, or move its values across, to use the plugin's.`
+  );
+}
+
 /** Minimal shape an entity must have to be an extend target (slug + fields). */
 export interface SchemaEntityLike {
   slug: string;
@@ -400,7 +415,8 @@ export function extendersBySlug(
     // A scope names no slug of its own: the types it reached are the caller's
     // to say, from the entities it holds. Without them it records nothing,
     // so a full uninstall keeps those fields' columns rather than guessing.
-    const slugs = typeof target === "string" ? [target] : (reach?.(target) ?? []);
+    const slugs =
+      typeof target === "string" ? [target] : (reach?.(target) ?? []);
     for (const slug of slugs) {
       const names = bySlug.get(slug) ?? new Map<string, string>();
       for (const field of fields) {

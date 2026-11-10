@@ -266,5 +266,70 @@ describe.each(getConfiguredTestDialects())(
         });
       }
     }, 240_000);
+
+    it("leaves a type with its own field of that name, and a removed plugin's table, as they are", async () => {
+      database = await openDatabase(dialect);
+      const adapter = database.adapter;
+      // A code type that already has the field the plugin adds.
+      const blog = defineCollection({
+        slug: "es_blog",
+        fields: [text({ name: "seo_title" })],
+      });
+
+      await createTestNextly({
+        adapter: adapter as never,
+        collections: [posts, blog],
+      });
+      // A Builder type that has it too, and a table a plugin that has since
+      // been uninstalled left behind: the registry keeps its row.
+      await seedBuilderCollection(adapter as never, {
+        slug: "es_landing",
+        fields: [{ name: "seo_title", type: "text" }],
+      });
+      await seedBuilderCollection(adapter as never, {
+        slug: "es_leftover",
+        fields: [{ name: "data", type: "text" }],
+      });
+      await adapter.executeQuery(
+        `UPDATE dynamic_collections SET source = 'plugin:@t/gone' WHERE slug = 'es_leftover'`
+      );
+
+      clearServices();
+      const warnings: string[] = [];
+      current = await createTestNextly({
+        adapter: adapter as never,
+        collections: [posts, blog],
+        plugins: [seoPlugin],
+        logger: {
+          debug() {},
+          info() {},
+          warn: (message: string) => warnings.push(message),
+          error() {},
+        },
+      });
+
+      // The plugin's table never gets the field; the Builder type with its
+      // own keeps that one field, as it was.
+      expect(await columnsOf(current, "dc_es_leftover")).toContain("data");
+      expect(await columnsOf(current, "dc_es_leftover")).not.toContain(
+        "seo_title"
+      );
+      expect(
+        (await columnsOf(current, "dc_es_landing")).filter(
+          column => column === "seo_title"
+        )
+      ).toHaveLength(1);
+
+      // Each type left alone is named at startup, the code one and the
+      // Builder one, and no other.
+      const named = warnings.filter(message =>
+        message.includes('did not add "seo_title"')
+      );
+      expect(named).toHaveLength(2);
+      expect(named.some(message => message.includes('"es_blog"'))).toBe(true);
+      expect(named.some(message => message.includes('"es_landing"'))).toBe(
+        true
+      );
+    }, 240_000);
   }
 );

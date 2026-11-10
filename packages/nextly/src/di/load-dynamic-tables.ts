@@ -355,6 +355,12 @@ export interface LoadedBuilderEntity {
   fields: FieldConfig[];
   /** Draft/Published flag (collections/singles; always false for components). */
   status: boolean;
+  /**
+   * Who made the row: `ui` for the Schema Builder, `code`, or
+   * `plugin:<name>`. A plugin scope reaches only the Builder's rows, and a
+   * row an uninstalled plugin left behind still names that plugin.
+   */
+  source?: string;
 }
 
 export interface LoadedBuilderEntities {
@@ -378,11 +384,24 @@ export async function loadBuilderEntities(
     table: "dynamic_collections" | "dynamic_singles" | FieldGroupRegistryName,
     hasStatusColumn: boolean
   ): Promise<LoadedBuilderEntity[]> => {
-    const selectSql = hasStatusColumn
-      ? `SELECT slug, table_name, fields, status FROM ${table}`
-      : `SELECT slug, table_name, fields FROM ${table}`;
+    const columns = hasStatusColumn
+      ? "slug, table_name, fields, status"
+      : "slug, table_name, fields";
+    // `source` as well where the registry has it; one from before that column
+    // is read without it, rather than read as empty.
+    const selectRows = async (): Promise<DynamicTableRow[]> => {
+      try {
+        return await adapter.executeQuery<DynamicTableRow>(
+          `SELECT ${columns}, source FROM ${table}`
+        );
+      } catch {
+        return adapter.executeQuery<DynamicTableRow>(
+          `SELECT ${columns} FROM ${table}`
+        );
+      }
+    };
     try {
-      const rows = await adapter.executeQuery<DynamicTableRow>(selectSql);
+      const rows = await selectRows();
       const out: LoadedBuilderEntity[] = [];
       for (const row of rows) {
         try {
@@ -397,6 +416,7 @@ export async function loadBuilderEntities(
             fields,
             // Same dialect-boolean coercion as loadDynamicTables.
             status: row.status === 1 || row.status === true,
+            ...(typeof row.source === "string" ? { source: row.source } : {}),
           });
         } catch {
           // Skip a row whose fields JSON is malformed.

@@ -478,6 +478,23 @@ export type {
 } from "nextly";
 
 /**
+ * "Every content type the site defines, except these": the target a
+ * `contributes.extend` clause takes to reach types it cannot name, and the one
+ * function that says which types a scope covers. The site's own collections
+ * and Singles, Schema Builder ones made later included; never a plugin's own
+ * types, Nextly's system types or field groups. Anything else that needs to
+ * know what a scope covers asks `typesReachedBy` rather than deciding again.
+ *
+ * @experimental
+ */
+export { isContentTypeScope, typesReachedBy } from "nextly";
+export type {
+  ContentTypeCandidate,
+  ContentTypeKind,
+  ContentTypeScope,
+} from "nextly";
+
+/**
  * Declaring a field of a type the plugin itself contributes. The built-in
  * factories cover only the built-in types, so a contributed type has no factory
  * to build its field with; `pluginField` brands one so the authoring surfaces

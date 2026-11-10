@@ -222,6 +222,8 @@ import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
 import {
   applyPluginSchemaContributionsDeferred,
   assertRegisteredKeepTheirKind,
+  leftAloneWarnings,
+  type LeftAloneExtend,
 } from "../plugins/schema/apply-contributions";
 import { reconcileBuilderContributions } from "../plugins/schema/reconcile-builder-contributions";
 import {
@@ -863,6 +865,7 @@ async function registerServicesOnce(
     transformedPlugins,
     deferredExtends,
     pluginGrants,
+    leftAlone,
   } = await resolveBootConfig(config);
   const {
     unresolvedRelations,
@@ -906,6 +909,9 @@ async function registerServicesOnce(
   const resolvedBasePath = basePath ?? process.cwd();
 
   logRegisteredPlugins(transformedConfig, resolvedLogger);
+  for (const warning of leftAloneWarnings(leftAlone)) {
+    resolvedLogger.warn?.(warning);
+  }
 
   // Said once per boot, whatever plugins are present: an app on an edge that
   // reports the client, with security.trustProxy unset, rate-limits sign-in
@@ -1183,7 +1189,10 @@ async function registerServicesOnce(
       // Approvals given under an earlier definition of a workflow are withdrawn now the workflows
       // this boot registered are published, unless the definition keeps them. After the migrations,
       // so the review states table is there to read where it exists at all.
-      await withdrawApprovalsUnderEarlierDefinitions(adapter, workflows.values());
+      await withdrawApprovalsUnderEarlierDefinitions(
+        adapter,
+        workflows.values()
+      );
 
       // The stored language list is read before any plugin starts and before registration publishes:
       // until its first read the registry knows no stored languages, and a plugin's `init` writing
@@ -1353,6 +1362,8 @@ interface ResolvedBootConfig {
   deferredExtends: DeferredExtends;
   /** What `resolveBootPlugins` granted the plugins of `transformedConfig`. */
   pluginGrants: PluginGrants;
+  /** Configured types a plugin scope left as they were; warned of at boot. */
+  leftAlone: LeftAloneExtend[];
 }
 
 /**
@@ -1384,11 +1395,14 @@ async function resolveBootConfig(
   // DEFERRED here (candidate Builder-made collections) and finalized after the
   // DB is reachable below — this is how extending/relating to a Builder
   // collection works.
-  const { config: contributedConfig, deferredExtends } =
-    applyPluginSchemaContributionsDeferred(
-      transformedSetupConfig,
-      transformedPlugins
-    );
+  const {
+    config: contributedConfig,
+    deferredExtends,
+    leftAlone,
+  } = applyPluginSchemaContributionsDeferred(
+    transformedSetupConfig,
+    transformedPlugins
+  );
 
   return {
     transformedConfig: withResolvedPreview(
@@ -1397,6 +1411,7 @@ async function resolveBootConfig(
     transformedPlugins,
     deferredExtends,
     pluginGrants,
+    leftAlone,
   };
 }
 
@@ -1856,7 +1871,7 @@ async function reconcileBuilderTargets<T>(
   // a message naming neither the other kind nor its owner -- and where, for
   // a permission named `read-<slug>` and a code rule resolved by slug alone,
   // the install would be ambiguous even if both could be stored.
-  const { entities, unresolved } = reconcileBuilderContributions(
+  const { entities, unresolved, leftAlone } = reconcileBuilderContributions(
     args.deferredExtends,
     builderEntities
   );
@@ -1864,6 +1879,7 @@ async function reconcileBuilderTargets<T>(
   if (unresolved.length > 0) {
     handleUnresolvedExtends(unresolved, transformedConfig, logger);
   }
+  for (const warning of leftAloneWarnings(leftAlone)) logger.warn?.(warning);
 
   // A field extended onto a Builder-owned entity is not in the transformed
   // config — it was deferred until the Builder set could be read — so the
