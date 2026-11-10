@@ -1,4 +1,5 @@
 import { expectTypeOf } from "vitest";
+import type { ComponentType, ReactNode } from "react";
 import type { FieldTypeCatalogEntry } from "nextly/field-catalog";
 
 import type { PluginAdminContributions as RootAdminContributions } from "@nextlyhq/plugin-sdk";
@@ -290,6 +291,58 @@ expectTypeOf(adminEntry.describeFieldTypes<"rating">)
 expectTypeOf(adminEntry.describeFieldTypes<"rating">).returns.toEqualTypeOf<
   adminEntry.FieldTypeDescription<"rating">[]
 >();
+
+// ---------------------------------------------------------------------------
+// The shared field settings panel and its surface configuration
+// (@experimental). Asserted EXACTLY, as the picker is, so a prop renamed,
+// dropped or widened to `any` fails here rather than in a plugin.
+type PanelProps = Parameters<typeof adminEntry.FieldSettingsPanel>[0];
+expectTypeOf<PanelProps>().toEqualTypeOf<adminEntry.FieldSettingsPanelProps>();
+expectTypeOf<adminEntry.FieldSettingsPanelProps>().toEqualTypeOf<{
+  surface: adminEntry.FieldSettingsSurface;
+  field: adminEntry.FieldSettingsField;
+  ancestors: readonly adminEntry.FieldSettingsField[];
+  siblings: readonly adminEntry.FieldSettingsField[];
+  saved: boolean;
+  readOnly?: boolean;
+  onChange: (next: adminEntry.FieldSettingsField) => void;
+  onClose?: () => void;
+  actions?: ReactNode;
+}>();
+expectTypeOf<adminEntry.FieldSettingsSurface>().toEqualTypeOf<{
+  surface: "entries" | "users" | "forms" | "blocks";
+  deriveName: (label: string) => string;
+  fixed?: readonly adminEntry.FixedFieldSetting[];
+  extraSettings?: Partial<
+    Record<
+      adminEntry.FieldSettingsTab,
+      ComponentType<adminEntry.FieldSettingsSurfaceControlProps>
+    >
+  >;
+  conditions: "sibling" | "none";
+}>();
+expectTypeOf<adminEntry.FixedFieldSetting>().toEqualTypeOf<{
+  setting: "name" | "type";
+  when: "always" | "saved";
+  reason: string;
+}>();
+expectTypeOf<adminEntry.FieldSettingsTab>().toEqualTypeOf<
+  "general" | "validation" | "display" | "conditions" | "advanced"
+>();
+expectTypeOf<adminEntry.FieldTypeSettings>().toEqualTypeOf<{
+  defining?: ComponentType<adminEntry.FieldSettingsControlProps>;
+  tabs?: Partial<
+    Record<
+      adminEntry.FieldSettingsTab,
+      ComponentType<adminEntry.FieldSettingsControlProps>
+    >
+  >;
+}>();
+// The field it edits carries the definition's own keys, so a surface can map
+// its storage to and from it.
+expectTypeOf<adminEntry.FieldSettingsField>().toHaveProperty("id");
+expectTypeOf<adminEntry.FieldSettingsField>().toHaveProperty("name");
+expectTypeOf<adminEntry.FieldSettingsField>().toHaveProperty("type");
 
 // A plugin's one-shot write to its own route: the caller names the answer's
 // shape, and a refusal arrives as a rejection rather than as `undefined`.

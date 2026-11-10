@@ -855,19 +855,38 @@ function buildRoute<TNode>(
     return params;
   }
 
+  /** What the route resolved an address it serves to: an entry or a redirect. */
+  type Served = NonNullable<Awaited<ReturnType<typeof resolvePath>>>;
+
+  /**
+   * The address the request names, resolved, then handed to `use`; not found
+   * where the route does not serve it: a framework or metadata path, or one
+   * nothing holds. The page and its head answer alike, so a crawler, which is
+   * answered once the head is ready, gets a 404 rather than a 200 carrying a
+   * not-found body. One memo of access lookups for the resolution and `use`,
+   * so the person a preview was shared by, the field rules of the draft read
+   * as them, and any read `use` makes look that person up once.
+   */
+  async function servedAt<T>(
+    args: ContentRouteArgs,
+    use: (served: Served) => T | Promise<T>
+  ): Promise<T> {
+    const slug = joinSlug(await args.params);
+    if (isReservedPath(`/${slug}`)) triggerNotFound();
+    return runWithAccessMemo(async () => {
+      const resolved = await resolvePath(slug);
+      if (!resolved) triggerNotFound();
+      return use(resolved);
+    });
+  }
+
   async function generateMetadata(args: ContentRouteArgs): Promise<Metadata> {
     // Nothing of its own to serve and no provider to ask: the page is not
     // resolved for its head at all, as before providers existed.
     if (!config.buildMetadata && knownNoPageMetadataProvider()) return {};
-    const slug = joinSlug(await args.params);
-    if (isReservedPath(`/${slug}`)) return {};
-    // One memo of access lookups for the resolution and the callback, so the
-    // person a preview was shared by, the field rules of the draft read as
-    // them, and any read the callback makes look that person up once.
-    return runWithAccessMemo(async () => {
-      const resolved = await resolvePath(slug);
+    return servedAt(args, resolved => {
       // A redirect's metadata is never read: the page answers with it.
-      if (!resolved || "redirect" in resolved) return {};
+      if ("redirect" in resolved) return {};
       const { entry, context } = resolved;
       // The address this request was served at: a later page of the entry's
       // list is its own address, not the list's first page.
@@ -880,14 +899,7 @@ function buildRoute<TNode>(
   }
 
   async function ContentPage(args: ContentRouteArgs): Promise<TNode> {
-    const slug = joinSlug(await args.params);
-    // Never serve content at a framework/metadata path.
-    if (isReservedPath(`/${slug}`)) triggerNotFound();
-    // One memo of access lookups for the resolution and the render; see
-    // `generateMetadata`.
-    return runWithAccessMemo(async () => {
-      const resolved = await resolvePath(slug);
-      if (!resolved) triggerNotFound();
+    return servedAt(args, resolved => {
       if ("redirect" in resolved) triggerPermanentRedirect(resolved.redirect);
       return config.render(resolved.entry, resolved.context);
     });

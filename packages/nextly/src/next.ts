@@ -72,10 +72,67 @@ const NEXTLY_FILE_TRACING_INCLUDES = [
 ];
 
 /**
+ * The crawlers Next.js's own default already waits for: those that read a
+ * page's head from the first HTML and run no script, so streamed metadata
+ * would reach them too late. Kept as its source, from Next.js's
+ * `HTML_LIMITED_BOT_UA_RE`, because setting `htmlLimitedBots` replaces that
+ * default rather than adding to it; a test holds this copy to the installed
+ * Next.js, so a crawler Next.js adds is not silently dropped.
+ */
+const NEXT_DEFAULT_HTML_LIMITED_BOTS =
+  "[\\w-]+-Google|Google-[\\w-]+|Chrome-Lighthouse|Slurp|DuckDuckBot|baiduspider|yandex|sogou|bitlybot|tumblr|vkShare|quora link preview|redditbot|ia_archiver|Bingbot|BingPreview|applebot|facebookexternalhit|facebookcatalog|Twitterbot|LinkedInBot|Slackbot|Discordbot|WhatsApp|SkypeUriPreview|Yeti|googleweblight";
+
+/**
+ * The crawlers a Nextly site also waits for, besides Next.js's own list: the
+ * main Googlebot, which Next.js leaves out because it runs scripts, but whose
+ * first reading of a page is the HTML it was sent; and the AI crawlers and
+ * answer engines, which run none.
+ */
+const NEXTLY_ADDED_HTML_LIMITED_BOTS = [
+  "Googlebot",
+  "GPTBot",
+  "OAI-SearchBot",
+  "ChatGPT-User",
+  "ClaudeBot",
+  "Claude-User",
+  "Claude-SearchBot",
+  "PerplexityBot",
+  "Perplexity-User",
+  "CCBot",
+  "Amazonbot",
+  "Bytespider",
+  "meta-externalagent",
+  "DuckAssistBot",
+  "MistralAI-User",
+  "cohere-ai",
+];
+
+/**
+ * `htmlLimitedBots` for a Nextly site's `next.config`: Next.js's own list and
+ * the crawlers above. A request from one of them is answered with the page's
+ * whole head in the first HTML, rather than streamed in after it, so what a
+ * search engine or an AI crawler reads of a page is what the page's metadata
+ * says. `withNextly` sets it; a config not wrapped in it sets it directly:
+ *
+ * ```ts
+ * import { nextlyHtmlLimitedBots } from "nextly/next";
+ * const nextConfig = { htmlLimitedBots: nextlyHtmlLimitedBots };
+ * ```
+ */
+export const nextlyHtmlLimitedBots: RegExp = new RegExp(
+  [NEXT_DEFAULT_HTML_LIMITED_BOTS, ...NEXTLY_ADDED_HTML_LIMITED_BOTS].join("|"),
+  "i"
+);
+
+/**
  * Wraps a Next.js config to add Nextly-required settings.
  *
  * Warns once when the config has Cache Components or Partial Prefetching
  * off: Nextly supports only both on.
+ *
+ * Sets `htmlLimitedBots` to {@link nextlyHtmlLimitedBots} unless the config
+ * sets its own, so search engines and AI crawlers read each page's whole head
+ * in the first HTML.
  *
  * Automatically adds server-external packages so database drivers
  * and adapters are loaded from node_modules at runtime instead of
@@ -153,6 +210,9 @@ export function withNextly<T extends Record<string, unknown>>(
     serverExternalPackages: merged,
     ...(nextConfig.experimental === undefined ? {} : { experimental }),
     outputFileTracingIncludes: includes,
+    // The app's own list stands where it set one; otherwise Nextly's, so the
+    // crawlers it names read each page's whole head in the first HTML.
+    htmlLimitedBots: nextConfig.htmlLimitedBots ?? nextlyHtmlLimitedBots,
   };
 }
 

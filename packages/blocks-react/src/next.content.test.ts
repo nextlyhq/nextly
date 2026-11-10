@@ -360,9 +360,10 @@ describe("the content route", () => {
         await expect(
           route.ContentPage({ params: { slug: ["blog", "hello"] } })
         ).rejects.toMatchObject(NOT_FOUND);
-        expect(
-          await route.generateMetadata({ params: { slug: ["blog", "hello"] } })
-        ).toEqual({});
+        // The head answers not found too, so a crawler gets a 404.
+        await expect(
+          route.generateMetadata({ params: { slug: ["blog", "hello"] } })
+        ).rejects.toMatchObject(NOT_FOUND);
       }
     );
 
@@ -412,9 +413,10 @@ describe("the content route", () => {
     expect(
       await route.generateMetadata({ params: { slug: ["blog", "hello"] } })
     ).toEqual({ title: "Hello world | Blog" });
-    expect(
-      await route.generateMetadata({ params: { slug: ["blog", "none"] } })
-    ).toEqual({});
+    // An address nothing holds: the head answers not found, as the page does.
+    await expect(
+      route.generateMetadata({ params: { slug: ["blog", "none"] } })
+    ).rejects.toMatchObject(NOT_FOUND);
   });
 
   it("asks for an entry's head through the runtime, at the address it was served", async () => {

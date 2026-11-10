@@ -24,6 +24,7 @@ import {
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
+import { assertSaveLeavesNoFieldGroupCycle } from "../../domains/field-groups/field-group-cycles";
 import { assertNotDiverged } from "../../domains/field-groups/services/assert-not-diverged";
 import {
   registerComponentRuntimeSchema,
@@ -39,10 +40,12 @@ import {
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
+import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
+import { recordedFieldsOf } from "../../domains/schema/services/collection-schema-apply";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
@@ -391,6 +394,8 @@ export const COMPONENTS_METHODS: Record<
           (component as { localized?: boolean }).localized === true,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
+        // What the fields were before this save, as the apply states it.
+        recordedFields: recordedFieldsOf(component),
       };
 
       return respondData(
@@ -501,6 +506,12 @@ export const COMPONENTS_METHODS: Record<
             fields,
             component.fields ?? []
           );
+          // Nor may the save leave this field group placed inside itself, judged against every
+          // field group as stored now, inside the exclusion.
+          assertSaveLeavesNoFieldGroupCycle({
+            saved: { slug, fields },
+            stored: await svc.registry.getAllFieldLists(),
+          });
 
           // i18n: prefer the request's localized flag over the persisted one (stale on a
           // simultaneous toggle+field-change save); fall back to the registry value.
@@ -549,6 +560,15 @@ export const COMPONENTS_METHODS: Record<
               builtBy: "fieldGroup",
             }
           );
+          // A translated relation renamed and switched at once is refused: the companion's
+          // rename carries its values as they are.
+          refuseCompanionRenameSwitch({
+            rename: companionRename,
+            oldFields: component.fields ?? [],
+            newFields: fields,
+            subject: `Field group '${slug}'`,
+            component: true,
+          });
           // A field leaving translation has preconditions of its own, asked before the apply
           // alters anything.
           await archiveFieldsLeavingTranslation({
@@ -610,6 +630,9 @@ export const COMPONENTS_METHODS: Record<
             localized: isLocalized,
             // Authored in the Schema Builder: this is the Builder's own save path.
             builderOwned: true,
+            // What the fields were before this save: a relation's previous shape, which SQLite's
+            // column cannot tell (`withRecordedShapes`).
+            recordedFields: recordedFieldsOf(component),
           };
 
           const push = builderSchemaPush({

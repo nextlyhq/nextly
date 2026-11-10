@@ -210,7 +210,11 @@ interface FixedSweep {
   turn: boolean;
   key: string;
   failure: string;
-  count: "oneTimeSecrets" | "receivedWebhooks" | "pluginEvents" | "previewLinks";
+  count:
+    | "oneTimeSecrets"
+    | "receivedWebhooks"
+    | "pluginEvents"
+    | "previewLinks";
   prune(
     adapter: NonNullable<RunDrainDeps["retention"]>["prune"]["adapter"],
     now: Date,

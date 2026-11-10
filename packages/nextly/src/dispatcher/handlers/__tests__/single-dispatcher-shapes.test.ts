@@ -101,6 +101,7 @@ type Registry = {
   getAllSingles: ReturnType<typeof vi.fn>;
   updateSingle: ReturnType<typeof vi.fn>;
   deleteSingle: ReturnType<typeof vi.fn>;
+  assertNothingDependsOn: ReturnType<typeof vi.fn>;
 };
 type Entry = {
   get: ReturnType<typeof vi.fn>;
@@ -122,6 +123,8 @@ function makeRegistry(overrides: Partial<Registry> = {}): Registry {
     getAllSingles: vi.fn().mockResolvedValue([]),
     updateSingle: vi.fn(),
     deleteSingle: vi.fn(),
+    // A delete asks what depends on the Single before it removes anything; nothing does here.
+    assertNothingDependsOn: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -526,6 +529,15 @@ describe("dispatchSingles, actions (respondAction)", () => {
 
     const response = result as Response;
     expect(response.status).toBe(200);
+    // Asked of the Single as stored, before its row went.
+    expect(registry.assertNothingDependsOn).toHaveBeenCalledWith({
+      slug: "site",
+      tableName: "single_site",
+      fields: [],
+    });
+    expect(
+      registry.assertNothingDependsOn.mock.invocationCallOrder[0]
+    ).toBeLessThan(registry.deleteSingle.mock.invocationCallOrder[0]);
     const body = await response.json();
     expect(body).toEqual({
       message: 'Single "site" deleted successfully',

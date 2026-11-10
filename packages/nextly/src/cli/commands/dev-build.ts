@@ -12,6 +12,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
+import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { dashboardPinsPresent } from "../../domains/dashboard/dashboard-pins";
 import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
@@ -34,6 +35,8 @@ import {
   storesPerLanguage,
 } from "../../domains/i18n/per-language-storage";
 import type { Deletion } from "../../domains/schema/migrate/data-loss-consent";
+import { refuseFieldGroupSwitches } from "../../domains/schema/pipeline/companion-shape-switches";
+import { registryRows } from "../../domains/schema/pipeline/recorded-fields";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import {
   deleteEntityRegistryRow,
@@ -168,6 +171,22 @@ export async function syncCollections(
   const generateTypes = options.types === true;
   const generateZodSchemas = options.schemas === true;
 
+  // What each collection's registry row records before the sync below replaces it, for the apply
+  // that follows: on SQLite a relationship switched between one related entry and many is told by
+  // nothing else.
+  const recordedCollections = await registryRows(
+    () =>
+      new CollectionRegistryService(
+        adapter as unknown as DrizzleAdapter,
+        serviceLogger
+      ).getAllCollections(),
+    {
+      kind: "collections",
+      tableExists: name =>
+        (adapter as unknown as DrizzleAdapter).tableExists(name),
+    }
+  );
+
   let result: CollectionSyncResultWithValidation;
   try {
     result = await syncService.syncWithValidation(config, {
@@ -191,7 +210,14 @@ export async function syncCollections(
   // Step 5: Auto-sync schema to database (development mode only)
   const autoSyncEnabled = options.autoSync !== false;
   if (autoSyncEnabled) {
-    await performAutoSync(config, adapter, result, options, context);
+    await performAutoSync(
+      config,
+      adapter,
+      result,
+      options,
+      context,
+      recordedCollections
+    );
   }
 
   // Seeding moved out of syncCollections to the orchestrator (runDbSync).
@@ -377,6 +403,17 @@ export async function syncComponents(
       localized: component.localized === true,
       configPath: `${STORAGE_FORMAT.configPathDir}/${component.slug}.ts`,
     })
+  );
+
+  // A relation an existing field group switches between storage shapes is refused before the
+  // registry records the new shape: this sync never converts an existing field group's columns.
+  refuseFieldGroupSwitches(
+    await registryRows(() => componentRegistry.getAllComponents(), {
+      kind: "components",
+      tableExists: name =>
+        (adapter as unknown as DrizzleAdapter).tableExists(name),
+    }),
+    config.fieldGroups
   );
 
   let result: SyncComponentResult;
@@ -761,7 +798,7 @@ export async function judgeOrphanRemoval(
 }
 
 /** What `--remove-orphaned` deletes, as the consent judges it. */
-async function collectOrphanDeletions(
+export async function collectOrphanDeletions(
   configResult: LoadConfigResult,
   adapter: CLIDatabaseAdapter,
   logger: CommandContext["logger"]

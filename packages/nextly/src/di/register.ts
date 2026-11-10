@@ -69,6 +69,7 @@ import {
   getEmailProviderRegistry,
   resetEmailProviderRegistry,
 } from "../domains/email/services/email-provider-registry";
+import { judgeFieldGroupCyclesAtStart } from "../domains/field-groups/field-group-cycles";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import {
   resolveFieldGroupRegistryName,
@@ -110,6 +111,10 @@ import {
   registerFieldType,
   withoutDisabledBehavior,
 } from "../domains/schema/field-types/field-type-registry";
+import {
+  holdRecordedAtStart,
+  registryRows,
+} from "../domains/schema/pipeline/recorded-fields";
 import { builtByFor } from "../domains/schema/pipeline/registered-collections";
 import type {
   DesiredCollection,
@@ -227,6 +232,8 @@ import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
 import {
   applyPluginSchemaContributionsDeferred,
   assertRegisteredKeepTheirKind,
+  leftAloneWarnings,
+  type LeftAloneExtend,
 } from "../plugins/schema/apply-contributions";
 import { reconcileBuilderContributions } from "../plugins/schema/reconcile-builder-contributions";
 import {
@@ -872,6 +879,7 @@ async function registerServicesOnce(
     transformedPlugins,
     deferredExtends,
     pluginGrants,
+    leftAlone,
   } = await resolveBootConfig(config);
   const {
     unresolvedRelations,
@@ -915,6 +923,9 @@ async function registerServicesOnce(
   const resolvedBasePath = basePath ?? process.cwd();
 
   logRegisteredPlugins(transformedConfig, resolvedLogger);
+  for (const warning of leftAloneWarnings(leftAlone)) {
+    resolvedLogger.warn?.(warning);
+  }
 
   // Said once per boot, whatever plugins are present: an app on an edge that
   // reports the client, with security.trustProxy unset, rate-limits sign-in
@@ -1374,6 +1385,8 @@ interface ResolvedBootConfig {
   deferredExtends: DeferredExtends;
   /** What `resolveBootPlugins` granted the plugins of `transformedConfig`. */
   pluginGrants: PluginGrants;
+  /** Configured types a plugin scope left as they were; warned of at boot. */
+  leftAlone: LeftAloneExtend[];
 }
 
 /**
@@ -1412,11 +1425,14 @@ async function resolveBootConfig(
   // refuses to change it. A site restarted over the database it laid out would otherwise register
   // its tables as if the setting were off, naming translatable columns its main tables lack.
   setPerLanguageStorage(transformedSetupConfig.perLanguageStorage === true);
-  const { config: contributedConfig, deferredExtends } =
-    applyPluginSchemaContributionsDeferred(
-      transformedSetupConfig,
-      transformedPlugins
-    );
+  const {
+    config: contributedConfig,
+    deferredExtends,
+    leftAlone,
+  } = applyPluginSchemaContributionsDeferred(
+    transformedSetupConfig,
+    transformedPlugins
+  );
 
   return {
     transformedConfig: withResolvedPreview(
@@ -1425,6 +1441,7 @@ async function resolveBootConfig(
     transformedPlugins,
     deferredExtends,
     pluginGrants,
+    leftAlone,
   };
 }
 
@@ -1884,7 +1901,7 @@ async function reconcileBuilderTargets<T>(
   // a message naming neither the other kind nor its owner -- and where, for
   // a permission named `read-<slug>` and a code rule resolved by slug alone,
   // the install would be ambiguous even if both could be stored.
-  const { entities, unresolved } = reconcileBuilderContributions(
+  const { entities, unresolved, leftAlone } = reconcileBuilderContributions(
     args.deferredExtends,
     builderEntities
   );
@@ -1892,6 +1909,7 @@ async function reconcileBuilderTargets<T>(
   if (unresolved.length > 0) {
     handleUnresolvedExtends(unresolved, transformedConfig, logger);
   }
+  for (const warning of leftAloneWarnings(leftAlone)) logger.warn?.(warning);
 
   // A field extended onto a Builder-owned entity is not in the transformed
   // config — it was deferred until the Builder set could be read — so the
@@ -1916,6 +1934,14 @@ async function reconcileBuilderTargets<T>(
     builderEntities,
     table => adapter.tableExists(table)
   );
+  // Field groups placed in a cycle, judged over code and the Builder's field groups as this start
+  // reconciled them, plugin extensions included, before anything below writes.
+  judgeFieldGroupCyclesAtStart({
+    code: transformedConfig.fieldGroups ?? [],
+    registered: entities.components ?? [],
+    stored: builderEntities.components ?? [],
+    warn: message => logger.warn(message),
+  });
 
   // Only touch the DB for entities whose merged field set actually differs
   // from what's persisted — keeps an unchanged/plugin-free boot write-free and
@@ -2416,6 +2442,37 @@ async function syncCodeFirstEntities(
    */
   workflows: ReadonlyMap<string, RegisteredWorkflow>
 ): Promise<{ databaseNotSetUp: boolean }> {
+  // In development only, what each code-first collection's, Single's and field group's registry
+  // row records before the syncs below replace it, held for the apply this start runs next: on
+  // SQLite a relationship switched between one related entry and many while the server was stopped
+  // is told by nothing else. A read alone, and a production start, which applies nothing, makes
+  // none.
+  if (bootApplyEnabled()) {
+    holdRecordedAtStart({
+      collections: await registryRows(
+        () =>
+          container
+            .get<CollectionRegistryService>("collectionRegistryService")
+            .getAllCollections(),
+        { kind: "collections", tableExists: name => adapter.tableExists(name) }
+      ),
+      singles: await registryRows(
+        () =>
+          container
+            .get<SingleRegistryService>("singleRegistryService")
+            .getAllSingles(),
+        { kind: "singles", tableExists: name => adapter.tableExists(name) }
+      ),
+      components: await registryRows(
+        () =>
+          container
+            .get<FieldGroupRegistryService>("fieldGroupRegistryService")
+            .getAllComponents(),
+        { kind: "components", tableExists: name => adapter.tableExists(name) }
+      ),
+    });
+  }
+
   // ----------------------------------------
   // Layer 4: Sync Code-First Collections
   // ----------------------------------------
@@ -2925,13 +2982,6 @@ export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
     config.plugins ?? [],
     { coreVersion: getCoreVersion(), consent: pluginConsent }
   );
-  for (const warning of unmatchedConsentWarnings(
-    resolvedPlugins,
-    pluginConsent
-  )) {
-    // Masked as every line the services write is (`resolvedLogger`).
-    maskingServiceLogger(config.logger ?? consoleLogger).warn(warning);
-  }
   const resolvedConfig = setupTransformerInput(config, resolvedPlugins);
 
   // ----------------------------------------
@@ -2968,11 +3018,25 @@ export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
   // The published hook-point map is rewritten by the same call, and the
   // boot's schema folding receives this list, so a transformer-added plugin's
   // collections and singles fold exactly like a declared plugin's.
-  return resolveTransformedPlugins(setupConfig, {
+  const transformed = resolveTransformedPlugins(setupConfig, {
     coreVersion: getCoreVersion(),
     consent: pluginConsent,
     declared: preSetup,
   });
+  // The unmatched-consent warnings are judged against the FINAL list — the
+  // configuration that actually runs and receives the grants. Judged on the
+  // pre-transform list, a `setup` transformer removing a listed plugin
+  // emitted no stale-grant warning (the name still matched there), and one
+  // adding an ordinary plugin under a listed name emitted a false one (the
+  // name matched nothing yet).
+  for (const warning of unmatchedConsentWarnings(
+    transformed.config.plugins,
+    pluginConsent
+  )) {
+    // Masked as every line the services write is (`resolvedLogger`).
+    maskingServiceLogger(config.logger ?? consoleLogger).warn(warning);
+  }
+  return transformed;
 }
 
 // eslint-disable-next-line @typescript-eslint/require-await

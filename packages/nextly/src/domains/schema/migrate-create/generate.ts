@@ -77,6 +77,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
   buildDesiredTableFromFields,
@@ -96,6 +97,7 @@ import { operationsToJudge } from "../pipeline/moved-to-companion";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
+import { refuseSwitchesWithRename } from "../pipeline/several-references-refusal";
 import { generateStatements } from "../pipeline/sql-templates/index";
 import { sqliteTableRebuildStatements } from "../pipeline/sql-templates/sqlite-rebuild";
 
@@ -517,6 +519,13 @@ export async function generateMigration(
       args.dialect,
       previousSnapshot
     );
+    // A relation renamed and switched between storage shapes at once is refused, as the apply
+    // refuses it: the rename carries its values to the new name in the shape they had.
+    refuseSwitchesWithRename({
+      operations,
+      previous: previousSnapshot,
+      next: desiredSnapshot,
+    });
   }
   if (operations.length === 0 && !hasCompanions && !hasSettingsChanges) {
     return null;
@@ -581,6 +590,19 @@ export async function generateMigration(
   );
   sqlStatements.push(...rows.up);
   downSqlStatements.push(...rows.down);
+
+  // 7c. A translated relation whose shape changed keeps its values on the entity's companion,
+  //     which the diff above does not reach: its guards lead the file, before any DDL, and its
+  //     conversions follow (`migrationCompanionSwitches`).
+  const companionSwitches = migrationCompanionSwitches({
+    entities,
+    previous: previous === null ? null : previous.data.entities,
+    dialect: args.dialect,
+  });
+  sqlStatements.unshift(...companionSwitches.up.guards);
+  sqlStatements.push(...companionSwitches.up.rest);
+  downSqlStatements.unshift(...companionSwitches.down.guards);
+  downSqlStatements.push(...companionSwitches.down.rest);
 
   /*
    * 8. Compose file content + write both files.
