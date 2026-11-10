@@ -123,10 +123,15 @@ async function save(
   data: Record<string, unknown>,
   locale: string
 ): Promise<void> {
-  await handlerOf(app()).updateEntry(
+  const result = await handlerOf(app()).updateEntry(
     { collectionName: "posts", entryId, overrideAccess: true, locale },
-    data
+    // An update names its version or says it overwrites; this one read none.
+    { ...data, _overwrite: true }
   );
+  // A refused save fails the test rather than leaving the document as it was.
+  if (!result.success) {
+    throw new Error(`save refused: ${result.statusCode} ${result.message}`);
+  }
 }
 
 /** A post published in English. */
