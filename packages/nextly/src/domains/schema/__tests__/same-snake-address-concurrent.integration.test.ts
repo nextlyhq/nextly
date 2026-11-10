@@ -45,6 +45,7 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { collectionTag, singleTag } from "../../../revalidation/compute-tags";
 import type { CacheRevalidator } from "../../../revalidation/types";
 import type { ServiceContainer } from "../../../services";
 import { addressSnakeForm } from "../../../shared/address-rule";
@@ -398,12 +399,20 @@ describe.each(getConfiguredTestDialects())(
           const released = new Promise<void>(resolve => {
             releaseFlush = resolve;
           });
+          // The rename's own flush, after its commit, names the content of both slugs. Other
+          // flushes run during the rename, inside its lock (the permissions write expires content
+          // under the new slug alone), and are let through.
+          const tagOf = renamed === "collection" ? collectionTag : singleTag;
+          const ownTags = [tagOf("flush-start"), tagOf("flush-end")];
           let held = false;
           const spy = vi
             .spyOn(revalidator, "flush")
             .mockImplementation(async (...args) => {
-              // The first flush is the rename's own, after its commit.
-              if (!held) {
+              const [intents] = args;
+              const own = intents.some(intent =>
+                ownTags.every(tag => (intent.tags ?? []).includes(tag))
+              );
+              if (own && !held) {
                 held = true;
                 flushStarted();
                 await released;
