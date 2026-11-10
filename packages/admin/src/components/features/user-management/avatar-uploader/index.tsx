@@ -16,6 +16,18 @@ export interface AvatarUploaderProps {
   fullName: string;
   /** Disables both pencil and remove buttons. */
   disabled?: boolean;
+  /**
+   * Disables picking a new avatar alone, for someone who cannot open the
+   * media library it picks from. Removing one stays available: it reads
+   * nothing from the library.
+   */
+  pickerDisabled?: boolean;
+  /**
+   * Whether the picker offers uploading a new file and making a folder, which
+   * need the create permission; picking from what is there needs only
+   * reading. Offered when not said.
+   */
+  pickerAllowsUpload?: boolean;
   /** Optional className applied to the underlying <Avatar>. */
   className?: string;
   /** Optional className overriding the default <AvatarFallback> styling. */
@@ -30,6 +42,8 @@ export function AvatarUploader({
   onChange,
   fullName,
   disabled = false,
+  pickerDisabled = false,
+  pickerAllowsUpload = true,
   className,
   fallbackClassName,
 }: AvatarUploaderProps): ReactElement {
@@ -58,7 +72,7 @@ export function AvatarUploader({
       <button
         type="button"
         onClick={() => setPickerOpen(true)}
-        disabled={disabled}
+        disabled={disabled || pickerDisabled}
         aria-label="Change avatar"
         className={cn(
           "absolute -bottom-1 -right-1 inline-flex h-7 w-7 items-center justify-center rounded-md",
@@ -94,6 +108,7 @@ export function AvatarUploader({
           open={pickerOpen}
           onOpenChange={setPickerOpen}
           accept="image/*"
+          allowCreate={pickerAllowsUpload}
           title="Select Avatar"
           onSelect={media => {
             const url = media[0]?.url;
