@@ -299,7 +299,10 @@ export const PATCH = withErrorHandler(
  * `deleteSingle` authorization. The registry returns 403 if the Single is locked
  * (code-first Singles cannot be deleted via API). Singles require
  * `force: true` to delete because they represent persistent site-wide
- * configuration.
+ * configuration. A Single another owner depends on, through a foreign key
+ * declared into its tables or a column, index, foreign key or check added to
+ * them, is refused with 409 naming each, and with 503 when those cannot be
+ * read; nothing is removed either way.
  */
 export const DELETE = withErrorHandler(
   async (request: Request, context: RouteContext) => {
@@ -323,7 +326,20 @@ export const DELETE = withErrorHandler(
         // a role without DDL rights.
         issuesDdl: false,
       },
-      () => registry.deleteSingle(slug, { force: true })
+      async () => {
+        // Refused before the row goes, as the Builder's delete refuses before its drops, while a
+        // declared key into the Single's tables or another owner's element on them depends on it.
+        // A Single that does not exist has nothing to ask about: the delete answers not found.
+        const single = await registry.getSingleForWrite(slug);
+        if (single) {
+          await registry.assertNothingDependsOn({
+            slug,
+            tableName: single.tableName,
+            fields: single.fields,
+          });
+        }
+        await registry.deleteSingle(slug, { force: true });
+      }
     );
 
     return new Response(null, { status: 204 });

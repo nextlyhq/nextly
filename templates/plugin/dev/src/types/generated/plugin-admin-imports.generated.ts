@@ -3,7 +3,7 @@
  * string (pages, settings, views, slots, field-type editors) so they load
  * without manual host imports. */
 
-import { registerComponents } from "@nextlyhq/admin";
+import { registerComponentMap } from "@nextlyhq/admin";
 import * as _p0 from "{{pluginName}}/admin";
 import { registeredComponentPaths as listed } from "./plugin-admin-components.generated";
 
@@ -33,5 +33,5 @@ if (
   );
 }
 
-registerComponents(registered);
+registerComponentMap(registered);
 export const registeredComponentPaths = listed;

@@ -123,9 +123,6 @@ vi.mock("@admin/hooks/useTranslationMode", () => ({
     exitTranslationMode: vi.fn(),
   }),
 }));
-vi.mock("@admin/hooks/usePluginAutoRegistration", () => ({
-  usePluginAutoRegistration: () => undefined,
-}));
 
 import EditEntryPage from "./index";
 
@@ -636,5 +633,40 @@ describe("a custom edit view that gains the entry", () => {
     view.rerender(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
 
     expect(await screen.findByText("editing Ada's post")).toBeInTheDocument();
+  });
+});
+
+describe("a site collection's own edit view", () => {
+  // The site's own collection names its view relative to its config, and the
+  // generated component map registers it under exactly that path. Nothing else
+  // loads it: the admin imports no module by name.
+  const SITE_VIEW = "./views/orders#OrderEditor";
+
+  it("draws in place of the default editor once the map has registered it", () => {
+    registerComponent(SITE_VIEW, () => <div>site order editor</div>);
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: SITE_VIEW } } } },
+    };
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(screen.getByText("site order editor")).toBeInTheDocument();
+    expect(entryFormProps).toBeUndefined();
+  });
+
+  it("leaves the default editor when the map does not register it, and nothing loads it later", async () => {
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: SITE_VIEW } } } },
+    };
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(entryFormProps).toBeDefined();
+    // Given every chance to: a run-time import resolved in a later task.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(screen.queryByText("site order editor")).toBeNull();
+    expect(entryFormProps).toBeDefined();
   });
 });

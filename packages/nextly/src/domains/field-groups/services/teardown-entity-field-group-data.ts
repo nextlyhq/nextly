@@ -43,9 +43,6 @@ import {
 import { MIGRATION_TARGET } from "../migration/manifest";
 import { resolveRegistryTableName } from "../storage/resolve-storage-names";
 
-/** Bound on how deep component nesting is followed; mirrors MAX_FIELD_GROUP_NESTING_DEPTH. */
-const DEFAULT_MAX_DEPTH = 10;
-
 /**
  * Registry table holding one row per component, including its physical table
  * name. Resolved rather than constant: the field-group storage migration
@@ -84,8 +81,6 @@ export interface TeardownEntityComponentDataArgs {
    * component instance whose `_parent_table` is this table belongs to the entity.
    */
   parentTable: string;
-  /** Override the nesting bound; primarily for tests. */
-  maxDepth?: number;
 }
 
 export interface TeardownEntityComponentDataResult {
@@ -292,7 +287,7 @@ async function listRegisteredComponentTables(
 export async function teardownEntityComponentData(
   args: TeardownEntityComponentDataArgs
 ): Promise<TeardownEntityComponentDataResult> {
-  const { adapter, parentTable, maxDepth = DEFAULT_MAX_DEPTH } = args;
+  const { adapter, parentTable } = args;
 
   // Component data tables: `comp_` prefixed by convention, plus every table the
   // registry has registered — a row written before names resolved canonically can
@@ -334,9 +329,12 @@ export async function teardownEntityComponentData(
   let instancesDeleted = 0;
   // The entity's own table owns every instance pointing at it, hence `ids: null`.
   let frontier: Frontier[] = [{ table: parentTable, ids: null }];
-  let depth = 0;
+  // Field groups nest to any depth, so the walk goes down until a level finds nothing. Each
+  // instance is followed once: a level deletes what it finds, and an id already reached in a
+  // table is not reached again even if its delete removed nothing, so the walk ends.
+  const reached = new Map<string, Set<string>>();
 
-  while (frontier.length > 0 && depth < maxDepth) {
+  while (frontier.length > 0) {
     const nextFrontier: Frontier[] = [];
 
     for (const componentTable of componentTables) {
@@ -415,15 +413,21 @@ export async function teardownEntityComponentData(
             }
           }
 
-          if (instanceIds.length > 0) {
-            nextFrontier.push({ table: componentTable, ids: instanceIds });
+          let reachedHere = reached.get(componentTable);
+          if (reachedHere === undefined) {
+            reachedHere = new Set();
+            reached.set(componentTable, reachedHere);
+          }
+          const newIds = instanceIds.filter(id => !reachedHere.has(id));
+          for (const id of newIds) reachedHere.add(id);
+          if (newIds.length > 0) {
+            nextFrontier.push({ table: componentTable, ids: newIds });
           }
         }
       }
     }
 
     frontier = nextFrontier;
-    depth += 1;
   }
 
   return {

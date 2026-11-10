@@ -33,6 +33,46 @@ describe("a field group declared before the group it references", () => {
         ],
       } as never);
 
-    expect(build).toThrow(/Circular component reference detected/);
+    expect(build).toThrow(
+      expect.objectContaining({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: "fieldGroups",
+              code: "FIELD_GROUP_CYCLE",
+              message: expect.stringContaining("a → b → a"),
+            }),
+          ],
+        },
+      })
+    );
+  });
+});
+
+describe("field groups nested deeper than the limit code once had", () => {
+  it("are accepted five levels deep", () => {
+    const levels = ["l1", "l2", "l3", "l4", "l5"];
+    const build = () =>
+      defineConfig({
+        collections: [],
+        fieldGroups: levels.map((slug, i) => ({
+          slug,
+          label: { singular: slug },
+          fields:
+            i + 1 < levels.length
+              ? [
+                  text,
+                  {
+                    name: "next",
+                    type: "fieldGroup",
+                    fieldGroup: levels[i + 1],
+                  },
+                ]
+              : [text],
+        })),
+      } as never);
+
+    expect(build).not.toThrow();
   });
 });

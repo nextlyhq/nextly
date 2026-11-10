@@ -19,6 +19,7 @@
 import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
+import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { PluginDefinition } from "../plugin-context";
 
 import {
@@ -89,7 +90,9 @@ export async function checkComponentMapFiles(
   cwd: string,
   configFile: string | undefined,
   /** The site config's `admin.dashboard`, whose own widgets the map must list too. */
-  siteDashboard?: unknown
+  siteDashboard?: unknown,
+  /** The site config's own collections, whose own views the map must list too. */
+  siteCollections?: readonly CollectionConfig[]
 ): Promise<ComponentMapAgreement> {
   const dir = resolve(cwd, dirname(typesOutputPath));
   const files = [
@@ -103,6 +106,7 @@ export async function checkComponentMapFiles(
   const declared = componentImportMapEntries(
     plugins,
     siteDashboard,
+    siteCollections,
     unbackedPaths(
       unbackedContributions(plugins, typesOutputPath, cwd, siteDashboard)
     )
@@ -118,12 +122,16 @@ export async function checkComponentMapFiles(
     missing: declared.filter(each => !held.has(each.path)),
     obsolete: (listed ?? []).filter(path => !declaredPaths.has(path)),
     // Only a widget's components (its view and its settings' editors) are checked against the
-    // config, so a map declaring none needs no config import: a scaffold's map, made before its
-    // project's layout fixed the config's path.
+    // config, and only a component written relative to the config is imported through its
+    // folder, a site collection's view among them, so a map declaring none of these needs no
+    // config import: a scaffold's map, made before its project's layout fixed the config's path.
     otherConfig:
       map === undefined ||
       !declared.some(
-        each => each.use === "widget" || each.use === "setting editor"
+        each =>
+          each.use === "widget" ||
+          each.use === "setting editor" ||
+          each.fromConfig === true
       )
         ? undefined
         : otherConfigOf(map, dir, cwd, configFile),

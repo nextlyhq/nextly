@@ -33,6 +33,7 @@ import { Authors } from "./src/collections/authors";
 import { BlockPages } from "./src/collections/block-pages";
 import { BoundEntries } from "./src/collections/bound-entries";
 import { EntryArticles } from "./src/collections/entry-articles";
+import { ContributionStories } from "./src/collections/contribution-stories";
 import { ListStories } from "./src/collections/list-stories";
 import { E2E_NAMED_QUERIES } from "./src/named-queries";
 import { Categories } from "./src/collections/categories";
@@ -219,6 +220,11 @@ export default defineConfig({
     // page-built entry holding a public to-many relation; registered for the
     // e2e run only, by the same switch.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [ListStories] : []),
+    // The one collection the contributions fixture's replacement applies to,
+    // for the browser test of a plugin extending a page, by the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [ContributionStories]
+      : []),
     // The blog template's own posts, authors, categories and tags, renamed,
     // for the browser test of its post page rebuilt with a template.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"

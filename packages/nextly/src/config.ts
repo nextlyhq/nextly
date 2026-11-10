@@ -254,6 +254,13 @@ export type { PluginRouteMount } from "./plugins/routes/route-types";
 // route the admin cannot call, and nothing fails. A pure string union, so this
 // costs the browser nothing.
 export type { RouteMethod } from "./plugins/routes/route-types";
+// The most rows one request to a declared action's route may name, published
+// so the admin holds a bulk action back on a larger selection instead of
+// sending a request the route refuses. One number, read by both sides: a copy
+// in the admin would stop matching the day the route's limit changes. A plain
+// constant from a module with no runtime imports, so it costs the browser
+// nothing.
+export { MAX_ACTION_ROWS } from "./plugins/routes/route-types";
 
 // And what may travel as one of those routes' bodies. Published here for the
 // same reason: the admin's client serialises with `JSON.stringify`, so a value
