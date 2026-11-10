@@ -47,6 +47,10 @@ import { generateSlug } from "@admin/lib/fields";
  * editor uses for drag reordering; it is presentation-only and surfaces that
  * persist plain `{ label, value }` pairs can strip it before writing (see
  * `withOptionIds`). `value` is what gets stored; `label` is what editors see.
+ *
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
  */
 export interface FieldOption {
   /** Stable identity for drag-and-drop; not persisted. */
@@ -64,6 +68,10 @@ export interface FieldOption {
  * radio layout) are the surface's responsibility, not the kit's — keeping them
  * out is what lets every surface share one options editor without inheriting
  * another surface's storage shape.
+ *
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
  */
 export interface FieldOptionsEditorProps {
   /** The current options (controlled). */
@@ -93,6 +101,10 @@ function generateOptionId(prefix: string): string {
  * Seed drag-and-drop ids onto plain `{ label, value }` data. Surfaces that
  * store option lists without ids (e.g. the Form Builder) call this once to
  * feed {@link FieldOptionsEditor} and strip the ids again on write.
+ *
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
  */
 export function withOptionIds(
   options: ReadonlyArray<{ label: string; value: string }>,
@@ -288,6 +300,10 @@ function SortableOptionRow({
  * `@nextlyhq/plugin-sdk/admin`). It owns only the option list; a surface that
  * also needs field-admin knobs (multi-select, clearable, placeholder, radio
  * layout) renders those itself around this component.
+ *
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
  */
 export function FieldOptionsEditor({
   options,
