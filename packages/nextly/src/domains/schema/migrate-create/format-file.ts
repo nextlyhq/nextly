@@ -26,8 +26,9 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { getDialectDisplayName } from "../../../cli/utils/adapter";
 import { NO_TRANSACTION_MARKER } from "../migrate/split-sql";
+
+import { getDialectDisplayName } from "./dialect-name";
 
 /**
  * The field-group header written into a generated migration, and the pattern that reads it

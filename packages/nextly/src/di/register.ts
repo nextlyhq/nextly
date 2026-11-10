@@ -1148,6 +1148,7 @@ async function registerServicesOnce(
         }),
         schemasDir,
         migrationsDir,
+        deferredExtends,
         storage,
         mediaStorage,
         imageProcessor,

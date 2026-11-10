@@ -26,6 +26,7 @@ import {
   buildRetentionRunner,
   retentionPoliciesFrom,
 } from "../domains/retention/passes";
+import type { BuilderSaveSetup } from "../domains/schema/builder-save/collection-save";
 import {
   draftSplitResponseFields,
   schemaDraftSplit,
@@ -289,6 +290,13 @@ export class CollectionsHandler {
       this.fileManager,
       this.collectionService
     );
+    // A save through this handler writes where every Builder save writes:
+    // the app's definition file and migrations folder, as registered at boot.
+    if (container.has("builderSaveSetup")) {
+      this.metadataService.setBuilderSave(
+        container.get<BuilderSaveSetup>("builderSaveSetup")
+      );
+    }
 
     const fieldGroupDataService = container.has("fieldGroupDataService")
       ? container.get<FieldGroupDataService>("fieldGroupDataService")

@@ -154,3 +154,71 @@ describe("assertValidFieldsPayload", () => {
     ).toBe(true);
   });
 });
+
+// A plugin or the API may have given an entity a camelCase field, and the
+// admin sends every field on each save, so such a name keeps working where the
+// entity already holds it. A name the Builder would create is still its own.
+describe("the Builder's field names, against the fields as stored", () => {
+  const stored = [
+    { name: "firstName", type: "text" },
+    {
+      name: "seo",
+      type: "group",
+      fields: [{ name: "metaTitle", type: "text" }],
+    },
+  ];
+  const nameRefusal = (name: string, path: string) => ({
+    code: "VALIDATION_ERROR",
+    publicData: {
+      errors: [expect.objectContaining({ path, code: "INVALID_FIELD_NAME" })],
+    },
+    message: expect.any(String),
+  });
+  const refusedFor = (fields: unknown, opts = {}) => {
+    try {
+      assertValidFieldsPayload(fields, opts);
+    } catch (error) {
+      return error;
+    }
+    return undefined;
+  };
+
+  it("keeps a camelCase name the entity already holds, at any depth", () => {
+    expect(() =>
+      assertValidFieldsPayload(stored, { kind: "collection", stored })
+    ).not.toThrow();
+  });
+
+  it("refuses a camelCase name the entity does not hold yet", () => {
+    const fields = [...stored, { name: "lastName", type: "text" }];
+    expect(refusedFor(fields, { kind: "collection", stored })).toMatchObject(
+      nameRefusal("lastName", "2.name")
+    );
+  });
+
+  it("holds a stored name only where it is stored", () => {
+    // `metaTitle` is held inside `seo`, not at the top level, and `firstName`
+    // at the top level, not inside `seo`.
+    expect(
+      refusedFor([{ name: "metaTitle", type: "text" }], { stored })
+    ).toMatchObject(nameRefusal("metaTitle", "0.name"));
+    expect(
+      refusedFor(
+        [
+          {
+            name: "seo",
+            type: "group",
+            fields: [{ name: "firstName", type: "text" }],
+          },
+        ],
+        { stored }
+      )
+    ).toMatchObject(nameRefusal("firstName", "0.fields.0.name"));
+  });
+
+  it("refuses every camelCase name when nothing is stored, as for a new entity", () => {
+    expect(refusedFor(stored)).toMatchObject(
+      nameRefusal("firstName", "0.name")
+    );
+  });
+});

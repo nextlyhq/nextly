@@ -57,7 +57,6 @@ import { resolve } from "node:path";
 import type { Command } from "commander";
 
 import { LOCALIZATION_MIGRATION_MARKER } from "../../domains/i18n/migration/write-migration-file";
-import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
 import {
   describeDeletion,
   type Deletion,
@@ -67,6 +66,7 @@ import {
   functionsDefinedBy,
   type DeletionFacts,
 } from "../../domains/schema/migrate/file-deletions";
+import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
 import {
   marksNoTransaction,
   splitSqlStatements,
