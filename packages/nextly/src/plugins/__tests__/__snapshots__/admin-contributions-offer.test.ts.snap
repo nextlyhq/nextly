@@ -1,0 +1,105 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`contributionsForReader > snapshots what each reader receives 1`] = `
+{
+  "full": {
+    "collection.edit": {
+      "sidebarSection": [
+        {
+          "component": "x#Status",
+          "id": "acme-support.status",
+          "kind": "sidebarSection",
+          "label": "Status",
+          "plugin": "@acme/support",
+          "replaces": "status",
+        },
+        {
+          "builtIn": "publishing",
+        },
+        {
+          "builtIn": "language",
+        },
+        {
+          "builtIn": "details",
+        },
+        {
+          "collections": [
+            "helpdesk-tickets",
+          ],
+          "component": "x#Sla",
+          "id": "acme-support.sla",
+          "kind": "sidebarSection",
+          "label": "SLA",
+          "plugin": "@acme/support",
+        },
+      ],
+    },
+    "dashboard": {
+      "block": [
+        {
+          "builtIn": "welcome",
+        },
+        {
+          "builtIn": "widgets",
+        },
+        {
+          "component": "x#Audit",
+          "id": "acme-support.audit",
+          "kind": "block",
+          "plugin": "@acme/support",
+        },
+        {
+          "component": "x#Totals",
+          "id": "acme-support.totals",
+          "kind": "block",
+          "plugin": "@acme/support",
+        },
+      ],
+    },
+  },
+  "restricted": {
+    "collection.edit": {
+      "sidebarSection": [
+        {
+          "builtIn": "status",
+        },
+        {
+          "builtIn": "publishing",
+        },
+        {
+          "builtIn": "language",
+        },
+        {
+          "builtIn": "details",
+        },
+        {
+          "collections": [
+            "helpdesk-tickets",
+          ],
+          "component": "x#Sla",
+          "id": "acme-support.sla",
+          "kind": "sidebarSection",
+          "label": "SLA",
+          "plugin": "@acme/support",
+        },
+      ],
+    },
+    "dashboard": {
+      "block": [
+        {
+          "builtIn": "welcome",
+        },
+        {
+          "builtIn": "widgets",
+        },
+        {
+          "component": "x#Totals",
+          "id": "acme-support.totals",
+          "kind": "block",
+          "plugin": "@acme/support",
+        },
+      ],
+    },
+  },
+}
+`;

@@ -116,7 +116,10 @@ const NODES = [
 
 async function seed(page: Page): Promise<void> {
   const stored = await page.request.patch(HOMEPAGE_API, {
-    data: { layout: { formatVersion: 1, kind: "page", nodes: NODES } },
+    data: {
+      layout: { formatVersion: 1, kind: "page", nodes: NODES },
+      _overwrite: true,
+    },
   });
   expect(stored.ok(), `seeding the homepage layout: ${stored.status()}`).toBe(
     true
@@ -706,6 +709,7 @@ test.describe("a page's own background", () => {
           },
           nodes: NODES,
         },
+        _overwrite: true,
       },
     });
     expect(stored.ok(), `seeding the page: ${stored.status()}`).toBe(true);
@@ -751,6 +755,7 @@ test.describe("a translucent site ground", () => {
             },
           ],
         },
+        _overwrite: true,
       },
     });
     expect(stored.ok(), `storing the ground: ${stored.status()}`).toBe(true);
@@ -774,7 +779,7 @@ test.describe("a translucent site ground", () => {
       await expectGroundOnce(page);
     } finally {
       const cleared = await page.request.patch(SITE_STYLE, {
-        data: { tokens: null },
+        data: { tokens: null, _overwrite: true },
       });
       expect(cleared.ok(), `clearing the ground: ${cleared.status()}`).toBe(
         true

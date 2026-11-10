@@ -16,7 +16,11 @@
  *   collection.
  * - The route is contributed, authenticated, and answers the list envelope.
  */
-import type { BindingFieldShape } from "@nextlyhq/blocks-engine";
+import {
+  listFieldKind,
+  type BindingFieldShape,
+  type FieldStoragePrimitive,
+} from "@nextlyhq/blocks-engine";
 import { describe, expect, it, vi } from "vitest";
 
 import { LOOP_COLLECTIONS_ROUTE_PATH } from "./loop-collections-contract";
@@ -34,6 +38,8 @@ interface FixtureField {
   readonly hasMany?: boolean;
   readonly relationTo?: string;
   readonly dateOnly?: boolean;
+  readonly timeOnly?: boolean;
+  readonly storage?: FieldStoragePrimitive;
   readonly options?: ReadonlyArray<string | { readonly value: string }>;
 }
 
@@ -52,6 +58,8 @@ function shapeOf(field: FixtureField): BindingFieldShape {
           ),
         }),
     ...(field.dateOnly === true ? { dateOnly: true } : {}),
+    ...(field.timeOnly === true ? { timeOnly: true } : {}),
+    ...(field.storage === undefined ? {} : { storage: field.storage }),
   };
 }
 
@@ -279,6 +287,34 @@ describe("the fields a list may name", () => {
     });
   });
 
+  it("sends what the engine reads of each field, so the editor judges a list's kinds as the save does", async () => {
+    // A time of day takes no filter or sort, and a plugin's type takes the
+    // kind of the primitive it is stored as: both are read off the shape.
+    const EVENTS = {
+      slug: "events",
+      label: "Event",
+      migrationStatus: "synced",
+      fields: [
+        { name: "opensAt", type: "date", timeOnly: true },
+        { name: "colour", type: "colour", storage: "text" as const },
+      ],
+    };
+    const reads = readsOf([EVENTS]);
+    const answer = await readLoopCollections(reads);
+    const sent = answer.items[0]?.readable ?? [];
+    const server = (await reads.publicFields("events")) as BindingFieldShape[];
+    for (const shape of server) {
+      const read = sent.find(field => field.name === shape.name);
+      expect(read).toBeDefined();
+      expect(listFieldKind(read!)).toBe(listFieldKind(shape));
+    }
+    // CONTROL: the two fields the engine tells apart only by those keys.
+    expect(server.map(shape => listFieldKind(shape))).toEqual([
+      undefined,
+      "text",
+    ]);
+  });
+
   it("sends every field the public may read, as the save judges a list against them", async () => {
     const answer = await readLoopCollections(
       readsOf([POSTS], { protectedFields: ["internalScore"] })
@@ -288,8 +324,12 @@ describe("the fields a list may name", () => {
     // Rich text and a has-many relation are not offered, and are readable.
     expect(names).toEqual(expect.arrayContaining(["id", "body", "categories"]));
     expect(names).not.toContain("internalScore");
+    // CONTROL: a declared label is the one sent.
+    expect(readable.find(field => field.name === "title")?.label).toBe("Title");
     expect(readable.find(field => field.name === "categories")).toEqual({
       name: "categories",
+      // Named as an offered field is, for a menu that offers it.
+      label: "Categories",
       type: "relationship",
       hasMany: true,
       relationTo: "categories",

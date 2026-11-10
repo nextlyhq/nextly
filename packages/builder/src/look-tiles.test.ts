@@ -12,6 +12,7 @@ import {
   lookChoice,
   lookLineWords,
   lookTiles,
+  lookStageStyle,
   lookTileStyle,
   withLook,
   wornLook,
@@ -172,6 +173,17 @@ describe("how a tile draws a look", () => {
     ],
   } as unknown as SiteTokenSet;
   const base = values({ backgroundColor: "#ffffff", borderRadius: "8px" });
+
+  it("sets a tile's stage in the site's own page colours, for the mode", () => {
+    expect(lookStageStyle(undefined, "light")).toEqual({
+      backgroundColor: "#ffffff",
+      color: "#111827",
+    });
+    expect(lookStageStyle(undefined, "dark")).toEqual({
+      backgroundColor: "#0b0f19",
+      color: "#f9fafb",
+    });
+  });
 
   it("lays the look over the block's base, its tokens resolved for the mode", () => {
     expect(lookTileStyle(base, outline.styles, tokens, "light")).toMatchObject({

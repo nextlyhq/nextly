@@ -494,6 +494,51 @@ describe("the judgement the group shows", () => {
   });
 });
 
+describe("the judgement for a host naming no readable fields", () => {
+  it("judges each offered field by its kind, so a choice or a yes/no field filters and sorts as offered", async () => {
+    mount(
+      {
+        collection: "notes",
+        filters: [
+          { field: "kind", op: "in", value: ["news"] },
+          { field: "pinned", op: "equals", value: true },
+          { field: "author", op: "equals", value: "a1" },
+        ],
+        sort: "kind,-pinned,-views,-due,title",
+      },
+      {
+        listLoopCollections: vi.fn(async () => [
+          {
+            slug: "notes",
+            label: "Notes",
+            fields: [
+              { name: "title", label: "Title", kind: "text" as const },
+              {
+                name: "kind",
+                label: "Kind",
+                kind: "choice" as const,
+                options: [{ value: "news", label: "News" }],
+              },
+              { name: "pinned", label: "Pinned", kind: "boolean" as const },
+              { name: "views", label: "Views", kind: "number" as const },
+              { name: "due", label: "Due", kind: "date" as const },
+              {
+                name: "author",
+                label: "Author",
+                kind: "entry" as const,
+                relationTo: "authors",
+              },
+            ],
+          },
+        ]),
+      }
+    );
+    await screen.findByRole("button", { name: "Source Notes" });
+    // Every kind a field is offered with, judged as a field of that kind.
+    expect(screen.queryAllByText(/cannot compare|cannot order by/)).toEqual([]);
+  });
+});
+
 describe("a list's sort", () => {
   it("names the direction in words for the field's kind", async () => {
     mount({ collection: "posts", sort: "-publishedAt,title,-views" });
@@ -651,6 +696,25 @@ describe("a fallen-back sort's Choose a field", () => {
       screen.getByRole("tab", { name: "Content" }).getAttribute("aria-selected")
     ).toBe("true");
     expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("answers an ask made as the list is selected, when React runs its effects twice", async () => {
+    register();
+    const editor = editorFor({ collection: "posts", sort: "-rating" });
+    render(
+      <React.StrictMode>
+        <InspectorPanel
+          editor={{ ...editor, sortFieldAsked: { id: "list", seq: 1 } }}
+          contentServices={{
+            listLoopCollections: vi.fn(async () => COLLECTIONS),
+          }}
+        />
+      </React.StrictMode>
+    );
+    const first = await screen.findByRole("button", {
+      name: /^Sort 1 of 1, by/,
+    });
+    await waitFor(() => expect(document.activeElement).toBe(first));
   });
 
   it("asks nothing of a list it was not pressed for", async () => {

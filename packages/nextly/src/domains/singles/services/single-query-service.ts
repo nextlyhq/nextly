@@ -54,6 +54,7 @@ import {
 } from "../../../errors/error-codes";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
+import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import {
   buildContext,
   type BuildContextOptions,
@@ -87,6 +88,7 @@ import {
   TRUSTS_EVERY_COLLECTION,
   assumedBound,
   narrows,
+  readHooksWaived,
 } from "../../../services/collections/trust-grant";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
@@ -115,6 +117,7 @@ import {
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
+import { readLocksRows } from "../../../shared/lib/read-transaction-scope";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { Logger } from "../../../shared/types";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
@@ -1139,14 +1142,18 @@ export class SingleQueryService extends BaseService {
     await applyFieldReadAccess(fieldAccess, sourceRedactions);
     await fieldGroupPass?.(doc, fieldGroupCaller);
 
-    await runFieldHooks({
-      kind: "single",
-      slug,
-      phase: "afterRead",
-      data: doc,
-      operation: "read",
-      user: options.user,
-    });
+    // The fields' own afterRead hooks are read hooks like the Single's, and
+    // waived with them for the plugin that declared it.
+    if (!readHooksWaived(options.hookExemptRead, slug)) {
+      await runFieldHooks({
+        kind: "single",
+        slug,
+        phase: "afterRead",
+        data: doc,
+        operation: "read",
+        user: options.user,
+      });
+    }
 
     await withFieldGroupEvidence(doc, fieldGroupRedactions, () =>
       applyFieldReadAccess(fieldAccess, sourceRedactions)
@@ -1226,9 +1233,16 @@ export class SingleQueryService extends BaseService {
       // same thing about the caller.
       const requestFacts = resolveRequestFacts(options.request);
       const hookCollection = getSingleHookCollection(slug);
+      // A plugin reading a Single it declared carries a grant, and the grant
+      // waives every read hook below: these three phases and the fields'
+      // afterRead hooks. Related rows keep their own.
+      const hooksWaived = readHooksWaived(options.hookExemptRead, slug);
 
       // 3. Execute beforeOperation hook
-      if (this.hookRegistry.hasHooks("beforeOperation", hookCollection)) {
+      if (
+        !hooksWaived &&
+        this.hookRegistry.hasHooks("beforeOperation", hookCollection)
+      ) {
         await this.hookRegistry.executeBeforeOperation({
           collection: hookCollection,
           operation: "read",
@@ -1243,7 +1257,10 @@ export class SingleQueryService extends BaseService {
       }
 
       // 4. Execute beforeRead hooks
-      if (this.hookRegistry.hasHooks("beforeRead", hookCollection)) {
+      if (
+        !hooksWaived &&
+        this.hookRegistry.hasHooks("beforeRead", hookCollection)
+      ) {
         const beforeContext = buildSingleHookContext({
           collection: hookCollection,
           operation: "read",
@@ -1365,7 +1382,10 @@ export class SingleQueryService extends BaseService {
       stripServerOnlyColumns(doc, singleMeta.tableName);
 
       // 8. Execute afterRead hooks
-      if (this.hookRegistry.hasHooks("afterRead", hookCollection)) {
+      if (
+        !hooksWaived &&
+        this.hookRegistry.hasHooks("afterRead", hookCollection)
+      ) {
         const afterContext = buildSingleHookContext({
           collection: hookCollection,
           operation: "read",
@@ -1523,9 +1543,12 @@ export class SingleQueryService extends BaseService {
       options.fallbackLocale
     );
     if (!joinable) {
+      // Inside a read routed to a plugin's transaction the row is read with a
+      // shared lock (`readLocksRows`): the latest committed row, held until
+      // that transaction ends. A read that asked for no lock reads it plainly.
       const doc = await this.adapter.selectOne<SingleDocument>(
         singleMeta.tableName,
-        {}
+        readLocksRows(this.adapter) ? { forShare: true } : {}
       );
       return { doc, translations: undefined };
     }
@@ -1537,6 +1560,7 @@ export class SingleQueryService extends BaseService {
       where: undefined,
       companionTable: joinable.companion.table,
       localeChain: joinable.localeChain,
+      lockingOn: this.adapter,
     }).catch((error: unknown) => {
       throw translationLoadFailure(slug, error);
     });
@@ -2711,6 +2735,9 @@ export class SingleQueryService extends BaseService {
       );
       return expandedDoc as SingleDocument;
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with the relationships returned as stored references.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.error("Failed to expand relationship fields for Single", {
         error,
       });

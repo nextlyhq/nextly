@@ -26,6 +26,7 @@
 
 import { authorizationGroups } from "../../auth/entity-read-access";
 import { configuredLocales } from "../../domains/i18n/configured-locales";
+import { rethrowIfAnyRuleCouldNotRun } from "../../errors/rule-could-not-run";
 import type { ReadCaller } from "../dashboard/readable-resources";
 
 import { readableDocumentIds } from "./readable-documents";
@@ -167,6 +168,9 @@ async function admittedPerUnit<T>(
     const settled = await Promise.allSettled(
       group.map(key => decide(units.get(key) as ReadUnit<T>))
     );
+    // A rule that could not run never answered: the request ends with that,
+    // not with its documents left out as though withheld.
+    rethrowIfAnyRuleCouldNotRun(settled);
     for (const outcome of settled) {
       if (outcome.status !== "fulfilled") continue;
       for (const item of outcome.value) visible.add(item);

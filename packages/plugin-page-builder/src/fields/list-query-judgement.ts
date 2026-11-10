@@ -32,6 +32,7 @@ import {
   type IssueCode,
   type ListFields,
   type ListFieldSource,
+  type NamedQuerySource,
   type ResolvedBlockNode,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -101,12 +102,23 @@ export function listFieldsFrom(reads: {
       declared,
       // A collection the public may read none of has no readable field, so
       // every field a list names on it is refused as one visitors can't see.
-      readable:
-        shapes === undefined
-          ? []
-          : [{ name: "id", type: "text" }, ...stamps, ...shapes],
+      readable: publicReadsNothing(shapes)
+        ? []
+        : [{ name: "id", type: "text" }, ...stamps, ...shapes],
     };
   };
+}
+
+/**
+ * Whether visitors may read nothing of a collection, from the public field
+ * shapes `bindingFieldShapes` answers: `undefined` when the public may not
+ * read it at all. An empty list is a collection visitors may read whose own
+ * fields are all hidden: they still read its id and timestamps.
+ */
+function publicReadsNothing(
+  shapes: readonly BindingFieldShape[] | undefined
+): shapes is undefined {
+  return shapes === undefined;
 }
 
 /**
@@ -119,23 +131,172 @@ export interface ListSetting {
   readonly entryCollection?: string | null;
 }
 
+/** What is written and where: a write, short of reading what is stored. */
+export type WriteTarget = Omit<PluginFieldWrite, "readStored">;
+
 /**
  * A write's setting: its language, and the collection its page is an entry
  * of, for a list of the entry's related entries; `null` for a Single's, whose
  * page has no entry to read a relation of, so such a list is refused rather
  * than judged by its shape.
+ *
+ * A component is no page, though it is stored as an entry of the component
+ * store: it is drawn on the pages placing it, whose entries its lists relate
+ * to and its visibility conditions read, and each such page is judged as its
+ * own entry (`composedListQueryIssues`, `composedConditionIssues`). So the
+ * entry is left unknown: such a list is judged by its shape, and such a
+ * condition by its operator, as a component placing the one being saved is.
+ * A list's item inside the definition is still known, and still judged.
  */
-export function listSettingOf(write: PluginFieldWrite): ListSetting {
+function listSettingOf(write: WriteTarget, document: unknown): ListSetting {
+  const locale = write.locale === undefined ? {} : { locale: write.locale };
+  if (isPlainRecord(document) && document.kind === "component") return locale;
   return {
-    ...(write.locale === undefined ? {} : { locale: write.locale }),
+    ...locale,
     entryCollection: write.kind === "collection" ? write.slug : null,
   };
 }
 
-/** The collections a judgement over `nodes` asks about, and nothing read. */
+/**
+ * Where templates are stored, and what a stored one draws: a template's
+ * lists and conditions read the entry of the collection it names, not an
+ * entry of the templates collection it is stored in.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export interface TemplateTargets {
+  /** The RESOLVED templates collection: a host may rename it. */
+  readonly collection: string;
+  /**
+   * The fields a template names the collection it draws in, in order: a
+   * collection's template by `collection`, an entry's own design by
+   * `entryCollection`.
+   */
+  readonly fields: readonly string[];
+  /**
+   * The collections stored templates draw, by template id, read as the
+   * system in ONE read whatever the number of ids: a template missing from
+   * the answer is not stored or names none.
+   */
+  readonly storedTargetsOf: (
+    ids: readonly string[]
+  ) => Promise<ReadonlyMap<string, string>>;
+}
+
+/**
+ * Said of a template whose collection this judgement cannot know, so its
+ * lists and conditions cannot be judged against it. Never answered by
+ * judging them by their shape alone: the write is refused instead
+ * ({@link templateTargetUnknownIssue}).
+ */
+export const TEMPLATE_TARGET_UNKNOWN: unique symbol = Symbol(
+  "template target unknown"
+);
+
+/** The code of the refusal of a template whose collection is not known. */
+const TEMPLATE_TARGET_UNKNOWN_CODE = "TEMPLATE_COLLECTION_UNKNOWN";
+
+/**
+ * Whether `document`, stored under `slug`, is a template stored where
+ * templates are: a document of kind `template` in the templates collection.
+ */
+export function isStoredTemplate(
+  slug: string,
+  document: unknown,
+  templates: TemplateTargets | undefined
+): templates is TemplateTargets {
+  return (
+    templates !== undefined &&
+    isPlainRecord(document) &&
+    document.kind === "template" &&
+    slug === templates.collection
+  );
+}
+
+/**
+ * The setting a template's lists and conditions are judged in: the write's
+ * language, with the collection the template draws as the entry's;
+ * `undefined` for any other document, which `listSettingOf` answers for.
+ *
+ * The collection is the template's own field, as the write stores it: the
+ * value the write carries, which the template guard holds to the stored one
+ * (a template keeps the collection it draws), or, where it carries none, the
+ * value stored, read as the system. Never a value the editor sends beside
+ * the write. Inside a caller's transaction the stored value cannot be read:
+ * a validator is handed no read of a text field on the write's connection,
+ * and a read on another connection can wait on the one the transaction
+ * holds. There, and where nothing is stored, the answer is
+ * {@link TEMPLATE_TARGET_UNKNOWN}, which refuses the write.
+ */
+async function templateSettingOf(
+  write: WriteTarget,
+  document: unknown,
+  data: Readonly<Record<string, unknown>>,
+  templates: TemplateTargets | undefined
+): Promise<ListSetting | typeof TEMPLATE_TARGET_UNKNOWN | undefined> {
+  if (write.kind !== "collection") return undefined;
+  if (!isStoredTemplate(write.slug, document, templates)) return undefined;
+  const locale = write.locale === undefined ? {} : { locale: write.locale };
+  const carried = templates.fields
+    .map(field => data[field])
+    .find(value => typeof value === "string" && value !== "");
+  if (typeof carried === "string") {
+    return { ...locale, entryCollection: carried };
+  }
+  if (write.id === undefined || write.inTransaction) {
+    return TEMPLATE_TARGET_UNKNOWN;
+  }
+  const stored = (await templates.storedTargetsOf([write.id])).get(write.id);
+  return stored === undefined
+    ? TEMPLATE_TARGET_UNKNOWN
+    : { ...locale, entryCollection: stored };
+}
+
+/**
+ * A write's setting: a template's ({@link templateSettingOf}) where the
+ * document is one, else {@link listSettingOf}'s.
+ */
+export async function writeSettingOf(
+  write: WriteTarget,
+  document: unknown,
+  data: Readonly<Record<string, unknown>>,
+  templates: TemplateTargets | undefined
+): Promise<ListSetting | typeof TEMPLATE_TARGET_UNKNOWN> {
+  return (
+    (await templateSettingOf(write, document, data, templates)) ??
+    listSettingOf(write, document)
+  );
+}
+
+/**
+ * The refusal of a template save whose collection cannot be known, so its
+ * lists and conditions cannot be judged against it: said on the field, with
+ * what to do instead.
+ */
+function templateTargetUnknownIssue(
+  args: Pick<PluginFieldValidateArgs, "path">,
+  label: string
+): PluginFieldIssue {
+  return {
+    path: args.path,
+    code: TEMPLATE_TARGET_UNKNOWN_CODE,
+    message:
+      `${label}: this template's lists and conditions are checked against the collection it draws, ` +
+      "which this save does not name and cannot read inside a batch. Send the template's collection " +
+      "with the save, or save the template on its own.",
+  };
+}
+
+/**
+ * The collections a judgement over `nodes` asks about, and nothing read.
+ * Walked as far as the judgement walks (`maxNodes`), so a forest past the
+ * bound reads no schema for lists the judgement never reaches.
+ */
 function collectionsAsked(
   nodes: readonly unknown[],
-  entryCollection: string | null | undefined
+  entryCollection: string | null | undefined,
+  maxNodes: number | undefined,
+  namedQueries: NamedQuerySource | undefined
 ): Set<string> {
   const asked = new Set<string>();
   const judgement = {
@@ -146,6 +307,9 @@ function collectionsAsked(
       },
     },
     ...(entryCollection === undefined ? {} : { entryCollection }),
+    ...(maxNodes === undefined ? {} : { maxNodes }),
+    // A custom source asks about what its query reads and lists.
+    ...(namedQueries === undefined ? {} : { namedQueries }),
   };
   // Both judgements read the schema through one source, so the fields read
   // are those any list or any condition on the page names.
@@ -159,10 +323,18 @@ async function sourceFor(
   forests: readonly (readonly unknown[])[],
   setting: ListSetting,
   read: ListFieldsReader,
-  known: Map<string, ListFields | undefined>
+  known: Map<string, ListFields | undefined>,
+  maxNodes: number | undefined,
+  namedQueries: NamedQuerySource | undefined
 ): Promise<ListFieldSource> {
   for (const nodes of forests) {
-    for (const collection of collectionsAsked(nodes, setting.entryCollection)) {
+    const asked = collectionsAsked(
+      nodes,
+      setting.entryCollection,
+      maxNodes,
+      namedQueries
+    );
+    for (const collection of asked) {
       if (!known.has(collection)) {
         known.set(collection, await read(collection, setting.locale));
       }
@@ -172,7 +344,7 @@ async function sourceFor(
 }
 
 /** A stored form's nodes, when it has a forest to walk. */
-function nodesOf(document: unknown): readonly unknown[] | undefined {
+export function nodesOf(document: unknown): readonly unknown[] | undefined {
   return isPlainRecord(document) && Array.isArray(document.nodes)
     ? document.nodes
     : undefined;
@@ -188,9 +360,28 @@ export interface ListJudging {
    * their shape alone.
    */
   readonly fieldsOf?: ListFieldsReader;
-  /** The forms the forest is stored as, read only once a problem is found. */
+  /**
+   * The forms the forest is stored as, read only once a problem is found.
+   * Unreadable, they may already hold every problem found, so none is
+   * refused: a write is never blamed for a problem nothing shows it made.
+   */
   readonly storedForms?: () => Promise<StoredForms>;
   readonly maxNodes?: number;
+  /**
+   * The site's named queries, for a list whose source is one; absent, such
+   * a list is judged by its shape alone.
+   */
+  readonly namedQueries?: NamedQuerySource;
+  /**
+   * Told how many problems were kept unjudged because the stored forms could
+   * not be read, for a caller whose server log says so.
+   */
+  readonly onUnjudged?: (kept: number) => void;
+  /**
+   * Where templates are stored, so a template's lists are judged against the
+   * collection it draws; absent, a template is judged as any other entry.
+   */
+  readonly templates?: TemplateTargets;
 }
 
 /** One finding of a forest judgement, as the engine names it. */
@@ -208,13 +399,16 @@ interface ForestJudgement {
   readonly entryCollection?: string | null;
   readonly stored?: readonly BlockDocument[];
   readonly maxNodes?: number;
+  readonly namedQueries?: NamedQuerySource;
 }
 
 /**
  * The errors about `nodes` that `counts` keeps, as `judge` finds them in
  * `setting`: the lists' judgement or the conditions'. A problem a stored form
  * already held on the same block is kept rather than refused, so the stored
- * forms are read only once a problem is found.
+ * forms are read only once a problem is found; where they cannot be read,
+ * every problem is kept, as the other checks against the stored page keep
+ * theirs.
  */
 async function errorsIn<Issue extends ForestIssue>(
   nodes: readonly unknown[],
@@ -228,8 +422,10 @@ async function errorsIn<Issue extends ForestIssue>(
 ): Promise<Issue[]> {
   const known = new Map<string, ListFields | undefined>();
   const fieldsOf = site.fieldsOf;
+  const namedQueries = site.namedQueries;
   const judge = async (stored: readonly BlockDocument[]) =>
     judgeForest(nodes, {
+      ...(namedQueries === undefined ? {} : { namedQueries }),
       ...(fieldsOf === undefined
         ? {}
         : {
@@ -243,7 +439,9 @@ async function errorsIn<Issue extends ForestIssue>(
               ],
               setting,
               fieldsOf,
-              known
+              known,
+              site.maxNodes,
+              namedQueries
             ),
           }),
       ...(setting.entryCollection === undefined
@@ -252,14 +450,19 @@ async function errorsIn<Issue extends ForestIssue>(
       ...(stored.length === 0 ? {} : { stored }),
       ...(site.maxNodes === undefined ? {} : { maxNodes: site.maxNodes }),
     }).filter(issue => isErrorIssue(issue) && counts(issue));
-  let found = await judge([]);
-  if (found.length > 0 && site.storedForms !== undefined) {
-    const snapshot = await site.storedForms();
-    if (snapshot.readable && snapshot.forms.length > 0) {
-      found = await judge(snapshot.forms);
-    }
+  const found = await judge([]);
+  if (found.length === 0 || site.storedForms === undefined) return found;
+  const snapshot = await site.storedForms();
+  // A stored page this cannot read (a language whose store is not ready), or
+  // one composed only in part, may already hold every problem found, so none
+  // is refused: nothing can tell a new one from one the page held. A caller
+  // whose server log says so is told how many were kept.
+  if (!snapshot.readable) {
+    site.onUnjudged?.(found.length);
+    return [];
   }
-  return found;
+  // Nothing stored (a create) holds no problem, so every one is the write's.
+  return snapshot.forms.length > 0 ? judge(snapshot.forms) : found;
 }
 
 /** The errors about the lists in `nodes` that `counts` keeps. */
@@ -273,9 +476,9 @@ function listErrorsIn(
 }
 
 /** A write's errors as the field reports them, each naming where it is. */
-function asFieldIssues(
+export function asFieldIssues(
   found: readonly ForestIssue[],
-  args: PluginFieldValidateArgs,
+  args: Pick<PluginFieldValidateArgs, "path">,
   label: string
 ): PluginFieldIssue[] {
   return found.map(issue => ({
@@ -286,9 +489,40 @@ function asFieldIssues(
 }
 
 /**
+ * What a write's forest is judged in: its nodes and its setting, nothing for
+ * a value with no forest or no entry write behind it, or
+ * {@link TEMPLATE_TARGET_UNKNOWN} for a template whose collection cannot be
+ * known, which is refused rather than judged by shape.
+ */
+async function writeForest(
+  value: unknown,
+  args: PluginFieldValidateArgs,
+  site: ListJudging
+): Promise<
+  | { readonly nodes: readonly unknown[]; readonly setting: ListSetting }
+  | typeof TEMPLATE_TARGET_UNKNOWN
+  | undefined
+> {
+  const nodes = nodesOf(value);
+  if (nodes === undefined || args.write === undefined) return undefined;
+  // A template's lists and conditions read the entry of the collection it
+  // draws.
+  const setting = await writeSettingOf(
+    args.write,
+    value,
+    args.data,
+    site.templates
+  );
+  return setting === TEMPLATE_TARGET_UNKNOWN
+    ? TEMPLATE_TARGET_UNKNOWN
+    : { nodes, setting };
+}
+
+/**
  * The issues a write is refused with for the fields its lists name; empty
  * when it names only fields the public may read, or when nothing can tell a
- * new problem from one the page already held.
+ * new problem from one the page already held. A template whose collection
+ * cannot be known is refused here, once.
  *
  * Fields are read only for the collections the value's lists name, and the
  * stored forms only once a problem is found, so a page with no list, or with
@@ -300,15 +534,15 @@ export async function newListQueryIssues(
   label: string,
   site: ListJudging
 ): Promise<PluginFieldIssue[]> {
-  const nodes = nodesOf(value);
-  if (nodes === undefined || args.write === undefined) return [];
+  const forest = await writeForest(value, args, site);
+  if (forest === undefined) return [];
+  if (forest === TEMPLATE_TARGET_UNKNOWN) {
+    return [templateTargetUnknownIssue(args, label)];
+  }
   // Only what the schema or the host decides: the engine's own validation
   // already reported the shape of each of the page's own lists on this write.
-  const found = await listErrorsIn(
-    nodes,
-    listSettingOf(args.write),
-    site,
-    issue => LIST_FIELD_CODES.has(issue.code)
+  const found = await listErrorsIn(forest.nodes, forest.setting, site, issue =>
+    LIST_FIELD_CODES.has(issue.code)
   );
   return asFieldIssues(found, args, label);
 }
@@ -320,6 +554,10 @@ export async function newListQueryIssues(
  * field's kind does not take, and a condition on the entry of a page that
  * has none. Each would hide its block on the published page, so the save
  * says so instead. A problem the page already held is kept, as for lists.
+ *
+ * A template whose collection cannot be known is refused by the lists'
+ * judgement ({@link newListQueryIssues}), which the field asks beside this
+ * one, so the refusal is said once; nothing here judges it by shape instead.
  */
 export async function newConditionIssues(
   value: unknown,
@@ -327,34 +565,18 @@ export async function newConditionIssues(
   label: string,
   site: ListJudging
 ): Promise<PluginFieldIssue[]> {
-  const nodes = nodesOf(value);
-  if (nodes === undefined || args.write === undefined) return [];
+  const forest = await writeForest(value, args, site);
+  if (forest === undefined || forest === TEMPLATE_TARGET_UNKNOWN) return [];
   // The operators were judged by the engine's own validation of this write;
   // only what the schema or the host decides is left.
   const found = await errorsIn(
-    nodes,
-    conditionSettingOf(value, args.write),
+    forest.nodes,
+    forest.setting,
     site,
     conditionIssues,
     issue => CONDITION_FIELD_CODES.has(issue.code)
   );
   return asFieldIssues(found, args, label);
-}
-
-/**
- * Where a write's conditions read. A component's definition is no page: a
- * condition in it reads the entry of whichever page places it, which its own
- * save cannot know, so there it is judged by its operator alone and judged
- * again on each page that places it ({@link composedConditionIssues}). A
- * list's item inside the definition is still known, and still judged.
- */
-function conditionSettingOf(
-  value: unknown,
-  write: PluginFieldWrite
-): ListSetting {
-  const setting = listSettingOf(write);
-  if (!isPlainRecord(value) || value.kind !== "component") return setting;
-  return setting.locale === undefined ? {} : { locale: setting.locale };
 }
 
 /** One composed list's issue, with the placement that put the list there. */
@@ -401,10 +623,9 @@ export function composedListQueryIssues(
  * as the page composes them. A definition's condition reads the entry of the
  * page it is placed on, or the item of a list it lands in, which only the
  * composition knows; so a condition the definition's own save judged by its
- * operator alone is judged here against the fields it will read. Only what
- * the schema or the host decides counts: the definition's save already
- * judged its operators. A problem the stored page already composed to is
- * kept, as for the page's own conditions.
+ * operator alone is judged here against the fields it will read. Every issue
+ * counts, as for a placed list. A problem the stored page already composed
+ * to is kept, as for the page's own conditions.
  */
 export function composedConditionIssues(
   composed: unknown,
@@ -415,9 +636,25 @@ export function composedConditionIssues(
   return composedIssues(composed, host, setting, site, {
     judge: conditionIssues,
     placed: () => true,
-    counts: issue => CONDITION_FIELD_CODES.has(issue.code),
+    // Every issue counts, the operator's included: a definition stored before
+    // operators were judged keeps its problem as a warning on its own save,
+    // and a page newly placing it would serve a block that never shows.
+    counts: () => true,
     holds: "a block whose visibility conditions can't be checked there",
   });
+}
+
+/** The component each of a page's placements places, by the placement's id. */
+export function placedComponents(
+  host: BlockDocument,
+  maxNodes: number | undefined
+): Map<string, string> {
+  const componentOf = new Map<string, string>();
+  for (const placement of componentPlacementsIn(host, maxNodes).placements) {
+    const id = isPlainRecord(placement.node) ? placement.node.id : undefined;
+    if (typeof id === "string") componentOf.set(id, placement.target);
+  }
+  return componentOf;
 }
 
 /** What one composed judgement reads, and how its findings are said. */
@@ -468,12 +705,7 @@ async function composedIssues<Issue extends ForestIssue>(
     issue => placedNodes.has(issue.nodeId) && by.counts(issue)
   );
   if (found.length === 0) return [];
-  const componentOf = new Map<string, string>();
-  for (const placement of componentPlacementsIn(host, site.maxNodes)
-    .placements) {
-    const id = isPlainRecord(placement.node) ? placement.node.id : undefined;
-    if (typeof id === "string") componentOf.set(id, placement.target);
-  }
+  const componentOf = placedComponents(host, site.maxNodes);
   return found.map(issue => {
     const placement = placedNodes.get(issue.nodeId) ?? "";
     const component = componentOf.get(placement);

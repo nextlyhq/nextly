@@ -24,11 +24,15 @@
  * rather than failing it: a failed item still shows its label, which a reader
  * not proven to see the item must not be shown.
  *
+ * An access rule that could not run, for want of a database connection, is
+ * neither: it never answered, so the whole digest ends with that answer.
+ *
  * @module domains/widgets/attention/digest
  * @experimental The digest's items may change until the card that draws them
  *   is built on them.
  */
 
+import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import { getNextlyLogger } from "../../../observability/logger";
 import type { AttentionCount } from "../declaration/dashboard";
 
@@ -153,6 +157,9 @@ async function isVisible(
   try {
     return (await visible(signal)) === true;
   } catch (error) {
+    // A rule that could not run never answered: the request ends with that,
+    // not with the item hidden as though refused.
+    rethrowIfRuleCouldNotRun(error);
     getNextlyLogger().warn({
       kind: "attention-item-access-failed",
       owner: reader.owner,
@@ -177,6 +184,9 @@ async function countOf(
     if (value === null) return null;
     return parseAttentionCount(value) ?? { failure: "not-a-count" };
   } catch (error) {
+    // A rule that could not run never answered: the request ends with that,
+    // not with the item drawn as failed with nothing saying why.
+    rethrowIfRuleCouldNotRun(error);
     return { failure: "threw", error };
   }
 }

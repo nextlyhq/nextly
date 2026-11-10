@@ -239,6 +239,8 @@ export interface Collection extends RemovedFromCodeMark {
     isPlugin?: boolean;
     /** Hide the "New …" affordances (machine-created collections) */
     disableCreate?: boolean;
+    /** Hide the admin's own Delete (deleted through a plugin's own action) */
+    disableDelete?: boolean;
     /** Custom components for admin UI */
     components?: CollectionAdminComponents;
   };

@@ -371,6 +371,20 @@ export interface CollectionAdminOptions {
   disableCreate?: boolean;
 
   /**
+   * Hide the admin's own Delete for this collection's entries: in the
+   * editor's menu, on a list row and in the selection bar.
+   *
+   * For collections whose entries are deleted through an action of their
+   * own, which a plugin draws instead, such as one that must first take an
+   * entry out of the documents that use it. Offering the plain Delete there
+   * offers a button the server refuses. The API surface is unaffected; the
+   * server still decides every delete.
+   *
+   * @default false
+   */
+  disableDelete?: boolean;
+
+  /**
    * Icon identifier for the collection.
    * Should be a valid icon name from the icon library (e.g., Lucide).
    *

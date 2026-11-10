@@ -8,6 +8,7 @@ import {
 import { pressSave } from "../canvas/editor-driver";
 import { gotoAdmin } from "../support/admin";
 import { test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 /**
  * The page builder's composition exit tests, against a PRODUCTION build.
@@ -33,8 +34,6 @@ import { test } from "../support/visible";
  * @module tests/production/composition-exit
  */
 
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
-
 const API = "/admin/api";
 const PLUGIN = `${API}/plugins/@nextlyhq/plugin-page-builder`;
 const INSTANCE = "nextly/component-instance";
@@ -55,19 +54,6 @@ interface BlockNodeJson {
   props: Json;
   slots?: Record<string, BlockNodeJson[]>;
   origin?: unknown;
-}
-
-/** Sign in through the real form; dev auto-login is blocked here. */
-async function signIn(page: Page): Promise<APIRequestContext> {
-  await page.goto("/admin");
-  await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-  // By role, not label: "Show password" also matches a password label.
-  await page
-    .getByRole("textbox", { name: /password/i })
-    .fill(DEV_USER.password);
-  await page.getByRole("button", { name: /sign in|log in/i }).click();
-  await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
-  return page.request;
 }
 
 /**
@@ -397,7 +383,7 @@ test.describe("the composition exit tests", () => {
     // Served, published: both copies drawn, and no two elements share an id.
     await itemOf(
       await api.patch(`${API}/collections/pages/entries/${target}`, {
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       }),
       "publishing the page"
     );
@@ -466,6 +452,7 @@ test.describe("the composition exit tests", () => {
         data: {
           content: cardDefinition(`Card title ${STAMP}`, v2),
           status: "published",
+          _overwrite: true,
         },
       }),
       "publishing the card"
@@ -813,6 +800,13 @@ test.describe("the composition exit tests", () => {
     expect(count(framed.drawn, `From the pattern ${STAMP}`)).toBe(2);
     expect(framed.drawn).toContain(`Set through the API ${STAMP}`);
     expect(framed.drawn).toContain(`API card body ${STAMP}`);
+    // The first visit after a publish is drawn on demand, and Next.js then
+    // stores the page in the background from what that visit read. A publish
+    // made while that store is still running is older than the page it
+    // stores, so the old page would stay current. Waiting for the cached page
+    // keeps this step about the action, not about that window, which any
+    // write shares.
+    await warmed(page.request, `/site/through-the-api-${STAMP}`);
 
     await act(
       { kind: "set-layout", layout, noHeaderFooter: true },
@@ -860,17 +854,22 @@ test.describe("the composition exit tests", () => {
      */
     const scriptsOf = async (path: string) => {
       const loaded: string[] = [];
-      const listen = (response: {
-        request(): { resourceType(): string };
-        url(): string;
-      }) => {
-        if (response.request().resourceType() === "script") {
-          loaded.push(new URL(response.url()).pathname);
+      // Counted as the page asks for them. A response can arrive for a
+      // request the previous page made, and the page before the first
+      // measurement is the admin the test signed in through, whose own
+      // scripts were still arriving: one of those counted against the page
+      // that happened to be loading.
+      const listen = (request: { resourceType(): string; url(): string }) => {
+        if (request.resourceType() === "script") {
+          loaded.push(new URL(request.url()).pathname);
         }
       };
-      page.on("response", listen);
+      // And from a blank page, so nothing of the previous one is still
+      // running to ask for more while this one loads.
+      await page.goto("about:blank");
+      page.on("request", listen);
       await page.goto(path, { waitUntil: "networkidle" });
-      page.off("response", listen);
+      page.off("request", listen);
       const { clientReferences, inContent } = await page.evaluate(() => {
         // The payload as the server sent it, read from the inline scripts
         // that pushed it: hydration empties `self.__next_f` itself.

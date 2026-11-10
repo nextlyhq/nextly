@@ -24,6 +24,7 @@ import {
   boundLooksOf,
   lookChoice,
   lookTiles,
+  lookStageStyle,
   lookTileStyle,
   looksOfType,
   wornLook,
@@ -74,7 +75,11 @@ export function LookSpecimen({
 }): React.JSX.Element {
   const kind = specimenKind(blockType);
   return (
-    <span className="nx-look-tile__stage" aria-hidden="true">
+    <span
+      className="nx-look-tile__stage"
+      aria-hidden="true"
+      style={lookStageStyle(tokens, mode)}
+    >
       <span
         className="nx-look-tile__specimen"
         data-kind={kind}

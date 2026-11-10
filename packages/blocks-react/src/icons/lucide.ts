@@ -219,3 +219,25 @@ export async function searchLucideIcons(
     tags: LUCIDE_TAGS[name] ?? [],
   }));
 }
+
+/**
+ * The set as an icon picker's source: its prefix, its name as a person reads
+ * it, and its search and resolve. Shaped as `@nextlyhq/ui`'s `IconSource`,
+ * which this package cannot import, so every picker (the admin's icon field,
+ * the page builder's Icon control) reads the set through this one object
+ * rather than each assembling its own.
+ */
+export const lucideIconSource: LucideIconSource = {
+  prefix: LUCIDE_PREFIX,
+  label: "Lucide",
+  search: query => searchLucideIcons(query),
+  resolve: id => resolveLucideIcon(id),
+};
+
+/** The shape of {@link lucideIconSource}. */
+export interface LucideIconSource {
+  readonly prefix: string;
+  readonly label: string;
+  search(query: string): Promise<readonly LucideSearchResult[]>;
+  resolve(id: string): Promise<ResolvedIcon | null>;
+}

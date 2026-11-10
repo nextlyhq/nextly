@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
 
-import { EntryTable } from "../EntryTable";
+import { EntryTable, type EntryTableProps } from "../EntryTable";
 import type { CollectionForColumns } from "../EntryTableColumns";
 
 const { canFor } = vi.hoisted(() => ({
@@ -43,7 +43,12 @@ const posts: CollectionForColumns = {
   fields: [{ type: "text", name: "title", label: "Title" } as never],
 };
 
-function renderTable(handlers: { onDelete?: (id: string) => void } = {}): void {
+function renderTable(
+  handlers: {
+    onDelete?: (id: string) => void;
+    declaredRowActions?: EntryTableProps["declaredRowActions"];
+  } = {}
+): void {
   render(
     <EntryTable
       collection={posts}
@@ -61,8 +66,23 @@ function renderTable(handlers: { onDelete?: (id: string) => void } = {}): void {
       onBulkDelete={vi.fn()}
       onBulkPublish={vi.fn()}
       onBulkUnpublish={vi.fn()}
+      declaredRowActions={handlers.declaredRowActions}
     />
   );
+}
+
+/** The labels of the given row's action menu, once opened. */
+async function rowActionsOf(index: number): Promise<string[]> {
+  const user = userEvent.setup();
+  await user.click(
+    table().getAllByRole("button", { name: "Row actions" })[index]
+  );
+  const menu = await screen.findByRole("menu");
+  const labels = within(menu)
+    .getAllByRole("menuitem")
+    .map(item => item.textContent?.trim() ?? "");
+  await user.keyboard("{Escape}");
+  return labels;
 }
 
 const table = () =>
@@ -111,6 +131,24 @@ describe("EntryTable — actions a caller may use", () => {
       table().getByRole("checkbox", { name: "Select all" })
     ).toBeInTheDocument();
     expect(await firstRowActions()).not.toContain("Delete");
+  });
+
+  it("offers a plugin's declared row action after the list's own, on the rows it is offered on", async () => {
+    holding("read-posts");
+    const onSelect = vi.fn();
+    renderTable({
+      declaredRowActions: [
+        {
+          id: "declared:acme-support.escalate",
+          label: "Escalate",
+          isVisible: row => row.id === "p1",
+          onSelect,
+        },
+      ],
+    });
+
+    expect(await rowActionsOf(0)).toEqual(["Edit", "Escalate"]);
+    expect(await rowActionsOf(1)).toEqual(["Edit"]);
   });
 
   it("offers bulk Delete in the bar only with the delete permission", async () => {

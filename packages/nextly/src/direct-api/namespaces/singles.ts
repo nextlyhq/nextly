@@ -13,6 +13,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import { collectingWarnings } from "../../hooks/side-effect-warnings";
 import { transformRichTextFields } from "../../lib/field-transform";
 import type { Principal } from "../../plugins/principals/types";
+import { assertPaginationIsComplete } from "../../shared/base-registry-service";
 import type {
   MutationResult,
   RowFromSingleSlug,
@@ -170,6 +171,11 @@ export async function findSingles(
     locked: args.locked,
     search: args.search,
   };
+
+  // The refusal before any work: made as a person, the call below reads the
+  // registry for the allowlist before it lists, and a call this call will
+  // refuse must not do even that read.
+  assertPaginationIsComplete({ limit: args.limit, offset: args.offset });
 
   // Made as a person, the list holds only the Singles the person may read,
   // and its total counts only those: a total taken before the read gate

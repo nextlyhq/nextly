@@ -67,6 +67,17 @@ describe("cache revalidation — write path (sqlite)", () => {
     handle = undefined;
   });
 
+  /**
+   * Forget what the boot itself flushed, so a case sees only its own writes'
+   * flushes. Booting writes each collection's and Single's permissions, and
+   * granting the Public role writes more: each is a change to grants, which
+   * expires every content scope's cached reads, the collection and Single tags
+   * included.
+   */
+  function forgetBootFlushes(): void {
+    spy.flushed.length = 0;
+  }
+
   async function memoryAdapter() {
     process.env.DB_DIALECT = "sqlite";
     return createAdapter({
@@ -94,6 +105,7 @@ describe("cache revalidation — write path (sqlite)", () => {
       seedPublic: publicMay !== undefined,
     });
     if (publicMay !== undefined) await grantPublic(handle, publicMay);
+    forgetBootFlushes();
     return handle
       .getService<CollectionsHandler>("collectionsHandler")
       .getEntryService() as CollectionEntryService;
@@ -471,11 +483,11 @@ describe("cache revalidation — write path (sqlite)", () => {
     // Register a second revalidator AFTER the service was constructed; it must
     // win. With an eager capture, `spy` (registered pre-boot) would receive the
     // flush and `lateSpy` would get nothing — this fails there and passes here.
+    // Registered as `registerNextCacheRevalidator` registers the Next adapter.
+    // A second `registerSingleton` would not replace it: the boot has already
+    // resolved `spy`, and a singleton keeps the instance it built first.
     const lateSpy = new RecordingRevalidator();
-    container.registerSingleton<CacheRevalidator>(
-      "cacheRevalidator",
-      () => lateSpy
-    );
+    container.register<CacheRevalidator>("cacheRevalidator", () => lateSpy);
     await entries.createEntry(
       { collectionName: "late", overrideAccess: true },
       { title: "T", slug: "z" }
@@ -510,6 +522,7 @@ describe("cache revalidation — write path (sqlite)", () => {
         }),
       ],
     });
+    forgetBootFlushes();
     const singleEntry =
       handle.getService<SingleEntryService>("singleEntryService");
     await singleEntry.update(
@@ -583,6 +596,7 @@ describe("cache revalidation — write path (sqlite)", () => {
         }),
       ],
     });
+    forgetBootFlushes();
     const singleEntry =
       handle.getService<SingleEntryService>("singleEntryService");
     await singleEntry.update(
@@ -608,6 +622,7 @@ describe("cache revalidation — write path (sqlite)", () => {
         }),
       ],
     });
+    forgetBootFlushes();
     const singleEntry =
       handle.getService<SingleEntryService>("singleEntryService");
     await singleEntry.update(

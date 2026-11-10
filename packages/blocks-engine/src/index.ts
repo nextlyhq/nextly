@@ -6,6 +6,10 @@
  * created, inspected, and transformed from any JavaScript environment.
  */
 export { deriveSeoFromDocument } from "./derive-seo";
+// A document's own metadata, its bound segments filled by the page's binding
+// pass: what a collection template gives each entry's page.
+export { resolveDocumentSeo } from "./document-seo";
+export type { ResolvedDocumentSeo } from "./document-seo";
 // Which Layout a page is drawn inside: the one rule the render, the editor
 // and the tests share.
 export { resolvePageLayout } from "./resolve-layout";
@@ -29,10 +33,13 @@ export type { SeoDefinitionSource, SeoImageCandidate } from "./derive-seo";
 export {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  MAX_SEO_SEGMENTS,
+  MAX_SEO_TEXT_LENGTH,
   BINDING_SOURCES,
   BINDING_FORMAT_TYPES,
   DEFAULT_BINDING_SOURCE,
   COMPONENT_INSTANCE_TYPE,
+  CONDITION_HIDDEN_TYPE,
   // The component-definition contract, published so the stores and the admin
   // DERIVE the vocabulary rather than restating it. A schema branch or a
   // picker that listed these values itself would agree on the day it was
@@ -92,7 +99,10 @@ export type {
   DocumentFormatVersion,
   DocumentKind,
   BlockOrigin,
+  DocumentSeo,
   DocumentSettings,
+  SeoBinding,
+  SeoTextSegment,
   LocaleOverlay,
   LocaleOverlayValue,
   NodeStyles,
@@ -614,7 +624,12 @@ export { overlaidStyles } from "./style/overlaid-styles";
  * split, so the decision is published rather than restated.
  */
 export { authoredText, isAuthoredText } from "./authored-text";
-export { declaresNoMarkup, isConditionGated } from "./visibility";
+export {
+  declaresNoMarkup,
+  isConditionGated,
+  placementGatesOf,
+  storedVisibilityOf,
+} from "./visibility";
 // Per-device visibility as an author works with it: each device's resolved
 // state, a hide that stays on one device, and the stored values carried across
 // a change of the site's breakpoints. Public because the editor writes the eye
@@ -625,6 +640,7 @@ export {
   carryDocumentDeviceVisibility,
   deviceVisibility,
   hiddenOnDevice,
+  revealConditioned,
   revealDeviceHidden,
   setDeviceVisibility,
 } from "./device-visibility";
@@ -643,6 +659,9 @@ export type {
 } from "./validation";
 
 export {
+  // The prop an image kept by its address goes to, as a block declares it;
+  // public for the editor's unbind and the image renderer alike.
+  addressPropOf,
   BLOCK_ICONS,
   defineBlock,
   ITEM_SCHEMA_MAX_DEPTH,
@@ -659,6 +678,7 @@ export type {
   BlockIsland,
   BlockExample,
   BlockSeoContribution,
+  BlockSeoRead,
   BlockSeoImage,
   BlockRenderArgs,
   BlockRenderResult,
@@ -1256,6 +1276,7 @@ export {
   bindablePropKind,
   checkBinding,
   fieldFitsProp,
+  imageValueOf,
   isBindPath,
   isEmptyBoundValue,
   isValidPropValue,
@@ -1269,7 +1290,16 @@ export type {
   BindingSchemaRef,
   BindingSchemaSource,
   CheckedBinding,
+  CrossedRelation,
+  ImageValue,
 } from "./binding-rules";
+// A document's bindings judged against the schema of what they read, as a
+// save judges them: one rule with the renderer, a held break a warning.
+export { bindingSchemaIssues, ENTRY_LINK_PROPS } from "./binding-schema-issues";
+export type {
+  BindingDocument,
+  BindingSchemaJudgement,
+} from "./binding-schema-issues";
 export {
   checkFormat,
   createBindingFormatter,
@@ -1288,10 +1318,13 @@ export type {
 export {
   bindDocument,
   bindingDemand,
+  bindingFormatEnv,
+  bindingRefsFor,
   createBindingRun,
   DEFAULT_BINDING_LOCALE,
   hasItemBindings,
   resolveNodeBindings,
+  runDrawsImageField,
 } from "./resolve-bindings";
 export type {
   BindingDemand,
@@ -1306,6 +1339,43 @@ export type {
   NodeBindingResult,
   SourceDemand,
 } from "./resolve-bindings";
+// The bound props a visitor will not see: the page's own binding check, asked
+// with the field shapes a visitor may read, for an editor to say so.
+export { visitorUnreadableBindings } from "./visitor-unreadable-bindings";
+export {
+  SITE_SETTING_FIELD_SHAPES,
+  SITE_SETTING_FIELD_TYPES,
+  SITE_SETTING_LABELS,
+  type SiteSettingName,
+} from "./site-setting-fields";
+export type {
+  VisitorUnreadableBinding,
+  VisitorUnreadableInput,
+} from "./visitor-unreadable-bindings";
+
+// The Entry content block: where a collection's template draws the entry's
+// own blocks content. Its rules, shared by the validator, the editor and the
+// page builder's save, and the one composition of an entry's content into a
+// template for drawing, shared by the published page and the editor's canvas.
+export {
+  composeEntryContent,
+  entryBlocksDocumentOf,
+  ENTRY_CONTENT_FIELD_PROP,
+  ENTRY_CONTENT_ISSUE_CODES,
+  ENTRY_CONTENT_SLOT,
+  ENTRY_CONTENT_TYPE,
+  entryContentFieldOf,
+  entryContentIssues,
+  entryContentPlacements,
+  holdsEntryContent,
+} from "./entry-content";
+export type {
+  EntryContentIssue,
+  EntryContentIssueCode,
+  EntryContentJudgement,
+  EntryContentPlacement,
+  EntryContentSource,
+} from "./entry-content";
 
 // A collection list's stored query: the one reading of it, shared by the
 // validator, the renderer and the editor, and its save-time judgement.
@@ -1328,18 +1398,52 @@ export {
   LIST_MAX_VALUES,
   isListFieldKind,
   listFieldKind,
+  listItemRef,
   listKindSortable,
+  listPageCount,
   listQueryIssues,
+  namesListSource,
   listRelationTarget,
   listSortText,
+  mayPaginateList,
+  namedQueryHiddenReads,
   outerListOf,
+  paginatedList,
   readListQuery,
 } from "./list-query";
+// The day an instant falls on in a zone, `YYYY-MM-DD`: a page's "today", as
+// a published page and the editor's canvas each read it for a named query.
+export { calendarDayIn } from "./calendar-day";
+// Named queries: a collection list's custom source, declared by a developer
+// in code. The declaration's types and checks, the process registry the page
+// builder fills at boot, and every message about one, shared by the
+// validator, the renderer, the editor and the plugin SDK.
+export {
+  createNamedQueryRegistry,
+  defineNamedQuery,
+  isNamedQueryName,
+  isNamedQueryParamKey,
+  judgeNamedParams,
+  NAMED_QUERY_DEFAULT_TIMEOUT_MS,
+  NAMED_QUERY_MAX_PARAMS,
+  NAMED_QUERY_MAX_TIMEOUT_MS,
+  NAMED_QUERY_TEXT,
+  NAMED_QUERY_TEXT_MAX,
+  namedQueryDeclaration,
+  namedQueryNeedsInput,
+  namedQueryParamNeedsInput,
+  namedQueryProblem,
+  namedQueryRowFields,
+  namedQueryTimeout,
+  param,
+} from "./named-query";
 
 // A block's visibility conditions: the operator vocabulary and its render
 // classes, the evaluator the renderer asks, and their save-time judgement.
 export {
   canonicalConditions,
+  conditionDemand,
+  conditionScopeIn,
   CONDITION_FIELD_CODES,
   CONDITION_ISSUE_CODES,
   CONDITION_KIND_OPS,
@@ -1351,9 +1455,11 @@ export {
   conditionIssues,
   conditionOp,
   evaluateConditions,
+  withConditions,
 } from "./visibility-conditions";
 export type {
   ConditionDayStart,
+  ConditionDemand,
   ConditionEvaluation,
   ConditionFieldKind,
   ConditionInput,
@@ -1363,10 +1469,41 @@ export type {
   ConditionOp,
   ConditionRegistry,
   ConditionRenderClass,
+  ConditionScope,
   ConditionSource,
   ConditionSubject,
 } from "./visibility-conditions";
 export type {
+  BooleanParam,
+  ChoiceParam,
+  DayParam,
+  EntryParam,
+  NamedParamJudgement,
+  NamedParamProblem,
+  NamedQueryChoice,
+  NamedQueryDeclaration,
+  NamedQueryDefinition,
+  NamedQueryKnown,
+  NamedQueryNeed,
+  NamedQueryParam,
+  NamedQueryParams,
+  NamedQueryParamType,
+  NamedQueryParamValue,
+  NamedQueryParamValues,
+  NamedQueryReader,
+  NamedQueryRegistry,
+  NamedQueryResult,
+  NamedQueryRows,
+  NamedQueryRunArgs,
+  NamedQuerySource,
+  NamedReadFilter,
+  NamedReadQuery,
+  NumberParam,
+  TextParam,
+} from "./named-query";
+export type {
+  ListNamedQuery,
+  NamedQueryHiddenRead,
   ListFieldCode,
   ListFieldKind,
   ListFields,
@@ -1374,6 +1511,7 @@ export type {
   ListFilter,
   ListFilterOp,
   ListFilterScalar,
+  ListPageCode,
   ListQuery,
   ListQueryJudgement,
   ListQueryProblem,
@@ -1381,4 +1519,5 @@ export type {
   ListRelation,
   ListShapeCode,
   ListSortKey,
+  PaginatedList,
 } from "./list-query";

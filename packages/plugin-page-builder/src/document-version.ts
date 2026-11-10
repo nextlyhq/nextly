@@ -24,7 +24,9 @@ export function documentVersionOf(row: unknown): string | undefined {
 
 /**
  * The data of an update made from a read: it carries the version that read
- * gave. A read that gave none (a server that issues no versions) adds nothing.
+ * gave. A read that gave none adds nothing, and the update is then refused as
+ * saying neither its version nor that it overwrites: a write that cannot say
+ * what it was made from is not applied over whatever is stored.
  */
 export function withVersionFrom(
   data: Record<string, unknown>,

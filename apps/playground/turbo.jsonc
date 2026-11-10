@@ -19,7 +19,16 @@
   "extends": ["//"],
   "tasks": {
     "check-types": {
-      "dependsOn": ["^check-types", "^build"]
+      "dependsOn": ["^check-types", "^build"],
+      // The journal fixture (`src/blog-fixture/collections.ts`) imports the
+      // blog template's collections, so their files are in this program.
+      // Inputs are package-scoped and `templates/` is no package, so the tree
+      // is named here: without it, an edit to a template collection would leave
+      // this hash unchanged and CI would replay a green that never read it.
+      "inputs": [
+        "$TURBO_EXTENDS$",
+        "$TURBO_ROOT$/templates/blog/src/**/*.{ts,tsx}"
+      ]
     },
     "build": {
       // `next build` compiles Tailwind with automatic detection from this
@@ -27,7 +36,14 @@
       // and Markdown included. So unlike the shared build inputs, this hash
       // keeps them: a class used only there still lands in the compiled sheet,
       // and leaving it out would replay a stale one.
-      "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      //
+      // The blog template's collections compile into this build through the
+      // journal fixture, by a relative import no package edge sees.
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".env*",
+        "$TURBO_ROOT$/templates/blog/src/**/*.{ts,tsx}"
+      ],
       // Hashed, not passed through: each decides what this build holds
       // (Cache Components on or off; which first-party plugins
       // `nextly.config.ts` registers), so a build with one set and one without

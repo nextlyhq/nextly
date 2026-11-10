@@ -382,7 +382,18 @@ describePg(
             entries.updateEntriesInTransaction(
               tx,
               { collectionName: BULK_UPDATE_SLUG, user: { id: editor } },
-              [{ id, data: { title: "changed", status: "published" } }]
+              // Over whatever is stored: what this pins is where the write's
+              // reads run, not the version it was made from.
+              [
+                {
+                  id,
+                  data: {
+                    title: "changed",
+                    status: "published",
+                    _overwrite: true,
+                  },
+                },
+              ]
             )
           ),
           15_000
@@ -461,7 +472,8 @@ describePg(
                 entryId: id,
                 user: { id: editor },
               },
-              { title: "changed", status: "published" }
+              // Over whatever is stored, as in the bulk case above.
+              { title: "changed", status: "published", _overwrite: true }
             )
           ),
           15_000

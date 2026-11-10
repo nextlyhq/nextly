@@ -37,6 +37,7 @@ import {
   type Control,
   type FieldValues,
 } from "react-hook-form";
+import { ShortcutProvider, TooltipProvider } from "@nextlyhq/ui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BlocksFieldConfig } from "../../fields/blocks-options";
@@ -81,18 +82,30 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     BuilderShell: ({
       onExit,
       children,
+      canvasStrip,
     }: {
       onExit?: () => void;
       children?: React.ReactNode;
+      canvasStrip?: React.ReactNode;
     }): React.JSX.Element => (
-      <div>
-        <header aria-label="Editor actions">
-          <button type="button" onClick={onExit}>
-            Leave editor
-          </button>
-        </header>
-        {children}
-      </div>
+      // The providers the real shell gives what it draws: its shortcut
+      // manager and its tooltips.
+      <ShortcutProvider>
+        <TooltipProvider>
+          <div>
+            <header aria-label="Editor actions">
+              <button type="button" onClick={onExit}>
+                Leave editor
+              </button>
+            </header>
+            {/* The real shell's strip slot, above the canvas. */}
+            {canvasStrip === undefined ? null : (
+              <div data-testid="canvas-strip">{canvasStrip}</div>
+            )}
+            {children}
+          </div>
+        </TooltipProvider>
+      </ShortcutProvider>
     ),
     BreakpointManager: nothing,
     BreakpointSwitcher: nothing,
@@ -188,6 +201,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
     read => () =>
       read
   )(() => Promise.resolve(null)),
+  // The Fallback picker's library search, finding nothing: no case here
+  // opens it. One function for every call, as the admin's own hook keeps it.
+  useMediaSearcher: (
+    search => () =>
+      search
+  )(() => Promise.resolve([])),
   // The host's font table, which the real entry re-exports from core.
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   // The media library, drawn as nothing: these cases never open it.
@@ -240,6 +259,14 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   useDocumentStatus: () => null,
+  // The admin's words for a document's state, which a template's strip
+  // draws the previewed entry's status in.
+  PILL_LABEL: {
+    draft: "Draft",
+    modified: "Modified",
+    changed: "Changed",
+    published: "Published",
+  },
   // The editor registers its restore; nothing here offers one.
   useDocumentRestore: () => undefined,
   // Nothing stored, read successfully: the site's style is ready, so the
@@ -248,6 +275,46 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
     mutateAsync: async () => ({ success: true }),
     isPending: false,
   }),
+}));
+
+// A template's preview reads: two posts, the newest a draft, and the right
+// to create one.
+vi.mock("../template-preview-client", () => ({
+  listPreviewEntries: vi.fn(async () => ({
+    items: [
+      {
+        id: "p2",
+        title: "Release notes: September",
+        status: "draft",
+        updatedAt: "2026-11-07T08:00:00.000Z",
+      },
+      {
+        id: "p1",
+        title: "Building a content model that lasts",
+        status: "published",
+        updatedAt: "2026-11-06T08:00:00.000Z",
+      },
+    ],
+    meta: {
+      total: 2,
+      page: 1,
+      limit: 20,
+      totalPages: 1,
+      hasNext: false,
+      hasPrev: false,
+      mayCreate: true,
+      labels: { singular: "Post", plural: "Posts" },
+      blocksFields: [{ name: "body", label: "Body" }],
+    },
+  })),
+  readPreviewEntry: vi.fn(async ({ id }: { id: string }) => ({
+    id,
+    title: id === "p2" ? "Release notes: September" : "Building a model",
+    status: id === "p2" ? "draft" : "published",
+    editorValues: { id },
+    publicValues: null,
+    fields: [],
+  })),
 }));
 
 // Imported after the mocks, which is what makes them take effect.
@@ -529,5 +596,42 @@ describe("an empty field", () => {
     render(<Host stored={{ body: undefined, content: undefined }} />);
 
     expect(seeded.map(document => document.kind)).toEqual(["page"]);
+  });
+});
+
+describe("the Previewing strip", () => {
+  /** A template's design, in the field templates keep it in. */
+  const templateDocument = {
+    ...pageSaying("Post title"),
+    kind: "template",
+  } as unknown as BlockDocument;
+  const TEMPLATE_FIELD = declaration({
+    name: "content",
+    type: "blocks",
+    blocks: { kinds: ["template"] },
+  });
+
+  it("is drawn above a template's canvas, previewing the newest entry", async () => {
+    render(
+      <Host
+        field={TEMPLATE_FIELD}
+        stored={{ collection: "posts", content: templateDocument }}
+      />
+    );
+    const strip = await screen.findByTestId("canvas-strip");
+    expect(strip.textContent).toContain("Previewing");
+    // The newest entry the author may read, named in full, its status beside.
+    expect(
+      await screen.findByRole("button", {
+        name: "Previewing Release notes: September, draft",
+      })
+    ).toBeTruthy();
+  });
+
+  it("is not drawn for a page (the control)", () => {
+    render(<Host />);
+    expect(screen.getByRole("banner", { name: "Editor actions" })).toBeTruthy();
+    expect(screen.queryByTestId("canvas-strip")).toBeNull();
+    expect(screen.queryByText("Previewing")).toBeNull();
   });
 });

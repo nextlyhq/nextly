@@ -157,7 +157,9 @@ function activityListModel(now: number): ListModel<ActivityRow> {
     leadingOf: ({ activity }) => (
       <Avatar className="size-full">
         <AvatarImage src={activity.user.avatar} alt="" />
-        <AvatarFallback className="bg-primary/5 text-primary text-[10px] font-semibold">
+        {/* The initials take the page's ink, not `text-primary`: a site's brand primary sets
+            that token, so 10px initials on its own 5% tint fall under 4.5:1 for many brands. */}
+        <AvatarFallback className="bg-primary/5 text-foreground text-[10px] font-semibold">
           {activity.user.initials}
         </AvatarFallback>
       </Avatar>

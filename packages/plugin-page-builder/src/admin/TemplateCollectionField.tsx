@@ -1,0 +1,707 @@
+"use client";
+
+/**
+ * The template form's collection control: the collection a template draws,
+ * by its name ("Posts") rather than its slug.
+ *
+ * The admin draws the field's label, description and error around it, as it
+ * does around every plugin field editor. A saved template keeps its
+ * collection, so it is shown read-only there, as the name with the slug
+ * beside it. A template being made chooses one from the collections the
+ * server answers by the guard's own rule (the choices route): those the
+ * author may read that a template may draw. For a saved template whose
+ * collection is no longer listed, the server is asked whether it may be
+ * pointed at another, by the guard's own rule, since the list leaves out
+ * what the author may not read: the choice is offered only where that rule
+ * would let the save through, and the note says why it is not.
+ *
+ * Every read is asked again on mount, and its cached answer is not shown
+ * while that refresh is in flight: a collection added, removed or changed
+ * since is offered, or not, only once the fresh answer says so.
+ *
+ * It decides nothing: the template guard judges every collection a write
+ * names, whichever control wrote it, and refuses the rest in its own words.
+ * Where the collections cannot be listed, a template being made falls back to
+ * typing the slug, as the form drew it before.
+ *
+ * @module admin/TemplateCollectionField
+ */
+import {
+  useDocumentIdentity,
+  usePluginRoute,
+} from "@nextlyhq/plugin-sdk/admin";
+import {
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@nextlyhq/ui";
+import { useEffect, useId, useRef, type JSX } from "react";
+import {
+  get,
+  useController,
+  type Control,
+  type FieldValues,
+  type Path,
+  type RefCallBack,
+} from "react-hook-form";
+
+// The CONTRACTS, not the routes: the routes reach server-only modules.
+import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
+import {
+  loopCollectionsPath,
+  type LoopCollectionsResponse,
+} from "../loop-collections-contract";
+import {
+  TEMPLATE_COLLECTION_CHOICES_ROUTE_PATH,
+  templateCollectionRetargetPath,
+  type TemplateCollectionChoicesResponse,
+  type TemplateCollectionRetarget,
+} from "../templates/template-actions-contract";
+import { TEMPLATE_ADDRESS_FIELD } from "../templates/template-preview-contract";
+
+import { loopCollectionsOf } from "./loop-collections-client";
+
+export interface TemplateCollectionFieldProps<
+  TFieldValues extends FieldValues = FieldValues,
+> {
+  /** Field path this control reads and writes. */
+  name: Path<TFieldValues>;
+  /** React Hook Form control the entry form owns. */
+  control: Control<TFieldValues>;
+  /** The field's declaration, as the admin passes it to a plugin field editor. */
+  field?: { label?: unknown };
+  /** The document is being read, not edited. */
+  readOnly?: boolean;
+  /** The field is unavailable: no permission, or a form mid-submit. */
+  disabled?: boolean;
+}
+
+/** One collection a template may be made for, as the choice names it. */
+export interface CollectionChoice {
+  readonly slug: string;
+  readonly label: string;
+}
+
+/** Where one read stands: still being asked, failed, or answered. */
+type ReadState<T> =
+  | { readonly state: "pending" }
+  | { readonly state: "failed" }
+  | { readonly state: "answered"; readonly value: T };
+
+/** What the control knows of the collections, from its two reads. */
+export interface CollectionChoices {
+  /** Every collection the author may read, by slug and name. */
+  readonly named: ReadState<ReadonlyMap<string, string>>;
+  /**
+   * The ones a template may draw, as the choices route answers by the
+   * guard's rule, in its order.
+   */
+  readonly offered: ReadState<readonly CollectionChoice[]>;
+}
+
+/**
+ * Whether a saved template the list leaves out may be pointed at another
+ * collection, as the server answers by the guard's rule: still being asked,
+ * unanswered, allowed, refused while its collection exists, or refused until
+ * its stored address is cleared, which this author may do
+ * (`clear-address`) or only someone who may manage addresses may
+ * (`address-held`).
+ */
+export type CollectionRetarget =
+  | "pending"
+  | "failed"
+  | "allowed"
+  | "collection-exists"
+  | "clear-address"
+  | "address-held";
+
+/** What the control draws. */
+export type CollectionFieldView =
+  /** The collection, read-only: its name where known, and its slug. */
+  | {
+      readonly kind: "fixed";
+      readonly label: string | null;
+      readonly slug: string;
+      readonly note: string | null;
+    }
+  /** A choice of collections, by name. */
+  | {
+      readonly kind: "choose";
+      readonly options: readonly CollectionChoice[];
+      readonly loading: boolean;
+      readonly note: string | null;
+    }
+  /** The slug typed, where the collections could not be listed. */
+  | { readonly kind: "type"; readonly note: string };
+
+/** Said where a saved template's collection is not among those listed. */
+export function unlistedNote(slug: string): string {
+  return `"${slug}" isn't among the collections you can see, so it is shown by its slug.`;
+}
+
+/** Said where a saved template's collection no longer exists under its slug. */
+export function removedNote(slug: string): string {
+  return `The collection "${slug}" was removed or renamed. Choose the collection this template draws now.`;
+}
+
+/**
+ * Said where a saved template's collection is gone but its address holds it,
+ * to an author who may clear the address.
+ */
+export function clearAddressNote(slug: string): string {
+  return `The collection "${slug}" was removed or renamed. Clear the Address field and save, then choose the collection this template draws now.`;
+}
+
+/**
+ * Said where a saved template's collection is gone but its address holds it,
+ * to an author who may not clear the address.
+ */
+export function addressHeldNote(slug: string): string {
+  return `The collection "${slug}" was removed or renamed, but this template still has an address. Someone who can manage template addresses must clear it before another collection can be chosen.`;
+}
+
+/** Said where the collections could not be listed. */
+export const LIST_FAILED_NOTE =
+  "Couldn't list the collections. Reload the page to try again.";
+
+/** Said where a template being made falls back to typing the slug. */
+export const TYPE_SLUG_NOTE =
+  "Couldn't list the collections. Type the collection's slug, or reload the page to try again.";
+
+/**
+ * The control's state from the form's flags, whether the template is saved,
+ * the value it holds, the value it was saved with, the list of collections and
+ * whether the saved one may be changed. Its own function so the rule is pinned apart
+ * from the render.
+ *
+ * What is offered is decided by the SAVED value, not the one being edited, so
+ * a template pointed at another collection keeps its choice open until it is
+ * saved, rather than the control turning read-only under the author's cursor.
+ */
+export function collectionFieldView(
+  flags: {
+    readonly readOnly?: boolean;
+    readonly saved: boolean;
+    readonly value: string;
+    /** The collection the template was saved with. */
+    readonly stored: string;
+  },
+  choices: CollectionChoices,
+  retarget: CollectionRetarget
+): CollectionFieldView {
+  const { value, stored } = flags;
+  const { named, offered } = choices;
+  const name =
+    named.state === "answered" ? (named.value.get(value) ?? null) : null;
+  // A version being read changes nothing, whatever the template is.
+  if (flags.readOnly === true) {
+    return { kind: "fixed", label: name, slug: value, note: null };
+  }
+  if (flags.saved && stored !== "") {
+    switch (named.state) {
+      // The slug alone for the moment the names take, rather than a choice
+      // that turns into text under the author's cursor.
+      case "pending":
+        return { kind: "fixed", label: null, slug: value, note: null };
+      case "failed":
+        return {
+          kind: "fixed",
+          label: null,
+          slug: value,
+          note: LIST_FAILED_NOTE,
+        };
+      case "answered":
+        if (named.value.has(stored)) {
+          return { kind: "fixed", label: name, slug: value, note: null };
+        }
+        return unlistedView(value, stored, offered, retarget);
+    }
+  }
+  switch (offered.state) {
+    case "pending":
+      return { kind: "choose", options: [], loading: true, note: null };
+    case "failed":
+      return { kind: "type", note: TYPE_SLUG_NOTE };
+    case "answered":
+      return {
+        kind: "choose",
+        options: offered.value,
+        loading: false,
+        note: null,
+      };
+  }
+}
+
+/**
+ * A saved template whose collection the list does not name. The list leaves
+ * out collections this author may not read, so only the retarget answer says
+ * whether it may be changed, by the rule the guard judges the save with. Kept
+ * fixed by its slug unless that answer allows it, so a failed or slow answer
+ * offers nothing that cannot save; and, where it allows it, until the choices
+ * are in, so nothing stale is offered either.
+ */
+function unlistedView(
+  value: string,
+  stored: string,
+  offered: CollectionChoices["offered"],
+  retarget: CollectionRetarget
+): CollectionFieldView {
+  const fixed = (note: string | null): CollectionFieldView => ({
+    kind: "fixed",
+    label: null,
+    slug: value,
+    note,
+  });
+  switch (retarget) {
+    case "allowed":
+      if (offered.state === "answered") {
+        return {
+          kind: "choose",
+          options: offered.value,
+          loading: false,
+          note: removedNote(stored),
+        };
+      }
+      return fixed(offered.state === "failed" ? LIST_FAILED_NOTE : null);
+    // No note for the moment the answer takes, rather than one that changes
+    // under the author's eyes.
+    case "pending":
+      return fixed(null);
+    // Gone, but the save would be refused until the address is cleared, so
+    // nothing is offered that cannot save, and the note says who clears it.
+    case "clear-address":
+      return fixed(clearAddressNote(stored));
+    case "address-held":
+      return fixed(addressHeldNote(stored));
+    case "collection-exists":
+    case "failed":
+      return fixed(unlistedNote(value));
+  }
+}
+
+/**
+ * A read's answer once it is fresh: `undefined` while it is still being
+ * asked, and also while a refresh of a cached answer is in flight, so an
+ * answer from before a collection was added, removed or changed is never
+ * shown as though it were current.
+ */
+function freshAnswer<T>(read: {
+  readonly data: T | undefined;
+  readonly fetching: boolean;
+}): T | undefined {
+  return read.fetching ? undefined : read.data;
+}
+
+/** A read's state, its answer parsed by `parse`; one it cannot parse failed. */
+function readState<T>(
+  read: {
+    readonly data: unknown;
+    readonly error: Error | null;
+    readonly fetching: boolean;
+  },
+  parse: (answer: unknown) => T | undefined
+): ReadState<T> {
+  // A read asked again is pending whatever it answered last, error included:
+  // the query keeps an earlier error beside the retry in flight.
+  if (read.fetching) return { state: "pending" };
+  if (read.error !== null) return { state: "failed" };
+  const answer = freshAnswer(read);
+  if (answer === undefined) return { state: "pending" };
+  const value = parse(answer);
+  return value === undefined
+    ? { state: "failed" }
+    : { state: "answered", value };
+}
+
+/** A list answer's items, or `undefined` where the answer holds no list. */
+function itemsOf(answer: unknown): readonly unknown[] | undefined {
+  const items = fieldOf(answer, "items");
+  return Array.isArray(items) ? items : undefined;
+}
+
+/** One `{ slug, label }` item, or `undefined` for one of another shape. */
+function choiceOf(item: unknown): CollectionChoice | undefined {
+  const slug = fieldOf(item, "slug");
+  const label = fieldOf(item, "label");
+  return typeof slug === "string" && slug !== "" && typeof label === "string"
+    ? { slug, label }
+    : undefined;
+}
+
+/** A list answer's `{ slug, label }` items, in its order. */
+function choicesIn(answer: unknown): CollectionChoice[] | undefined {
+  return itemsOf(answer)?.flatMap(item => {
+    const choice = choiceOf(item);
+    return choice === undefined ? [] : [choice];
+  });
+}
+
+/**
+ * The names of the collections the author may read, by slug, for a saved
+ * template's collection. Asked again on every mount, as the choices are:
+ * collections are added, renamed and removed in the Schema Builder, whose
+ * writes do not refresh these reads.
+ */
+function useCollectionNames(): CollectionChoices["named"] {
+  const listed = usePluginRoute<LoopCollectionsResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: loopCollectionsPath(),
+    staleTime: 0,
+  });
+  return readState(listed, answer => {
+    const collections = loopCollectionsOf(answer);
+    return collections === undefined
+      ? undefined
+      : new Map(collections.map(item => [item.slug, item.label]));
+  });
+}
+
+/**
+ * The collections a template may draw, as the choices route answers them by
+ * the guard's own rule, asked only where `offer` says a choice may be drawn.
+ */
+function useOfferedCollections(offer: boolean): CollectionChoices["offered"] {
+  const choices = usePluginRoute<TemplateCollectionChoicesResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: TEMPLATE_COLLECTION_CHOICES_ROUTE_PATH,
+    enabled: offer,
+    staleTime: 0,
+  });
+  return readState(choices, choicesIn);
+}
+
+/**
+ * Whether template `template` may be pointed at another collection, asked
+ * only where `ask` says the list leaves its collection out. Asked again on
+ * every mount, as the list is, and again once the template is saved with
+ * another address, `savedAddress`: clearing it is what may let the change
+ * through.
+ */
+function useCollectionRetarget(
+  template: string,
+  ask: boolean,
+  savedAddress: string
+): CollectionRetarget {
+  const read = usePluginRoute<TemplateCollectionRetarget>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: templateCollectionRetargetPath(template),
+    enabled: ask,
+    staleTime: 0,
+  });
+  useAskedAgainOn(savedAddress, ask, read.refetch);
+  // Asked again (after the address is cleared, say), it is pending whatever
+  // it answered last: the query keeps an earlier error beside the retry.
+  if (read.fetching) return "pending";
+  if (read.error !== null) return "failed";
+  const answer = freshAnswer(read);
+  return answer === undefined ? "pending" : retargetOf(answer);
+}
+
+/** The retarget answer as the control reads it; anything else is unanswered. */
+function retargetOf(answer: unknown): CollectionRetarget {
+  switch (fieldOf(answer, "retarget")) {
+    case "allowed":
+      return "allowed";
+    case "collection-exists":
+      return "collection-exists";
+    case "address-blocks":
+      return fieldOf(answer, "mayClearAddress") === true
+        ? "clear-address"
+        : "address-held";
+    default:
+      return "failed";
+  }
+}
+
+/**
+ * Ask a read again once `key` changes from the value it had when the control
+ * mounted, or last changed, while `ask` holds. The form's fields stay mounted
+ * across a save, so a mount-time read alone would keep its first answer.
+ */
+function useAskedAgainOn(key: string, ask: boolean, refetch: () => void): void {
+  const seen = useRef(key);
+  useEffect(() => {
+    if (seen.current === key) return;
+    seen.current = key;
+    if (ask) refetch();
+  }, [key, ask, refetch]);
+}
+
+/** One property of a route's answer, which may be any JSON a server sent. */
+function fieldOf(answer: unknown, key: string): unknown {
+  return typeof answer === "object" && answer !== null
+    ? (answer as Record<string, unknown>)[key]
+    : undefined;
+}
+
+/** The field's label, as its declaration gives it. */
+function declaredLabel(
+  declaration: TemplateCollectionFieldProps["field"]
+): string {
+  return typeof declaration?.label === "string"
+    ? declaration.label
+    : "Collection";
+}
+
+export function TemplateCollectionField<
+  TFieldValues extends FieldValues = FieldValues,
+>({
+  name,
+  control,
+  field: declaration,
+  readOnly = false,
+  disabled = false,
+}: TemplateCollectionFieldProps<TFieldValues>): JSX.Element {
+  const { field, fieldState, formState } = useController({ name, control });
+  const value = typeof field.value === "string" ? field.value : "";
+  // The form starts again from the stored row on load and after each save,
+  // so its defaults hold the collection the template is saved with. A form
+  // that keeps no default for the field is read by its value, as before.
+  const savedValue: unknown = get(formState.defaultValues, name);
+  const stored = typeof savedValue === "string" ? savedValue : value;
+  const savedAddress: unknown = get(
+    formState.defaultValues,
+    TEMPLATE_ADDRESS_FIELD
+  );
+  const { view, busy } = useCollectionFieldState(readOnly, value, stored, {
+    savedAddress: typeof savedAddress === "string" ? savedAddress : "",
+  });
+  const noteId = useId();
+  const handed: CollectionControlProps = {
+    label: declaredLabel(declaration),
+    describedBy: view.note === null ? undefined : noteId,
+    value,
+    invalid: fieldState.invalid,
+    disabled,
+    onChange: next => field.onChange(next),
+    onBlur: field.onBlur,
+    inputRef: field.ref,
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {view.kind === "fixed" ? (
+        <FixedCollection view={view} busy={busy} {...handed} />
+      ) : view.kind === "choose" ? (
+        <ChooseCollection view={view} {...handed} />
+      ) : (
+        <TypedCollection {...handed} />
+      )}
+      {view.note === null ? null : (
+        <p id={noteId} className="text-xs text-muted-foreground">
+          {view.note}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The control's view and whether it is still waiting, from the template's
+ * identity, the collection list and, for a saved collection the list does
+ * not name, whether the template may be pointed at another.
+ */
+function useCollectionFieldState(
+  readOnly: boolean,
+  value: string,
+  stored: string,
+  saved: { readonly savedAddress: string }
+): { view: CollectionFieldView; busy: boolean } {
+  const identity = useDocumentIdentity();
+  const template =
+    typeof identity?.documentId === "string" ? identity.documentId : "";
+  const named = useCollectionNames();
+  const askRetarget =
+    !readOnly &&
+    template !== "" &&
+    stored !== "" &&
+    named.state === "answered" &&
+    !named.value.has(stored);
+  // The choices only where they may be drawn: a template being made, or a
+  // saved one the list leaves out, asked beside the retarget question.
+  const choices: CollectionChoices = {
+    named,
+    offered: useOfferedCollections(
+      !readOnly && (template === "" || stored === "" || askRetarget)
+    ),
+  };
+  const retarget = useCollectionRetarget(
+    template,
+    askRetarget,
+    saved.savedAddress
+  );
+  return {
+    view: collectionFieldView(
+      { readOnly, saved: template !== "", value, stored },
+      choices,
+      retarget
+    ),
+    busy: stillAsking(choices, askRetarget, retarget),
+  };
+}
+
+/**
+ * Whether a fixed collection still waits on an answer: the names, or, for a
+ * saved collection the list leaves out, the retarget question and, where it
+ * allows a change, the choices.
+ */
+function stillAsking(
+  choices: CollectionChoices,
+  askRetarget: boolean,
+  retarget: CollectionRetarget
+): boolean {
+  if (choices.named.state === "pending") return true;
+  if (!askRetarget) return false;
+  return (
+    retarget === "pending" ||
+    (retarget === "allowed" && choices.offered.state === "pending")
+  );
+}
+
+/** What each of the control's three forms is handed. */
+interface CollectionControlProps {
+  readonly label: string;
+  readonly describedBy: string | undefined;
+  readonly value: string;
+  readonly invalid: boolean;
+  readonly disabled: boolean;
+  readonly onChange: (next: string) => void;
+  readonly onBlur: () => void;
+  readonly inputRef: RefCallBack;
+}
+
+/** The collection as text: its name with its slug, read-only. */
+function FixedCollection({
+  view,
+  busy,
+  label,
+  describedBy,
+}: CollectionControlProps & {
+  readonly view: Extract<CollectionFieldView, { kind: "fixed" }>;
+  readonly busy: boolean;
+}): JSX.Element {
+  return (
+    <div
+      role="textbox"
+      aria-readonly="true"
+      // The wrapper's label is not tied to a plugin editor's control, so
+      // the value carries its own name.
+      aria-label={label}
+      aria-describedby={describedBy}
+      aria-busy={busy || undefined}
+      className="flex h-9 min-w-0 items-center gap-2 rounded-md border border-input bg-muted/40 px-3 text-sm"
+    >
+      {view.slug === "" ? (
+        <span className="text-muted-foreground">No collection</span>
+      ) : (
+        <>
+          <span className="min-w-0 truncate text-foreground">
+            {view.label ?? view.slug}
+          </span>
+          {/* The slug beside the name, as the API and code name it, with
+              a space between for a screen reader. */}
+          {view.label === null || view.label === view.slug ? null : (
+            <>
+              {" "}
+              <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                {view.slug}
+              </span>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** What the choice says while it has nothing chosen. */
+function choosePlaceholder(
+  view: Extract<CollectionFieldView, { kind: "choose" }>
+): string {
+  if (view.loading) return "Loading collections…";
+  return view.options.length === 0
+    ? "No collection can have a template"
+    : "Choose a collection";
+}
+
+/** The collections offered by name, to choose one. */
+function ChooseCollection({
+  view,
+  label,
+  describedBy,
+  value,
+  invalid,
+  disabled,
+  onChange,
+  onBlur,
+  inputRef,
+}: CollectionControlProps & {
+  readonly view: Extract<CollectionFieldView, { kind: "choose" }>;
+}): JSX.Element {
+  return (
+    <Select
+      // A value none of the options holds, as a removed collection's slug,
+      // shows the placeholder rather than an empty trigger.
+      value={
+        view.options.some(option => option.slug === value) ? value : undefined
+      }
+      onValueChange={onChange}
+      disabled={disabled || view.loading}
+    >
+      <SelectTrigger
+        ref={inputRef}
+        aria-label={label}
+        aria-describedby={describedBy}
+        aria-invalid={invalid || undefined}
+        aria-busy={view.loading || undefined}
+        onBlur={onBlur}
+        className="[&>span]:min-w-0 [&>span]:truncate [&>span]:text-left"
+      >
+        <SelectValue placeholder={choosePlaceholder(view)} />
+      </SelectTrigger>
+      <SelectContent>
+        {view.options.map(option => (
+          <SelectItem key={option.slug} value={option.slug}>
+            {/* A space between, so the option reads "Posts posts". */}
+            {option.label}{" "}
+            <span className="font-mono text-xs text-muted-foreground">
+              {option.slug}
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+/** The slug typed, where the collections could not be listed. */
+function TypedCollection({
+  label,
+  describedBy,
+  value,
+  invalid,
+  disabled,
+  onChange,
+  onBlur,
+  inputRef,
+}: CollectionControlProps): JSX.Element {
+  return (
+    <Input
+      ref={inputRef}
+      type="text"
+      aria-label={label}
+      aria-describedby={describedBy}
+      aria-invalid={invalid || undefined}
+      value={value}
+      onChange={event => onChange(event.target.value)}
+      onBlur={onBlur}
+      disabled={disabled}
+      spellCheck={false}
+      autoComplete="off"
+      className="font-mono"
+    />
+  );
+}

@@ -21,11 +21,20 @@ export const en = {
   "nextly.errors.page.reload": "Reload page",
   "nextly.errors.page.retry": "Try again",
   "nextly.errors.page.home": "Go home",
-  "nextly.errors.page.details": "View technical details",
+  // The labels of the development-only error boxes. Those boxes are folded out
+  // of a production build, and these two strings go with them: the ternary
+  // sits here, not in a helper, so the build's folding can drop the text. A
+  // string left in the catalog ships to every production user. Each says
+  // its type because the published declarations are written without inference.
+  "nextly.errors.page.details": (process.env.NODE_ENV === "production"
+    ? ""
+    : "View technical details") as string,
   "nextly.errors.section.title": "Error loading section",
   "nextly.errors.section.description":
     "An error occurred while loading this section. Please try again.",
-  "nextly.errors.section.details": "Error details",
+  "nextly.errors.section.details": (process.env.NODE_ENV === "production"
+    ? ""
+    : "Error details") as string,
   "nextly.errors.section.retry": "Try Again",
   "nextly.errors.inline.message": "Error loading content",
   "nextly.errors.inline.development": "Error: {message}",
@@ -54,4 +63,8 @@ export const en = {
   "nextly.userMenu.followBrowser": "Follow the browser",
   "nextly.userMenu.unavailable": "{language} (not available)",
   "nextly.userMenu.saveFailed": "Your interface language could not be saved.",
+  "nextly.places.userDetail.content": "Profile",
+  "nextly.places.settings.content": "General",
+  "nextly.places.document.content": "Content",
+  "nextly.places.unavailable": "This part of the page couldn't be loaded.",
 } as const;

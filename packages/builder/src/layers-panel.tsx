@@ -103,6 +103,11 @@ import { DRAG_SOURCE_ATTRIBUTE } from "./canvas";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
+import {
+  EntryContentRowFact,
+  useEntryContentRows,
+  type EntryContentRowFacts,
+} from "./entry-content-layers";
 import { useHoveredBlockSetter } from "./hovered-block";
 import {
   layersLockChangeable,
@@ -319,6 +324,8 @@ interface RowView {
   readonly deviceName: string | undefined;
   readonly onRenamed: (id: string, name: string | null) => void;
   readonly onAct: (id: string, action: RowKeyAction) => void;
+  /** Each Entry content block's field, and whether it is gone, by id. */
+  readonly entryContent: ReadonlyMap<string, EntryContentRowFacts>;
 }
 
 /**
@@ -533,6 +540,7 @@ function LayerRow({
         </span>
       )}
       <ComponentTag node={node} />
+      <EntryContentRowFact facts={view.entryContent.get(node.id)} />
       <RowFacts node={node} />
       <RowActions node={node} view={view} />
     </span>
@@ -1160,6 +1168,7 @@ export function LayersPanel({
   );
 
   const icons = React.useMemo(iconsByType, []);
+  const entryContent = useEntryContentRows(editor.document);
   const deviceName = deviceNameOf(device);
   const { renamingId, onRenamed, act } = rows;
   const nodes = React.useMemo(
@@ -1172,11 +1181,13 @@ export function LayersPanel({
           deviceName,
           onRenamed,
           onAct: act,
+          entryContent,
         })
       ),
     [
       search.roots,
       icons,
+      entryContent,
       drag.draggingId,
       renamingId,
       deviceName,

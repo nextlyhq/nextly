@@ -19,11 +19,13 @@ import type {
   BeforeOperationArgs,
   BeforeOperationContext,
   BeforeOperationHandler,
+  CollectionDeleteRunner,
   HookContext,
   HookContextPhase,
   HookHandler,
   HookOwner,
   HookType,
+  InTransactionRunner,
 } from "./types";
 
 export type { HookOwner };
@@ -70,6 +72,12 @@ interface RegisteredHook<H> {
 export interface OwnedHookSet {
   byPhase: Array<{ hookType: HookContextPhase; handlers: HookHandler[] }>;
   beforeOperation: BeforeOperationHandler[];
+  /**
+   * @experimental The owner's in-transaction handlers. Absent means none: the
+   * config declares no handler for that phase, so a config rebuild that leaves
+   * it out holds none afterwards, as it would after a restart.
+   */
+  inTransaction?: InTransactionRunner[];
 }
 
 export interface SideEffectHookFailure {
@@ -221,6 +229,28 @@ export class HookRegistry {
   > = new Map();
 
   /**
+   * In-transaction handlers, kept apart from the rest, as `beforeOperation`'s
+   * are.
+   *
+   * The phase is not one of `HOOK_TYPES`: adding a member to that published
+   * list would break an exhaustive switch over `HookType` downstream. Its
+   * handlers also take the write's transaction, which no other phase's do.
+   * Keyed `inTransaction:<collection>`, the shape every other key has, so the
+   * owner scans below read the collection out of it the same way.
+   */
+  private inTransactionHooks: Map<
+    string,
+    RegisteredHook<InTransactionRunner>[]
+  > = new Map();
+
+  /**
+   * Collection-delete handlers, in registration order. Not keyed by
+   * collection: a plugin's handler is asked about every collection deleted,
+   * since what it holds for one is its own to know.
+   */
+  private collectionDeleteHooks: RegisteredHook<CollectionDeleteRunner>[] = [];
+
+  /**
    * Owners whose handlers stay registered but do not run.
    *
    * Disabling a plugin has to stop everything it contributed, and its
@@ -251,10 +281,15 @@ export class HookRegistry {
 
   /** Drop the entries whose owner is suspended, cheaply when none is. */
   private runnable<H>(entries: RegisteredHook<H>[]): H[] {
-    if (this.suspendedOwners.size === 0) return entries.map(e => e.handler);
-    return entries
-      .filter(e => !this.suspendedOwners.has(e.owner))
-      .map(e => e.handler);
+    return this.runnableEntries(entries).map(e => e.handler);
+  }
+
+  /** {@link runnable}, keeping who owns each handler. */
+  private runnableEntries<H>(
+    entries: RegisteredHook<H>[]
+  ): RegisteredHook<H>[] {
+    if (this.suspendedOwners.size === 0) return entries;
+    return entries.filter(e => !this.suspendedOwners.has(e.owner));
   }
 
   /**
@@ -291,6 +326,9 @@ export class HookRegistry {
       this.configBoundaries.set(key, new WeakSet<object>(entries));
     }
     for (const [key, entries] of this.beforeOperationHooks) {
+      this.configBoundaries.set(key, new WeakSet<object>(entries));
+    }
+    for (const [key, entries] of this.inTransactionHooks) {
       this.configBoundaries.set(key, new WeakSet<object>(entries));
     }
   }
@@ -491,6 +529,126 @@ export class HookRegistry {
   }
 
   /**
+   * @experimental Register an in-transaction handler: it runs last inside a
+   * write's own transaction, before the commit, and again on each retried
+   * attempt (see `hooks/in-transaction-phase`).
+   *
+   * @param collection - Collection name, `single:<slug>`, or '*' for every one
+   * @param runner - Called with the write's transaction and the write
+   */
+  registerInTransaction(
+    collection: string,
+    runner: InTransactionRunner,
+    owner: HookOwner = "app"
+  ): void {
+    this.pushHandler(this.inTransactionHooks, inTransactionKey(collection), {
+      handler: runner,
+      owner,
+    });
+  }
+
+  /**
+   * @experimental Unregister an in-transaction handler, the counterpart to
+   * {@link registerInTransaction}. Only the caller's own registration of it
+   * is removed, as for the other phases.
+   */
+  unregisterInTransaction(
+    collection: string,
+    runner: InTransactionRunner,
+    owner: HookOwner = "app"
+  ): void {
+    this.removeHandler(
+      this.inTransactionHooks,
+      inTransactionKey(collection),
+      runner,
+      owner
+    );
+  }
+
+  /**
+   * @experimental Whether any in-transaction handler would run for a
+   * collection: its own or a '*' one, not counting a suspended owner's.
+   *
+   * What a write asks before it loads the phase, so a write with nothing to
+   * run loads nothing and does nothing more than it did before the phase
+   * existed.
+   */
+  hasInTransaction(collection: string): boolean {
+    return this.inTransactionRunners(collection).length > 0;
+  }
+
+  /**
+   * @experimental The in-transaction handlers to run for a collection, in
+   * order: the '*' ones first, then the collection's own, each in
+   * registration order, without a suspended owner's.
+   *
+   * @internal
+   */
+  inTransactionRunners(collection: string): InTransactionRunner[] {
+    return this.inTransactionEntries(collection).map(e => e.handler);
+  }
+
+  /**
+   * @experimental {@link inTransactionRunners}, with the owner of each, which
+   * the phase names when a handler does something it should not.
+   *
+   * @internal
+   */
+  inTransactionEntries(
+    collection: string
+  ): ReadonlyArray<{ handler: InTransactionRunner; owner: HookOwner }> {
+    return [
+      ...this.runnableEntries(
+        this.inTransactionHooks.get(inTransactionKey("*")) ?? []
+      ),
+      ...(collection === "*"
+        ? []
+        : this.runnableEntries(
+            this.inTransactionHooks.get(inTransactionKey(collection)) ?? []
+          )),
+    ];
+  }
+
+  /**
+   * @experimental Register a plugin's collection-delete handlers: asked what
+   * deleting a collection takes with it, and run inside the delete's
+   * transaction before the collection is removed.
+   */
+  registerCollectionDelete(
+    runner: CollectionDeleteRunner,
+    owner: HookOwner = "app"
+  ): void {
+    this.collectionDeleteHooks.push({ handler: runner, owner });
+  }
+
+  /**
+   * @experimental Unregister collection-delete handlers, the counterpart to
+   * {@link registerCollectionDelete}: only the caller's own registration.
+   */
+  unregisterCollectionDelete(
+    runner: CollectionDeleteRunner,
+    owner: HookOwner = "app"
+  ): void {
+    const index = this.collectionDeleteHooks.findIndex(
+      e => e.handler === runner && e.owner === owner
+    );
+    if (index > -1) this.collectionDeleteHooks.splice(index, 1);
+  }
+
+  /**
+   * @experimental The collection-delete handlers to ask and run, in
+   * registration order, with the owner of each, without a suspended owner's.
+   *
+   * @internal
+   */
+  collectionDeleteEntries(): ReadonlyArray<{
+    handler: CollectionDeleteRunner;
+    owner: HookOwner;
+  }> {
+    return this.runnableEntries(this.collectionDeleteHooks);
+  }
+
+  /**
    * Remove only the handlers a given owner registered for a collection.
    *
    * A config reload has to replace the app's own handlers while leaving a
@@ -500,13 +658,15 @@ export class HookRegistry {
    * about and cannot put back. Singles registration documents the same hazard
    * and avoids it by never clearing at all, which trades a wipe for a leak.
    *
-   * Reaches both stores, because `beforeOperation` lives apart and a partial
-   * clear would leave one phase of a reloaded collection stale.
+   * Reaches every store, because `beforeOperation` and the in-transaction
+   * phase live apart and a partial clear would leave one phase of a reloaded
+   * collection stale.
    */
   clearCollectionOwnedBy(collection: string, owner: HookOwner): void {
     this.replaceCollectionOwnedBy(collection, owner, {
       byPhase: [],
       beforeOperation: [],
+      inTransaction: [],
     });
   }
 
@@ -550,6 +710,20 @@ export class HookRegistry {
         beforeOperationKey,
         owner,
         replacement.beforeOperation
+      );
+    }
+
+    const inTransaction = replacement.inTransaction ?? [];
+    const inTransactionAt = inTransactionKey(collection);
+    if (
+      inTransaction.length > 0 ||
+      this.inTransactionHooks.has(inTransactionAt)
+    ) {
+      this.spliceOwned(
+        this.inTransactionHooks,
+        inTransactionAt,
+        owner,
+        inTransaction
       );
     }
   }
@@ -632,6 +806,14 @@ export class HookRegistry {
     for (const entries of this.beforeOperationHooks.values()) {
       for (const entry of entries) owners.add(entry.owner);
     }
+    // A plugin that only ever registered an in-transaction handler is an owner
+    // too: left out, a deleted plugin's handler would never be suspended.
+    for (const entries of this.inTransactionHooks.values()) {
+      for (const entry of entries) owners.add(entry.owner);
+    }
+    // And one that registered only collection-delete handlers, for the same
+    // reason: a deleted plugin's handler would otherwise go on running.
+    for (const entry of this.collectionDeleteHooks) owners.add(entry.owner);
     return [...owners];
   }
 
@@ -657,6 +839,9 @@ export class HookRegistry {
 
     for (const [key, entries] of this.hooks) collect(key, entries);
     for (const [key, entries] of this.beforeOperationHooks) {
+      collect(key, entries);
+    }
+    for (const [key, entries] of this.inTransactionHooks) {
       collect(key, entries);
     }
 
@@ -695,6 +880,8 @@ export class HookRegistry {
     this.beforeOperationHooks.delete(
       this.makeKey("beforeOperation", collection)
     );
+    // And so does the in-transaction phase, kept in a third store.
+    this.inTransactionHooks.delete(inTransactionKey(collection));
   }
 
   /**
@@ -714,6 +901,8 @@ export class HookRegistry {
   clear(): void {
     this.hooks.clear();
     this.beforeOperationHooks.clear();
+    this.inTransactionHooks.clear();
+    this.collectionDeleteHooks = [];
     // Suspension describes handlers, so it cannot outlive them. A registry
     // cleared at shutdown and registered into again would otherwise filter out
     // the fresh handlers of a plugin that is now enabled, leaving it inert
@@ -1095,6 +1284,15 @@ export class HookRegistry {
   private makeKey(hookType: HookType, collection: string): string {
     return `${hookType}:${collection}`;
   }
+}
+
+/**
+ * The in-transaction store's key for a collection, in the `<phase>:<collection>`
+ * shape the other stores use, so a scan reading the collection back out of a
+ * key reads this one the same way.
+ */
+function inTransactionKey(collection: string): string {
+  return `inTransaction:${collection}`;
 }
 
 /**
