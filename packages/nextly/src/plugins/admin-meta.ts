@@ -429,14 +429,25 @@ export function buildPluginAdminMeta(
       order: hostOverride?.order ?? plugin.admin?.order,
       after: hostOverride?.after ?? plugin.admin?.after,
       appearance: effectiveAppearance,
-      collections: pluginCollectionSlugs(plugin),
+      // Registered slugs, through the host's rename, as every list and link
+      // in the admin addresses them: a declared slug a host renamed names
+      // nothing the admin can find.
+      collections: pluginCollectionSlugs(plugin).map(declared =>
+        renamedSlug(plugin.renameMap ?? {}, declared)
+      ),
     };
 
     // Contributed singles/field-group slugs, so the detail page can list
     // everything the plugin adds without loading the plugin itself.
-    const singles = plugin.contributes?.singles?.map(s => s.slug) ?? [];
+    const singles =
+      plugin.contributes?.singles?.map(s =>
+        renamedSlug(plugin.renameMap ?? {}, s.slug)
+      ) ?? [];
     if (singles.length > 0) meta.singles = singles;
-    const fieldGroups = plugin.contributes?.fieldGroups?.map(c => c.slug) ?? [];
+    const fieldGroups =
+      plugin.contributes?.fieldGroups?.map(c =>
+        renamedSlug(plugin.renameMap ?? {}, c.slug)
+      ) ?? [];
     if (fieldGroups.length > 0) meta.fieldGroups = fieldGroups;
 
     // Serialized regardless of enabled state, on the same reasoning as

@@ -655,6 +655,35 @@ describe("buildPluginAdminMeta", () => {
   });
 });
 
+describe("buildPluginAdminMeta — the slugs a plugin's entities are registered under", () => {
+  it("names each collection, Single and field group by the slug the host's rename gave it", () => {
+    const [meta] = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            collections: [{ slug: "forms" }, { slug: "submissions" }],
+            singles: [{ slug: "settings" }],
+            fieldGroups: [{ slug: "address" }],
+          },
+          // As `plugin.rename({ … })` leaves it: declared slug to registered slug.
+          renameMap: {
+            forms: "contact-forms",
+            settings: "form-settings",
+            address: "postal-address",
+          },
+        },
+      ]),
+      undefined
+    );
+    // What the admin lists, so a renamed entity is found under its plugin
+    // rather than shown among the site's own content.
+    expect(meta.collections).toEqual(["contact-forms", "submissions"]);
+    expect(meta.singles).toEqual(["form-settings"]);
+    expect(meta.fieldGroups).toEqual(["postal-address"]);
+  });
+});
+
 describe("buildPluginAdminMeta — clientConfig", () => {
   const withConfig = (clientConfig: Record<string, unknown>) =>
     asPlugins([{ ...base, contributes: { admin: { clientConfig } } }]);
