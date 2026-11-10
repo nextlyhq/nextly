@@ -20,18 +20,16 @@ import type { Metadata } from "next";
 
 import { getUnstableRethrow } from "../../actions/next-runtime";
 import { NextlyError } from "../../errors/nextly-error";
-import { capabilityProvider } from "../../plugins/capabilities";
+import {
+  capabilityProvider,
+  capabilityProvidersRecorded,
+} from "../../plugins/capabilities";
 import { buildPluginServicesNamespace } from "../../plugins/services/plugin-services-registry";
 import { consoleLogger } from "../../shared/types";
 import { cachedFind } from "../cache/cached-find";
+import { readTags } from "../cache/nextly-tags";
 
-import {
-  defined,
-  isRecord,
-  metadataFromAnswer,
-  type OpenGraph,
-  type Twitter,
-} from "./answer-metadata";
+import { defined, isRecord, metadataFromAnswer } from "./answer-metadata";
 import {
   PAGE_METADATA_CAPABILITY,
   PAGE_METADATA_SERVICE,
@@ -168,6 +166,22 @@ function isResolver(value: unknown): value is PageMetadataResolver {
 }
 
 /**
+ * Whether this process is known to have no page-metadata provider: a boot has
+ * recorded its providers and none provides it.
+ *
+ * Lets a route that supplies no metadata of its own skip resolving the page
+ * for it, as it always has. Before a boot has recorded anything the answer is
+ * unknown, and a route must resolve the page and ask: its reader may boot on
+ * that very read.
+ */
+export function knownNoPageMetadataProvider(): boolean {
+  return (
+    capabilityProvidersRecorded() &&
+    capabilityProvider(PAGE_METADATA_CAPABILITY) === undefined
+  );
+}
+
+/**
  * The started page-metadata provider's resolver, or undefined when no plugin
  * provides one.
  *
@@ -266,7 +280,9 @@ export async function pageMetadataFor(
     };
     const answer = await cachedFind(async () => await resolver.resolve(input), {
       keyParts: ["nextly-page-metadata", answerKey(input)],
-      tags: [...request.tags, ...(resolver.tags?.(input) ?? [])],
+      // The page's own tags first, so the one every write to its document
+      // expires is never the one Next.js's per-read limit drops.
+      tags: readTags(request.tags, resolver.tags?.(input) ?? []),
       ...(request.revalidate === undefined
         ? {}
         : { revalidate: request.revalidate }),

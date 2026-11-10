@@ -722,6 +722,17 @@ export function capabilityProvider(capability: string): string | undefined {
 }
 
 /**
+ * Whether a boot has recorded its providers. Until one has, "no provider" is
+ * unknown rather than none: a route whose reader boots on its first query asks
+ * before that boot, and must not take the answer for "none".
+ */
+export function capabilityProvidersRecorded(): boolean {
+  return (
+    globalForCapabilityProviders.__nextly_capabilityProviders !== undefined
+  );
+}
+
+/**
  * Check that everything a plugin requires is provided, at a compatible version.
  *
  * The range is matched against the PROVIDING PLUGIN's version, not against a
