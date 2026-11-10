@@ -1,7 +1,13 @@
 import type { JSX } from "react";
 
 import { NotificationBell } from "@admin/components/features/notifications";
-import { Discord, Github, HelpCircle } from "@admin/components/icons";
+import {
+  Discord,
+  Github,
+  HelpCircle,
+  PanelLeftClose,
+  PanelLeftOpen,
+} from "@admin/components/icons";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { ThemeToggle } from "@admin/components/shared/theme-toggle";
 import {
@@ -14,6 +20,7 @@ import { useLogout } from "@admin/hooks/useLogout";
 import { cn } from "@admin/lib/utils";
 
 import { shellAnswersMarker } from "../lib/shell-answers";
+import { usePanelFold } from "../PanelFold";
 import { UserProfileDropdown } from "../sidebar/UserProfileDropdown";
 
 import {
@@ -69,6 +76,7 @@ export function DashboardHeader({
             than pushing into them; the controls keep their size. Controls
             arriving narrow it from its right end, so nothing in it moves. */}
         <div className="mr-3 flex min-w-0 flex-1 items-center gap-4">
+          <PanelFoldToggle />
           <HeaderTrail />
         </div>
         {/* The bell is the one control the row waits on the reader's
@@ -107,6 +115,28 @@ export function DashboardHeader({
 }
 
 /** What the controls row is drawn from. */
+/**
+ * The panel toggle, at the bar's left end, on a page that started its panel
+ * folded. Nothing on any other page: there the panel follows the rail.
+ */
+function PanelFoldToggle(): JSX.Element | null {
+  const { declared, open, toggle } = usePanelFold();
+  if (!declared) return null;
+  const Icon = open ? PanelLeftClose : PanelLeftOpen;
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      aria-pressed={open}
+      aria-label={open ? "Hide the panel" : "Show the panel"}
+      title={open ? "Hide the panel" : "Show the panel"}
+      className="-ml-2 flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+    >
+      <Icon className="h-5 w-5" aria-hidden="true" />
+    </button>
+  );
+}
+
 interface ControlsProps {
   hidden: ReadonlySet<HeaderButtonId>;
   headerSlots: readonly { name: string; slot: string }[];

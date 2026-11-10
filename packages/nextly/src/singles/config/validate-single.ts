@@ -25,6 +25,7 @@ import {
   RESERVED_SLUGS,
   statusOptionError,
 } from "../../collections/config/validate-config";
+import { publicAddressErrors } from "../../domains/public-addresses/public-address-template";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import {
   fieldProducesColumn,
@@ -126,7 +127,9 @@ export type SingleValidationErrorCode =
   // Access errors (Single-specific: only read/update)
   | "ACCESS_INVALID_TYPE"
   | "ACCESS_FUNCTION_INVALID"
-  | "ACCESS_KEY_UNKNOWN";
+  | "ACCESS_KEY_UNKNOWN"
+  // Public address errors
+  | "PUBLIC_ADDRESS_INVALID";
 
 /**
  * A single validation error with path and context.
@@ -460,6 +463,12 @@ export function validateSingleConfig(
   validateSiblingFieldsShared("single", config.slug, config.fields, errsBase);
 
   validateAccess(config.access, errors);
+
+  // Judged by the rule every public address is (see the collection
+  // validator): a Single's is one fixed path, so it names no placeholder.
+  errors.push(
+    ...publicAddressErrors(config.publicAddress, "single", config.fields)
+  );
 
   return {
     valid: errors.length === 0,
