@@ -307,6 +307,40 @@ export function componentRelationshipStoresJson(field: {
 }
 
 /**
+ * How a relation's column stores its value: `one` id, a `list` of ids, one `{ relationTo, value }`
+ * reference to one of several collections (`targets`), or a list of those (`targetList`).
+ * `undefined` for anything that is not a relation's own column.
+ *
+ * The shape decides which change of it keeps every value. One id and a list of them convert into
+ * each other; a reference naming its collection cannot be made from a bare id, nor turned back into
+ * one, without guessing. A column's type does not always tell the shapes apart (SQLite keeps all
+ * four as text), so the schema records this beside it.
+ *
+ * `component` asks for a component row, where a many-to-many keeps its list on the row
+ * (`componentRelationshipStoresJson`).
+ */
+export function relationStorageShape(
+  field: {
+    type?: unknown;
+    hasMany?: unknown;
+    relationTo?: unknown;
+    options?: unknown;
+  },
+  component = false
+): "one" | "list" | "targets" | "targetList" | undefined {
+  if (field.type !== "relationship" && field.type !== "upload") {
+    return undefined;
+  }
+  if (Array.isArray(field.relationTo)) {
+    return field.hasMany ? "targetList" : "targets";
+  }
+  const list = component
+    ? componentRelationshipHoldsReferenceList(field)
+    : Boolean(field.hasMany);
+  return list ? "list" : "one";
+}
+
+/**
  * Whether a component row's relation column holds a LIST of references: a `hasMany` relationship or
  * a many-to-many.
  *

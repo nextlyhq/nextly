@@ -80,6 +80,19 @@ writing two files:
 Commit both. From then on the normal loop applies: edit `nextly.config.ts`, run
 `nextly migrate:create`, and get a file containing only what changed.
 
+To see what a sync would do before it does it, add `--dry-run` to any form of it:
+`nextly db:sync --dry-run` names each table and column operation the schema push would run,
+and each rename or data-loss question it would ask, and a note says what it does not show (the
+registry rows, the core, translation, Single and component tables, `user_ext` and the
+permissions it seeds), since the plan is made against the registry as it stands before the
+sync rewrites it. With `--remove-orphaned` it also names each table it would delete, in the
+words the data-loss consent uses; with `--promote <slug>` it shows the commented snippet it
+would append and the registry row it would remove (the table is kept); with `--demote <slug>`
+it shows the registry record it would write. A dry run opens the database read-only, takes no
+schema lock, asks nothing, and exits 0; where the real run would refuse (a slug that is not
+there, a collection defined in code, a field-group storage migration in flight), it says so and
+still exits 0. It cannot be combined with `--watch`.
+
 <Callout type="warn">
 **Do not keep using `db:sync` against a database that holds content.** It compares your
 config to the database, and when a column disappears and another appears on the same table
@@ -515,6 +528,13 @@ label, description and admin display settings. A database that has run
 Collections and Singles additionally carry the Versions, Revalidate and Webhooks switches; Field
 Groups have none of those, and the Field Group registry has no columns for them under either name.
 The runtime reads its Drizzle table from that row, so the row matters as much as the columns do.
+
+The Builder itself never runs in production. A production server refuses every Builder save,
+preview, repair and delete with `BUILDER_DISABLED`, and so does a field-group save through the
+Direct API or a collection save through a plugin's `ctx.services.collections`, whatever
+`admin.branding.showBuilder` says; a production start that finds `showBuilder: true` logs that it
+has no effect there. Make schema changes in development, commit them with their migration, and let
+`nextly migrate` apply them. Entry writes are unaffected.
 
 ### Commit `ui-schema.json`
 

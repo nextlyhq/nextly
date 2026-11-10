@@ -23,7 +23,6 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import type { CollectionsHandler } from "../../../services/collections-handler";
 
 import { seedPlainAuthor } from "./helpers/live-author";
 
@@ -79,7 +78,7 @@ async function releaseOfOne(
   for (const action of ["read", "update", "publish"]) {
     await grantTo(t, author, action, [POSTS, "content-releases"]);
   }
-  const handler = t.getService<CollectionsHandler>("collectionsHandler");
+  const handler = t.getService("collectionsHandler");
   const created = await handler.createEntry(
     { collectionName: POSTS, overrideAccess: true },
     { title: "Draft", status: "draft" }

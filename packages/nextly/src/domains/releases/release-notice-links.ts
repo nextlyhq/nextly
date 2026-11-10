@@ -4,7 +4,6 @@
  * notice and its email always lead to the same page.
  *
  * @module domains/releases/release-notice-links
- * @experimental Until the notices feature is complete.
  */
 import { container } from "../../di/container";
 import { hasPermission } from "../../services/lib/permissions";
@@ -21,8 +20,6 @@ function releaseAdminPath(id: string): string {
 /**
  * The releases that still exist, each with its page in the admin: one read for
  * a page of notices. A release deleted since has none, and its notice says so.
- *
- * @experimental
  */
 export async function releaseNoticeLinks(
   ids: readonly string[]
@@ -40,8 +37,6 @@ export async function releaseNoticeLinks(
 /**
  * Whether a person may see release notices: a person who may no longer read
  * releases stops seeing them, as the releases themselves are hidden from them.
- *
- * @experimental
  */
 export function mayReadReleaseNotices(userId: string): Promise<boolean> {
   return hasPermission(userId, "read", RELEASES_RESOURCE);

@@ -254,8 +254,12 @@ Add `serverExternalPackages` so Next.js doesn't try to bundle server-only depend
 
 ```typescript title="next.config.ts"
 import type { NextConfig } from "next";
+import { nextlyHtmlLimitedBots } from "nextly/next";
 
 const nextConfig: NextConfig = {
+  // Search engines and AI crawlers read each page's whole head in the first
+  // HTML; see "Metadata in the first HTML" in the routing and SEO guide.
+  htmlLimitedBots: nextlyHtmlLimitedBots,
   // Nextly runs with both on; see Cache Components below.
   cacheComponents: true,
   partialPrefetching: true,
@@ -310,11 +314,15 @@ export default function AdminPage() {
 ```
 
 ```tsx title="src/app/admin/[[...params]]/layout.tsx"
-import { getBrandingCss } from "nextly/config";
+import { adminMetadata, getBrandingCss } from "nextly/config";
 
 import config from "../../../../nextly.config";
 
 const brandingCss = getBrandingCss(config.admin?.branding);
+
+// Keeps the admin out of search results: `noindex, nofollow` in the head of
+// the first HTML the server sends.
+export const metadata = adminMetadata;
 
 export default function AdminLayout({
   children,

@@ -108,7 +108,7 @@ test("the save confirmation is primary without a deletion and destructive with o
     .click();
   await page.getByRole("tab", { name: "Advanced" }).click();
   await page.getByRole("switch", { name: "Localized" }).click();
-  await page.getByRole("button", { name: "Apply" }).click();
+  // No Apply: the settings panel keeps each change as it is made.
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toBeVisible();
   await testInfo.attach("save without a deletion", {

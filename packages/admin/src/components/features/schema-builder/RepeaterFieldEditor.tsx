@@ -191,7 +191,10 @@ export function RepeaterFieldEditor({
           value={rowLabelField || "__default__"}
           onValueChange={handleRowLabelFieldChange}
         >
-          <SelectTrigger className="h-8 text-sm">
+          <SelectTrigger
+            aria-label="Collapsed row title"
+            className="h-8 text-sm"
+          >
             <SelectValue placeholder="Select a field" />
           </SelectTrigger>
           <SelectContent>
@@ -268,6 +271,7 @@ export function RepeaterFieldEditor({
             />
           </div>
           <Switch
+            aria-label="Collapsed by default"
             checked={initCollapsed || false}
             onCheckedChange={onInitCollapsedChange}
           />
@@ -283,6 +287,7 @@ export function RepeaterFieldEditor({
             />
           </div>
           <Switch
+            aria-label="Allow reordering"
             checked={isSortable !== false}
             onCheckedChange={onIsSortableChange}
           />

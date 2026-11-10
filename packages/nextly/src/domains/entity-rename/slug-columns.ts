@@ -37,6 +37,7 @@ import { NextlyError } from "../../errors";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { entityPermissionSpelling } from "../auth/services/entity-permission-spelling";
+import { MIGRATION_TARGET } from "../field-groups/migration/target";
 import {
   DOCUMENT_EVENT_KINDS,
   documentOfReleaseEvent,
@@ -665,6 +666,55 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     reason: "A job's own slug.",
   },
 ];
+
+/**
+ * A registry whose rows store field configurations, in its `fields` column: what a relationship
+ * names as its target is a slug inside it (`relationTo`, the Builder shape's `options.target`).
+ * A rename rewrites those targets (`relationship-targets`), and the test that reads the core
+ * schema asks this list about every table with a `fields` column, so a new store of field
+ * configurations can't be left out.
+ */
+export interface StoredFieldConfiguration {
+  table: string;
+  /**
+   * The name the registry takes once its storage is migrated, where it can have another: read
+   * under whichever of the two the database has, as the registry's own storage resolver does.
+   */
+  migratedTable?: string;
+  /** Who made each row: `ui` for the Schema Builder, whose rows a rename may rewrite. */
+  sourceColumn: "source";
+  fieldsColumn: "fields";
+}
+
+/** Every name a declared registry can have: its own, and the one its storage migration gives it. */
+export function storedFieldConfigurationTables(): string[] {
+  return STORED_FIELD_CONFIGURATIONS.flatMap(registry =>
+    registry.migratedTable === undefined
+      ? [registry.table]
+      : [registry.table, registry.migratedTable]
+  );
+}
+
+/** Every registry that stores field configurations: collections, Singles and field groups. */
+export const STORED_FIELD_CONFIGURATIONS: readonly StoredFieldConfiguration[] =
+  [
+    {
+      table: "dynamic_collections",
+      sourceColumn: "source",
+      fieldsColumn: "fields",
+    },
+    {
+      table: "dynamic_singles",
+      sourceColumn: "source",
+      fieldsColumn: "fields",
+    },
+    {
+      table: STORAGE_FORMAT.registryTable,
+      migratedTable: MIGRATION_TARGET.registryTable,
+      sourceColumn: "source",
+      fieldsColumn: "fields",
+    },
+  ];
 
 /** The declared columns a rename moves or deletes rows by, in order. */
 export function renamedSlugColumns(): RenamedSlugColumn[] {
