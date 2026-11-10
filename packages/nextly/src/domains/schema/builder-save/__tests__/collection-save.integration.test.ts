@@ -341,7 +341,8 @@ describe.each(getConfiguredTestDialects())(
         applied: await appliedRows(),
       };
 
-      // Two rows share a code, so making it unique fails on its first statement.
+      // Two rows share a code, so making it unique fails on its first statement; on MySQL an
+      // unbounded text column cannot be keyed at all, so the save is refused before it writes.
       await expect(
         writeCollectionSave(deps(), {
           slug: "posts",
@@ -589,18 +590,24 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** The save adding `subtitle` to the earlier Builder's posts. */
+    // The definition declares `body` short, a width the earlier table never
+    // had: a column the save genuinely has to convert.
+    const shortBody = text("body", { options: { variant: "short" } });
     const addSubtitle = (acknowledged?: string[]) => ({
       slug: "posts",
-      previous: posts([text("body")]),
-      entity: posts([text("body"), text("subtitle")]),
+      previous: posts([shortBody]),
+      entity: posts([shortBody, text("subtitle")]),
       change: "update",
       ...(acknowledged === undefined
         ? {}
         : { acknowledgedConversions: acknowledged }),
     });
 
-    // An earlier Builder made a MySQL text field TEXT; the one mapping says varchar(255).
-    const converts = dialect === "mysql";
+    // An earlier Builder made `body` unbounded; declared short it is
+    // varchar(255) on PostgreSQL and MySQL. SQLite's text has no width.
+    const converts = dialect !== "sqlite";
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 
     it("previews the save, naming each column it brings to the one mapping, and writes nothing", async () => {
       await earlierBuilderTable();
@@ -658,12 +665,12 @@ describe.each(getConfiguredTestDialects())(
       expect(read(files[0]!)).toMatch(/CREATE TABLE/);
       if (converts) {
         // As the database has it, then brought to the mapping, then changed.
-        expect(read(files[0]!)).toMatch(/`body` text/);
-        expect(read(files[1]!)).toMatch(/`body`[^;]*varchar\(255\)/);
-        expect(read(files[1]!)).not.toMatch(/subtitle/);
-        expect(read(files[2]!)).not.toMatch(
-          /varchar\(255\)[^;]*`body`|`body`[^;]*varchar/
+        expect(read(files[0]!)).toMatch(new RegExp(`${q("body")} text`, "i"));
+        expect(read(files[1]!)).toMatch(
+          new RegExp(`${q("body")}[^;]*varchar\\(255\\)`, "i")
         );
+        expect(read(files[1]!)).not.toMatch(/subtitle/);
+        expect(read(files[2]!)).not.toMatch(/varchar\(255\)/i);
       }
       expect(await columns()).toContain("subtitle");
       expect((await appliedRows()).map(r => r.filename)).toEqual(files);

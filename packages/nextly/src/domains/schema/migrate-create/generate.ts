@@ -2610,7 +2610,15 @@ export function buildDesiredSnapshotFromConfig(
     tables.push(
       withLocalizedMarker(
         buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
-          builtBy: "codeFirst" as const,
+          // A Builder collection by the Builder's own column rule, as the
+          // Builder creates and pushes its table; a code-first one by the
+          // code-first rule. On MySQL the two read an unstated text width
+          // differently, so describing a Builder table by the code-first
+          // rule wrote a column the table never had.
+          builtBy:
+            c.settings?.source === "builder"
+              ? ("collection" as const)
+              : ("codeFirst" as const),
           hasStatus: c.status === true,
           localized: c.localized === true,
           ...(c.indexes !== undefined ? { indexes: c.indexes } : {}),

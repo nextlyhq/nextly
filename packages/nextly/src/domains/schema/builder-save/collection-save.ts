@@ -49,6 +49,7 @@ import type {
   UiSchemaEntity,
   UiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { checksumOf } from "../migrate/applied-checksums";
 import {
@@ -86,7 +87,14 @@ import { validateDefaultValue } from "../pipeline/pre-cleanup/validate-default";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 import { generateStatements } from "../pipeline/sql-templates/index";
 import type { ColumnResolution } from "../pipeline/sql-templates/resolution-statements";
-import { toSnakeCase } from "../services/field-column-descriptor";
+import {
+  getColumnDescriptor,
+  toSnakeCase,
+} from "../services/field-column-descriptor";
+import {
+  uniquenessCanBeAnIndex,
+  uniquenessNotEnforceableError,
+} from "../services/index-name";
 import { loadUiSchema } from "../ui-schema/loader";
 import { uiToMinimal } from "../ui-schema/merge";
 import { mutateManifest } from "../ui-schema/mutate";
@@ -218,6 +226,7 @@ export async function writeCollectionSave(
   if (options.historyChecked !== true) await checkSaveHistory(deps);
   const plan = await planSave(deps, save);
   refuseUnconfirmedConversions(plan, save);
+  refuseUnenforceableUniques(deps, save, plan.table);
   await settledRows(deps, save, plan.table);
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
@@ -515,6 +524,33 @@ function resolutionNotice({ column, rows, resolution }: SettledRows): string {
   return resolution.kind === "fill"
     ? `This save fills ${counted} with '${String(resolution.value)}' in ${column}.`
     : `This save also deletes ${counted} here, and the rows that don't fit on every database the migration reaches.`;
+}
+
+/**
+ * Refuses a field marked unique whose column, by the Builder's column rule,
+ * the database cannot key (an unbounded MySQL TEXT): the generator leaves such
+ * an index out, so the save would claim a uniqueness nothing enforces. The
+ * Builder's own DDL refuses it with the same error.
+ */
+function refuseUnenforceableUniques(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): void {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  for (const field of save.entity?.fields ?? []) {
+    if (field.unique !== true) continue;
+    if (toSnakeCase(field.name) === "slug") continue;
+    const column = getColumnDescriptor(
+      field as FieldDefinition,
+      dialect,
+      "collection"
+    );
+    if (column === null) continue;
+    if (!uniquenessCanBeAnIndex(column.dialectType, dialect)) {
+      throw uniquenessNotEnforceableError(table, field, dialect);
+    }
+  }
 }
 
 /** The line the review shows for a conversion. */

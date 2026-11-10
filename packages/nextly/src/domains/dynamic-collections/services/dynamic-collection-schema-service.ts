@@ -68,6 +68,7 @@ import {
   indexNameForColumn,
   uniqueIndexNameForColumn,
   uniquenessCanBeAnIndex,
+  uniquenessNotEnforceableError,
 } from "../../schema/services/index-name";
 import {
   backfillDefaultForType,
@@ -549,25 +550,7 @@ export class DynamicCollectionSchemaService {
     tableName: string,
     field: FieldDefinition
   ): NextlyError {
-    return NextlyError.validation({
-      errors: [
-        {
-          path: `fields.${field.name}`,
-          code: "UNIQUE_NOT_ENFORCEABLE_ON_DIALECT",
-          message:
-            `"${field.name}" is marked unique, but ${this.dialect} cannot enforce ` +
-            `uniqueness on a ${field.type} column. Store the value in a short-variant ` +
-            `text field, which becomes a bounded VARCHAR the server can key, or remove ` +
-            `the unique flag.`,
-        },
-      ],
-      logContext: {
-        tableName,
-        field: field.name,
-        type: field.type,
-        dialect: this.dialect,
-      },
-    });
+    return uniquenessNotEnforceableError(tableName, field, this.dialect);
   }
 
   /**
