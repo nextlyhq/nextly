@@ -151,7 +151,9 @@ describe("a content route with a page-metadata provider", () => {
     expect(asked[0]?.derived).toEqual({ title: "Drawn About" });
   });
 
-  it("asks nothing for an address the route does not serve", async () => {
+  it("answers an address the route does not serve as not found, asking nothing", async () => {
+    // A crawler is answered once its head is ready, so a head that says "not
+    // found" is what gives it a 404 rather than a 200 with a not-found body.
     const asked = provide(() => ({ title: "Never" }));
     const { reader } = contentReader();
     const route = createContentRoute({
@@ -160,7 +162,9 @@ describe("a content route with a page-metadata provider", () => {
       render: () => "page",
     });
 
-    expect(await route.generateMetadata(params(["missing"]))).toEqual({});
+    await expect(route.generateMetadata(params(["missing"]))).rejects.toThrow(
+      /NEXT_HTTP_ERROR_FALLBACK;404/
+    );
     expect(asked).toHaveLength(0);
   });
 });

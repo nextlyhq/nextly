@@ -5215,8 +5215,12 @@ function buildContentRoute(
   async function generateMetadata(args: ContentRouteArgs): Promise<Metadata> {
     const segments = await segmentsOf(args);
     const found = await answer(segments);
+    // Not found here as in the page: a crawler is answered once its head is
+    // ready, so this is what gives it a 404 rather than a 200 carrying a
+    // not-found body.
+    if (found === null) return await contentNotFound();
     // A redirect's metadata is never read: the page answers with it.
-    if (found === null || found.kind === "redirect") return {};
+    if (found.kind === "redirect") return {};
     if (found.kind === "page") {
       return await pagesRoute.generateMetadata({
         params: { slug: segments },

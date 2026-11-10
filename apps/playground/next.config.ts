@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
 
+import { nextlyHtmlLimitedBots } from "nextly/next";
+
 import { playgroundCacheComponents } from "./cache-components";
 
 // Payload-style env-conditional source-mode (see packages/next/src/withPayload/withPayload.js
@@ -56,6 +58,9 @@ const NEXTLY_DYNAMIC_PACKAGES = [
 const CACHE_COMPONENTS = playgroundCacheComponents();
 
 const nextConfig: NextConfig = {
+  // Search engines and AI crawlers read each page's whole head in the first
+  // HTML, as a Nextly site's config sets it.
+  htmlLimitedBots: nextlyHtmlLimitedBots,
   ...(CACHE_COMPONENTS
     ? { cacheComponents: true, partialPrefetching: true }
     : { cacheComponents: false }),

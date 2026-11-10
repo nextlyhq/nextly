@@ -456,6 +456,27 @@ but its result becomes one input rather than the answer:
 
 Without such a plugin, a route's metadata is served exactly as it returns it.
 
+## Metadata in the first HTML
+
+Next.js streams a page's metadata in after the `<head>` to a browser, and waits for it only for the
+crawlers named in `htmlLimitedBots`. Its own list leaves out the main Googlebot, which runs
+scripts but takes its first reading from the HTML it is sent, and the AI crawlers, which run
+none. `nextlyHtmlLimitedBots`, from `nextly/next`, is Next.js's list with those added, so each of
+them reads the page's whole head in the first response. A new app's `next.config` sets it, and so
+does `withNextly()` where the app sets no list of its own. An app made before then adds it:
+
+```ts title="next.config.ts"
+import { nextlyHtmlLimitedBots } from "nextly/next";
+
+const nextConfig = {
+  htmlLimitedBots: nextlyHtmlLimitedBots,
+  // ...the rest of your config
+};
+```
+
+Setting `htmlLimitedBots` replaces Next.js's list rather than adding to it, so a list of your own
+should start from `nextlyHtmlLimitedBots.source`.
+
 ## nextlySitemap and nextlyRobots
 
 `nextlySitemap({ entries, tags })` builds the default export for
