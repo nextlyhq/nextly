@@ -764,8 +764,8 @@ reserves (`admin-place-reserved-slug`), under one of core's segments
 (`admin-place-reserved`), outside the plugin's slug
 (`admin-place-outside-namespace`), or declared twice (`admin-place-collision`).
 
-Settings, a user's detail page, the entry form, the login page, both edit pages
-and the dashboard draw what is sent to them; the other core places draw nothing
+Settings, a user's detail page, the account page, the entry form, the login
+page, both edit pages and the dashboard draw what is sent to them; the other core places draw nothing
 yet. A plugin draws its own
 place on one of its pages with `TargetSlot` and `PlaceTabs` from
 `@nextlyhq/plugin-sdk/admin` (`@experimental`), the parts core's pages use:
@@ -898,7 +898,8 @@ four built-in sections, in order: `status`, `publishing`, `language` and
 `details`. Among blocks, the edit pages name the document bar, with the
 banners under it, `document-bar`, and the editor, the fields with the side
 panel, `editor`; settings and a user's detail page name the page's own
-content `content`, the entry form names its fields `fields`, and the login page
+content `content`, the account page names its profile card `profile`, the
+entry form names its fields `fields`, and the login page
 names the sign-in form `form`. A plugin that replaces the login page's `form`
 takes over sign-in for the site.
 
@@ -953,8 +954,8 @@ only what they may see:
   contribution whose rule names such a field is not sent to that reader at
   all.
 
-The admin draws blocks and tabs at settings, a user's detail page, the entry
-form, the login page, both edit pages and the dashboard, in the order sent,
+The admin draws blocks and tabs at settings, a user's detail page, the account
+page, the entry form, the login page, both edit pages and the dashboard, in the order sent,
 each behind its own error boundary; a contributed tab follows the page's own content, which
 stays as it was when no tab is sent. On an edit page the tabs head the field
 column, and the document bar and the side panel stay whichever tab is open.
@@ -965,7 +966,44 @@ heading behind. A section's component receives `SidebarSectionProps`
 and `entry`, as every contributed component does, and on a collection entry's
 page also the document's handles a `panelSections` section is given
 (`collectionSlug`, `entryId`, `documentLock`, `mayWrite`,
-`documentChanged`). The entry list offers a collection's row actions in each row's menu,
+`documentChanged`).
+
+A contributed tab's component receives `PlaceTabProps` (`@experimental`): the
+place's `context` and `entry`, and `setBadge`, which shows a count beside the
+tab's label, or none with `null`. It stays mounted while another tab is open,
+so what it holds is kept and its count stays current. On an edit page it
+receives `DocumentTabProps` (`@experimental`): those, the document form's
+`control`, and the `documentLock` a side panel section is told, on a saved
+entry, a new one and a Single alike. A tab reads what the author has typed and
+not saved, and what it writes through `control` is stored by the bar's Save
+and Publish with everything else. The open tab is kept in the address as
+`?tab=<id>`, so a reload or a shared link opens it again.
+
+```tsx
+import { useEffect } from "react";
+import { useWatch } from "react-hook-form";
+import type { DocumentTabProps } from "@nextlyhq/plugin-sdk/admin";
+
+export function TitleCheckTab({ control, setBadge }: DocumentTabProps) {
+  // What the author has typed, saved or not.
+  const title = useWatch({ control, name: "title" });
+  const tooLong = typeof title === "string" && title.length > 60;
+  useEffect(() => {
+    setBadge(
+      tooLong ? { count: 1, label: "1 thing to fix", tone: "attention" } : null
+    );
+  }, [tooLong, setBadge]);
+  return (
+    <p>
+      {tooLong
+        ? "The title is longer than a results page shows."
+        : "The title fits."}
+    </p>
+  );
+}
+```
+
+The entry list offers a collection's row actions in each row's menu,
 after its own, on the rows whose `visibleWhen` holds. Columns, bulk actions,
 and blocks at the entry list arrive as data and are not drawn yet.
 
