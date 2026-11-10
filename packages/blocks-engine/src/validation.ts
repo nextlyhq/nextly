@@ -669,7 +669,14 @@ export function validateDocument(
     issues.push(
       // As validation issues: the path names the block, so the block's id
       // each judgement also carries is left to the editor that asks for it.
-      ...listQueryIssues(envelope.nodes, judgement).map(withoutNodeId),
+      ...listQueryIssues(envelope.nodes, {
+        ...judgement,
+        // So a list in a component or a Layout region, which shows on many
+        // pages, is refused a split into pages of its own.
+        ...(typeof envelope.kind === "string"
+          ? { documentKind: envelope.kind }
+          : {}),
+      }).map(withoutNodeId),
       // Each block's visibility conditions, judged as its lists are: the
       // operator always, the field against the entry's or the list item's
       // schema when given, a problem a stored form held kept a warning.

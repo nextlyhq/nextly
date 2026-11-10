@@ -54,11 +54,12 @@ const frenchPage = await ctx.services.collections.findEntryById("pages", id, {
   locale: "fr",
 });
 
-// A translation is written the same way: only the localized fields move.
+// A translation is written the same way: only the localized fields move. The
+// version comes from the French read, which covers the French translation.
 await ctx.services.collections.updateEntry(
   "pages",
   id,
-  { title: "Merci" },
+  { title: "Merci", _rev: frenchPage._rev },
   { as: "system", locale: "fr" }
 );
 ```
@@ -106,7 +107,7 @@ read and is refused on a write, and a selector is refused on both.
 | `createEntry(slug, data, opts?)`     | Create one entry. Returns `{ message, item, warnings? }`.         |
 | `listEntries(slug, query?, opts?)`   | List with filter/sort/pagination → `PaginatedResult`.             |
 | `findEntryById(slug, id, opts?)`     | Fetch one by id.                                                  |
-| `updateEntry(slug, id, data, opts?)` | Update one. Returns `{ message, item, warnings? }`.               |
+| `updateEntry(slug, id, data, opts?)` | Update one; `data` carries `_rev` or `_overwrite: true`. Returns `{ message, item, warnings? }`. |
 | `deleteEntry(slug, id, opts?)`       | Delete one. Returns `{ message, item: { id }, warnings? }`.       |
 | `count(slug, where?, opts?)`         | Count matching rows.                                              |
 | `createMany(slug, rows, opts?)`      | Bulk insert → `BatchOperationResult`.                             |
@@ -180,8 +181,10 @@ call with the patch repeated:
 const res = await ctx.services.collections.updateMany(
   slug,
   [
-    { id: "post-1", data: { status: "published" } },
-    { id: "post-2", data: { status: "archived", pinned: false } },
+    // Each row says which version it changes (its `_rev`), or that it
+    // replaces whatever is stored.
+    { id: "post-1", data: { status: "published", _rev: "7" } },
+    { id: "post-2", data: { status: "archived", pinned: false, _overwrite: true } },
   ],
   { as: "system" }
 );
@@ -211,9 +214,9 @@ for (;;) {
 
   const res = await ctx.services.collections.updateMany(
     slug,
-    page.data.map((row: { id: string }) => ({
+    page.data.map((row: { id: string; _rev: string }) => ({
       id: row.id,
-      data: { status: "published" },
+      data: { status: "published", _rev: row._rev },
     })),
     { as: "system" }
   );
@@ -227,6 +230,11 @@ for (;;) {
 When the patch does NOT change what the filter matches, page with
 `pagination: { page: n }` instead and stop when `pagination.hasMore` is false, or the
 loop above would re-read the same rows.
+
+Each row of `updateMany` carries its own `_rev` in its `data`, or `_overwrite: true`, and is
+judged on its own (see [Versions and conflicts](#versions-and-conflicts)): a row saved since you
+read it comes back in `errors` with the code `STALE_VERSION`, a row that sends neither comes back
+with `VERSION_REQUIRED`, and neither writes anything. The other rows are applied.
 
 Neither takes a `locale`: the bulk pipeline writes in one pass and cannot store a
 translation, so both refuse one by name rather than filing every row under the default
@@ -255,6 +263,36 @@ if (warnings) {
 ```
 
 `deleteEntry` reports `item` as `{ id }`, since there is no row left to return.
+
+## Versions and conflicts
+
+Every entry carries a version, `_rev`, on what `findEntryById` and `listEntries` return and on the
+`item` of every create and update. Pass it back in the update's `data`, and the update is applied
+only if nobody has saved the entry since you read it:
+
+```ts
+const post = await ctx.services.collections.findEntryById(slug, id, {
+  as: "system",
+});
+
+const { item } = await ctx.services.collections.updateEntry(
+  slug,
+  id,
+  { title: "Hello again", _rev: post._rev },
+  { as: "system" }
+);
+// item._rev is the new version, for the next save
+```
+
+An out-of-date save throws a `NextlyError` with the code `STALE_VERSION` (409), and writes nothing:
+check it with `NextlyError.isCode(err, "STALE_VERSION")`. `updateEntryInTransaction` is judged the
+same way, so a refused update leaves the rest of your transaction to you. To save whatever the
+current version, add `_overwrite: true` to `data`; the entry's history records the overwrite. An
+update that sends neither throws `VERSION_REQUIRED` (428) and writes nothing.
+
+What `_rev` covers and which writes are judged are the same for every caller; see the REST API's
+[Versions and conflicts](/docs/api-reference/rest-api#versions-and-conflicts). `ctx.services`
+reads no Single's content, so a plugin has no `_rev` to send for a Single.
 
 ## Collection transactions
 

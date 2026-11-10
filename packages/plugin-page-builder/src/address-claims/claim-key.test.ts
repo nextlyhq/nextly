@@ -136,6 +136,8 @@ describe("the space a later page falls in", () => {
     // Page one is the list's own address under a second spelling, which a
     // page of its own may hold.
     ["page one", "/news/page/1"],
+    // Too long to hold exactly, so the route serves no page there.
+    ["a number the route reads as no page", "/news/page/99999999999999999999"],
     ["a word where the number goes", "/news/page/two"],
     ["a number not after the page segment", "/news/2"],
   ])("finds no space for %s", (_why, path) => {

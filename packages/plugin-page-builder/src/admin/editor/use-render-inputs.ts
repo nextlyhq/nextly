@@ -13,14 +13,26 @@ import {
   BASE_BREAKPOINT,
   registryNestingSource,
   getBlock,
+  paginatedList,
+  visitorUnreadableBindings,
   type BlockDocument,
   type BreakpointId,
   type StyleState,
   type StyleCompileContext,
   type RemotePattern,
   type BreakpointSet,
+  type BindingSchemaRef,
+  type DefinitionsById,
+  type VisitorUnreadableBinding,
 } from "@nextlyhq/blocks-engine";
-import type { PageBindings, PageStyleCascade } from "@nextlyhq/blocks-react";
+import {
+  noPublicFields,
+  prepareDocumentForRead,
+  registeredBlocks,
+  type BlocksFieldShapes,
+  type PageBindings,
+  type PageStyleCascade,
+} from "@nextlyhq/blocks-react";
 import {
   DEFAULT_PREFERENCES,
   fallbackBreakpoint,
@@ -61,6 +73,7 @@ import {
 } from "../../host-policy";
 import { siteSheet, type SiteStyleData } from "../../site-style";
 import { readSiteStyleRecord } from "../../site-style-record";
+import { useCanvasBindings } from "../canvas-bindings-client";
 import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
 import { useSiteStyle } from "../site-style-client";
 import { useStoredSiteStyle } from "../site-style-read";
@@ -264,11 +277,11 @@ type CanvasRender = {
   classSummaryContext: StyleCompileContext;
 };
 
-/**
- * The canvas's binding sources: none read for the page, one object for the
- * editor's life so the pass is not a new input on every render.
- */
-const CANVAS_BINDINGS: PageBindings = Object.freeze({});
+/** Nothing marked: no sources read yet, or none of their shapes known. */
+const NONE_UNREADABLE: ReadonlyMap<
+  string,
+  readonly VisitorUnreadableBinding[]
+> = new Map();
 
 /** The render context the canvas is compiled under, and what is read off it. */
 function useCanvasRender({
@@ -354,14 +367,18 @@ function useCanvasRender({
   // `canvas-page-context.ts`.
   // The lists the author chose to see empty, drawn so on the canvas, and
   // every list read in the language being edited.
+  // The list the page splits into pages draws its links on the canvas, as
+  // on its first published page, so an author sees and styles them.
+  const pagedList = paginatedList(editor.document.nodes)?.id;
   const canvasContext = useCanvasPageContext(
     editor.listsShowingEmpty,
     locale,
-    initialDocument
+    initialDocument,
+    pagedList
   );
-  const canvasRender = useMemo(
-    () => ({
-      ...pageRenderInputs({
+  const pageInputs = useMemo(
+    () =>
+      pageRenderInputs({
         siteStyle: canvasSiteStyle,
         clientConfig,
         // None: the canvas is a frame at the previewed device's size, so the
@@ -374,20 +391,19 @@ function useCanvasRender({
         // keystroke.
         definitions: componentLibrary.definitions,
       }),
-      context: canvasContext,
-      // The binding pass, with no source read for the page: a list item's
-      // bindings fill from the entry the canvas drew it with, as on the
-      // published page, and a binding to a source the canvas did not read
-      // keeps the block's own value (or its fallback), as it always drew.
-      bindings: CANVAS_BINDINGS,
-    }),
     [
       canvasSiteStyle,
       clientConfig,
       documentLimits,
       componentLibrary.definitions,
-      canvasContext,
     ]
+  );
+  // The page as the canvas draws it, before the sources its bindings read
+  // are known: `useBoundCanvasRender` adds them, once the Layout's regions
+  // drawn around the page are known too.
+  const canvasRender = useMemo(
+    () => ({ ...pageInputs, context: canvasContext }),
+    [pageInputs, canvasContext]
   );
 
   /*
@@ -890,6 +906,125 @@ export function useCanvasInputs(
     ...site,
     sharedStyle,
   };
+}
+
+/**
+ * Whether a source is one of which the public may read no field, so the
+ * published page reads none of it. The page's entry and a Single count only
+ * when the person editing read them (no such source is not a private one); a
+ * collection a path's relation leads into counts when its lookup found none.
+ */
+function sourceHiddenFromVisitors(
+  bindings: PageBindings,
+  shapes: BlocksFieldShapes,
+  ref: BindingSchemaRef
+): boolean {
+  if ("site" in ref || !noPublicFields(shapes, ref)) return false;
+  if ("single" in ref) {
+    return (bindings.singles?.get(ref.single) ?? null) !== null;
+  }
+  const entryRef = bindings.entryRef;
+  const isEntry =
+    entryRef !== undefined &&
+    "collection" in entryRef &&
+    entryRef.collection === ref.collection;
+  return isEntry ? (bindings.entry ?? null) !== null : true;
+}
+
+/** No region: what a page with no Layout draws around it. */
+const NO_DEFINITIONS: DefinitionsById = new Map();
+
+/** A drawn tree, prepared by the renderer's own pipeline for the canvas. */
+function drawnTree(
+  document: BlockDocument,
+  definitions: DefinitionsById,
+  render: PageRenderInputs
+): BlockDocument | null {
+  return prepareDocumentForRead(document, {
+    resolver: registeredBlocks(),
+    styleContext: render.styleContext,
+    definitions,
+    ...(render.limits === undefined ? {} : { limits: render.limits }),
+  });
+}
+
+/**
+ * The canvas's render inputs with the sources its bindings read, read as the
+ * person editing: the entry, its Singles and the site settings, and the
+ * public field shapes that judge them.
+ *
+ * Asked of every tree the canvas draws, prepared by the renderer's own
+ * pipeline: the page's, composed with its components' definitions, and each
+ * region of its Layout with the definitions it reaches, as the published
+ * route reads for the page and its regions together. A list item's bindings
+ * fill from the entry the canvas drew it with, as on the published page;
+ * until the sources arrive, a bound prop keeps its own value (or its
+ * fallback), as it always drew.
+ */
+export function useBoundCanvasRender(
+  canvasRender: PageRenderInputs,
+  drawn: {
+    readonly document: BlockDocument;
+    readonly regions: readonly {
+      readonly document: BlockDocument;
+      readonly definitions?: DefinitionsById;
+    }[];
+  },
+  locale: string | undefined,
+  /** Whether the document is a component's own, which has no entry. */
+  component: boolean
+): {
+  readonly canvasRender: PageRenderInputs;
+  /**
+   * The bound props on the page a visitor will not see filled, by node id:
+   * the published page's own binding check, asked with the field shapes a
+   * visitor may read, which the canvas's sources carry.
+   */
+  readonly visitorUnreadable: ReadonlyMap<
+    string,
+    readonly VisitorUnreadableBinding[]
+  >;
+} {
+  const { document, regions } = drawn;
+  const pageTree = useMemo(
+    () => drawnTree(document, canvasRender.definitions, canvasRender),
+    [document, canvasRender]
+  );
+  const trees = useMemo(
+    () =>
+      [
+        pageTree,
+        ...regions.map(region =>
+          drawnTree(
+            region.document,
+            region.definitions ?? NO_DEFINITIONS,
+            canvasRender
+          )
+        ),
+      ].filter((tree): tree is BlockDocument => tree !== null),
+    [pageTree, regions, canvasRender]
+  );
+  const bindings = useCanvasBindings(trees, locale, component);
+  const bound = useMemo(
+    () => ({ ...canvasRender, bindings }),
+    [canvasRender, bindings]
+  );
+  // Judged on the page's tree as the canvas draws it (repaired, composed and
+  // gated by the renderer's own pipeline), so a mark lands on the block that
+  // is drawn; a Layout region's bindings are its own editor's to say.
+  const visitorUnreadable = useMemo(() => {
+    const shapes = bindings.fieldShapes;
+    if (shapes === undefined || pageTree === null) return NONE_UNREADABLE;
+    return visitorUnreadableBindings(pageTree, {
+      schema: shapes,
+      ...(bindings.entryRef === undefined
+        ? {}
+        : { entryRef: bindings.entryRef }),
+      props: { get: getBlock },
+      unreadableSource: ref => sourceHiddenFromVisitors(bindings, shapes, ref),
+    });
+  }, [pageTree, bindings]);
+  return { canvasRender: bound, visitorUnreadable };
 }
 
 /**

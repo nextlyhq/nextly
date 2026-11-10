@@ -40,7 +40,13 @@ import { LIST_ACTION_ATTRIBUTE } from "../editor-markers";
 
 import { CONTENT } from "./categories";
 import { CONTAINER_CHILD_GAP } from "./container";
-import { readList, type ListOutcome } from "./list-read";
+import { ListPages } from "./list-pages";
+import {
+  listPagesOf,
+  readList,
+  wholeCount,
+  type ListOutcome,
+} from "./list-read";
 
 export interface CollectionLoopProps {
   /** The collection queried, or the collection a related source's entries are in. */
@@ -59,6 +65,11 @@ export interface CollectionLoopProps {
   offset?: number;
   /** The to-many relation of the page's entry or the outer item to list. */
   relation?: ListRelation;
+  /**
+   * Split into pages of `limit` entries, each at its own address
+   * (`/news/page/2`), with links between them. One list on a page may be.
+   */
+  paginate?: boolean;
 }
 
 /**
@@ -149,6 +160,7 @@ export async function renderCollectionLoop({
   renderSlot,
   spacingMode,
   className,
+  partClass,
   ctx,
 }: BlockRenderArgs<CollectionLoopProps>): Promise<ReactElement> {
   // An author asked to design what visitors see when nothing matches: the
@@ -183,22 +195,42 @@ export async function renderCollectionLoop({
       <div className={className}>{renderSlot("children", withoutItem)}</div>
     );
   }
+  // The page this render draws, when the route pages this list: the one
+  // list it names, so no other list on the page is paged by its address.
+  const paging =
+    props.paginate === true && ctx.listPage?.nodeId === node.id
+      ? ctx.listPage
+      : undefined;
   // A loop inside a loop runs once per entry of the outer one, so depth in a
   // document becomes multiplication in queries. Claiming from a shared
   // allowance before reading is what keeps a page bounded; without one the
   // renderer is not counting, which is the editor drawing a single block.
-  if (ctx.queries?.take() === false) {
+  // The list a route pages had its first read claimed for it before any
+  // block was drawn, so it does not claim again.
+  if (paging?.claimed !== true && ctx.queries?.take() === false) {
     return <div className={className} />;
   }
+  // The count of matching entries, as the read reports it, for the links.
+  let matching: number | undefined;
   // Never throws: a page that cannot reach its data draws the list's empty
   // state rather than failing, and an author is told why.
-  const outcome = await readList(props, collection, ctx, {
-    find: async query => {
-      const result = await data.find(query);
-      return Array.isArray(result.items) ? [...result.items] : [];
+  const outcome = await readList(
+    props,
+    collection,
+    ctx,
+    {
+      find: async query => {
+        const result = await data.find(query);
+        // A provider's own answer, held to what a count can be, as the
+        // route's count holds it: anything else draws no links, rather than
+        // links to `/page/NaN` the route would never serve.
+        matching = wholeCount(result.total);
+        return Array.isArray(result.items) ? [...result.items] : [];
+      },
+      claim: () => ctx.queries?.take() !== false,
     },
-    claim: () => ctx.queries?.take() !== false,
-  });
+    paging?.page
+  );
   const note = diagnosticNote(outcome, ctx);
   const marks = emptyMarks(
     ctx,
@@ -223,18 +255,123 @@ export async function renderCollectionLoop({
             {renderSlot("children", { ...ctx, item, itemSource: collection })}
           </div>
         ));
+  // The links between pages, under the entries, when the route pages this
+  // list and its read said how many entries it matches.
+  const pages =
+    paging === undefined || outcome.failed ? null : (
+      <ListPages
+        page={paging.page}
+        pages={
+          // The route's own count where it served this page by one, so the
+          // links never depend on a total this read may not report.
+          paging.pages ??
+          (matching === undefined ? 1 : listPagesOf(props, matching))
+        }
+        href={paging.href}
+        parts={{
+          nav: partClass("pages"),
+          link: partClass("page-link"),
+          current: partClass("current-page"),
+          gap: partClass("page-gap"),
+        }}
+      />
+    );
   // The note, when an author is looking, goes above what visitors see.
-  return note === null ? (
-    <div className={className} {...marks}>
-      {content}
-    </div>
-  ) : (
+  return (
     <div className={className} {...marks}>
       {note}
       {content}
+      {pages}
     </div>
   );
 }
+
+/** A page link's own colours, in both themes, from the site's tokens. */
+const PAGE_LINK_BORDER = {
+  width: {
+    blockStart: "1px",
+    blockEnd: "1px",
+    inlineStart: "1px",
+    inlineEnd: "1px",
+  },
+  style: "solid",
+} as const;
+
+/**
+ * The links between a list's pages, named so a site styles them as it
+ * styles the list. They must read as controls in a host whose reset strips
+ * a link of everything but its text, so each states a box, a border a person
+ * can see (`color.border-strong`, the one that clears 3:1 against the page)
+ * and a size a finger can hit; the current page is filled with the primary
+ * colour. Colours are tokens, so both themes hold.
+ */
+const COLLECTION_LOOP_PARTS = {
+  pages: {
+    baseStyles: {
+      base: {
+        base: {
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: "0.5rem",
+          margin: { blockStart: "2rem" },
+        },
+      },
+    },
+  },
+  "page-link": {
+    baseStyles: {
+      base: {
+        base: {
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          boxSizing: "border-box",
+          minWidth: "2.5rem",
+          minHeight: "2.5rem",
+          padding: { inlineStart: "0.75rem", inlineEnd: "0.75rem" },
+          borderRadius: "6px",
+          border: {
+            ...PAGE_LINK_BORDER,
+            color: { $token: "color.border-strong" },
+          },
+          backgroundColor: { $token: "color.background" },
+          color: { $token: "color.text" },
+          textDecoration: "none",
+        },
+      },
+      hover: {
+        base: { backgroundColor: { $token: "color.surface" } },
+      },
+    },
+  },
+  "current-page": {
+    baseStyles: {
+      base: {
+        base: {
+          border: { ...PAGE_LINK_BORDER, color: { $token: "color.primary" } },
+          backgroundColor: { $token: "color.primary" },
+          color: { $token: "color.background" },
+        },
+      },
+      // Kept filled under the pointer, which the plain link's hover would
+      // otherwise repaint.
+      hover: {
+        base: { backgroundColor: { $token: "color.primary" } },
+      },
+    },
+  },
+  "page-gap": {
+    baseStyles: {
+      base: {
+        base: {
+          padding: { inlineStart: "0.25rem", inlineEnd: "0.25rem" },
+          color: { $token: "color.text" },
+        },
+      },
+    },
+  },
+} as const;
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
@@ -290,6 +427,7 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
       },
       limit: { label: "Number of items", type: "number", min: 1, max: 100 },
       offset: { label: "Skip the first", type: "number", min: 0 },
+      paginate: { label: "Split into pages", type: "checkbox" },
     },
     defaultProps: { limit: 10 },
     example: { props: { collection: "posts", limit: 3 } },
@@ -311,6 +449,7 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
       // a gap. Left empty, the list shows nothing, as it always did.
       empty: {},
     },
+    parts: COLLECTION_LOOP_PARTS,
     // Spaces one entry from the next, as any container spaces its blocks.
     childGap: CONTAINER_CHILD_GAP,
     supports: {

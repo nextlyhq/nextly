@@ -20,6 +20,7 @@ import {
 } from "nextly/config";
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -351,6 +352,108 @@ function useReplacementRequests({
   return { open, openReplacement, closeRequest, failed };
 }
 
+/**
+ * A section's report, bound to the document it was drawn for: the entry,
+ * in this editor while it is mounted, and for a change the language it was
+ * drawn in too (a deletion removes the entry in every language). A section
+ * keeps the props it was drawn with, so a report can arrive once another
+ * document is on screen, or once this editor is gone. Then the reported
+ * document's own caches are still refreshed, since what the plugin did to it
+ * stands, and nothing else happens: no redirect from a "deleted", and no
+ * own-change expectation armed on the document now shown from a "changed".
+ */
+function useBoundSectionReport({
+  collectionSlug,
+  entryId,
+  locale,
+  documentChanged,
+}: {
+  collectionSlug: string;
+  entryId: string;
+  locale: string | undefined;
+  documentChanged: (result: DocumentChangeResult) => void;
+}): (result: DocumentChangeResult) => void {
+  const queryClient = useQueryClient();
+  const shown = { collectionSlug, entryId, locale: locale ?? null };
+  // The document on screen, as the editor last COMMITTED it, and whether this
+  // editor still is: set as the commit lands, not while rendering, so a
+  // render React abandons cannot move it; its cleanup ends it, so a report
+  // kept past an unmount is never this one's. The first render's value holds
+  // until then: an editor whose first render is abandoned is never mounted.
+  const shownNow = useRef<typeof shown | null>(shown);
+  useLayoutEffect(() => {
+    shownNow.current = { collectionSlug, entryId, locale: locale ?? null };
+    return () => {
+      shownNow.current = null;
+    };
+  }, [collectionSlug, entryId, locale]);
+  return result => {
+    const now = shownNow.current;
+    // Deleting removes the entry in every language, so a deletion reported
+    // from the entry in another language still leaves it. A change is the
+    // language's own: only one reported in the language on screen is taken
+    // for the author's, since it arms the expectation on that language.
+    const sameEntry =
+      now !== null &&
+      now.collectionSlug === shown.collectionSlug &&
+      now.entryId === shown.entryId;
+    const stillShown =
+      sameEntry && (result === "deleted" || now.locale === shown.locale);
+    if (stillShown) {
+      documentChanged(result);
+      return;
+    }
+    // The reported document's caches, and nothing the screen shows now.
+    if (result === "deleted") {
+      refreshAfterEntryDelete(queryClient, shown.collectionSlug, shown.entryId);
+    } else {
+      void refreshAfterEntryChange(
+        queryClient,
+        shown.collectionSlug,
+        shown.entryId
+      );
+    }
+  };
+}
+
+/**
+ * The open replacement, drawn with the identity it was opened for and the
+ * document's live gates. An unregistered component or one that throws is
+ * closed as failed, so its run is answered rather than left waiting.
+ */
+function replacementElement(
+  open: OpenReplacement,
+  {
+    documentLock,
+    mayWrite,
+    close,
+    fail,
+  }: {
+    documentLock: DocumentLockGates;
+    mayWrite: () => boolean;
+    close: (result?: DocumentChangeResult) => void;
+    fail: () => void;
+  }
+): JSX.Element {
+  return (
+    <PluginSlot<DocumentActionReplacementProps>
+      path={open.component}
+      props={{
+        action: open.action,
+        collectionSlug: open.collectionSlug,
+        entryId: open.entryId,
+        documentLock,
+        mayWrite,
+        close,
+      }}
+      fallback={<ClosesAsFailed onMount={fail} />}
+      // Nothing drawn in its place: the editor closes it at once.
+      errorFallback={null}
+      onError={fail}
+    />
+  );
+}
+
 export function usePluginDocumentSurfaces({
   collectionSlug,
   entryId,
@@ -358,10 +461,16 @@ export function usePluginDocumentSurfaces({
   mayWrite,
   onDeleted,
   onOwnChange,
+  locale,
 }: {
   collectionSlug: string;
   /** The saved document's id, or "" before it is saved. */
   entryId: string;
+  /**
+   * The language being edited: part of which document a section was drawn
+   * for, as it is of the form's own idea of the document.
+   */
+  locale?: string | undefined;
   /** What holds the document right now, as a section is told. */
   documentLock: DocumentLockGates;
   /**
@@ -402,6 +511,13 @@ export function usePluginDocumentSurfaces({
     onOwnChange,
   });
 
+  const sectionDocumentChanged = useBoundSectionReport({
+    collectionSlug,
+    entryId,
+    locale,
+    documentChanged,
+  });
+
   const { open, openReplacement, closeRequest, failed } =
     useReplacementRequests({ collectionSlug, entryId, documentChanged });
 
@@ -415,23 +531,14 @@ export function usePluginDocumentSurfaces({
     // Drawn only on the document it was opened for, with that document's
     // identity: on another, it is not drawn while it is being cancelled.
     replacement:
-      open === null || !isFor(open, collectionSlug, entryId) ? null : (
-        <PluginSlot<DocumentActionReplacementProps>
-          path={open.component}
-          props={{
-            action: open.action,
-            collectionSlug: open.collectionSlug,
-            entryId: open.entryId,
+      open === null || !isFor(open, collectionSlug, entryId)
+        ? null
+        : replacementElement(open, {
             documentLock,
             mayWrite,
             close: result => closeRequest(open, result),
-          }}
-          fallback={<ClosesAsFailed onMount={() => failed(open)} />}
-          // Nothing drawn in its place: the editor closes it at once.
-          errorFallback={null}
-          onError={() => failed(open)}
-        />
-      ),
+            fail: () => failed(open),
+          }),
     // Each with whether its component is still loading, so the panel draws
     // it as loading rather than blank until the component arrives.
     sections: surfaces.sections.map(section => ({
@@ -446,7 +553,7 @@ export function usePluginDocumentSurfaces({
             entryId,
             documentLock,
             mayWrite,
-            documentChanged,
+            documentChanged: sectionDocumentChanged,
           },
   };
 }
