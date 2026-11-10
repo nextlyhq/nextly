@@ -28,6 +28,8 @@ import {
   asSubmissionDocument,
   asSubmissionDocuments,
 } from "./document-shapes";
+import { submissionAnswers } from "./emails/answers";
+import { formsEmailTemplates } from "./emails/starter-messages";
 import {
   sameSubmittedPayload,
   submissionMarks,
@@ -238,6 +240,9 @@ export function formBuilder(
       // names. Contributed, never suggested: where it goes is core's default's
       // to say, and a site's own default may leave it out.
       dashboard: { widgets: [newSubmissions] },
+      // The team's and the visitor's starter emails, so a new notification has
+      // a message to send from the start; a site edits them in Settings › Email.
+      emailTemplates: formsEmailTemplates(),
       // A visitor submits a form without an account, so the Public role, the
       // role visitors are judged by, may create submissions. Granted once;
       // an owner who takes it away closes public submissions for good.
@@ -753,9 +758,17 @@ export function buildNotificationEmails(input: {
   formName: unknown;
   submissionId: unknown;
   defaultFrom?: string;
+  /**
+   * The form's fields, which turn the answers into the `answers` list the
+   * starter messages loop over. Absent, the list is empty and templates that
+   * name answers by field (`{{ full_name }}`) still read them as before.
+   */
+  fields?: readonly AnyFormField[];
 }): { emails: FormEmailNotification[]; skipped: SkippedNotification[] } {
   const { notifications, submittedData, formName, submissionId, defaultFrom } =
     input;
+  // Built once: every notification of a submission lists the same answers.
+  const answers = submissionAnswers(input.fields ?? [], submittedData);
 
   const seen = new Set<string>();
   const emails: FormEmailNotification[] = [];
@@ -828,6 +841,7 @@ export function buildNotificationEmails(input: {
         ...submittedData,
         formName,
         submissionId,
+        answers,
       },
       providerId: notification.providerId,
       from,
@@ -1257,6 +1271,7 @@ async function handleSubmissionCreated(
     formName: form.name,
     submissionId: submission.id,
     defaultFrom: config.notifications.defaultFrom,
+    fields: Array.isArray(form.fields) ? (form.fields as AnyFormField[]) : [],
   });
 
   for (const skip of skipped) {
