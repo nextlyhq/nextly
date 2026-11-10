@@ -18,6 +18,17 @@ export const NOTE_SLUG = "fixture";
 
 /** The note's value as this instance's cache holds it, or null with no row. */
 export function readNote(): Promise<string | null> {
+  return readNoteTagged(nextlyTags("notes"), "notes");
+}
+
+/**
+ * The note, cached under `tags` alone and its own `key`, so only an expiry of
+ * one of those tags makes it read the database again.
+ */
+export function readNoteTagged(
+  tags: string[],
+  key: string
+): Promise<string | null> {
   return cachedFind(
     async () => {
       const nextly = await getNextly({ config });
@@ -30,7 +41,7 @@ export function readNote(): Promise<string | null> {
       const value = result.items[0]?.value;
       return typeof value === "string" ? value : null;
     },
-    { tags: nextlyTags("notes"), keyParts: ["notes", NOTE_SLUG] }
+    { tags, keyParts: [key, NOTE_SLUG] }
   );
 }
 
