@@ -117,16 +117,39 @@ function docsOf(name: string, files: readonly string[]): string[] {
 }
 
 const adminDeclarations = declarationsIn(distOf("@nextlyhq/admin"));
-const sdkAdminDeclarations = declarationsIn(
-  distOf("@nextlyhq/plugin-sdk/admin")
-).join("\n");
+/**
+ * The declaration file of the SDK's `admin` entry itself, beside the module
+ * the entry resolves to. Read alone rather than with the rest of `dist`, so a
+ * name still mentioned elsewhere (a type an export refers to) is not taken
+ * for one the entry publishes.
+ */
+function entryDeclarationOf(specifier: string): string {
+  const module = fileURLToPath(import.meta.resolve(specifier));
+  for (const candidate of [
+    module.replace(/\.m?js$/, ".d.ts"),
+    module.replace(/\.m?js$/, ".d.mts"),
+  ]) {
+    try {
+      return readFileSync(candidate, "utf8");
+    } catch {
+      // Not this spelling; the next one is tried.
+    }
+  }
+  throw new Error(`no declaration file beside ${module}`);
+}
+
+const sdkAdminEntry = entryDeclarationOf("@nextlyhq/plugin-sdk/admin");
 
 describe("the old field-UI parts in the published declarations", () => {
   it.each(Object.entries(REPLACED_BY))(
     "%s is deprecated, naming %s and the release that may remove it",
     (name, replacement) => {
-      // Still exported from the SDK's admin entry: deprecated, not removed.
-      expect(sdkAdminDeclarations).toMatch(new RegExp(String.raw`\b${name}\b`));
+      // Still in the SDK's admin entry's own export list: deprecated, not
+      // removed. A mention anywhere else in the SDK's declarations would not do.
+      expect(
+        localNameOf(name, sdkAdminEntry),
+        `${name} is published`
+      ).toBeDefined();
 
       const docs = docsOf(name, adminDeclarations);
       expect(docs.length, `${name} is declared`).toBeGreaterThan(0);
