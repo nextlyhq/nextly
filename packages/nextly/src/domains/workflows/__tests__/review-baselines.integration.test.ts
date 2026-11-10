@@ -40,12 +40,14 @@ async function pageWithSaves(): Promise<{ id: string; saves: number[] }> {
   const id = await entry(app(), "pages");
   const saves: number[] = [];
   for (const title of ["First", "Second", "Third"]) {
-    await (
+    // An update names its version or says it overwrites; this one read none.
+    const saved = await (
       app().getService("collectionsHandler") as CollectionsHandler
     ).updateEntry(
       { collectionName: "pages", entryId: id, overrideAccess: true },
-      { title }
+      { title, _overwrite: true }
     );
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
     saves.push(await shownVersion(app(), "pages", id, null));
   }
   return { id, saves };
