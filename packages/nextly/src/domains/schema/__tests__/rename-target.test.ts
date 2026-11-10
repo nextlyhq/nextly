@@ -49,8 +49,8 @@ describe("isRenameStatement", () => {
       `ALTER TABLE "t" ADD COLUMN "rename" text`,
     ],
     [
-      "an ADD after a comment that mentions a rename",
-      `-- rename heading later\nALTER TABLE "t" ADD COLUMN "b" text`,
+      "an ADD followed by a comment that mentions a rename",
+      `ALTER TABLE "t" ADD COLUMN "b" text -- rename it to c later`,
     ],
     ["a CREATE TABLE", `CREATE TABLE "renamed" ("id" integer)`],
     [
