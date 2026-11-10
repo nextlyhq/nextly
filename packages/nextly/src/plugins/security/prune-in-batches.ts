@@ -134,7 +134,10 @@ async function removeBatch(
       });
     }
     return db.delete(target.table, {
-      and: [{ column: target.key, op: "IN", value: keys }, ...where.and.slice(1)],
+      and: [
+        { column: target.key, op: "IN", value: keys },
+        ...where.and.slice(1),
+      ],
     });
   }
   return db.delete(target.table, where);

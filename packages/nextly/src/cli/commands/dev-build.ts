@@ -761,7 +761,7 @@ export async function judgeOrphanRemoval(
 }
 
 /** What `--remove-orphaned` deletes, as the consent judges it. */
-async function collectOrphanDeletions(
+export async function collectOrphanDeletions(
   configResult: LoadConfigResult,
   adapter: CLIDatabaseAdapter,
   logger: CommandContext["logger"]
