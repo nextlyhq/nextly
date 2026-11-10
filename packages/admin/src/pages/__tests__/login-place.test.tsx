@@ -96,7 +96,8 @@ describe("LoginPage's place", () => {
 
     const block = await screen.findByTestId("login-block");
     const form = await screen.findByRole("form", { name: "Sign in" });
-    expect(form.nextElementSibling).toBe(block);
+    // The block stands in the wrapper that keeps its own form's submit its own.
+    expect(form.nextElementSibling).toBe(block.parentElement);
     expect(JSON.parse(block.textContent ?? "")).toEqual({});
   });
 });
