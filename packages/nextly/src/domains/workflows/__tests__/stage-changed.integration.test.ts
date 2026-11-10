@@ -701,6 +701,8 @@ describe.each(getConfiguredTestDialects())(
 
       await handlerOf(app()).discardWorkingDraftCounted({
         collectionName: "pages",
+        // A discard names the version it read or says it overwrites; this one read none.
+        version: { _overwrite: true },
         entryId: page,
         actor: { type: "user", id: "dave" },
         user: { id: "dave", name: "Dave" },
