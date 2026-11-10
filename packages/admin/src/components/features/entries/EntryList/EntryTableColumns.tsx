@@ -333,7 +333,7 @@ export function findTopLevelField(
  * @param fieldName - Name of the field to find
  * @returns Field configuration or undefined if not found
  */
-export function findFieldByName(
+function findFieldByName(
   fields: FieldConfig[],
   fieldName: string
 ): NamedDataFieldConfig | undefined {

@@ -243,6 +243,39 @@ function PluginFilterMenuSections({
   ));
 }
 
+/**
+ * The table's row selection, and the bulk actions it is offered for. Rows are
+ * selectable only when some bulk action is offered on them, and a row's
+ * Delete only with the delete permission. A plugin's declared bulk action
+ * counts as one: the server sends it only to a reader who may run it, and a
+ * reader holding none of the built-in ones still needs the checkboxes to
+ * reach it.
+ */
+function useEntryTableSelection(
+  collection: EntryTableProps["collection"],
+  declaredBulkActions: readonly DeclaredBulkAction[] = []
+) {
+  const offered = useEntryBulkActions(collection);
+  return {
+    offered,
+    ...useEntrySelection(offered.any || declaredBulkActions.length > 0),
+  };
+}
+
+/** Plugins' declared bulk actions as the bulk bar draws them, judged on `selected`. */
+function declaredBarActions(
+  declaredBulkActions: readonly DeclaredBulkAction[] = [],
+  selected: readonly string[]
+) {
+  return declaredBulkActions.map(action => ({
+    id: action.id,
+    label: action.label,
+    disabled: action.isDisabled(selected),
+    note: action.heldBackNote(selected),
+    onSelect: () => action.onSelect(selected),
+  }));
+}
+
 export const EntryTable: ForwardRefExoticComponent<
   EntryTableProps & RefAttributes<EntryTableRef>
 > = forwardRef<EntryTableRef, EntryTableProps>(function EntryTable(
@@ -291,15 +324,8 @@ export const EntryTable: ForwardRefExoticComponent<
   // -------------------------------------------------------------------------
 
   const [globalFilter, setGlobalFilter] = useState("");
-  // Rows are selectable only when some bulk action is offered on them, and a
-  // row's Delete only with the delete permission. A plugin's declared bulk
-  // action counts as one: the server sends it only to a reader who may run
-  // it, and a reader holding none of the built-in ones still needs the
-  // checkboxes to reach it.
-  const offered = useEntryBulkActions(collection);
-  const { selection, selected, versions, selectAll, clear } = useEntrySelection(
-    offered.any || (declaredBulkActions?.length ?? 0) > 0
-  );
+  const { offered, selection, selected, versions, selectAll, clear } =
+    useEntryTableSelection(collection, declaredBulkActions);
 
   // -------------------------------------------------------------------------
   // Columns
@@ -611,13 +637,7 @@ export const EntryTable: ForwardRefExoticComponent<
             }
             isPublishing={isBulkPublishing}
             onClear={clear}
-            declaredActions={(declaredBulkActions ?? []).map(action => ({
-              id: action.id,
-              label: action.label,
-              disabled: action.isDisabled(selected),
-              note: action.heldBackNote(selected),
-              onSelect: () => action.onSelect(selected),
-            }))}
+            declaredActions={declaredBarActions(declaredBulkActions, selected)}
           />
         ) : undefined
       }

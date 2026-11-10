@@ -13,9 +13,8 @@
  *
  * @module components/features/entries/EntryList/useDeclaredBulkActions
  */
-import { useCallback, useMemo } from "react";
-
 import { MAX_ACTION_ROWS } from "nextly/config";
+import { useCallback, useMemo } from "react";
 
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 
