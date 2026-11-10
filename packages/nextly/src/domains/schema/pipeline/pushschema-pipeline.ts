@@ -90,6 +90,7 @@ import {
   stripKitDropsOfLiveUniqueConstraints,
 } from "./filter-unsafe-statements";
 import { indexRestoreStatements } from "./index-restore";
+import { withKeptScopeFieldsIn } from "./kept-scope-fields";
 import { kitRouteConstraintStatements } from "./kit-route-constraints";
 import {
   desiredUniqueColumns,
@@ -680,7 +681,7 @@ export class PushSchemaPipeline {
     // snapshot the diff compares and the Drizzle tables drizzle-kit turns into DDL — and resolving
     // inside either leaves the other on the raw fields, so a table would converge and then report a
     // type change against itself on every following diff.
-    const desired = args.desired;
+    let desired = args.desired;
     // Merged HERE rather than at each call site. `apply` has many callers —
     // HMR, the collection/single/component dispatchers, the dev server, the
     // DI registration — and adding extensions at each would miss some: a UI
@@ -788,6 +789,11 @@ export class PushSchemaPipeline {
             ? (cached as NextlySchemaSnapshot)
             : await introspectLiveSnapshot(db, dialect, managedTableNames);
       }
+      // A field a plugin's scope holds back from a type switched off keeps
+      // its column while the database has it: added back here, before
+      // anything reads the desired state, so neither the diff nor the tables
+      // handed to drizzle-kit plans its drop (`kept-scope-fields.ts`).
+      desired = withKeptScopeFieldsIn(desired, liveSnapshot);
 
       // 🔴 Contained, and its failure means "declare NEITHER registry".
       //

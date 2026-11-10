@@ -170,6 +170,19 @@ const seoPlugin: PluginDefinition = {
   },
 };
 
+/** The same field on every collection and Single, none excepted. */
+const seoEverywhere: PluginDefinition = {
+  ...seoPlugin,
+  contributes: {
+    extend: [
+      {
+        target: { every: ["collection", "single"] },
+        fields: [text({ name: "seo_title" })],
+      },
+    ],
+  },
+};
+
 async function columnsOf(t: TestNextly, table: string): Promise<string[]> {
   const snapshot = await introspectLiveSnapshot(
     t.adapter.getDrizzle(),
@@ -265,6 +278,54 @@ describe.each(getConfiguredTestDialects())(
           [collection]: `On ${collection}`,
         });
       }
+    }, 240_000);
+
+    it("keeps a type's column and values, hidden, while it is switched off in development", async () => {
+      database = await openDatabase(dialect);
+      const adapter = database.adapter;
+      vi.stubEnv("NODE_ENV", "development");
+      current = await createTestNextly({
+        adapter: adapter as never,
+        collections: [posts, pages],
+        plugins: [seoEverywhere],
+      });
+      // The code tables take the plugin's field from a config reload, as in
+      // development.
+      configWith({ collections: [posts, pages] }, [seoEverywhere]);
+      await reloadNextlyConfig();
+      expect(await columnsOf(current, "dc_es_pages")).toContain("seo_title");
+      const created = await current.nextly.create({
+        collection: "es_pages" as never,
+        data: { title: "Saved", seo_title: "Kept" } as never,
+      });
+      const id = (created.item as { id: string }).id;
+      const read = async () =>
+        (await current?.nextly.findByID({
+          collection: "es_pages" as never,
+          id,
+        } as never)) as Record<string, unknown> | null;
+
+      expect((await read())?.seo_title).toBe("Kept");
+
+      // The site switches the type off, and a saved edit reloads the config.
+      configWith({ collections: [posts, pages] }, [seoPlugin]);
+      await reloadNextlyConfig();
+
+      // The column and its value stay, and the type no longer shows the
+      // field: not in a read, and a new entry saves without it.
+      expect(await columnsOf(current, "dc_es_pages")).toContain("seo_title");
+      const hidden = await read();
+      expect(hidden?.title).toBe("Saved");
+      expect(hidden).not.toHaveProperty("seo_title");
+      await current.nextly.create({
+        collection: "es_pages" as never,
+        data: { title: "Written while off" } as never,
+      });
+
+      // Switched on again, the value saved before is back.
+      configWith({ collections: [posts, pages] }, [seoEverywhere]);
+      await reloadNextlyConfig();
+      expect((await read())?.seo_title).toBe("Kept");
     }, 240_000);
 
     it("leaves a type with its own field of that name, and a removed plugin's table, as they are", async () => {

@@ -71,6 +71,13 @@ import type {
   Operation,
   TableSpec,
 } from "../domains/schema/pipeline/diff/types";
+import {
+  columnsByTable,
+  keptScopeFieldsChanged,
+  noteKeptScopeFieldsServed,
+  keptScopeFields,
+  scopedTypeKey,
+} from "../domains/schema/pipeline/kept-scope-fields";
 import { RealPreCleanupExecutor } from "../domains/schema/pipeline/pre-cleanup/executor";
 import { ClackTerminalPromptDispatcher } from "../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
 import { ttyRequiredDetail } from "../domains/schema/pipeline/prompt-dispatcher/errors";
@@ -2263,6 +2270,30 @@ async function applyReloadHolding(
   // a field leaving translation whose main column an earlier reload added
   // before it stopped: the move below is what finishes it.
   let hasChanges = startsAsChange(extensionSchemaChanged, leaving.entries);
+  // A plugin's field held back from a type switched off keeps its column
+  // while the database has it, as the apply keeps it: judged here the same
+  // way, so this gate and the apply see the same table, and a field moving
+  // between declared and kept, which changes no column, still rebuilds the
+  // type's runtime tables (`kept-scope-fields.ts`).
+  const liveColumns = columnsByTable(liveSnapshot);
+  const keptByType = new Map<
+    string,
+    { kind: "collection" | "single"; slug: string; names: string[] }
+  >();
+  const keptFor = (
+    kind: "collection" | "single",
+    entry: DesiredCollection | DesiredSingle
+  ) => {
+    const kept = keptScopeFields(kind, entry, liveColumns);
+    const names = kept.map(field => field.name);
+    keptByType.set(scopedTypeKey(kind, entry.slug), {
+      kind,
+      slug: entry.slug,
+      names,
+    });
+    if (keptScopeFieldsChanged(kind, entry.slug, names)) hasChanges = true;
+    return kept;
+  };
   // The rows a development start held, once this reload takes them (`recordRegistryHistory`), so a
   // refused apply can hold them again.
   const held: { atStart?: RecordedAtStart } = {};
@@ -2307,12 +2338,10 @@ async function applyReloadHolding(
       const desiredTable = desiredCollectionTable(
         {
           ...entry,
-          fields: heldFields(
-            leaving.entries,
-            "collection",
-            target.slug,
-            entry.fields
-          ),
+          fields: heldFields(leaving.entries, "collection", target.slug, [
+            ...entry.fields,
+            ...keptFor("collection", entry),
+          ]),
         },
         dialect
       );
@@ -2364,7 +2393,10 @@ async function applyReloadHolding(
         : { tables: [] };
       const desiredTable = buildDesiredTableFromFields(
         target.tableName,
-        heldFields(leaving.entries, "single", target.slug, target.fields),
+        heldFields(leaving.entries, "single", target.slug, [
+          ...target.fields,
+          ...keptFor("single", entry),
+        ]),
         dialect,
         {
           // These branches apply a CONFIG edit, so the table is the pipeline's.
@@ -3259,6 +3291,12 @@ async function applyReloadHolding(
       }
     } catch {
       // Non-fatal: same reasoning as SchemaRegistry block above.
+    }
+    // The types' tables are now built from their declared fields, with the
+    // kept ones left out: recorded, so the next reload rebuilds them again
+    // only when a field moves between the two.
+    for (const { kind, slug, names } of keptByType.values()) {
+      noteKeptScopeFieldsServed(kind, slug, names);
     }
 
     // Signal all connected browser tabs to reload so they immediately
