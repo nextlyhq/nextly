@@ -3,21 +3,22 @@ description: >-
   Restores pnpm's package store before an install, on every event, and saves it
   after one, on a push only (`save: "true"`).
 
-# A dependency cache is written only by `main`'s pushes and read everywhere
-# else, the same split as the shared turbo cache. A pull request that saved its
+# A dependency cache is written only by pushes to `main` and `dev` and read
+# everywhere else, the same split as the shared turbo cache. `dev` saves too
+# because a pull request into it reads `dev`'s caches, never `main`'s. A pull request that saved its
 # own store kept a copy under its merge ref that nobody else reads, often of the
-# very key `main` saves moments later, and each such copy is several hundred MB
+# very key its base branch saves moments later, and each such copy is several hundred MB
 # of the repository's cache allowance.
 #
 # Restored by the lockfile's exact key only. A pull request that changes the
-# lockfile installs from the registry until `main` saves that lockfile's store
+# lockfile installs from the registry until its base saves that lockfile's store
 # (measured cold: 7 to 11 s on Linux, 15 to 24 s on Windows, 18 s on macOS),
 # and a saved store holds one lockfile's packages, never every earlier one's.
 # It is not pruned: `pnpm store prune` takes a file nothing hard-links to as
 # unreferenced, and where pnpm copies or clones into `node_modules` (macOS, or
 # a Windows store on another drive) that is every file it just installed.
 #
-# Saving looks the key up first, so of the many jobs a push to `main` runs on
+# Saving looks the key up first, so of the many jobs a push runs on
 # one platform, only the first to finish its install uploads, and the rest skip
 # without a reservation warning.
 #
