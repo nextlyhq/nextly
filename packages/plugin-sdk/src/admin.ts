@@ -652,6 +652,16 @@ export { useSuppressAdminChrome } from "@nextlyhq/admin";
 export type { AdminChromeLayer } from "@nextlyhq/admin";
 
 /**
+ * Ask for the admin's content panel to start folded away while this page is
+ * mounted (@experimental), for a page that needs the width: a builder with a
+ * field list, a preview and a settings panel. The icon rail stays, the top
+ * bar shows a toggle that brings the panel back, and the reader's choice is
+ * remembered under `key` (name the page, `"forms.builder"`, not the record it
+ * shows), so the next visit starts the way they left it.
+ */
+export { useFoldedPanel } from "@nextlyhq/admin";
+
+/**
  * The live values of the document being edited (@experimental), for any
  * component a plugin draws inside the editor: a block, a side panel section
  * or a tab, on an entry, a new one or a Single. A place's `entry` prop is the

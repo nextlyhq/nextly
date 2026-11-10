@@ -20,7 +20,7 @@ import { HiddenWhileEmptyContext } from "@admin/components/features/widgets/hidd
 import { WidgetCard } from "@admin/components/features/widgets/WidgetCard";
 import { fireEvent, render, screen, within } from "@admin/__tests__/utils";
 
-import type { ReleaseListResponse } from "@admin/types/releases";
+import type { ReleaseListResponse } from "@admin/services/releaseApi";
 
 import { NeedsAttention } from "./NeedsAttention";
 
