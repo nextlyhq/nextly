@@ -84,17 +84,20 @@ export const CORE_ADMIN_PLACES = Object.freeze({
   "entry.form": Object.freeze({
     page: "the entry form, on a collection entry's or a Single's edit page",
     accepts: Object.freeze(["block"] as const),
-    builtIns: Object.freeze({}),
+    // The form's own fields, as both editors draw them.
+    builtIns: Object.freeze({ block: Object.freeze(["fields"] as const) }),
   }),
   settings: Object.freeze({
     page: "settings",
     accepts: Object.freeze(["block", "tab"] as const),
-    builtIns: Object.freeze({}),
+    // The general settings page's own form.
+    builtIns: Object.freeze({ block: Object.freeze(["content"] as const) }),
   }),
   "user.detail": Object.freeze({
     page: "a user's detail page",
     accepts: Object.freeze(["block", "tab"] as const),
-    builtIns: Object.freeze({}),
+    // The page's own card: the avatar and the user's details form.
+    builtIns: Object.freeze({ block: Object.freeze(["content"] as const) }),
   }),
   account: Object.freeze({
     page: "the signed-in admin's account page",
@@ -104,7 +107,8 @@ export const CORE_ADMIN_PLACES = Object.freeze({
   login: Object.freeze({
     page: "the login page",
     accepts: Object.freeze(["block"] as const),
-    builtIns: Object.freeze({}),
+    // The sign-in form itself.
+    builtIns: Object.freeze({ block: Object.freeze(["form"] as const) }),
   }),
 } as const);
 
