@@ -89,6 +89,8 @@
   "NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET": "A plugin's `.rename()` names an entity the plugin does not contribute.",
   "NEXTLY_SCHEMA_SLUG_COLLISION": "A plugin contributes an entity whose slug the configuration or another plugin already uses.",
   "NO_TRANSACTION_NEEDS_BLANK": "`--no-transaction` was given to `nextly migrate:create` without `--blank` or `--plugin`.",
+  "OLD_BUILDER_FILE_SNAPSHOT_ADDED": "A migration file recognised as an old Schema Builder file now has a snapshot beside it, so it would be read as a migration.",
+  "OLD_BUILDER_FILE_VARIANT_ADDED": "A dialect variant now shares the name of a migration file recognised as an old Schema Builder file, so its ledger rows and the Builder's cannot be told apart.",
   "OWNERSHIP_TAKEOVER_REFUSED": "A table or element recorded as one owner's would pass to another, so the change was refused.",
   "PACKAGE_INSTALL_FAILED": "The package manager could not install the package `nextly add` was given.",
   "PASSWORD_CLEAR_UNCONFIRMED": "`nextly users:clear-plaintext-passwords --apply` was run without `--confirm-default-hasher`.",

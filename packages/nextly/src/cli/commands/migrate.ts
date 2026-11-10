@@ -30,7 +30,7 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
@@ -91,6 +91,13 @@ import {
   runMigrationStatements,
   type MigrationUnit,
 } from "../../domains/schema/migrate/migration-transaction";
+import {
+  markedFileChange,
+  readOldBuilderLedger,
+  withOldBuilderMarks,
+  type ChangedOldBuilderFile,
+  type OldBuilderLedger,
+} from "../../domains/schema/migrate/old-builder-ledger";
 import {
   assertPluginHistories,
   assertPluginListsSound,
@@ -189,11 +196,12 @@ import {
 } from "../utils/data-loss-consent";
 import { formatDuration, formatCount, type Logger } from "../utils/logger";
 import {
+  migrationFilesInRunOrder,
   builderMigrationRemedy,
-  discoverMigrationGroups,
-  isBuilderWrittenMigration,
-  selectVariant,
-  getSortedBaseNames,
+  oldBuilderFileLine,
+  partialBuilderFileLacks,
+  readMigrationFolder,
+  type DeclaredNames,
 } from "../utils/migration-discovery";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
@@ -429,12 +437,26 @@ export async function runMigrate(
       adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
     );
 
+    // What the declared schema names, with the ledger's old Builder marks:
+    // the one value every reader of the folder below reads it through.
+    // `migrateCore` reads the marks again under the lock.
+    const { declared } = await withOldBuilderMarks({
+      adapter,
+      db,
+      dialect,
+      declared: {
+        junctions: resolvedSchema.junctionsByEntity,
+        tables: resolvedSchema.declaredTables,
+      },
+    });
+
     if (options.dryRun) {
       await previewMigrate({
         adapter,
         db,
         dialect,
         migrationsDir: appMigrationsDir,
+        declared,
         plugins: configResult.config.plugins ?? [],
         step: options.step,
         logger,
@@ -501,12 +523,13 @@ export async function runMigrate(
         // convention, and such a table is in no snapshot — so the drift check
         // has to be told about it or it reports a difference no migration can
         // resolve.
+        // A file with a Builder name the signature does not recognise is
+        // refused, never run as written.
+        refuseUnrecognisedBuilderFiles: true,
         knownJunctions: resolvedSchema.knownJunctions,
+        declared,
         allowDestructive: allowCoreDestructive,
         ...commandLineConsent(options, logger),
-        // A file the Builder wrote with no snapshot is replaced by the one
-        // `migrate:create` writes, never applied as written here.
-        refuseBuilderFilesWithoutSnapshot: true,
         dropRetiredAuthTables,
         allowDropNonEmptyRetired,
         ensureLedger: () => ensureSchemaEventsTable(dz),
@@ -521,7 +544,8 @@ export async function runMigrate(
             db,
             dialect,
             appMigrationsDir,
-            logger
+            logger,
+            declared
           );
           if (pending.length > 0) return;
           const { refuseCompanionColumnsThatCannotHold } = await import(
@@ -583,7 +607,8 @@ export async function runMigrate(
         db,
         dialect,
         appMigrationsDir,
-        logger
+        logger,
+        declared
       );
       if (stillPending.length > 0) {
         logger.info(
@@ -820,10 +845,14 @@ export interface MigrateCoreDeps {
   refuseUnresolvedAttemptsFn?: typeof refuseUnresolvedAppAttempts;
   /** The applied-file checksum check; injected for tests (`assertAppliedFilesUnchanged`). */
   assertAppliedFilesUnchangedFn?: typeof assertAppliedFilesUnchanged;
+  /** The old Builder files' marks; injected for tests (`markOldBuilderFiles`). */
+  markOldBuilderFilesFn?: typeof markOldBuilderFiles;
   /** Injected for tests; the default is `assertAppliedFilesPresent`. */
   assertAppliedFilesPresentFn?: typeof assertAppliedFilesPresent;
   /** Junction tables the config names outright; see `runFileMigrations`. */
   knownJunctions?: ReadonlySet<string>;
+  /** What the declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
   withLock?: typeof withMigrateLock;
   /** Seam for tests; defaults to the real metadata reconciliation. */
   reconcileMetadataFn?: typeof reconcileMigrationMetadata;
@@ -846,17 +875,18 @@ export interface MigrateCoreDeps {
    */
   beforeMetadata?: () => Promise<void>;
   /**
-   * Refuse, before anything changes, a pending migration file the Schema
-   * Builder wrote with no snapshot beside it (`isBuilderWrittenMigration`),
-   * rather than apply it as written.
+   * Refuse, before anything changes, a pending file with a Schema Builder
+   * name and no snapshot that is not recognised as an earlier Builder's
+   * (`refuseUnrecognisedBuilderFiles`), rather than run it as written.
    *
-   * `nextly migrate` and the production boot (`db.runMigrationsOnBoot`) pass
-   * it. Off by default because the development boot
-   * runs this core too, over the files the Builder writes into the project as
-   * it saves: there the Builder has already applied the change, and refusing
-   * would stop every later migration of a development server.
+   * `nextly migrate` and the production boot pass it. Off by default because
+   * the development boot runs this core too, over the files the Builder
+   * writes into the project as it saves: there the Builder has already made
+   * the change.
    */
-  refuseBuilderFilesWithoutSnapshot?: boolean;
+  refuseUnrecognisedBuilderFiles?: boolean;
+  /** The unrecognised-file refusal; injected for tests (`refuseUnrecognisedBuilderFiles`). */
+  refuseUnrecognisedBuilderFilesFn?: typeof refuseUnrecognisedBuilderFiles;
 }
 
 export interface MigrateCoreResult {
@@ -915,6 +945,8 @@ export async function previewMigrate(args: {
   db: unknown;
   dialect: SupportedDialect;
   migrationsDir: string;
+  /** What the run's declared schema names, read as a real run reads them. */
+  declared?: DeclaredNames;
   plugins: Parameters<typeof pluginMigrationArgs>[0];
   step?: number;
   logger: CommandContext["logger"];
@@ -951,21 +983,13 @@ export async function previewMigrate(args: {
               db,
               dialect,
               args.migrationsDir,
-              logger
+              logger,
+              args.declared
             )
           ).map(({ file, applied }) => ({ file, done: applied })),
           appStep,
           "up"
         ).run;
-  // Every pending file, whatever the step allows: a real run refuses a
-  // snapshotless Builder file among them before it applies any.
-  const allPendingFiles = await findPendingFiles(
-    adapter,
-    db,
-    dialect,
-    args.migrationsDir,
-    logger
-  );
 
   logger.newline();
   logger.keyValue(
@@ -998,12 +1022,7 @@ export async function previewMigrate(args: {
     logger,
     pendingModules.length > 0
   );
-  await previewBeyondStep(
-    allPendingFiles,
-    pendingFiles,
-    args.migrationsDir,
-    logger
-  );
+  await previewOldBuilderFiles({ ...args, logger });
   if (hasLedger) await previewChangedFiles(rows, args, logger);
   await previewAppHistory(args, logger);
   if (pendingModules.length + pendingFiles.length > 0) {
@@ -1031,8 +1050,8 @@ function previewModules(
 
 /**
  * Each pending app file within the step, with what it deletes (`deletions`,
- * in the same order), the required columns a real run would refuse it over,
- * and a Builder file's refusal. `modulesFirst`: plugin modules run before
+ * in the same order), and the required columns a real run would refuse it
+ * over. `modulesFirst`: plugin modules run before
  * the files, so even the first file is not the first migration applied.
  */
 async function previewFiles(
@@ -1053,33 +1072,25 @@ async function previewFiles(
       logger,
       at > 0 || modulesFirst
     );
-    if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
-      logger.info(
-        `    ✖ a real run would refuse it: ${builderMigrationRemedy(`${m.name}.sql`)}`
-      );
-    }
   }
 }
 
 /**
- * A real run refuses a snapshotless Builder file among ALL its pending files
- * before it applies any, whatever `--step` allows, so one the step leaves
- * out of the preview is named too.
+ * The old Schema Builder files the run ignores, named, and the refusal a real
+ * run makes of a pending Builder-named file it does not recognise, before it
+ * applies anything, whatever `--step` allows (`refuseUnrecognisedBuilderFiles`).
  */
-async function previewBeyondStep(
-  allPendingFiles: readonly ParsedMigration[],
-  pendingFiles: readonly ParsedMigration[],
-  migrationsDir: string,
-  logger: CommandContext["logger"]
+async function previewOldBuilderFiles(
+  args: Parameters<typeof refuseUnrecognisedBuilderFiles>[0]
 ): Promise<void> {
-  const previewed = new Set(pendingFiles.map(m => m.name));
-  for (const m of allPendingFiles) {
-    if (previewed.has(m.name)) continue;
-    if (await isRefusedWithoutSnapshot(m, migrationsDir)) {
-      logger.info(
-        `  • ${m.name}.sql (beyond --step) ✖ a real run would refuse it before applying anything: ${builderMigrationRemedy(`${m.name}.sql`)}`
-      );
-    }
+  await nameOldBuilderFiles(args);
+  try {
+    await refuseUnrecognisedBuilderFiles(args);
+  } catch (error) {
+    if (!NextlyError.is(error)) throw error;
+    args.logger.info(
+      `  ✖ a real run would refuse before applying anything: ${error.publicMessage}`
+    );
   }
 }
 
@@ -1113,14 +1124,20 @@ async function previewAppHistory(
 
 async function previewChangedFiles(
   rows: Parameters<typeof appliedChecksums>[1],
-  args: { dialect: SupportedDialect; migrationsDir: string },
+  args: {
+    db: unknown;
+    dialect: SupportedDialect;
+    migrationsDir: string;
+    declared?: DeclaredNames;
+  },
   logger: CommandContext["logger"]
 ): Promise<void> {
   const files = await discoverMigrations(
     args.migrationsDir,
     logger,
     args.dialect,
-    "app"
+    "app",
+    args.declared
   );
   const { changed } = appliedChecksums(
     files.map(m => ({ filename: `${m.name}.sql`, checksum: m.checksum })),
@@ -1129,6 +1146,18 @@ async function previewChangedFiles(
   for (const filename of changed) {
     logger.info(
       `  ✖ a real run would refuse before applying anything: \`${filename}\` has changed since it was applied (exit code 2). Restore it, or accept the edit with \`nextly migrate:resolve --applied ${filename}\`.`
+    );
+  }
+  // A marked old Builder file that no longer carries the signature is refused
+  // with the edited ones.
+  const oldBuilder = await readOldBuilderLedger(
+    args,
+    new SchemaEventsRepository(args.db, args.dialect),
+    rows
+  );
+  for (const c of oldBuilder.changed) {
+    logger.info(
+      `  ✖ a real run would refuse before applying anything: \`${c.file}\` ${markedFileChange(c)}${c.change === "content" ? " (exit code 2)" : ""} since it was recognised as a file an earlier Schema Builder wrote.`
     );
   }
 }
@@ -1865,6 +1894,10 @@ async function runMigrationStreams(
     step: appStep,
     logger: deps.logger,
     knownJunctions: deps.knownJunctions,
+    declared: deps.declared,
+    ...(deps.refuseUnrecognisedBuilderFiles === true
+      ? { refuseUnrecognisedBuilderFiles: true }
+      : {}),
     judged,
   });
   return { pluginModulesApplied, applied };
@@ -1894,6 +1927,14 @@ export async function migrateCore(
   // The history checks that need no database, before the lock is waited on:
   // a list edited by hand is refused with nothing changed.
   assertPluginListsSound(deps.pluginMigrationSets ?? []);
+  // The ledger's old Builder marks in the declared names every reader below
+  // reads the folder through: the command and the boot alike hand only what
+  // is declared. Read again under the lock.
+  deps = await withOldBuilderMarks(deps);
+  // Each old Schema Builder file the run ignores, named once so a file that
+  // merely carries the signature never vanishes without a word. Information:
+  // the run does what it would without the file. The boot hands its own log.
+  await nameOldBuilderFiles(deps);
   // The app's history, before the lock and anything else, in
   // `assertAppHistoryHolds`'s order: an older build stops with exit 3 while
   // the ledger records an app migration its folder lacks, an unresolved
@@ -1916,8 +1957,10 @@ export async function migrateCore(
   // Before the lock as well: taking it creates the lock's own table on a
   // database that has none, and a refused run leaves the schema as it was. A
   // file another run records meanwhile is only refused once more.
-  if (deps.refuseBuilderFilesWithoutSnapshot === true) {
-    await assertNoBuilderFilesWithoutSnapshot(deps);
+  const refuseUnrecognised =
+    deps.refuseUnrecognisedBuilderFilesFn ?? refuseUnrecognisedBuilderFiles;
+  if (deps.refuseUnrecognisedBuilderFiles === true) {
+    await refuseUnrecognised(deps);
   }
   // Before the lock as well, so a person is asked without other runs waiting
   // on them; judged again under the lock, below, against the database as it
@@ -1950,11 +1993,25 @@ export async function migrateCore(
       // a deploy refused after the core reconcile would leave core's tables
       // at a release that never ran.
       await assertPluginHistoriesHold(deps);
+      // The marks as the ledger holds them now, which no other run changes
+      // before this one writes: a mark withdrawn while this run waited is not
+      // read as standing.
+      deps = await withOldBuilderMarks(deps);
+      const lockedHistory = {
+        ...deps,
+        command: deps.lockCommand ?? "nextly migrate",
+      };
       // Under the lock, so the ledger read is the one no other run changes
       // before this one writes, and before Phase 1's first write: the
       // history checks of `assertAppHistoryHolds`, in its order.
-      await assertFilesPresent(historyArgs);
-      await refuseAttempts(historyArgs);
+      await assertFilesPresent(lockedHistory);
+      await refuseAttempts(lockedHistory);
+      // And again under the lock, before anything writes (the checksum check
+      // below records a missing checksum): a file changed while this run
+      // waited for the lock is judged as it now reads.
+      if (deps.refuseUnrecognisedBuilderFiles === true) {
+        await refuseUnrecognised(deps);
+      }
       // A file that deletes data runs only with consent covering each
       // deletion, judged from the database this run holds the lock on. The
       // files run only as they were judged here (`assertRunsAsJudged`).
@@ -2043,6 +2100,9 @@ export async function migrateCore(
         ensureLedger: deps.ensureLedger,
       });
       coreChanged = r.changed;
+      // With the run's first write behind it, and every refusal it makes
+      // before writing passed, the marks it owes.
+      await (deps.markOldBuilderFilesFn ?? markOldBuilderFiles)(deps);
 
       // Before the app's files as well as after them (below, once Phase 3 has
       // recorded the registry): a file written after these columns existed may
@@ -2087,6 +2147,7 @@ export async function migrateCore(
           adapter: deps.adapter as unknown as DrizzleAdapter,
           dialect: deps.dialect,
           migrationsDir: deps.migrationsDir,
+          ...(deps.declared === undefined ? {} : { declared: deps.declared }),
           logger: {
             info: (m: string) => deps.logger.debug(m),
             warn: (m: string) => deps.logger.warn(m),
@@ -2153,6 +2214,8 @@ async function refuseUnresolvedAppAttempts(args: {
   dialect: SupportedDialect;
   migrationsDir: string;
   logger: CommandContext["logger"];
+  /** What the run's declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
   /** The command refusing, as the operator typed it. */
   command: string;
 }): Promise<void> {
@@ -2391,6 +2454,8 @@ interface AppHistoryArgs {
   dialect: SupportedDialect;
   migrationsDir: string;
   logger: CommandContext["logger"];
+  /** What the run's declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
 }
 
 /**
@@ -2406,6 +2471,7 @@ async function readAppHistory(args: AppHistoryArgs): Promise<
       /** The files whose removal `migrate:resolve --removed` recorded. */
       removed: ReadonlySet<string>;
       repo: SchemaEventsRepository;
+      oldBuilder: OldBuilderLedger;
     }
   | undefined
 > {
@@ -2414,19 +2480,27 @@ async function readAppHistory(args: AppHistoryArgs): Promise<
   ).tableExists("nextly_schema_events");
   if (!hasLedger) return undefined;
   const repo = new SchemaEventsRepository(args.db, args.dialect);
-  const rows = [
+  const allRows = [
     ...(await repo.listFileApplies()),
     ...(await repo.listFailedRollbacks()),
   ];
+  const oldBuilder = await readOldBuilderLedger(args, repo, allRows);
+  // An old Builder file's rows are not an app migration's, for any check.
+  const rows = allRows.filter(
+    row => row.filename === null || !oldBuilder.ignoredRows.has(row.filename)
+  );
+  // Read under the marks the judgement above read, so the files compared and
+  // the rows ignored are of one reading.
   const files = await discoverMigrations(
     args.migrationsDir,
     args.logger,
     args.dialect,
-    "app"
+    "app",
+    { ...args.declared, marks: oldBuilder.marked }
   );
   // A removal stands for the applied outcome it was recorded after.
   const removed = removedOnPurpose(rows, await repo.listFileRemovals());
-  return { files, rows, removed, repo };
+  return { files, rows, removed, repo, oldBuilder };
 }
 
 /**
@@ -2552,6 +2626,94 @@ export function appliedFilesMissing(
 }
 
 /**
+ * Refuses a pending file that has a Schema Builder name and no snapshot but
+ * is not recognised as an earlier Builder's (`classifyMigrationFile`'s
+ * "partial"), naming each with the part of the signature it lacks and the
+ * fix. Its statements are old Builder SQL that no snapshot checks, and the
+ * signature cannot know every file an earlier Builder wrote, so a file it
+ * does not recognise stops the run rather than running unchecked. One with a
+ * snapshot, or an ordinary name, is judged as any migration.
+ */
+async function refuseUnrecognisedBuilderFiles(
+  deps: AppHistoryArgs
+): Promise<void> {
+  const folder = await readMigrationFolder(
+    deps.migrationsDir,
+    deps.dialect,
+    deps.declared
+  );
+  const snapshotless = folder.partialBuilderFiles.filter(
+    file => !file.lacks.includes("snapshot")
+  );
+  if (snapshotless.length === 0) return;
+  // The pending files as the run and the dry run find them, so all agree,
+  // each by the file its dialect selects: a migration may exist only as one
+  // dialect's variant, and only the file that would run is judged.
+  const pending = new Set(
+    (
+      await findPendingFiles(
+        deps.adapter,
+        deps.db,
+        deps.dialect,
+        deps.migrationsDir,
+        deps.logger,
+        deps.declared
+      )
+    ).map(m => basename(m.filePath))
+  );
+  const refused = snapshotless.filter(file => pending.has(file.file));
+  if (refused.length === 0) return;
+  throw new NextlyError({
+    code: "NEXTLY_MIGRATION_SNAPSHOT_MISSING",
+    publicMessage:
+      `nextly migrate does not apply a file with a Schema Builder name that is not recognised as an earlier Builder's: ` +
+      refused
+        .map(file => `${file.file}, which ${partialBuilderFileLacks(file)}`)
+        .join("; ") +
+      ". " +
+      refused.map(file => builderMigrationRemedy(file.file)).join(" "),
+    logContext: { files: refused.map(file => file.file) },
+  });
+}
+
+/** Names each old Schema Builder file in the folder (`oldBuilderFileLine`). */
+async function nameOldBuilderFiles(
+  args: Pick<
+    AppHistoryArgs,
+    "migrationsDir" | "dialect" | "logger" | "declared"
+  >
+): Promise<void> {
+  const folder = await readMigrationFolder(
+    args.migrationsDir,
+    args.dialect,
+    args.declared
+  );
+  for (const file of folder.oldBuilderFiles) {
+    args.logger.info(oldBuilderFileLine(file));
+  }
+}
+
+/**
+ * Records the marks a run owes (`judgeOldBuilderLedger`'s `toMark`): each old
+ * Schema Builder file a ledger row names, with its checksum, where no mark of
+ * that checksum stands. Called with the run's first write behind it, so
+ * every refusal the run makes before writing comes first; a run refused
+ * earlier records none, and the next run records them. Without a ledger no
+ * row names a file, so there is nothing to mark.
+ */
+async function markOldBuilderFiles(args: AppHistoryArgs): Promise<void> {
+  const history = await readAppHistory(args);
+  if (history === undefined) return;
+  for (const { file, checksum } of history.oldBuilder.toMark) {
+    await history.repo.recordOldBuilderMark({
+      filename: file,
+      sha256: checksum,
+      source: "cli-migrate",
+    });
+  }
+}
+
+/**
  * Refuses, before the run's first write, while an applied app migration file
  * has changed since it ran (`appliedChecksums`): the database holds what its
  * earlier text did, and running the files after it on top of that would build
@@ -2576,6 +2738,12 @@ export async function assertAppliedFilesUnchanged(
   // Presence judged again from the folder this check reads: a file removed
   // since the earlier check would otherwise drop out of the comparison.
   refuseMissing(history, args.command);
+  // A marked old Builder file that no longer carries the signature: its mark's
+  // checksum is its recorded one, so a change of content is an edited applied
+  // file; with the content as marked, the snapshot beside it is the change.
+  if (history.oldBuilder.changed.length > 0) {
+    throw oldBuilderFilesChanged(args.command, history.oldBuilder.changed);
+  }
   const { changed, unrecorded } = appliedChecksums(
     history.files.map(m => ({
       filename: `${m.name}.sql`,
@@ -2599,6 +2767,55 @@ export async function assertAppliedFilesUnchanged(
   }
 }
 
+/**
+ * The refusal for marked old Builder files that changed since they were
+ * recognised (`markedFileChange`): `MIGRATION_TAMPERED` (exit 2) where any
+ * file's content changed, as for an edited applied file; else
+ * `OLD_BUILDER_FILE_VARIANT_ADDED` where a dialect variant took a marked
+ * name; else `OLD_BUILDER_FILE_SNAPSHOT_ADDED`. The strictest change names
+ * the code, and every file is named.
+ */
+export function oldBuilderFilesChanged(
+  command: string,
+  changed: readonly ChangedOldBuilderFile[]
+): CliError {
+  const named = changed
+    .map(c => `\`${c.file}\` ${markedFileChange(c)}`)
+    .join("; ");
+  const what = `${named} since it was recognised as a file an earlier Schema Builder wrote, so \`${command}\` ran nothing.`;
+  const why =
+    "A ledger row marks the file as an old Schema Builder file, which every command ignores, and it no longer carries the whole signature that recognised it, so it would be read as a migration.";
+  const context = { files: changed.map(c => c.file) };
+  if (changed.some(c => c.change === "content")) {
+    return new CliError("MIGRATION_TAMPERED", {
+      what,
+      why,
+      next: SETTLE_MARKED_FILE,
+      context,
+    });
+  }
+  if (changed.some(c => c.change === "variant")) {
+    // Accepting the file would leave the variant's rows and the Builder's
+    // under one name, so the only way on is to part them.
+    return new CliError("OLD_BUILDER_FILE_VARIANT_ADDED", {
+      what,
+      why: "A ledger row marks the name as an old Schema Builder file's, which every command ignores, and a dialect variant now shares that name, so its rows and the Builder's cannot be told apart.",
+      next: "Remove the dialect variant, and put its change in a migration of its own with `nextly migrate:create`; the marked file is then ignored again.",
+      context,
+    });
+  }
+  return new CliError("OLD_BUILDER_FILE_SNAPSHOT_ADDED", {
+    what,
+    why,
+    next: SETTLE_MARKED_FILE,
+    context,
+  });
+}
+
+/** How a marked file whose content or snapshot changed is settled. */
+const SETTLE_MARKED_FILE =
+  "Put the file back as it was, or remove the snapshot, and it is ignored again; delete it, and its ledger rows stay ignored; or accept it as it now stands with `nextly migrate:resolve --applied <file>`, after which it is checked as any migration.";
+
 /** The refusal for applied files edited since they ran (`MIGRATION_TAMPERED`). */
 function appliedFilesChanged(
   command: string,
@@ -2621,6 +2838,10 @@ function appliedFilesChanged(
 const HISTORY_REFUSAL_CODES: ReadonlySet<string> = new Set([
   "MIGRATION_MISSING",
   "MIGRATION_TAMPERED",
+  // A marked old Builder file that gained a snapshot or a dialect variant,
+  // refused by the same check.
+  "OLD_BUILDER_FILE_SNAPSHOT_ADDED",
+  "OLD_BUILDER_FILE_VARIANT_ADDED",
   "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
 ]);
 
@@ -2672,10 +2893,18 @@ export async function findPendingFiles(
   db: unknown,
   dialect: SupportedDialect,
   migrationsDir: string,
-  logger: CommandContext["logger"]
+  logger: CommandContext["logger"],
+  declared?: DeclaredNames
 ): Promise<ParsedMigration[]> {
   return (
-    await listMigrationFiles(adapter, db, dialect, migrationsDir, logger)
+    await listMigrationFiles(
+      adapter,
+      db,
+      dialect,
+      migrationsDir,
+      logger,
+      declared
+    )
   ).flatMap(({ file, applied }) => (applied ? [] : [file]));
 }
 
@@ -2685,10 +2914,17 @@ async function listMigrationFiles(
   db: unknown,
   dialect: SupportedDialect,
   migrationsDir: string,
-  logger: CommandContext["logger"]
+  logger: CommandContext["logger"],
+  declared?: DeclaredNames
 ): Promise<{ file: ParsedMigration; applied: boolean }[]> {
   // Passing dialect prefers {name}.{dialect}.sql over base {name}.sql when both exist
-  const all = await discoverMigrations(migrationsDir, logger, dialect, "app");
+  const all = await discoverMigrations(
+    migrationsDir,
+    logger,
+    dialect,
+    "app",
+    declared
+  );
   // No files, nothing to look up: the ledger is not read at all.
   if (all.length === 0) return [];
   const hasLedger = await (
@@ -2754,63 +2990,6 @@ async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
   } catch {
     return [];
   }
-}
-
-/**
- * Refuse a pending app migration file the Schema Builder wrote with no snapshot
- * beside it, naming each and the file to commit instead.
- *
- * Applied as written, such a file runs without the drift check a snapshot
- * gives — so on a database that is not where the Builder's own was, it either
- * fails part-way or changes a table into a shape nothing recorded — and it
- * leaves the next `migrate:create` comparing against a snapshot that never saw
- * the change. `migrate:create` writes the same change with its snapshot.
- *
- * Read before the lock and the core reconcile, so the run is refused with the
- * schema, the ledger and the registry as it found them. A missing ledger reads
- * as every file pending, as it does for the files phase.
- */
-async function assertNoBuilderFilesWithoutSnapshot(
-  deps: MigrateCoreDeps
-): Promise<void> {
-  // The pending files as the dry run and the run's report find them, so all
-  // three agree on which files are still to run.
-  const pending = await findPendingFiles(
-    deps.adapter,
-    deps.db,
-    deps.dialect,
-    deps.migrationsDir,
-    deps.logger
-  );
-  const refused: string[] = [];
-  for (const m of pending) {
-    if (await isRefusedWithoutSnapshot(m, deps.migrationsDir)) {
-      refused.push(`${m.name}.sql`);
-    }
-  }
-  if (refused.length === 0) return;
-  throw new NextlyError({
-    code: "NEXTLY_MIGRATION_SNAPSHOT_MISSING",
-    publicMessage:
-      `nextly migrate does not apply a Schema Builder migration file with no snapshot. ` +
-      refused.map(builderMigrationRemedy).join(" "),
-    logContext: { files: refused },
-  });
-}
-
-/**
- * Whether `nextly migrate` refuses this file for want of a snapshot: one the
- * Schema Builder wrote, with none beside it. The one answer the run and
- * `--dry-run` both ask.
- */
-async function isRefusedWithoutSnapshot(
-  m: ParsedMigration,
-  migrationsDir: string
-): Promise<boolean> {
-  return (
-    isBuilderWrittenMigration(m.name) &&
-    (await loadTargetSnapshot(resolve(migrationsDir, "meta"), m.name)) === null
-  );
 }
 
 /** Load a migration's paired target snapshot, or null if absent. */
@@ -3015,6 +3194,10 @@ export async function runFileMigrations(args: {
    * migration after adoption stops with drift no migration could resolve.
    */
   knownJunctions?: ReadonlySet<string>;
+  /** What the declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
+  /** See `MigrateCoreDeps.refuseUnrecognisedBuilderFiles`. */
+  refuseUnrecognisedBuilderFiles?: boolean;
   /**
    * The app files the run judged under its lock for what they delete, by
    * filename, with the digest of the UP judged (`judgeFileDeletions`). Given,
@@ -3024,8 +3207,19 @@ export async function runFileMigrations(args: {
   judged?: ReadonlyMap<string, string>;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
+  // The files about to run judged once more, as they read now: the folder may
+  // have changed since the run's earlier checks.
+  if (args.refuseUnrecognisedBuilderFiles === true) {
+    await refuseUnrecognisedBuilderFiles(args);
+  }
   // Passing dialect prefers {name}.{dialect}.sql over base {name}.sql when both exist
-  const all = await discoverMigrations(migrationsDir, logger, dialect, "app");
+  const all = await discoverMigrations(
+    migrationsDir,
+    logger,
+    dialect,
+    "app",
+    args.declared
+  );
   if (all.length === 0) {
     logger.debug("No user migration files found.");
     return 0;
@@ -3234,24 +3428,20 @@ export async function runFileMigrations(args: {
 async function discoverMigrations(
   migrationsDir: string,
   logger: CommandContext["logger"],
-  dialect?: SupportedDialect,
-  source: MigrationSource = "app"
+  dialect: SupportedDialect,
+  source: MigrationSource = "app",
+  declared?: DeclaredNames
 ): Promise<ParsedMigration[]> {
-  // Use shared migration discovery to group dialect variants
-  const groups = await discoverMigrationGroups(migrationsDir);
   const migrations: ParsedMigration[] = [];
-
-  // Process each migration group in sorted order
-  for (const baseName of getSortedBaseNames(groups)) {
-    const group = groups.get(baseName)!;
-    const selectedFile = selectVariant(group.variants, dialect);
-
-    if (!selectedFile) {
+  for (const { baseName, filePath } of await migrationFilesInRunOrder(
+    migrationsDir,
+    dialect,
+    declared
+  )) {
+    if (filePath === undefined) {
       logger.warn(`No suitable migration file found for ${baseName}`);
       continue;
     }
-
-    const filePath = resolve(migrationsDir, selectedFile);
 
     try {
       const content = await readFile(filePath, "utf-8");
@@ -3263,7 +3453,7 @@ async function discoverMigrations(
       // run report success while the transition this one describes never happened.
       if (isLocalizationIntentRefusal(error)) throw error;
       logger.warn(
-        `Failed to parse migration file ${selectedFile}: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to parse migration file ${basename(filePath)}: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }

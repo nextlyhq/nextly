@@ -500,9 +500,9 @@ exports[`each code, as a command ends with it > BUILD_STRICT_WARNINGS 1`] = `
 `;
 
 exports[`each code, as a command ends with it > BUILDER_MIGRATION_SNAPSHOT_MISSING 1`] = `
-"✗ nextly migrate does not apply a Schema Builder migration file with no snapshot.
+"✗ nextly migrate does not apply a file with a Schema Builder name that is not recognised as an earlier Builder's: 1761732000000_update_posts.sql, which has a statement on a table that is not its own entity's, or one that cannot be read.
   Why:  1761732000000_update_posts.sql was written by the Schema Builder and has no snapshot beside it (meta/1761732000000_update_posts.snapshot.json), so nothing says what the database should look like once it has run.
-  Next: Replace it with the migration \`nextly migrate:create\` writes for that change: delete 1761732000000_update_posts.sql, run \`nextly migrate:create --name=<name>\`, and commit the .sql file and its snapshot.
+  Next: Replace it with the migration \`nextly migrate:create\` writes for that change: delete 1761732000000_update_posts.sql, run \`nextly migrate:create --name=<name>\`, and commit the .sql file and its snapshot; or delete it, if the change is already in a migration or not wanted.
   Docs: https://nextlyhq.com/docs/cli/errors/builder-migration-snapshot-missing  (BUILDER_MIGRATION_SNAPSHOT_MISSING)"
 `;
 
@@ -1067,6 +1067,20 @@ exports[`each code, as a command ends with it > NO_TRANSACTION_NEEDS_BLANK 1`] =
   Why:  A generated migration file is not marked: marking it changes the contents its snapshot was taken over.
   Next: Put the statements that need to run outside a transaction in a file of their own: nextly migrate:create --blank --no-transaction.
   Docs: https://nextlyhq.com/docs/cli/errors/no-transaction-needs-blank  (NO_TRANSACTION_NEEDS_BLANK)"
+`;
+
+exports[`each code, as a command ends with it > OLD_BUILDER_FILE_SNAPSHOT_ADDED 1`] = `
+"✗ \`1761732000000_create_posts.sql\` has a snapshot beside it (\`meta/1761732000000_create_posts.snapshot.json\`) since it was recognised as a file an earlier Schema Builder wrote, so \`nextly migrate\` ran nothing.
+  Why:  A ledger row marks the file as an old Schema Builder file, which every command ignores, and it no longer carries the whole signature that recognised it, so it would be read as a migration.
+  Next: Put the file back as it was, or remove the snapshot, and it is ignored again; delete it, and its ledger rows stay ignored; or accept it as it now stands with \`nextly migrate:resolve --applied <file>\`, after which it is checked as any migration.
+  Docs: https://nextlyhq.com/docs/cli/errors/old-builder-file-snapshot-added  (OLD_BUILDER_FILE_SNAPSHOT_ADDED)"
+`;
+
+exports[`each code, as a command ends with it > OLD_BUILDER_FILE_VARIANT_ADDED 1`] = `
+"✗ \`1761732000000_create_posts.sql\` has a dialect variant sharing its ledger name since it was recognised as a file an earlier Schema Builder wrote, so \`nextly migrate\` ran nothing.
+  Why:  A ledger row marks the name as an old Schema Builder file's, which every command ignores, and a dialect variant now shares that name, so its rows and the Builder's cannot be told apart.
+  Next: Remove the dialect variant, and put its change in a migration of its own with \`nextly migrate:create\`; the marked file is then ignored again.
+  Docs: https://nextlyhq.com/docs/cli/errors/old-builder-file-variant-added  (OLD_BUILDER_FILE_VARIANT_ADDED)"
 `;
 
 exports[`each code, as a command ends with it > OWNERSHIP_TAKEOVER_REFUSED 1`] = `

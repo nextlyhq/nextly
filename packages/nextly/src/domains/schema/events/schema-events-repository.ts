@@ -25,6 +25,7 @@ import type {
 
 import { pluginOfLedgerRow } from "./ledger-scope";
 import { standingOf } from "./migration-state";
+import { newestEventsByFilename } from "./newest-event";
 import { asRepositoryDb, type RepositoryDb } from "./repository-db";
 
 /**
@@ -465,6 +466,36 @@ export class SchemaEventsRepository {
       .where(
         sql`event_type = 'plugin_lifecycle'`
       )) as unknown as SchemaEventRow[];
+  }
+
+  /**
+   * Mark that a ledger row names a file an earlier Schema Builder wrote, with
+   * the file's checksum. A one-shot record that is not an outcome: it changes
+   * no migration's state, which `file_apply` rows alone decide.
+   */
+  async recordOldBuilderMark(input: {
+    filename: string;
+    sha256: string;
+    source: SchemaEventSource;
+  }): Promise<string> {
+    return this.insertEvent({
+      eventType: "old_builder_file",
+      status: "applied",
+      source: input.source,
+      filename: input.filename,
+      sha256: input.sha256,
+    });
+  }
+
+  /** The newest mark for each file that has one, by file name. */
+  async currentOldBuilderMarks(): Promise<Map<string, SchemaEventRow>> {
+    const rows = (await this.db
+      .select()
+      .from(this.table)
+      .where(
+        sql`event_type = 'old_builder_file'`
+      )) as unknown as SchemaEventRow[];
+    return newestEventsByFilename(rows);
   }
 
   /** All `file_apply` rows, for `nextly migrate:status` (spec §4.3.1). */

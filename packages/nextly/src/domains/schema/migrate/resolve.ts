@@ -50,6 +50,7 @@ import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 
 import { isRecordedChecksum } from "./applied-checksums";
 import { failedAttemptMayBePartial } from "./drift-reconcile";
+import { isMarkCurrent } from "./old-builder-ledger";
 
 export type ResolveMode =
   | "applied"
@@ -70,6 +71,8 @@ export interface ResolveRepo {
   markRolledBack(id: string, input?: { note?: string | null }): Promise<void>;
   /** Record a checksum on a row in place (`SchemaEventsRepository.recordChecksum`). */
   recordChecksum(id: string, sha256: string, note: string): Promise<void>;
+  /** The newest old Schema Builder mark of each file (`currentOldBuilderMarks`). */
+  currentOldBuilderMarks(): Promise<Map<string, SchemaEventRow>>;
   /** Record an applied migration's file removed on purpose (`SchemaEventsRepository.recordRemoval`). */
   recordRemoval(input: {
     filename: string;
@@ -209,8 +212,11 @@ async function resolveApplied(
 
   const rows = await args.repo.findFileApplies(filename);
   const standing = standingOf(filename, rows);
+  const marked = isMarkCurrent(
+    (await args.repo.currentOldBuilderMarks()).get(filename)
+  );
   if (standing.state === "applied" && standing.outcome !== undefined) {
-    return acceptChecksum(args, filename, standing.outcome, rows);
+    return acceptChecksum(args, filename, standing.outcome, rows, marked);
   }
 
   const verified = args.skipVerify
@@ -238,6 +244,7 @@ async function resolveApplied(
         byEventId: id,
       });
     }
+    if (marked) await withdrawMark(repo, filename, sha256);
     return id;
   });
 
@@ -247,6 +254,28 @@ async function resolveApplied(
     supersededFailedId: failed[0]?.id ?? null,
     verified,
   };
+}
+
+/**
+ * Withdraws the old Schema Builder mark of `filename`: a newer mark recorded
+ * as `superseded`, which `isMarkCurrent` reads as no mark. The file and its
+ * rows are then judged as any file and rows. Only `--applied` withdraws one,
+ * in the write that records the file's checksum.
+ */
+async function withdrawMark(
+  repo: ResolveRepo,
+  filename: string,
+  sha256: string
+): Promise<void> {
+  await repo.insertEvent({
+    eventType: "old_builder_file",
+    status: "superseded",
+    source: "cli-migrate",
+    filename,
+    sha256,
+    endedAt: new Date(),
+    note: "accepted as a migration",
+  });
 }
 
 /**
@@ -264,7 +293,9 @@ async function acceptChecksum(
   args: ResolveMigrationArgs,
   filename: string,
   outcome: SchemaEventRow,
-  rows: readonly SchemaEventRow[]
+  rows: readonly SchemaEventRow[],
+  /** A mark names the file as an old Schema Builder file's; accepting withdraws it. */
+  marked: boolean
 ): Promise<ResolveResult> {
   const attempts = [...rows, ...(await args.repo.findFileRollbacks(filename))];
   if (migrationStanding(attempts).unresolvedAttempt !== undefined) {
@@ -275,19 +306,30 @@ async function acceptChecksum(
   }
   const sha256 = await args.fileChecksum();
   if (outcome.sha256 === sha256) {
+    // A marked file accepted as it stands, its content unchanged (a snapshot
+    // placed beside it): the mark is withdrawn and the checksum kept.
+    if (marked) {
+      await writeLedger(args, repo => withdrawMark(repo, filename, sha256));
+      return {
+        kind: "checksum-accepted",
+        eventId: outcome.id,
+        previous: outcome.sha256,
+      };
+    }
     return { kind: "noop", reason: `${filename} is already marked applied.` };
   }
   // Accepting an edit holds the database to the file as it now reads, as
   // recording a file applied does, unless the operator skips the comparison.
   if (!args.skipVerify) await verifyTarget(args, filename, rows);
   const previous = isRecordedChecksum(outcome.sha256) ? outcome.sha256 : "none";
-  await writeLedger(args, repo =>
-    repo.recordChecksum(
+  await writeLedger(args, async repo => {
+    await repo.recordChecksum(
       outcome.id,
       sha256,
       `checksum accepted (was ${previous})`
-    )
-  );
+    );
+    if (marked) await withdrawMark(repo, filename, sha256);
+  });
   return {
     kind: "checksum-accepted",
     eventId: outcome.id,
