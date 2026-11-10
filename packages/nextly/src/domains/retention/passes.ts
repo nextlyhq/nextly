@@ -17,10 +17,6 @@ import {
   type PreviewLinksPruneAdapter,
 } from "../../auth/preview/preview-link-records";
 import {
-  PLUGIN_EVENTS_SWEEP_INTERVAL_MS,
-  prunePluginEvents,
-} from "../plugin-events/prune";
-import {
   ONE_TIME_SECRETS_SWEEP_INTERVAL_MS,
   pruneOneTimeSecrets,
 } from "../../plugins/security/one-time-secrets-prune";
@@ -54,6 +50,10 @@ import {
 import type { EmailConfig } from "../email/types";
 import type { NoticesPruneDb } from "../notices/notices-service";
 import { pruneNoticesSafely } from "../notices/prune";
+import {
+  PLUGIN_EVENTS_SWEEP_INTERVAL_MS,
+  prunePluginEvents,
+} from "../plugin-events/prune";
 import { pruneWebhookDataSafely, type PruneDeps } from "../webhooks/prune";
 import type { ResolvedWebhookRetentionConfig } from "../webhooks/retention-config";
 

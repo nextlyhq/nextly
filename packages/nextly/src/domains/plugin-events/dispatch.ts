@@ -34,12 +34,12 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 import { eq } from "drizzle-orm";
 
+import { redactCredentialsInText } from "../../observability/mask-emails";
 import {
   PLUGIN_EVENT_DELIVERIES_TABLE,
   PLUGIN_EVENTS_TABLE,
   pluginEventsTables,
 } from "../../schemas/plugin-events";
-import { redactCredentialsInText } from "../../observability/mask-emails";
 import { nextAttempt } from "../jobs/job-backoff";
 
 import type { DurableSubscribers } from "./subscribers";
