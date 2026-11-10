@@ -357,6 +357,28 @@ describe("the config a map checks its widgets against", () => {
     expect(componentMapAgrees(found)).toBe(true);
   });
 
+  // A scaffold's map registers as the whole map, as the generator writes one, so an app made
+  // from it draws a missing component's fallback rather than loading, before it ever regenerates.
+  it.each([
+    ["base", "templates/base/src/types/generated"],
+    ["plugin", "templates/plugin/dev/src/types/generated"],
+  ])(
+    "the %s template's shipped map registers as the whole map",
+    async (_, dir) => {
+      const shipped = fileURLToPath(
+        new URL(`../../../../../${dir}/`, import.meta.url)
+      );
+      const map = await readFile(
+        join(shipped, COMPONENT_IMPORT_MAP_FILENAME),
+        "utf8"
+      );
+      expect(map).toContain(
+        'import { registerComponentMap } from "@nextlyhq/admin";'
+      );
+      expect(map).toContain("registerComponentMap(registered);");
+    }
+  );
+
   // The maps a scaffold ships are written before its layout fixes where its config sits, so they
   // import none; a project made from either must pass the check it is told to run.
   it.each([
