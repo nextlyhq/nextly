@@ -1,4 +1,8 @@
-import type { TemplateFormVariable } from "./schema";
+import type {
+  EmailTemplateVariableField,
+  EmailTemplateVariablePresentation,
+  EmailTemplateVariableType,
+} from "@admin/services/emailTemplateApi";
 
 // ============================================================
 // Variables & sample data
@@ -54,18 +58,75 @@ function sampleValueForVariable(name: string): string {
  */
 const LAYOUT_CONTENT_SAMPLE = "Your email content appears here.";
 
+/** A declaration, as the sample data reads one: its name and how it's shown. */
+export interface SampleDeclaration {
+  name: string;
+  presentation?: EmailTemplateVariablePresentation;
+}
+
+/** A starting value for a field of `type`, when its declaration gives none. */
+function valueOfType(
+  name: string,
+  type: EmailTemplateVariableType | undefined,
+  fields: EmailTemplateVariableField[] | undefined
+): unknown {
+  switch (type) {
+    case "number":
+      return 1;
+    case "money":
+      return 19.99;
+    case "date":
+      return new Date().toISOString().slice(0, 10);
+    case "link":
+      return SAMPLE_VALUE_BY_NAME[name] ?? "https://example.com";
+    case "boolean":
+      return true;
+    case "list":
+      // One row of the list's items, so the loop shows something.
+      return fields?.length ? [objectOf(fields)] : [`Sample ${name}`];
+    case "object":
+      return objectOf(fields ?? []);
+    default:
+      return sampleValueForVariable(name);
+  }
+}
+
+/** An object with a starting value for each of `fields`. */
+export function objectOf(
+  fields: readonly EmailTemplateVariableField[]
+): Record<string, unknown> {
+  return Object.fromEntries(
+    fields.map(field => [
+      field.name,
+      field.example ?? valueOfType(field.name, field.type, field.fields),
+    ])
+  );
+}
+
+/**
+ * A variable's starting test value: its declared example, else a value of its
+ * type, else today's sample for its name.
+ */
+export function startingValue(declaration: SampleDeclaration): unknown {
+  const presentation = declaration.presentation ?? {};
+  return (
+    presentation.example ??
+    valueOfType(declaration.name, presentation.type, presentation.fields)
+  );
+}
+
 export function buildSampleData(
-  variables: TemplateFormVariable[],
+  variables: SampleDeclaration[],
   options?: { isLayoutRow?: boolean }
-): Record<string, string> {
-  const data: Record<string, string> = {
+): Record<string, unknown> {
+  const data: Record<string, unknown> = {
     appName: SAMPLE_VALUE_BY_NAME.appName,
     year: SAMPLE_VALUE_BY_NAME.year,
   };
   if (options?.isLayoutRow) data.content = LAYOUT_CONTENT_SAMPLE;
   for (const v of variables) {
     if (!v.name || v.name.includes(".")) continue;
-    data[v.name] = sampleValueForVariable(v.name);
+    data[v.name] = startingValue(v);
   }
   return data;
 }
