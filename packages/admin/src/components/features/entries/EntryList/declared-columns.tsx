@@ -10,13 +10,15 @@
  * its own column; a field this collection does not have is not drawn. A
  * `component` column draws each cell through `PluginSlot`, which puts every
  * cell behind its own boundary: one cell that throws shows its fallback in
- * that cell alone.
+ * that cell alone. Each cell is isolated as every contribution is, so a form
+ * a plugin draws in its cell submits without reaching the page's.
  *
  * @module components/features/entries/EntryList/declared-columns
  */
 import type { DeliveredAdminEntry } from "nextly/config";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { IsolatedContribution } from "@admin/components/shared/target-slot/IsolatedContribution";
 import { PlaceContributionFallback } from "@admin/components/shared/target-slot/PlaceContributionFallback";
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 
@@ -75,11 +77,13 @@ export function declaredColumns(
         header: item.label,
         sortable: false,
         cell: ({ row }) => (
-          <PluginSlot<DeclaredColumnCellProps>
-            path={component}
-            props={{ context, row }}
-            fallback={<PlaceContributionFallback />}
-          />
+          <IsolatedContribution>
+            <PluginSlot<DeclaredColumnCellProps>
+              path={component}
+              props={{ context, row }}
+              fallback={<PlaceContributionFallback />}
+            />
+          </IsolatedContribution>
         ),
       },
     ];
