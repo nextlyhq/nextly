@@ -78,10 +78,7 @@ import {
   type TranslationLayoutChange,
 } from "../../i18n/per-language-storage";
 import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
-import {
-  columnRenamesIn,
-  refuseRenamesOntoTakenColumns,
-} from "../../schema/rename-target";
+import { refuseMovesOntoTakenColumns } from "../../schema/rename-target";
 import {
   applyMigrationStatements,
   applyMigrationWhole,
@@ -786,6 +783,11 @@ export class SingleMetadataService {
     // Asked here, from the flags this exclusion just re-derived, because the caller's reading can
     // be stale: a concurrent save that turned translation on would make this edit a field leaving
     // translation that the caller never saw as one.
+    // A field renamed onto a column that is already there is refused here, before anything
+    // changes: the archive write of a field leaving translation, just below, is the first write a
+    // save makes.
+    await this.refuseRenameOntoTakenColumn(input);
+
     await this.assertFieldsMayLeaveTranslation(input);
 
     // 1. PLAN. May reject; nothing is persisted and no statement has run.
@@ -852,6 +854,55 @@ export class SingleMetadataService {
    * leaves nothing to update, and a Single that became `locked` in the same window is code-first
    * now, so applying a UI edit to it would write a row the config is about to contradict.
    */
+  /**
+   * Refuse the field this save renames when the column it moves to is already there, naming the
+   * table and both columns, before anything changes.
+   *
+   * The renamed field is the one the main table's rule (`detectFieldRename`) finds on the whole
+   * field lists, as the plan finds it. Its values move from the table that holds it before the
+   * save to the one that holds it after: the companion for a translated field, the main table
+   * otherwise (`isFieldLocalized`), so a field leaving or joining translation as it is renamed is
+   * judged on both tables. The columns are the ones each spelling names (`renamedColumns`), which
+   * a companion column mirrors. A rename an earlier stopped save already made passes.
+   */
+  private async refuseRenameOntoTakenColumn(
+    input: UpdateSingleSchemaInput
+  ): Promise<void> {
+    const adapter = this.adapter;
+    if (!adapter || input.fields === undefined) return;
+    const previousFields = (input.existing.fields ??
+      []) as unknown as FieldDefinition[];
+    const { DynamicCollectionSchemaService } = await import(
+      "../../dynamic-collections/services/dynamic-collection-schema-service"
+    );
+    const rename = new DynamicCollectionSchemaService(
+      undefined,
+      this.dialect
+    ).detectFieldRename(previousFields, input.fields);
+    const columns = rename ? await this.renamedColumns(rename) : undefined;
+    if (!rename || !columns) return;
+    const { isFieldLocalized } = await import("../../i18n/classify-fields");
+    const mainTable = input.existing.tableName;
+    const companionTable = `${mainTable}_locales`;
+    await refuseMovesOntoTakenColumns(
+      adapter,
+      [
+        {
+          field: rename.to.name,
+          fromTable: isFieldLocalized(rename.from, input.wasLocalized)
+            ? companionTable
+            : mainTable,
+          fromColumn: columns.from,
+          toTable: isFieldLocalized(rename.to, input.isLocalized)
+            ? companionTable
+            : mainTable,
+          toColumn: columns.to,
+        },
+      ],
+      { single: input.slug }
+    );
+  }
+
   /**
    * The first step of a field leaving translation (`archiveFieldsLeavingTranslation`), for a
    * save whose flags were derived inside the exclusion. Nothing is asked when the save sends no
@@ -1633,14 +1684,9 @@ export class SingleMetadataService {
   private async renameTranslatedColumnFirst(
     adapter: DrizzleAdapter,
     input: UpdateSingleSchemaInput,
-    rename:
-      | {
-          renamed: { from: string; to: string };
-          forward: string[];
-          back: string[];
-        }
-      | undefined
+    plan: UpdateDdlPlan
   ): Promise<string[]> {
+    const rename = await this.companionRenameFirst(adapter, input, plan);
     if (!rename) return [];
     try {
       for (const statement of rename.forward) {
@@ -1830,24 +1876,6 @@ export class SingleMetadataService {
       };
     }
 
-    // Every column rename this save is about to run, on the main table and the companion, checked
-    // before its first statement: a rename onto a column the table already has is refused, naming
-    // the table and both columns, while nothing has changed. The companion's rename is decided once
-    // here and run below as decided.
-    const companionRename = await this.companionRenameFirst(
-      adapter,
-      input,
-      plan
-    );
-    await refuseRenamesOntoTakenColumns(
-      adapter,
-      columnRenamesIn([
-        plan.migrationSQL ?? "",
-        ...(companionRename?.forward ?? []),
-      ]),
-      { single: input.slug }
-    );
-
     // A field becoming translated takes its value to the default language's companion row first:
     // the main ALTER below drops its column. Before the try below, as the migration is: a failure
     // here stops the save before the main table changes.
@@ -1860,7 +1888,7 @@ export class SingleMetadataService {
     const undoRename = await this.renameTranslatedColumnFirst(
       adapter,
       input,
-      companionRename
+      plan
     );
 
     // Before the try below, which records what it catches: a refusal here has changed nothing
