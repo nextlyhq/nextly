@@ -41,16 +41,32 @@ async function clientReferencesOf(page: Page, path: string): Promise<string[]> {
       ) as unknown[];
       return typeof entry[1] === "string" ? entry[1] : "";
     }).join("");
+    // Under `next dev` a client reference names its module and export as
+    // `$<row>`, a reference to another row of this payload that holds the
+    // string. The row's number differs per response; what it holds, the
+    // module's path, does not. A production build writes both in place.
+    const strings = new Map(
+      [
+        ...pushed.matchAll(
+          /(?:^|\n)([0-9a-f]+):("(?:[^"\\\n]|\\.)*")(?=\n|$)/g
+        ),
+      ].map(row => [String(row[1]), JSON.parse(String(row[2])) as string])
+    );
+    const followed = (value: unknown): string => {
+      const text = String(value);
+      if (!text.startsWith("$")) return text;
+      const row = strings.get(text.slice(1));
+      // An unresolved reference is a payload this read no longer understands,
+      // and reading it as anything would let two modules compare equal.
+      if (row === undefined) throw new Error(`no payload row for ${text}`);
+      return row;
+    };
     // A client reference row is `<row>:I[<module>,[<chunks>],"<export>"]`.
     return [
       ...new Set(
         [...pushed.matchAll(/(?:^|\n)[0-9a-f]+:I(\[[^\n]*\])/g)].map(match => {
           const [module, , name] = JSON.parse(match[1] ?? "[]") as unknown[];
-          // Under `next dev` the module is a reference to another row of this
-          // payload, numbered per response, so it says nothing about which
-          // module this is. A production build's module id does.
-          const id = String(module);
-          return `${id.startsWith("$") ? "" : id}#${String(name)}`;
+          return `${followed(module)}#${followed(name)}`;
         })
       ),
     ].sort();
@@ -153,6 +169,13 @@ test.describe("the Icon block", () => {
     // The control: the read finds the page's references at all (every page
     // has its router's), so an equal pair is not two empty readings.
     expect(withIcons.length).toBeGreaterThan(0);
+    // The router's own modules share an export name, so reading each by its
+    // module leaves more references than names. A read that lost which module
+    // a reference names would fold them into one.
+    const names = withIcons.map(reference =>
+      reference.slice(reference.lastIndexOf("#"))
+    );
+    expect(new Set(names).size).toBeLessThan(names.length);
     expect(withIcons).toEqual(await clientReferencesOf(page, `/${plain}`));
     await page.goto(`/${slug}`);
 

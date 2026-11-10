@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A list whose stored sort names a field the collection no longer has, or one visitors cannot read, now shows its entries in id order on a published page. Under Cache Components it drew nothing. In the page builder, a list's "Choose a field" now takes focus to the sort, look tiles keep their contrast in the dark admin, and usage counts become exact on a site whose field groups, declared in code, hold no blocks field.
+A list whose stored sort names a field the collection no longer has, or one visitors cannot read, now shows its entries in id order on a published page. Under Cache Components it drew nothing. In the page builder, a list's "Choose a field" now takes focus to the sort, look tiles keep their contrast in the dark admin, and usage counts become exact on a site whose field groups hold no blocks field, judged by each group as it is defined now, so a group that gains a blocks field after the site starts keeps its styles and variables from being deleted as unused.
