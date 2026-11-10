@@ -6,6 +6,7 @@ import {
 
 import { answeredNotFound } from "../support/not-found";
 import { test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 /**
  * A collection's entries served under its template address, from a
@@ -22,8 +23,6 @@ import { test } from "../support/visible";
  *
  * @module tests/production/collection-templates
  */
-
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 
 const API = "/admin/api";
 
@@ -89,14 +88,8 @@ test.describe("a collection's entries under its template address", () => {
     page,
     request,
   }) => {
-    // 1. Sign in through the real form; dev auto-login is blocked here.
-    await page.goto("/admin");
-    await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-    await page
-      .getByRole("textbox", { name: /password/i })
-      .fill(DEV_USER.password);
-    await page.getByRole("button", { name: /sign in|log in/i }).click();
-    await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+    // 1. Signed in as the file's one sign-in; dev auto-login is blocked here.
+    await signIn(page);
     const api = page.request;
 
     // 2. The Posts template, published, then two published posts and a draft.

@@ -6,6 +6,7 @@ import {
 } from "@playwright/test";
 
 import { test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 /**
  * A Collection list split into pages, served by a production build to a
@@ -28,8 +29,6 @@ import { test } from "../support/visible";
  * 5. A list matching nothing shows its empty state at its own address, and
  *    its page 2 is not found.
  */
-
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 
 const ENTRIES = "/admin/api/collections/block-pages/entries";
 
@@ -176,14 +175,8 @@ test.describe("a Collection list split into pages", () => {
     browser,
     request,
   }) => {
-    // Sign in through the real form; dev auto-login is blocked here.
-    await page.goto("/admin");
-    await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-    await page
-      .getByRole("textbox", { name: /password/i })
-      .fill(DEV_USER.password);
-    await page.getByRole("button", { name: /sign in|log in/i }).click();
-    await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+    // Signed in as the file's one sign-in; dev auto-login is blocked here.
+    await signIn(page);
     const api = page.request;
 
     await publishEntries(

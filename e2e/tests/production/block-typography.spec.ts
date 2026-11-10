@@ -1,6 +1,7 @@
 import { expect } from "@playwright/test";
 
 import { test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 /**
  * A heading a visitor reads is set apart from the body text around it.
@@ -22,8 +23,6 @@ import { test } from "../support/visible";
  * @module tests/production/block-typography
  */
 
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
-
 const HEADING = "A heading nobody has styled";
 const BODY = "A paragraph nobody has styled, beneath it.";
 
@@ -31,16 +30,7 @@ test("a heading outranks body text with no author styling at all", async ({
   page,
   request,
 }) => {
-  await page.goto("/admin");
-  await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-  // By ROLE, not by label: `getByLabel(/password/i)` also matches the "Show
-  // password" toggle beside the input, and a locator resolving to two elements
-  // fails on strict mode rather than on anything about the product.
-  await page
-    .getByRole("textbox", { name: /password/i })
-    .fill(DEV_USER.password);
-  await page.getByRole("button", { name: /sign in|log in/i }).click();
-  await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+  await signIn(page);
 
   const cookies = await page.context().cookies();
   const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join("; ");
