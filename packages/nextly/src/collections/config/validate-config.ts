@@ -61,7 +61,7 @@ import {
   validateFieldBasicsShared,
   validateSiblingFieldsShared,
 } from "../../shared/base-validator";
-import { declaredPublicAddressProblem } from "../../domains/public-addresses/public-address-template";
+import { publicAddressErrors } from "../../domains/public-addresses/public-address-template";
 import { isPlainObject } from "../../shared/lib/plain-copy";
 import {
   RESERVED_SLUGS,
@@ -830,18 +830,9 @@ export function validateCollectionConfig(
 
   // Judged by the rule every public address is, so a template a plugin
   // supplies for a Builder type and one declared here never disagree.
-  const addressProblem = declaredPublicAddressProblem(
-    config.publicAddress,
-    "collection",
-    Array.isArray(config.fields) ? config.fields : []
+  errors.push(
+    ...publicAddressErrors(config.publicAddress, "collection", config.fields)
   );
-  if (addressProblem !== null) {
-    errors.push({
-      path: "publicAddress",
-      code: "PUBLIC_ADDRESS_INVALID",
-      message: addressProblem,
-    });
-  }
 
   return {
     valid: errors.length === 0,

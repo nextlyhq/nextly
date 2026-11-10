@@ -186,6 +186,15 @@ When enabled, the global sanitization hook strips HTML tags from plain-text fiel
 
 Arbitrary metadata for hooks, plugins, or custom code. Not persisted to the database.
 
+### `publicAddress`
+
+| | |
+|---|---|
+| **Type** | `string` |
+| **Default** | `undefined` |
+
+Where the Single is served on your site, as a fixed path: `"/"` for a homepage, `"/about"`. A Single is one page, so its address has no placeholder. A Single without one isn't public yet. Two Singles can't share an address: the configuration stops loading, naming both. See [Public addresses](/docs/configuration/public-addresses).
+
 ## Admin options
 
 Configure how the single appears in the admin panel via the `admin` property.

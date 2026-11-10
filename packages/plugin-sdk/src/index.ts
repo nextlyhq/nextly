@@ -538,6 +538,19 @@ export type {
 } from "nextly";
 
 /**
+ * Where an entry is served, as the site declares it. `publicAddressOf` answers
+ * one entry's public address, from the address its type declares in code
+ * (`publicAddress`) or, for a type made in the Schema Builder, from the
+ * `publicAddress.template` seam a plugin answers; a type with neither has no
+ * address, never a guessed one. `typesWithoutAddress` lists the site's types
+ * that have none yet.
+ *
+ * @experimental
+ */
+export { publicAddressOf, typesWithoutAddress } from "nextly";
+export type { PublicAddress, PublicAddressType } from "nextly";
+
+/**
  * Declaring a field of a type the plugin itself contributes. The built-in
  * factories cover only the built-in types, so a contributed type has no factory
  * to build its field with; `pluginField` brands one so the authoring surfaces
@@ -1072,6 +1085,7 @@ export {
   type NavFilterContext,
   type ListQueryWhere,
   type ListQueryFilterContext,
+  type PublicAddressTemplateContext,
 } from "nextly";
 
 /**

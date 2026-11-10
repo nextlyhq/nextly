@@ -52,6 +52,83 @@ function spelledAsSent(segment: string): boolean {
   }
 }
 
+/** Why `template` is not a path of one spelling, judged whole, or null. */
+function shapeProblem(template: string): string | null {
+  if (!template.startsWith("/")) {
+    return `A public address must start with "/": "${template}" does not.`;
+  }
+  if (/[?#]/.test(template)) {
+    return `A public address is a path, with no query or fragment: "${template}" has one.`;
+  }
+  if (template.length > 1 && template.endsWith("/")) {
+    return `A public address must not end with "/", except "/" itself: "${template}" does.`;
+  }
+  return null;
+}
+
+/** Why `segment` of `template` cannot be one, or null where it can. */
+function segmentProblem(segment: string, template: string): string | null {
+  if (segment === "") {
+    return `A public address has no empty segment ("//"): "${template}" has one.`;
+  }
+  if (segment === "." || segment === "..") {
+    return `A public address has no "." or ".." segment: "${template}" has one.`;
+  }
+  if (PLACEHOLDER.test(segment)) return null;
+  if (/[{}]/.test(segment)) {
+    return `A placeholder must be a whole segment, such as "/blog/{slug}": "${segment}" in "${template}" is not.`;
+  }
+  if (!spelledAsSent(segment)) {
+    return `The segment "${segment}" in "${template}" must be spelled as a browser sends it, as percent-encoded UTF-8 with capital hex digits.`;
+  }
+  return null;
+}
+
+/**
+ * Why the fields `template` names in `placeholders` do not suit `owner`, or
+ * null where they do.
+ */
+function placeholderProblem(
+  template: string,
+  placeholders: readonly string[],
+  owner: PublicAddressOwner
+): string | null {
+  if (owner.kind === "collection" && placeholders.length === 0) {
+    return `A collection's public address needs at least one placeholder, such as "/blog/{slug}", since each entry has its own: "${template}" has none.`;
+  }
+  if (owner.kind === "single" && placeholders.length > 0) {
+    return `A Single's public address has no placeholder, since a Single is one page at one address: "${template}" has one.`;
+  }
+  const unknown = placeholders.find(
+    name => !ALWAYS_NAMEABLE.has(name) && !owner.fieldNames.includes(name)
+  );
+  return unknown === undefined
+    ? null
+    : `"${unknown}" is not a field of this type, so "${template}" cannot be filled from an entry.`;
+}
+
+/**
+ * Why every address `template` makes falls under a path the runtime keeps,
+ * or null where none need.
+ *
+ * The literal part before the first placeholder decides it; a fixed address
+ * is judged whole. A placeholder's value that lands on a kept path is a single
+ * entry's problem, answered when that entry's address is filled.
+ */
+function keptPathProblem(
+  template: string,
+  segments: readonly string[]
+): string | null {
+  const firstPlaceholder = segments.findIndex(s => PLACEHOLDER.test(s));
+  const probe =
+    firstPlaceholder === -1
+      ? template
+      : `/${[...segments.slice(0, firstPlaceholder), "_"].join("/")}`;
+  return isReservedPath(probe)
+    ? `"${template}" is kept for the admin, the API or the runtime's own files, so no page can be served there.`
+    : null;
+}
+
 /**
  * Why `template` cannot be the public address of a type like `owner`, or null
  * where it can.
@@ -68,64 +145,22 @@ export function publicAddressProblem(
   if (typeof template !== "string") {
     return 'A public address must be a string, such as "/blog/{slug}".';
   }
-  if (!template.startsWith("/")) {
-    return `A public address must start with "/": "${template}" does not.`;
-  }
-  if (/[?#]/.test(template)) {
-    return `A public address is a path, with no query or fragment: "${template}" has one.`;
-  }
-  if (template.length > 1 && template.endsWith("/")) {
-    return `A public address must not end with "/", except "/" itself: "${template}" does.`;
-  }
+  const shape = shapeProblem(template);
+  if (shape !== null) return shape;
 
   // The root is one page with no segments.
   const segments = template === "/" ? [] : template.slice(1).split("/");
-  const placeholders: string[] = [];
   for (const segment of segments) {
-    if (segment === "") {
-      return `A public address has no empty segment ("//"): "${template}" has one.`;
-    }
-    if (segment === "." || segment === "..") {
-      return `A public address has no "." or ".." segment: "${template}" has one.`;
-    }
-    const placeholder = PLACEHOLDER.exec(segment);
-    if (placeholder) {
-      placeholders.push(placeholder[1]);
-      continue;
-    }
-    if (/[{}]/.test(segment)) {
-      return `A placeholder must be a whole segment, such as "/blog/{slug}": "${segment}" in "${template}" is not.`;
-    }
-    if (!spelledAsSent(segment)) {
-      return `The segment "${segment}" in "${template}" must be spelled as a browser sends it, as percent-encoded UTF-8 with capital hex digits.`;
-    }
+    const problem = segmentProblem(segment, template);
+    if (problem !== null) return problem;
   }
-
-  if (owner.kind === "collection" && placeholders.length === 0) {
-    return `A collection's public address needs at least one placeholder, such as "/blog/{slug}", since each entry has its own: "${template}" has none.`;
-  }
-  if (owner.kind === "single" && placeholders.length > 0) {
-    return `A Single's public address has no placeholder, since a Single is one page at one address: "${template}" has one.`;
-  }
-  for (const name of placeholders) {
-    if (!ALWAYS_NAMEABLE.has(name) && !owner.fieldNames.includes(name)) {
-      return `"${name}" is not a field of this type, so "${template}" cannot be filled from an entry.`;
-    }
-  }
-
-  // The literal part before the first placeholder decides whether every
-  // address the template can make falls under a kept path; a fixed address
-  // is judged whole. A placeholder's value that lands on a kept path is a
-  // single entry's problem, answered when that entry's address is filled.
-  const firstPlaceholder = segments.findIndex(s => PLACEHOLDER.test(s));
-  const probe =
-    firstPlaceholder === -1
-      ? template
-      : `/${[...segments.slice(0, firstPlaceholder), "_"].join("/")}`;
-  if (isReservedPath(probe)) {
-    return `"${template}" is kept for the admin, the API or the runtime's own files, so no page can be served there.`;
-  }
-  return null;
+  const placeholders = segments.flatMap(
+    segment => PLACEHOLDER.exec(segment)?.[1] ?? []
+  );
+  return (
+    placeholderProblem(template, placeholders, owner) ??
+    keptPathProblem(template, segments)
+  );
 }
 
 /**
@@ -163,6 +198,32 @@ export function declaredPublicAddressProblem(
     kind,
     fieldNames: addressableFieldNames(fields),
   });
+}
+
+/** A refused `publicAddress`, as the collection and Single validators report one. */
+export interface PublicAddressError {
+  path: "publicAddress";
+  code: "PUBLIC_ADDRESS_INVALID";
+  message: string;
+}
+
+/**
+ * The errors a validator reports for the `publicAddress` a type of `kind`
+ * with `fields` declares: none, or the one rule it breaks.
+ */
+export function publicAddressErrors(
+  publicAddress: unknown,
+  kind: PublicAddressKind,
+  fields: unknown
+): PublicAddressError[] {
+  const message = declaredPublicAddressProblem(
+    publicAddress,
+    kind,
+    Array.isArray(fields) ? fields : []
+  );
+  return message === null
+    ? []
+    : [{ path: "publicAddress", code: "PUBLIC_ADDRESS_INVALID", message }];
 }
 
 /** Options for {@link fillPublicAddress}. */

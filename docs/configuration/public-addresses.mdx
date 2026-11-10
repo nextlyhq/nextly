@@ -1,0 +1,56 @@
+---
+title: Public addresses
+description: Declare where each entry of a collection or Single is served, so canonical links, sitemaps and redirects read one answer instead of guessing.
+---
+
+A page's public address is where a visitor reaches it on your site: `/blog/hello` for a post, `/` for a homepage. Nextly reads it from one place, so a canonical link, a sitemap entry and a redirect never disagree, and a type whose address isn't known gets none of them rather than a guess.
+
+## Declaring an address
+
+A collection or Single declared in code states its address with `publicAddress`:
+
+```ts
+import { defineCollection, defineSingle, text } from "nextly/config";
+
+export const posts = defineCollection({
+  slug: "posts",
+  fields: [text({ name: "title" }), text({ name: "slug" })],
+  publicAddress: "/blog/{slug}",
+});
+
+export const home = defineSingle({
+  slug: "home",
+  fields: [text({ name: "headline" })],
+  publicAddress: "/",
+});
+```
+
+The rules are on the [collection](/docs/configuration/collections#publicaddress) and [Single](/docs/configuration/singles#publicaddress) pages.
+
+A type made in the Visual Schema Builder has no `publicAddress` of its own. A plugin supplies one, such as the SEO plugin from its settings, through the `publicAddress.template` seam. It is judged by the same rules, and an address that breaks them counts as none.
+
+A type with neither isn't public yet. It has no canonical link and no sitemap entry until it gets an address.
+
+## Reading an address (`@experimental`)
+
+Code that needs an entry's address asks `publicAddressOf`, from `nextly` or `@nextlyhq/plugin-sdk`:
+
+```ts
+import { publicAddressOf } from "nextly";
+
+const post = { id: "1", slug: "hello" };
+
+const address = await publicAddressOf(
+  { kind: "collection", slug: "posts" },
+  post
+);
+// { status: "resolved", path: "/blog/hello" }
+```
+
+| `status` | Meaning |
+|---|---|
+| `"resolved"` | The entry is served at `path`. |
+| `"none"` | The type has no public address. |
+| `"unavailable"` | The type has one, but this entry has no value yet to fill it with, such as an empty slug. |
+
+`typesWithoutAddress()` lists the site's collections and Singles that have no address yet. A plugin's own types and Nextly's system types are never listed.

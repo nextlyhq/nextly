@@ -25,7 +25,7 @@ import {
   RESERVED_SLUGS,
   statusOptionError,
 } from "../../collections/config/validate-config";
-import { declaredPublicAddressProblem } from "../../domains/public-addresses/public-address-template";
+import { publicAddressErrors } from "../../domains/public-addresses/public-address-template";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import {
   fieldProducesColumn,
@@ -466,18 +466,9 @@ export function validateSingleConfig(
 
   // Judged by the rule every public address is (see the collection
   // validator): a Single's is one fixed path, so it names no placeholder.
-  const addressProblem = declaredPublicAddressProblem(
-    config.publicAddress,
-    "single",
-    Array.isArray(config.fields) ? config.fields : []
+  errors.push(
+    ...publicAddressErrors(config.publicAddress, "single", config.fields)
   );
-  if (addressProblem !== null) {
-    errors.push({
-      path: "publicAddress",
-      code: "PUBLIC_ADDRESS_INVALID",
-      message: addressProblem,
-    });
-  }
 
   return {
     valid: errors.length === 0,
