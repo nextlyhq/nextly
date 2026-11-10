@@ -655,23 +655,21 @@ test("a keyboard alone adds a collection card through its add step, changes its 
     .toBe("Keyboard card");
 });
 
-/** The header's New split button: its caret, and the popover the caret opens. */
-const newCaret = (page: Page) =>
-  page.getByRole("button", { name: "Choose what to create" });
-const newMenuOf = (page: Page) =>
-  page.getByRole("dialog", { name: "Choose what to create" });
+/** The "+ New" button, and the popover it opens. */
+const newCaret = (page: Page) => page.getByTestId("new-menu-trigger");
+const newMenuOf = (page: Page) => page.getByRole("dialog", { name: "Create" });
 /** The menu's search row: the box around the magnifier and the search field (cmdk's wrapper). */
 const searchRow = (menu: Locator) => menu.locator("[cmdk-input-wrapper]");
 
 for (const theme of ["light", "dark"] as Theme[]) {
   test(`the header and its New menu pass axe (${theme})`, async ({ page }) => {
     await dashboardAtRest(page, theme);
-    await expect(page.getByTestId("dashboard-new-primary")).toBeVisible();
+    await expect(newCaret(page)).toBeVisible();
     await scan(page, "header at rest");
     await newCaret(page).click();
     const menu = newMenuOf(page);
     await expect(
-      menu.getByRole("listbox", { name: "Types to create" })
+      menu.getByRole("listbox", { name: "Types you can create" })
     ).toBeVisible();
     await scan(page, "New menu open");
     await page.keyboard.press("Escape");
@@ -736,13 +734,12 @@ for (const theme of ["light", "dark"] as Theme[]) {
   });
 }
 
-test("the New menu by keyboard: caret, search, a type chosen; Escape hands focus back to the caret", async ({
+test("the New menu by keyboard: button, search, a type chosen; Escape hands focus back to the button", async ({
   page,
 }) => {
   await dashboardAtRest(page, "light");
   const caret = newCaret(page);
-  const primary = page.getByTestId("dashboard-new-primary");
-  await expect(primary).toHaveAccessibleName(/^New .+/);
+  await expect(caret).toHaveAccessibleName("New");
 
   // Opened from the caret by Enter, closed by Escape: focus back on the caret, with a ring.
   await tabTo(page, caret);
@@ -754,16 +751,13 @@ test("the New menu by keyboard: caret, search, a type chosen; Escape hands focus
   await expect(menu).toBeHidden();
   await expectVisibleFocus(caret);
 
-  // Opened again: the playground offers more than ten types, so focus is in the search. A search
-  // that keeps several types, the arrow key moving to the second, which the search box names as
-  // its active option to a screen reader; Enter creates that type.
+  // Opened again: focus is in the search, which the menu always offers. A search that keeps
+  // several types, the arrow key moving to the second, which the search box names as its active
+  // option to a screen reader; Enter creates that type.
   await page.keyboard.press("Enter");
   await expect(menu).toBeVisible();
-  const search = menu.getByRole("combobox", { name: "Search types to create" });
-  await expect(
-    search,
-    "the playground's types fit in ten, so the menu offers no search"
-  ).toBeFocused();
+  const search = menu.getByRole("combobox", { name: "Search what to create" });
+  await expect(search).toBeFocused();
   // Focus in the search is drawn, not only a caret: on the whole search row, magnifier included.
   await expectFramedRow(searchRow(menu));
   await expectDrawnIndicator(searchRow(menu));
@@ -780,7 +774,7 @@ test("the New menu by keyboard: caret, search, a type chosen; Escape hands focus
   await expectDrawnIndicator(reached);
   const second = await options.nth(1).getAttribute("data-testid");
   expect(await reached.getAttribute("data-testid")).toBe(second);
-  const slug = (second ?? "").replace(/^dashboard-new-(recent|type)-/, "");
+  const slug = (second ?? "").replace(/^new-menu-type-/, "");
   await page.keyboard.press("Enter");
   // A choice opens the type's create form, which takes the page and its focus.
   await expect(page).toHaveURL(
@@ -795,7 +789,7 @@ for (const [theme, primary] of [
   ["light", "rgb(255, 255, 255)"],
   ["dark", "rgb(0, 0, 0)"],
 ] as Array<[Theme, string]>) {
-  test(`the New menu's search and reached option stay outlined under a brand primary of ${primary} (${theme})`, async ({
+  test(`the New menu's search and reached option stay marked under a brand primary of ${primary} (${theme})`, async ({
     page,
   }) => {
     await dashboardAtRest(page, theme);
@@ -814,7 +808,7 @@ for (const [theme, primary] of [
       )
     ).toBe(primary);
     const search = menu.getByRole("combobox", {
-      name: "Search types to create",
+      name: "Search what to create",
     });
     await expect(search).toBeFocused();
     await expectFramedRow(searchRow(menu));

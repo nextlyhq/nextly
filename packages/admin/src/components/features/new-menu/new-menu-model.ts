@@ -1,15 +1,11 @@
 /**
- * What the dashboard header's New button offers: the type its main part
- * creates, and the menu behind its caret.
- *
- * The main part creates the reader's most recent type they may still create,
- * else the first creatable type in sidebar order. The menu lists up to three
- * recent types, then every creatable type grouped as the sidebar groups it, so
- * a type is found where the reader already looks for it: the Collections
- * section in the sidebar's own order (pins included), then each custom group,
- * then each plugin's heading. A type the sidebar places nowhere among those is
- * listed under "Other" rather than dropped, because the create endpoint, not
- * this menu, decides what may be created.
+ * What "+ New" offers: every type the reader may create, once each, in the
+ * order the sidebar shows them. The sidebar's own grouping (the Collections
+ * section in its order, pins included, then each custom group, then each
+ * plugin's heading, then "Other") sets the order; the menu draws no headings.
+ * A type the sidebar places nowhere among those still comes last, under the
+ * "Other" place, rather than dropped, because the create endpoint, not this
+ * menu, decides what may be created.
  *
  * @module components/features/dashboard/header/new-menu-model
  */
@@ -25,32 +21,13 @@ import {
 import type { PluginMetadata } from "@admin/types/branding";
 import type { ApiCollection } from "@admin/types/entities";
 
-/** At most this many recent types lead the menu. */
-const NEW_MENU_RECENT_LIMIT = 3;
-
-/** Past this many creatable types, the menu offers a search. */
-const NEW_MENU_SEARCH_AFTER = 10;
-
 const OTHER = "Other";
 
-export interface NewMenuSection {
-  /**
-   * What the section is, whatever it is called: `collections`, a custom
-   * group's slug, a plugin group's name, or `other`, each with its kind. Two
-   * sections may share a heading (a custom group and a plugin group both
-   * named "Commerce"), so the heading cannot name one.
-   */
+/** One of the sidebar's places, whose types keep the sidebar's order in it. */
+interface NewMenuSection {
   id: string;
   label: string;
   collections: readonly ApiCollection[];
-}
-
-export interface NewMenu {
-  /** What the main part creates; null when nothing is creatable. */
-  primary: ApiCollection | null;
-  recent: readonly ApiCollection[];
-  sections: readonly NewMenuSection[];
-  searchable: boolean;
 }
 
 /**
@@ -64,8 +41,6 @@ export interface NewMenu {
 export interface NewMenuInput extends CollectionsLandingDeps {
   /** Every type the reader may create, in any order. */
   creatable: readonly ApiCollection[];
-  /** The reader's recent types' slugs, the most recent first. */
-  recentSlugs: readonly string[];
 }
 
 /** Order then shown name: how both the custom-group and plugin navs sort. */
@@ -123,12 +98,8 @@ function sectionOf(
   return { id: `plugin:${group}`, label: group, kind: "plugin" };
 }
 
-export function newMenu(input: NewMenuInput): NewMenu {
-  const creatable = new Map(input.creatable.map(c => [c.name, c]));
-  const recent = input.recentSlugs
-    .flatMap(slug => creatable.get(slug) ?? [])
-    .slice(0, NEW_MENU_RECENT_LIMIT);
-
+/** The sidebar's places, in its order, each holding its creatable types. */
+function newMenuSections(input: NewMenuInput): NewMenuSection[] {
   // Every creatable type, never the sidebar's one page: the section's members
   // and order come from the helper that draws the sidebar's own.
   const inCollections = getSidebarCollectionsForLanding(input.creatable, input);
@@ -162,7 +133,7 @@ export function newMenu(input: NewMenuInput): NewMenu {
         collections: [...section.collections].sort(byOrderThenName),
       }));
 
-  const sections: NewMenuSection[] = [
+  return [
     ...(inCollections.length > 0
       ? [
           {
@@ -175,10 +146,23 @@ export function newMenu(input: NewMenuInput): NewMenu {
     ...grouped(custom),
     ...grouped(plugin),
   ];
-  return {
-    primary: recent[0] ?? sections[0]?.collections[0] ?? null,
-    recent,
-    sections,
-    searchable: creatable.size > NEW_MENU_SEARCH_AFTER,
-  };
+}
+
+/**
+ * Every type the reader may create, once each, in sidebar order: the
+ * Collections section in its own order (pins included), then each custom
+ * group, then each plugin's heading, then "Other". The sections set the order
+ * only; the list draws no headings.
+ */
+export function newMenuTypes(input: NewMenuInput): ApiCollection[] {
+  const seen = new Set<string>();
+  const types: ApiCollection[] = [];
+  for (const section of newMenuSections(input)) {
+    for (const collection of section.collections) {
+      if (seen.has(collection.name)) continue;
+      seen.add(collection.name);
+      types.push(collection);
+    }
+  }
+  return types;
 }
