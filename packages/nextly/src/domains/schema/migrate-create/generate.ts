@@ -104,6 +104,7 @@ import {
   type ColumnResolution,
 } from "../pipeline/sql-templates/resolution-statements";
 import { sqliteTableRebuildStatements } from "../pipeline/sql-templates/sqlite-rebuild";
+import type { ColumnOrigin } from "../services/field-column-descriptor";
 
 import {
   appStreamSnapshots,
@@ -1481,7 +1482,11 @@ function buildDisableSpec(
 
   const columns: LocalizedColumnSpec[] = [];
   for (const f of entity.fields) {
-    const col = fieldToLocalizedColumnSpec(f, dialect, "codeFirst");
+    const col = fieldToLocalizedColumnSpec(
+      f,
+      dialect,
+      columnOriginOf(entity, kind)
+    );
     if (col && recorded.includes(col.name)) columns.push(col);
   }
   if (columns.length === 0) return null;
@@ -1563,7 +1568,7 @@ function planTranslatedUniqueMigrations(
   return entities.flatMap(({ entity: c, kind }) => {
     if (!storesPerLanguage(c)) return [];
     const derive = {
-      builtBy: "codeFirst" as const,
+      builtBy: columnOriginOf(c, kind),
       slug: c.slug,
       kind,
       dbName: c.tableName,
@@ -1590,6 +1595,7 @@ function planTranslatedUniqueMigrations(
     const plan = planTranslatedUniqueMigration({
       spec,
       fields: c.fields,
+      builtBy: columnOriginOf(c, kind),
       previous,
     });
     return plan === null ? [] : [{ entity: kind, spec, plan }];
@@ -1624,7 +1630,7 @@ function planCompanionMigrations(
     // for one being DISABLED it is the starting point that the previous snapshot's recorded
     // column list then corrects (see below). Returns null when no field is translatable.
     const spec = deriveCompanionSpec({
-      builtBy: "codeFirst" as const,
+      builtBy: columnOriginOf(c, entityKind),
       slug: c.slug,
       kind: entityKind,
       dbName: c.tableName,
@@ -1786,7 +1792,11 @@ function addsEntryFor(
   ]);
   const translated = c.fields.filter(f => isFieldLocalized(f, true));
   const isAdded = (f: (typeof translated)[number]) => {
-    const column = fieldToLocalizedColumnSpec(f, dialect, "codeFirst");
+    const column = fieldToLocalizedColumnSpec(
+      f,
+      dialect,
+      columnOriginOf(c, entityKind)
+    );
     return column != null && !there.has(column.name);
   };
   const added = translated.filter(isAdded);
@@ -1806,6 +1816,7 @@ function addsEntryFor(
       status: c.status === true,
       recorded: translated,
       added: [],
+      builtBy: columnOriginOf(c, entityKind),
     }).spec;
     return {
       spec,
@@ -1822,6 +1833,7 @@ function addsEntryFor(
     status: c.status === true,
     recorded: translated.filter(f => !isAdded(f)),
     added,
+    builtBy: columnOriginOf(c, entityKind),
   });
   // The renames first, so a column added beside them is added to the table
   // as it stands once they ran; the down undoes them last.
@@ -1885,7 +1897,7 @@ async function companionRenameDecisions(
   args: GenerateArgs
 ): Promise<Map<string, CompanionRename[]>> {
   const byTable = new Map<string, CompanionRename[]>();
-  for (const { entity } of entities) {
+  for (const { entity, kind } of entities) {
     if (entity.localized !== true) continue;
     const recorded = previous.tables.find(
       t => t.name === entity.tableName
@@ -1894,7 +1906,11 @@ async function companionRenameDecisions(
     const now = entity.fields
       .filter(f => isFieldLocalized(f, true))
       .flatMap(f => {
-        const column = fieldToLocalizedColumnSpec(f, args.dialect, "codeFirst");
+        const column = fieldToLocalizedColumnSpec(
+          f,
+          args.dialect,
+          columnOriginOf(entity, kind)
+        );
         return column == null ? [] : [column.name];
       });
     const gone = recorded.filter(c => !now.includes(c));
@@ -1980,7 +1996,7 @@ function planFieldsLeavingTranslation(
     const desiredMain = desiredSnapshot.tables.find(
       t => t.name === c.tableName
     );
-    assertFieldsMayLeaveTranslation(c, leaving, previousColumns, dialect);
+    assertFieldsMayLeaveTranslation(entry, leaving, previousColumns, dialect);
     const held = heldSettingsOf(
       c.tableName,
       leaving.map(l => l.column.name),
@@ -2212,7 +2228,11 @@ function fieldsLeavingTranslationIn(
   if (!previous || previous.columns.size === 0) return [];
   return c.fields.flatMap(field => {
     if (isFieldLocalized(field, true)) return [];
-    const column = fieldToLocalizedColumnSpec(field, dialect, "codeFirst");
+    const column = fieldToLocalizedColumnSpec(
+      field,
+      dialect,
+      columnOriginOf(c, kind)
+    );
     return column && previous.columns.has(column.name)
       ? [{ field, column }]
       : [];
@@ -2305,7 +2325,11 @@ function fieldsJoiningTranslationIn(
   const onMain = new Set(prevMain.columns.map(col => col.name));
   return c.fields.flatMap(field => {
     if (!isFieldLocalized(field, true)) return [];
-    const column = fieldToLocalizedColumnSpec(field, dialect, "codeFirst");
+    const column = fieldToLocalizedColumnSpec(
+      field,
+      dialect,
+      columnOriginOf(c, kind)
+    );
     return column &&
       onMain.has(column.name) &&
       !previous.columns.has(column.name)
@@ -2366,7 +2390,7 @@ function planFieldsJoiningTranslation(
               c.status === true &&
               prevMain?.columns.some(col => col.name === "status") === true,
           },
-          builtBy: "codeFirst",
+          builtBy: columnOriginOf(c, kind),
           oldFields,
           newFields: c.fields,
           // Read from the record the joining fields were found by, which plans them only while
@@ -2477,7 +2501,7 @@ function warnOfRenamesIntoShared(
   if (!prevMain || !previous) return;
   const recorded = [...previous.columns];
   const columnOf = (field: MinimalConfigField) =>
-    fieldToLocalizedColumnSpec(field, dialect, "codeFirst")?.name;
+    fieldToLocalizedColumnSpec(field, dialect, columnOriginOf(c, kind))?.name;
   const current = new Set(c.fields.map(columnOf));
   const gone = recorded.filter(name => !current.has(name));
   const onMain = new Set(prevMain.columns.map(col => col.name));
@@ -2524,7 +2548,7 @@ function warnOfUnknownShapes(
  * (`refusalsForFieldsLeavingTranslation`), naming the steps that work, before any file is written.
  */
 function assertFieldsMayLeaveTranslation(
-  c: MinimalConfigEntity,
+  { entity: c, kind }: TaggedConfigEntity,
   leaving: readonly LeavingField[],
   previousColumns: ReadonlyMap<string, LocalizedColumnSpec> | undefined,
   dialect: SupportedDialect
@@ -2534,7 +2558,7 @@ function assertFieldsMayLeaveTranslation(
     newFields: c.fields,
     ...(previousColumns ? { previousColumns } : {}),
     dialect,
-    builtBy: "codeFirst",
+    builtBy: columnOriginOf(c, kind),
     surface: "code",
   });
   refuseMigration(c, refusals);
@@ -2592,6 +2616,24 @@ function assertFieldsMayJoinTranslation(
 }
 
 /**
+ * The column rule an entity's tables are described by: a Builder collection's
+ * (`settings.source === "builder"`) is the Builder's own, which it creates its
+ * main table and its translations table by; every other entity's is the
+ * code-first rule. On MySQL the two read an unstated text width differently,
+ * so describing a Builder table by the code-first rule wrote a column the
+ * table never had. Every place a table or a translated column is described
+ * asks this one question.
+ */
+function columnOriginOf(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind
+): ColumnOrigin {
+  return kind === "collection" && entity.settings?.source === "builder"
+    ? "collection"
+    : "codeFirst";
+}
+
+/**
  * Stamp the snapshot's localization marker on a desired table.
  *
  * Records both that the entity is localized AND which columns its companion holds. The column
@@ -2608,12 +2650,14 @@ function assertFieldsMayJoinTranslation(
 function withLocalizedMarker(
   table: TableSpec,
   entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
   dialect: SupportedDialect
 ): TableSpec {
   if (!storesPerLanguage(entity)) return table;
+  const builtBy = columnOriginOf(entity, kind);
   // `defaultLocale` does not affect column names, so any value works here.
   const spec = deriveCompanionSpec({
-    builtBy: "codeFirst" as const,
+    builtBy,
     slug: entity.slug,
     dbName: entity.tableName,
     fields: entity.fields,
@@ -2628,7 +2672,7 @@ function withLocalizedMarker(
     fields: entity.fields,
     entityLocalized: true,
     dialect,
-    builtBy: "codeFirst",
+    builtBy,
   }).map(c =>
     c.kind === undefined ? c.column : { column: c.column, kind: c.kind }
   );
@@ -2711,20 +2755,13 @@ export function buildDesiredSnapshotFromConfig(
     tables.push(
       withLocalizedMarker(
         buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
-          // A Builder collection by the Builder's own column rule, as the
-          // Builder creates and pushes its table; a code-first one by the
-          // code-first rule. On MySQL the two read an unstated text width
-          // differently, so describing a Builder table by the code-first
-          // rule wrote a column the table never had.
-          builtBy:
-            c.settings?.source === "builder"
-              ? ("collection" as const)
-              : ("codeFirst" as const),
+          builtBy: columnOriginOf(c, "collection"),
           hasStatus: c.status === true,
           localized: storesPerLanguage(c),
           ...(c.indexes !== undefined ? { indexes: c.indexes } : {}),
         }),
         c,
+        "collection",
         dialect
       )
     );
@@ -2737,12 +2774,13 @@ export function buildDesiredSnapshotFromConfig(
     tables.push(
       withLocalizedMarker(
         buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
-          builtBy: "codeFirst" as const,
+          builtBy: columnOriginOf(c, "single"),
           hasStatus: c.status === true,
           localized: storesPerLanguage(c),
           ...(c.indexes !== undefined ? { indexes: c.indexes } : {}),
         }),
         c,
+        "single",
         dialect
       )
     );
@@ -2758,10 +2796,11 @@ export function buildDesiredSnapshotFromConfig(
     tables.push(
       withLocalizedMarker(
         buildDesiredTableFromComponentFields(c.tableName, c.fields, dialect, {
-          builtBy: "codeFirst" as const,
+          builtBy: columnOriginOf(c, "fieldGroup"),
           localized: storesPerLanguage(c),
         }),
         c,
+        "fieldGroup",
         dialect
       )
     );

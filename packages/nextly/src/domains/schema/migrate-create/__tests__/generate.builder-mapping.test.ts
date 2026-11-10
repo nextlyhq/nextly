@@ -47,3 +47,46 @@ describe("a collection's text column on MySQL", () => {
     expect(await created(posts())).toMatch(/`body` varchar\(255\)/i);
   });
 });
+
+/** Every file a translated `posts` writes, its translations table's included, as one text. */
+async function createdTranslated(entity: MinimalConfigEntity): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "nextly-builder-mapping-"));
+  const result = await generateMigration({
+    name: "one",
+    dialect: "mysql",
+    migrationsDir: dir,
+    collections: [
+      {
+        ...entity,
+        localized: true,
+        fields: [{ name: "body", type: "text", localized: true }],
+      },
+    ],
+    singles: [],
+    components: [],
+    nonInteractive: true,
+    now: new Date(Date.UTC(2026, 10, 10, 12)),
+  });
+  if (result === null) throw new Error("no migration was written");
+  const texts = await Promise.all(
+    [result.sqlPath, ...result.companionFiles.map(f => f.path)].map(path =>
+      readFile(path, "utf-8")
+    )
+  );
+  return texts.map(text => parseSqlSections(text).upSql).join("\n");
+}
+
+describe("a translated text column in the translations table on MySQL", () => {
+  it("is unbounded TEXT for a Builder collection, as the Builder creates its translations table", async () => {
+    const sql = await createdTranslated(posts("builder"));
+    expect(sql).toMatch(/dc_posts_locales/);
+    expect(sql).toMatch(/`body` text\b/i);
+    expect(sql).not.toMatch(/`body` varchar\(255\)/i);
+  });
+
+  it("stays varchar(255) for a code-first collection", async () => {
+    expect(await createdTranslated(posts("code"))).toMatch(
+      /`body` varchar\(255\)/i
+    );
+  });
+});

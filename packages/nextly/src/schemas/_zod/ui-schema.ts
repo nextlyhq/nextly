@@ -199,6 +199,14 @@ export type FieldNode = {
   hasMany?: boolean;
   relationTo?: string | string[];
   /**
+   * A number's storage as the registry stores it: exact `decimal` with its
+   * `precision` and `scale`, or `integer`. The column is made from these, so
+   * the definition holds them for the next save and `migrate:create` to read.
+   */
+  dbType?: "integer" | "decimal";
+  precision?: number;
+  scale?: number;
+  /**
    * A select's or radio's choices; on any other field, its options as the
    * registry stores them (`registryOptions`).
    */
@@ -315,6 +323,11 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       localized: z.boolean().optional(),
       hasMany: z.boolean().optional(),
       relationTo: z.union([z.string(), z.array(z.string())]).optional(),
+      // A number's storage, as `FieldDefinition` types it: kept, because the
+      // column is made from it and a key left out is stripped on the next load.
+      dbType: z.enum(["integer", "decimal"]).optional(),
+      precision: z.number().optional(),
+      scale: z.number().optional(),
       options: z.union([z.array(selectOption), registryOptions]).optional(),
       defaultValue: z.unknown().optional(),
       validation: validation.optional(),

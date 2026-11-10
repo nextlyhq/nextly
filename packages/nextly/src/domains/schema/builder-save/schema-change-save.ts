@@ -6,6 +6,7 @@
  *
  * @module domains/schema/builder-save/schema-change-save
  */
+import { NextlyError } from "../../../errors/nextly-error";
 import type {
   UiSchemaEntity,
   UiSchemaManifest,
@@ -47,6 +48,8 @@ type Answer =
  */
 export function saveOfSchemaChange(args: {
   slug: string;
+  /** The collection's table, which every answer's event must name. */
+  table: string;
   /** The definition file as it stands. */
   definition: UiSchemaManifest;
   /** The collection's registry row, for a collection the definition lacks. */
@@ -60,7 +63,7 @@ export function saveOfSchemaChange(args: {
   junctions: NonNullable<CollectionSave["junctions"]>;
   keys: NonNullable<CollectionSave["keys"]>;
 }): { save: CollectionSave; fields: FieldDefinition[] } {
-  const answers = answersOf(args.answers);
+  const answers = answersOf(args.answers, args.fields, args.table);
   const optional = new Set(
     answers.filter(a => a.kind === "make_optional").map(a => a.field)
   );
@@ -112,11 +115,15 @@ export function saveOfSchemaChange(args: {
  * by event (`kind:table.column`) and the earlier per-field ones. A drop's
  * confirmation needs nothing in the file; a cancel stops the save.
  */
-function answersOf(answers: SchemaChangeAnswers): Answer[] {
+function answersOf(
+  answers: SchemaChangeAnswers,
+  fields: readonly FieldDefinition[],
+  table: string
+): Answer[] {
   const out: Answer[] = [];
   for (const resolution of answers.eventResolutions ?? []) {
     if (resolution.kind === "abort") throw new PromptCancelledError();
-    const field = fieldOfEvent(resolution.eventId);
+    const field = fieldOfEvent(resolution.eventId, fields, table);
     if (resolution.kind === "provide_default") {
       out.push({ field, kind: "fill", value: resolution.value });
     } else if (resolution.kind === "delete_nonconforming") {
@@ -136,8 +143,39 @@ function answersOf(answers: SchemaChangeAnswers): Answer[] {
   return out;
 }
 
-/** The field an event names, by its column: a Builder field's column is its name in snake case. */
-function fieldOfEvent(eventId: string): string {
-  const { column } = parseEventId(eventId);
-  return toSnakeCase(column);
+/**
+ * The field an event names: the one of `fields` whose column (its name in
+ * snake case, as the Builder names a column) is the event's, so a camelCase
+ * field is found by its own name. An event that is malformed, names another
+ * table, or a column no field has is refused: an answer only settles a field
+ * of the collection being saved, and whether this save asks it at all is
+ * judged where its rows are counted (`settledRows`).
+ */
+function fieldOfEvent(
+  eventId: string,
+  fields: readonly FieldDefinition[],
+  table: string
+): string {
+  let event: ReturnType<typeof parseEventId> | undefined;
+  try {
+    event = parseEventId(eventId);
+  } catch {
+    event = undefined;
+  }
+  const field =
+    event?.table === table
+      ? fields.find(f => toSnakeCase(f.name) === event.column)
+      : undefined;
+  if (field === undefined) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "eventResolutions",
+          code: "RESOLUTION_EVENT_UNKNOWN",
+          message: `${eventId} is not a change to a field of this collection.`,
+        },
+      ],
+    });
+  }
+  return field.name;
 }

@@ -1747,6 +1747,7 @@ async function writerSaveOf(change: WriterChange): Promise<
   const before = change.collection.fields ?? [];
   const { save, fields } = saveOfSchemaChange({
     slug: change.slug,
+    table: change.collection.tableName,
     definition: await loadUiSchema({
       projectRoot: setup.projectRoot,
       uiSchemaFile: setup.config.db.uiSchemaFile,

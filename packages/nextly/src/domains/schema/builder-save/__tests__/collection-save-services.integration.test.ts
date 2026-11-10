@@ -356,6 +356,176 @@ describe.each(getConfiguredTestDialects())(
       expect(readdirSync(folder).sort()).toEqual(before);
     });
 
+    /** `articles` with one row, which a field made required does not fit. */
+    const articlesWithARow = async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      const service = t.getService("collectionService");
+      await service.createCollection(created("articles"), {});
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      await adapter.executeQuery(
+        "INSERT INTO dc_articles (id, title, body, slug, created_at, updated_at) VALUES ('a', 'T', 'x', 'a', '2026-11-06 00:00:00', '2026-11-06 00:00:00')"
+      );
+      return adapter;
+    };
+
+    it("answers a camelCase field made required by its own name: filled, or made optional", async () => {
+      const adapter = await articlesWithARow();
+
+      await applyFields(
+        "articles",
+        [
+          { name: "body", type: "text" },
+          { name: "firstName", type: "text", required: true },
+          { name: "lastName", type: "text", required: true },
+        ],
+        {
+          eventResolutions: [
+            {
+              kind: "provide_default",
+              eventId: "add_required_field_no_default:dc_articles.first_name",
+              value: "Ann",
+            },
+            {
+              kind: "make_optional",
+              eventId: "add_required_field_no_default:dc_articles.last_name",
+            },
+          ],
+        }
+      );
+
+      const rows = (await adapter.executeQuery(
+        "SELECT first_name FROM dc_articles"
+      )) as unknown as { first_name: string }[];
+      expect(rows.map(r => r.first_name)).toEqual(["Ann"]);
+      const definition = JSON.parse(
+        readFileSync(join(t.basePath, "schema", "builder.json"), "utf-8")
+      ) as {
+        collections: {
+          slug: string;
+          fields: { name: string; required?: boolean }[];
+        }[];
+      };
+      const fields = definition.collections.find(
+        c => c.slug === "articles"
+      )?.fields;
+      expect(fields?.find(f => f.name === "firstName")?.required).toBe(true);
+      expect(fields?.find(f => f.name === "lastName")?.required).toBe(false);
+    });
+
+    it("refuses an answer this save does not ask, and writes nothing", async () => {
+      const adapter = await articlesWithARow();
+      const folder = join(t.basePath, "database", "history");
+      const before = readdirSync(folder).sort();
+
+      // A delete of the rows of a field the save leaves optional.
+      await expect(
+        applyFields("articles", [{ name: "body", type: "text" }], {
+          eventResolutions: [
+            {
+              kind: "delete_nonconforming",
+              eventId: "add_not_null_with_nulls:dc_articles.body",
+            },
+          ],
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      // An answer naming another collection's table.
+      await expect(
+        applyFields(
+          "articles",
+          [
+            { name: "body", type: "text" },
+            { name: "subtitle", type: "text", required: true },
+          ],
+          {
+            eventResolutions: [
+              {
+                kind: "provide_default",
+                eventId: "add_required_field_no_default:dc_people.subtitle",
+                value: "x",
+              },
+            ],
+          }
+        )
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+      expect(readdirSync(folder).sort()).toEqual(before);
+      const rows = (await adapter.executeQuery(
+        "SELECT id FROM dc_articles"
+      )) as unknown as { id: string }[];
+      expect(rows).toHaveLength(1);
+    });
+
+    it("fills a JSON field made required with a structured value", async () => {
+      const adapter = await articlesWithARow();
+
+      await applyFields(
+        "articles",
+        [
+          { name: "body", type: "text" },
+          { name: "meta", type: "json", required: true },
+        ],
+        {
+          eventResolutions: [
+            {
+              kind: "provide_default",
+              eventId: "add_required_field_no_default:dc_articles.meta",
+              value: { tags: ["a"], n: 1 },
+            },
+          ],
+        }
+      );
+
+      const rows = (await adapter.executeQuery(
+        "SELECT meta FROM dc_articles"
+      )) as unknown as { meta: unknown }[];
+      const stored = rows[0]?.meta;
+      expect(typeof stored === "string" ? JSON.parse(stored) : stored).toEqual({
+        tags: ["a"],
+        n: 1,
+      });
+    });
+
+    it("keeps a decimal field's storage through the definition, so the next save changes no column", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      const service = t.getService("collectionService");
+      const price = {
+        name: "price",
+        type: "number",
+        dbType: "decimal",
+        precision: 10,
+        scale: 2,
+      };
+      await service.createCollection(
+        { name: "products", label: "Product", fields: [price] } as Parameters<
+          CollectionService["createCollection"]
+        >[0],
+        {}
+      );
+
+      await service.updateCollection(
+        "products",
+        { label: "Item" } as Parameters<
+          CollectionService["updateCollection"]
+        >[1],
+        {}
+      );
+
+      const definition = JSON.parse(
+        readFileSync(join(t.basePath, "schema", "builder.json"), "utf-8")
+      ) as { collections: { slug: string; fields: unknown[] }[] };
+      expect(
+        definition.collections.find(c => c.slug === "products")?.fields
+      ).toEqual([price]);
+      const folder = join(t.basePath, "database", "history");
+      const files = readdirSync(folder)
+        .filter(f => f.endsWith(".sql"))
+        .sort();
+      expect(files).toHaveLength(2);
+      expect(readFileSync(join(folder, files[1]!), "utf-8")).not.toMatch(
+        /price/i
+      );
+    });
+
     it.runIf(dialect !== "sqlite")(
       "changes a relationship's foreign-key action when its onDelete changes",
       async () => {

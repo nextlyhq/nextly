@@ -738,5 +738,110 @@ describe.each(getConfiguredTestDialects())(
         expect(await columns()).toContain("subtitle");
       }
     );
+
+    /** The writer's dependencies with a config that names its languages, as a translated save needs. */
+    const translatedDeps = () =>
+      deps({
+        config: defineConfig({
+          collections: [],
+          db: { migrationsDir: "./migrations" },
+          localization: { locales: ["en", "es"], defaultLocale: "en" },
+        }),
+      });
+    const translated = (fields: UiSchemaEntity["fields"]): UiSchemaEntity =>
+      ({ ...posts(fields), localized: true }) as UiSchemaEntity;
+    /** Turning translation on for `title`, which writes the main file and then its translations-table file. */
+    const enableTitle = {
+      slug: "posts",
+      previous: posts([text("title")]),
+      entity: translated([text("title", { localized: true })]),
+      change: "update" as const,
+    };
+
+    it("refuses to record a translation change whose push left the table short of its file, and records nothing", async () => {
+      await writeCollectionSave(translatedDeps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("title")]),
+        change: "create",
+      });
+      const applied = await appliedRows();
+
+      // A push that applies nothing: the main table keeps `title`, which the file's snapshot moved.
+      await expect(
+        writeCollectionSave(translatedDeps(), enableTitle, {
+          appliedBy: () => Promise.resolve(),
+        })
+      ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+
+      expect(await appliedRows()).toEqual(applied);
+    });
+
+    it("keeps every file and the new definition when an earlier file applied and a later one failed", async () => {
+      await writeCollectionSave(translatedDeps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("title")]),
+        change: "create",
+      });
+      await adapter.executeQuery(
+        "INSERT INTO dc_posts (id, title, slug, created_at, updated_at) VALUES ('p1', 'Hello', 'p1', '2026-11-06 00:00:00', '2026-11-06 00:00:00')"
+      );
+      // A translations table of another shape: the file's CREATE ... IF NOT EXISTS keeps it, and
+      // its copy of the rows into it fails, after the main file applied.
+      const key = dialect === "mysql" ? "VARCHAR(36)" : "TEXT";
+      await adapter.executeQuery(
+        `CREATE TABLE dc_posts_locales (_parent ${key} NOT NULL, _locale VARCHAR(20) NOT NULL)`
+      );
+      const before = migrationFiles();
+
+      await expect(
+        writeCollectionSave(translatedDeps(), enableTitle)
+      ).rejects.toBeDefined();
+
+      const written = migrationFiles().filter(f => !before.includes(f));
+      expect(written.length).toBeGreaterThan(1);
+      const applied = (await appliedRows()).map(row => row.filename);
+      expect(written.some(f => applied.includes(f))).toBe(true);
+      expect(
+        (
+          JSON.parse(definition() ?? "{}") as {
+            collections: { localized?: boolean }[];
+          }
+        ).collections[0]?.localized
+      ).toBe(true);
+    });
+
+    it.runIf(dialect === "mysql")(
+      "keeps the files of a translations-table change that failed part-way while the collection's own table stood still",
+      async () => {
+        await writeCollectionSave(translatedDeps(), {
+          slug: "posts",
+          previous: null,
+          entity: translated([text("title", { localized: true })]),
+          change: "create",
+        });
+        // A column the save's second addition collides with, after its first has committed.
+        await adapter.executeQuery(
+          "ALTER TABLE dc_posts_locales ADD COLUMN b TEXT NULL"
+        );
+        const before = migrationFiles();
+
+        await expect(
+          writeCollectionSave(translatedDeps(), {
+            slug: "posts",
+            previous: translated([text("title", { localized: true })]),
+            entity: translated([
+              text("title", { localized: true }),
+              text("a", { localized: true }),
+              text("b", { localized: true }),
+            ]),
+            change: "update",
+          })
+        ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED" });
+
+        expect(migrationFiles().length).toBeGreaterThan(before.length);
+      }
+    );
   }
 );

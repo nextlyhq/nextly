@@ -15,7 +15,18 @@ import { quoteIdent } from "./identifier-quoting";
 
 /** A column's rows that do not fit, and what is done with them. */
 export type ColumnResolution =
-  | { tableName: string; columnName: string; kind: "fill"; value: unknown }
+  | {
+      tableName: string;
+      columnName: string;
+      kind: "fill";
+      value: unknown;
+      /**
+       * The column stores JSON (`classifyFieldKind`'s `json`): the value is
+       * written as its JSON text, which every dialect's JSON column (and
+       * SQLite's text) takes from a string literal.
+       */
+      json?: boolean;
+    }
   | { tableName: string; columnName: string; kind: "delete_nonconforming" };
 
 /**
@@ -52,7 +63,23 @@ export function resolutionStatement(
 ): string {
   const table = quoteIdent(resolution.tableName, dialect);
   const column = quoteIdent(resolution.columnName, dialect);
-  return resolution.kind === "fill"
-    ? `UPDATE ${table} SET ${column} = ${sqlValueLiteral(resolution.value, dialect)} WHERE ${column} IS NULL;`
-    : `DELETE FROM ${table} WHERE ${column} IS NULL;`;
+  if (resolution.kind === "delete_nonconforming") {
+    return `DELETE FROM ${table} WHERE ${column} IS NULL;`;
+  }
+  const value =
+    resolution.json === true ? jsonText(resolution.value) : resolution.value;
+  return `UPDATE ${table} SET ${column} = ${sqlValueLiteral(value, dialect)} WHERE ${column} IS NULL;`;
+}
+
+/** `value` as the JSON text a JSON column stores; refused where it has none. */
+function jsonText(value: unknown): string {
+  const text = JSON.stringify(value) as string | undefined;
+  if (text === undefined) {
+    throw new NextlyError({
+      code: "VALIDATION_ERROR",
+      publicMessage: "A fill value for a JSON field must be a JSON value.",
+      logContext: { valueType: typeof value },
+    });
+  }
+  return text;
 }

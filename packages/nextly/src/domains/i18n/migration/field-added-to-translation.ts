@@ -10,6 +10,8 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
+
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import {
   buildCompanionReconcileStatements,
@@ -39,6 +41,8 @@ export function planFieldAddedToTranslationMigration(args: {
   status: boolean;
   recorded: readonly CompanionFieldLike[];
   added: readonly CompanionFieldLike[];
+  /** The column rule the entity's tables are made by: a Builder collection's is the Builder's. */
+  builtBy: ColumnOrigin;
 }): FieldAddedToTranslationPlan {
   const { dialect } = args;
   const withAdded = [...args.recorded, ...args.added];
@@ -57,7 +61,7 @@ export function planFieldAddedToTranslationMigration(args: {
       newLocalized,
       dialect,
       status: args.status,
-      builtBy: "codeFirst",
+      builtBy: args.builtBy,
       companionExists: true,
       companionHasStatus: args.status,
       companionHasUpdatedAt: true,
@@ -74,7 +78,7 @@ export function planFieldAddedToTranslationMigration(args: {
       defaultLocale: args.defaultLocale,
       parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
       columns: args.added.flatMap(
-        f => fieldToLocalizedColumnSpec(f, dialect, "codeFirst") ?? []
+        f => fieldToLocalizedColumnSpec(f, dialect, args.builtBy) ?? []
       ),
     },
     upSql: asFile(between([...args.recorded], withAdded)),

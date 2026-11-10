@@ -63,6 +63,7 @@ import { refuseRequiredColumnsOverNulls } from "../migrate/required-column-guard
 import { resolveMigration } from "../migrate/resolve";
 import { marksNoTransaction, splitSqlStatements } from "../migrate/split-sql";
 import { parseSqlSections } from "../migrate/sql-sections";
+import { tablesChangedIn } from "../migrate/statement-targets";
 import {
   appMigrationInputs,
   type AppMigrationInputsArgs,
@@ -88,6 +89,7 @@ import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces
 import { generateStatements } from "../pipeline/sql-templates/index";
 import type { ColumnResolution } from "../pipeline/sql-templates/resolution-statements";
 import {
+  classifyFieldKind,
   getColumnDescriptor,
   toSnakeCase,
 } from "../services/field-column-descriptor";
@@ -502,11 +504,27 @@ async function settledRows(
       }
     }
     const column = toSnakeCase(resolution.column);
+    const liveColumn = live?.columns.find(c => c.name === column);
+    // An answer settles rows that do not fit a field this save makes
+    // required: one required now whose column is new, or nullable as it
+    // stands. Any other would delete or fill rows, and the generator would
+    // make the column NOT NULL, for a change the save does not make.
+    if (field.required !== true || liveColumn?.nullable === false) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: resolution.column,
+            code: "RESOLUTION_NOT_ASKED",
+            message: `This save does not make ${resolution.column} required, so it has no rows to fill or delete.`,
+          },
+        ],
+      });
+    }
     const rows = exists
       ? (
           await countRowsBreakingNotNull(db, dialect, {
             table,
-            column: live?.columns.some(c => c.name === column) ? column : null,
+            column: liveColumn === undefined ? null : column,
           })
         ).total
       : 0;
@@ -516,6 +534,15 @@ async function settledRows(
     settled.push({ column: resolution.column, rows, resolution });
   }
   return settled;
+}
+
+/** Whether field `name` of the saved collection keeps its value as JSON. */
+function storesJson(save: CollectionSave, name: string): boolean {
+  const field = save.entity?.fields.find(f => f.name === name);
+  return (
+    field !== undefined &&
+    classifyFieldKind(field as FieldDefinition, "collection") === "json"
+  );
 }
 
 /** The line the review shows for a resolution. */
@@ -663,6 +690,11 @@ async function writeFiles(
             ...r,
             tableName: plan.table,
             columnName: toSnakeCase(r.column),
+            // A structured value (a JSON, chips or plugin JSON field's) is
+            // written as the JSON text its column stores.
+            ...(r.kind === "fill" && storesJson(save, r.column)
+              ? { json: true }
+              : {}),
           })),
         }),
     ...(save.keys === undefined
@@ -1117,12 +1149,15 @@ async function runWritten(
 }
 
 /**
- * Run one file, and where it fails, say whether any of it stayed: the
- * collection's table as it stood before the file, compared with how it stands
- * after the failure. MySQL commits each schema statement as it runs, so a file
- * that failed at a later statement keeps the earlier ones whatever the error
- * says; such a failure is thrown as part-way, so its files are kept for
- * `nextly migrate:resolve`. One that changed nothing is thrown as it was.
+ * Run one file, and where it fails, say whether any of it stayed: every table
+ * the file's statements change (the collection's own, its translations table,
+ * a junction) as it stood before the file, compared with how it stands after
+ * the failure. MySQL commits each schema statement as it runs, so a file that
+ * failed at a later statement keeps the earlier ones whatever the error says;
+ * such a failure is thrown as part-way, so its files are kept for `nextly
+ * migrate:resolve`. One that changed nothing is thrown as it was. A file whose
+ * tables cannot all be named, run where its statements commit one by one, is
+ * taken as part-way: what it may have kept cannot be compared.
  */
 async function runJudgingWhatStayed(
   deps: CollectionSaveDeps,
@@ -1130,11 +1165,22 @@ async function runJudgingWhatStayed(
   filename: string,
   run: () => Promise<void>
 ): Promise<void> {
-  const before = await liveTable(deps, table);
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const file = await unitOf(deps, filename);
+  const named = tablesChangedBy(file, dialect);
+  const tables = named ?? [table];
+  const unknown =
+    named === undefined && (dialect === "mysql" || !file.transaction);
+  const before = await liveTables(deps, [table, ...tables]);
   try {
     await run();
   } catch (error) {
-    if (snapshotsEquivalent(before, await liveTable(deps, table))) throw error;
+    if (
+      !unknown &&
+      snapshotsEquivalent(before, await liveTables(deps, [table, ...tables]))
+    ) {
+      throw error;
+    }
     throw new NextlyError({
       code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
       publicMessage: `${filename} failed part-way, and the statements before the failure stayed applied: ${NextlyError.is(error) ? error.publicMessage : String(error)} Settle it with \`nextly migrate:resolve\` before saving again.`,
@@ -1142,6 +1188,59 @@ async function runJudgingWhatStayed(
       ...(error instanceof Error ? { cause: error } : {}),
     });
   }
+}
+
+/** First words of a statement that changes no table. */
+const TABLELESS_STATEMENTS = new Set([
+  "SET",
+  "PRAGMA",
+  "SELECT",
+  "BEGIN",
+  "START",
+  "COMMIT",
+]);
+
+/**
+ * The tables a file's statements change (`tablesChangedIn`), or undefined
+ * when one that may change a table names none this reading can tell.
+ */
+function tablesChangedBy(
+  file: { sql: string; transaction: boolean },
+  dialect: SupportedDialect
+): string[] | undefined {
+  const tables = new Set<string>();
+  for (const statement of splitSqlStatements(file.sql, dialect, {
+    transaction: file.transaction,
+  })) {
+    const first = /^\s*([A-Za-z]+)/.exec(statement)?.[1]?.toUpperCase();
+    if (first !== undefined && TABLELESS_STATEMENTS.has(first)) continue;
+    const changed = tablesChangedIn(statement, dialect);
+    if (changed === undefined) return undefined;
+    for (const name of changed) tables.add(name);
+  }
+  return [...tables];
+}
+
+/** The tables of `names` the database has now, as it has them. */
+async function liveTables(
+  deps: CollectionSaveDeps,
+  names: readonly string[]
+): Promise<NextlySchemaSnapshot> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const unique = [...new Set(names)];
+  const present: string[] = [];
+  for (const name of unique) {
+    if (await deps.adapter.tableExists(name)) present.push(name);
+  }
+  const snapshot = await introspectLiveSnapshot(
+    deps.adapter.getDrizzle(),
+    dialect,
+    present
+  );
+  return {
+    ...snapshot,
+    tables: snapshot.tables.filter(t => unique.includes(t.name)),
+  };
 }
 
 /** The collection's table as the database has it now, alone. */
@@ -1180,26 +1279,36 @@ async function recordWhatWasPushed(
     ...(files.adopt === undefined ? [] : [files.adopt]),
     ...files.change,
   ];
-  const last = [...ordered].reverse().find(f => files.adopt !== f);
+  const units = [];
   for (const filename of ordered) {
-    const file = await unitOf(deps, filename);
-    const target = await snapshotOf(deps, filename);
-    // The adoption describes the table before the push; the change's file the
-    // table after it, which is what the database is compared with.
-    if (target !== null && filename === last) {
-      const live = await liveTable(deps, table);
-      const expected = onlyTable(target, table);
-      if (!snapshotsEquivalent(live, expected)) {
-        throw new NextlyError({
-          code: "NEXTLY_MIGRATION_DRIFT",
-          publicMessage: `The database does not stand as ${filename} says after the save's change was applied, so it was not recorded applied. Compare the table with the file, then record it with \`nextly migrate:resolve --applied ${filename}\` once they match.`,
-          logContext: {
-            file: filename,
-            differences: diffSnapshots(expected, live).length,
-          },
-        });
-      }
+    units.push({
+      filename,
+      file: await unitOf(deps, filename),
+      target: await snapshotOf(deps, filename),
+    });
+  }
+  // The table after the push is what the change's newest file with a
+  // snapshot records: the adoption describes it before the push, and a
+  // translations-table file, which may come after, has no snapshot. Compared
+  // before anything is recorded, so a mismatch records no file.
+  const verified = [...units]
+    .reverse()
+    .find(u => u.filename !== files.adopt && u.target !== null);
+  if (verified?.target != null) {
+    const live = await liveTable(deps, table);
+    const expected = onlyTable(verified.target, table);
+    if (!snapshotsEquivalent(live, expected)) {
+      throw new NextlyError({
+        code: "NEXTLY_MIGRATION_DRIFT",
+        publicMessage: `The database does not stand as ${verified.filename} says after the save's change was applied, so the save's files were not recorded applied. Compare the table with the file, then record it with \`nextly migrate:resolve --applied ${verified.filename}\` once they match.`,
+        logContext: {
+          file: verified.filename,
+          differences: diffSnapshots(expected, live).length,
+        },
+      });
     }
+  }
+  for (const { filename, file } of units) {
     await recordAlreadyApplied({ filename, sha256: file.sha256 }, repo);
   }
 }
@@ -1261,11 +1370,14 @@ function onlyTable(
 }
 
 /**
- * After a failed save: where nothing of the failed file applied, remove every
- * file the save wrote that the ledger does not record applied, with its
- * snapshot, and put the definition back as it was. A file that failed
- * part-way stays, with the definition it was written from, for `nextly
- * migrate:resolve` to settle.
+ * After a failed save: where nothing the save wrote applied, remove every
+ * file it wrote, with its snapshot, and put the definition back as it was. A
+ * file that failed part-way stays, with the definition it was written from,
+ * for `nextly migrate:resolve` to settle. Where an earlier file of the save
+ * applied and a later one failed with nothing of it applied, the database is
+ * part of the way to the new definition: every file and the new definition
+ * stay, the failed file's attempt is settled, and `nextly migrate` runs the
+ * rest once the cause is fixed.
  */
 async function undoUnapplied(
   deps: CollectionSaveDeps,
@@ -1284,8 +1396,24 @@ async function undoUnapplied(
     deps.adapter.getDrizzle(),
     deps.adapter.getCapabilities().dialect
   );
+  const applied: string[] = [];
+  if (deps.applies) {
+    for (const filename of written) {
+      if (await repo.isFileApplied(filename)) applied.push(filename);
+    }
+  }
+  if (applied.length > 0) {
+    for (const filename of written) {
+      if (!applied.includes(filename)) {
+        await settleAttempts(deps, repo, filename);
+      }
+    }
+    deps.logger.error(
+      `${applied.join(", ")} applied before the save failed, so the save's files and its definition stay: \`nextly migrate\` runs the rest once the cause is fixed.`
+    );
+    return;
+  }
   for (const filename of written) {
-    if (deps.applies && (await repo.isFileApplied(filename))) continue;
     await settleAttempts(deps, repo, filename);
     await rm(join(deps.migrationsDir, filename), { force: true });
     await rm(
