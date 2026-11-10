@@ -25,9 +25,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
-import { getDialectTables } from "../../database/index";
-import { SchemaRegistry } from "../../database/schema-registry";
-import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
+import { registerEntityRuntimeTables } from "../../di/register-runtime-tables";
 import {
   buildWorkflowRegistry,
   type RegisteredWorkflow,
@@ -37,6 +35,7 @@ import {
   strandedReviewStates,
   type StrandedReviewState,
 } from "../../domains/workflows/stranded-stages";
+import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { CommandContext } from "../context";
 import { exitWithError } from "../errors";
 import {
@@ -44,6 +43,7 @@ import {
   requireDatabaseEnv,
 } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
+import { installRegistryResolver } from "../utils/registry-resolver";
 
 import { commandRun } from "./command-run";
 
@@ -109,16 +109,8 @@ async function withStrandedRun<T>(
     context.logger
   );
   try {
-    // The ORM resolves table names through a SchemaRegistry: the review
-    // states, users and content events are static system tables.
     const drizzleAdapter = adapter as unknown as DrizzleAdapter;
-    const { dialect } = drizzleAdapter.getCapabilities();
-    const schemaRegistry = new SchemaRegistry(dialect);
-    schemaRegistry.registerStaticSchemas({
-      ...getDialectTables(dialect),
-      ...getFieldGroupRegistryAliases(dialect),
-    });
-    drizzleAdapter.setTableResolver(schemaRegistry);
+    await installStrandedRunResolver(drizzleAdapter, registry.values());
     return await work({
       adapter: drizzleAdapter,
       workflows: registry.values(),
@@ -128,6 +120,63 @@ async function withStrandedRun<T>(
     });
   } finally {
     await adapter.disconnect();
+  }
+}
+
+/** A registry row as a command reads it to register its entity's tables. */
+interface EntityRow {
+  slug: string;
+  tableName: string;
+  fields: unknown;
+  status: unknown;
+  localized: unknown;
+}
+
+/** A registry's stored `fields`, from either form a driver returns. */
+function storedFields(value: unknown): FieldDefinition[] {
+  const parsed: unknown =
+    typeof value === "string" ? (JSON.parse(value) as unknown) : value;
+  return Array.isArray(parsed) ? (parsed as FieldDefinition[]) : [];
+}
+
+/**
+ * Installs the table resolver a stranded-stage command reads and writes through: the system
+ * tables, and the tables of every collection and Single `workflows` are attached to, read from
+ * their registry rows. A move locks each document's own row, and a command has no boot to have
+ * registered those tables.
+ *
+ * @experimental
+ */
+export async function installStrandedRunResolver(
+  adapter: DrizzleAdapter,
+  workflows: Iterable<RegisteredWorkflow>
+): Promise<void> {
+  const schemaRegistry = installRegistryResolver(adapter);
+  const { dialect } = adapter.getCapabilities();
+  const attached = [...workflows];
+  const registries = [
+    ["dynamic_collections", attached.flatMap(each => each.collections)],
+    ["dynamic_singles", attached.flatMap(each => each.singles)],
+  ] as const;
+  for (const [registry, slugs] of registries) {
+    if (slugs.length === 0) continue;
+    const rows = await adapter.select<EntityRow>(registry, {
+      columns: ["slug", "tableName", "fields", "status", "localized"],
+      where: { and: [{ column: "slug", op: "IN", value: [...slugs] }] },
+    });
+    for (const row of rows) {
+      registerEntityRuntimeTables(
+        schemaRegistry,
+        {
+          slug: row.slug,
+          tableName: row.tableName,
+          fields: storedFields(row.fields),
+          status: Boolean(row.status),
+          localized: Boolean(row.localized),
+        },
+        dialect
+      );
+    }
   }
 }
 

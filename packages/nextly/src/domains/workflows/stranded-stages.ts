@@ -335,8 +335,8 @@ interface MovedStranded {
  * person `as` names, with the comment as its note and the stages the parts left. Each part leaves
  * its approval behind, since the stage it was given in is gone, and enters `to` as though from
  * the first stage, which is how it read while stranded. Refused, moving nothing, for a person
- * unknown or deactivated, a stage not in every workflow or one that allows publishing, and a
- * missing comment. Answers the documents moved.
+ * unknown or deactivated, a stage missing from a workflow whose parts it moves or one that allows
+ * publishing, and a missing comment. Answers the documents moved.
  *
  * @experimental
  */
@@ -348,15 +348,27 @@ export async function moveStrandedReviewStates(
     input.workflows ?? registeredWorkflows(),
     input.collection
   );
-  checkTarget(workflows, input.to);
   checkMoveComment(input.comment);
   const mover = await moverByEmail(adapter, input.as);
   ensureReviewStateEventKinds();
 
   return adapter.transaction(async tx => {
-    const moved: MovedStranded[] = [];
+    // Each workflow's stranded parts, read before anything is written: the stage is judged only
+    // by the workflows whose parts it moves, so one with nothing stranded has no say in it.
+    const strandedOf: Array<{
+      registered: RegisteredWorkflow;
+      stranded: StrandedReviewState[];
+    }> = [];
     for (const registered of workflows) {
       const stranded = await readStranded(tx, [registered]);
+      if (stranded.length > 0) strandedOf.push({ registered, stranded });
+    }
+    checkTarget(
+      strandedOf.map(each => each.registered),
+      input.to
+    );
+    const moved: MovedStranded[] = [];
+    for (const { registered, stranded } of strandedOf) {
       for (const states of byDocument(stranded)) {
         moved.push(
           await moveDocument(tx, registered, states, {
