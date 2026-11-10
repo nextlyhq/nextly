@@ -186,7 +186,12 @@ async function standingClaim(
 interface ClaimAttempt {
   tx: TransactionContext;
   dialect: SupportedDialect;
-  at: Date;
+  /**
+   * The clock, read afresh after each statement that can wait on another
+   * transaction: a lease counts from when this attempt won, not from before
+   * it waited.
+   */
+  now: () => Date;
   /** The lease's length, or null for a claim processed at once (in `tx`). */
   leaseMs: number | null;
   /** The claim's fixed columns: its key, plugin, provider, id and freshness. */
@@ -206,35 +211,64 @@ async function attemptClaim(
   | { status: "in-progress" }
   | undefined
 > {
-  const { tx, dialect, at, row } = attempt;
+  const { tx, dialect, row } = attempt;
   const token = randomUUID();
-  // Rounded up to a whole second, so a lease is never shorter than asked on
-  // a dialect that keeps times in seconds, and the same length on every one.
-  const leaseUntil =
-    attempt.leaseMs === null
-      ? null
-      : new Date(Math.ceil((at.getTime() + attempt.leaseMs) / 1000) * 1000);
-  const held = {
-    status: leaseUntil === null ? "completed" : "pending",
-    claimToken: token,
-    leaseUntil,
-    completedAt: leaseUntil === null ? at : null,
-    pruneAt: leaseUntil ?? at,
+  const at = attempt.now();
+  // What this attempt holds once it wins, as of `when`. A lease is rounded up
+  // to a whole second, so it is never shorter than asked on a dialect that
+  // keeps times in seconds, and the same length on every one.
+  const heldAt = (when: Date) => {
+    const leaseUntil =
+      attempt.leaseMs === null
+        ? null
+        : new Date(Math.ceil((when.getTime() + attempt.leaseMs) / 1000) * 1000);
+    return {
+      status: leaseUntil === null ? "completed" : "pending",
+      claimToken: token,
+      leaseUntil,
+      completedAt: leaseUntil === null ? when : null,
+      pruneAt: leaseUntil ?? when,
+    };
   };
+  const held = heldAt(at);
   if (await insertIfAbsent(tx, dialect, { ...row, receivedAt: at, ...held })) {
+    // The insert may have waited on another transaction holding the key,
+    // longer than the lease: counted from before that wait, the lease could
+    // be over already, and a retry could take the claim over while this
+    // handler runs. Restamped from now when the wait moved it.
+    const won = heldAt(attempt.now());
+    if (
+      won.leaseUntil !== null &&
+      held.leaseUntil !== null &&
+      won.leaseUntil > held.leaseUntil
+    ) {
+      await tx.updateCount(
+        RECEIVED_WEBHOOKS_TABLE,
+        { leaseUntil: won.leaseUntil, pruneAt: won.pruneAt },
+        {
+          and: [
+            { column: "deliveryKey", op: "=", value: row.deliveryKey },
+            { column: "claimToken", op: "=", value: token },
+          ],
+        }
+      );
+    }
     return { won: token };
   }
   const standing = await standingClaim(tx, dialect, row.deliveryKey);
+  // The locked read may have waited too: the standing lease is judged, and a
+  // takeover's lease counted, from now.
+  const seen = attempt.now();
   // Gone between the insert and the read: released or pruned.
   if (standing === undefined) return undefined;
   if (standing.status === "completed") return { status: "duplicate" };
-  if (standing.leaseUntil !== null && standing.leaseUntil > at) {
+  if (standing.leaseUntil !== null && standing.leaseUntil > seen) {
     return { status: "in-progress" };
   }
   // A lease run out: its handler is taken to have failed, and this retry
   // takes the claim over. The row is locked, and the token always changes, so
   // the update matches on every dialect.
-  const taken = await tx.updateCount(RECEIVED_WEBHOOKS_TABLE, held, {
+  const taken = await tx.updateCount(RECEIVED_WEBHOOKS_TABLE, heldAt(seen), {
     and: [
       { column: "deliveryKey", op: "=", value: row.deliveryKey },
       { column: "claimToken", op: "=", value: standing.claimToken },
@@ -403,7 +437,7 @@ export function createPluginReceivedWebhooks(
             const outcome = await attemptClaim({
               tx: adapterTx,
               dialect,
-              at: now(),
+              now,
               // In the plugin's transaction the claim is the processing
               // record at once, as it commits only with the plugin's writes.
               leaseMs: claimOptions.tx === undefined ? leaseMs : null,

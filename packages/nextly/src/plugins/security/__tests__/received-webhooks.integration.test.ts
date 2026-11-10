@@ -489,6 +489,38 @@ describe.each(getConfiguredTestDialects())(
       expect(await claim('{"event":1}')).toBe("in-progress");
     });
 
+    it("a claim that waited on the database holds its whole lease from when it won", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(T0);
+      const { a, adapter } = await boot();
+      const hooks = a.security.webhooks;
+      const answer = await verified(hooks, standardRequest("msg_waited"));
+      // A helper of the same plugin whose insert waited ten seconds on the
+      // database: its clock reads the start of the attempt first, and ten
+      // seconds later every time after.
+      let reads = 0;
+      const waited = createPluginReceivedWebhooks({
+        owner: "@test/hooks-a",
+        adapter: () => adapter,
+        now: () => ((reads += 1) === 1 ? T0 : new Date(T0.getTime() + 10_000)),
+      });
+      const first = await waited.claimDelivery(answer, {
+        provider: "acme",
+        leaseSeconds: 1,
+      });
+      expect(first.status).toBe("first");
+
+      // A retry half a second after the claim was won: its one-second lease
+      // is live, counted from then, not from before the wait.
+      vi.setSystemTime(T0.getTime() + 10_500);
+      expect(
+        await hooks.claimDelivery(
+          await verified(hooks, standardRequest("msg_waited")),
+          { provider: "acme", leaseSeconds: 1 }
+        )
+      ).toEqual({ status: "in-progress" });
+    });
+
     it("a lease is never shorter than asked, on every dialect", async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       // Most of a second past a whole second: a lease end kept in whole
