@@ -28,10 +28,13 @@ import { pageBuilder } from "@nextlyhq/plugin-page-builder";
 import { seoPlugin } from "@nextlyhq/plugin-seo";
 import { defineCollection, defineConfig, text } from "nextly/config";
 
+import { JOURNAL, JOURNAL_COLLECTIONS } from "./src/blog-fixture/collections";
 import { Authors } from "./src/collections/authors";
 import { BlockPages } from "./src/collections/block-pages";
 import { BoundEntries } from "./src/collections/bound-entries";
+import { EntryArticles } from "./src/collections/entry-articles";
 import { ListStories } from "./src/collections/list-stories";
+import { E2E_NAMED_QUERIES } from "./src/named-queries";
 import { Categories } from "./src/collections/categories";
 import { DevReloadProbe } from "./src/collections/dev-reload-probe";
 import { HistoryNotes } from "./src/collections/history-notes";
@@ -45,11 +48,13 @@ import { LinkCard, LinkQuote } from "./src/field-groups/related-link-groups";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
 import { blockFixturePlugin } from "./src/plugins/block-fixture/plugin";
+import { contributionsFixturePlugin } from "./src/plugins/contributions-fixture/plugin";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
 import { slowWidgetFixturePlugin } from "./src/plugins/slow-widget-fixture/plugin";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
 import { widgetKitFixturePlugin } from "./src/plugins/widget-kit-fixture/plugin";
 import { Announcement } from "./src/singles/announcement";
+import { ContactDetails } from "./src/singles/contact-details";
 import { Homepage } from "./src/singles/homepage";
 import { LandingPage } from "./src/singles/landing-page";
 import { RelatedLinks } from "./src/singles/related-links";
@@ -83,6 +88,52 @@ const SeoPages = defineCollection({
   slug: "seo-pages",
   labels: { singular: "SEO page", plural: "SEO pages" },
   fields: [text({ name: "title", label: "Title", required: true })],
+});
+
+/**
+ * The page builder, as one instance, so the site's routes can hand their
+ * pages this site's own named queries (`namedQueriesOf`) and never another
+ * site's served from the same process.
+ */
+export const pageBuilderPlugin = pageBuilder({
+  siteStyle: SITE_STYLE_DEFAULTS,
+  // The browser tests' custom sources, registered by the same switch as
+  // the collections and the Single they read.
+  ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+    ? { namedQueries: [...E2E_NAMED_QUERIES] }
+    : {}),
+  pagePreviewPath: "/{slug}",
+  // Each post is served at `/blog/<its slug>` by the same route as the pages,
+  // drawn with the Posts template once one is published.
+  // The Entry content fixture's articles at `/articles/<slug>`, and the blog
+  // fixture's posts at `/journal/<slug>`, with it.
+  templates: {
+    addresses: {
+      posts: "/blog",
+      ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+        ? {
+            "entry-articles": "/articles",
+            // The blog fixture's posts, rebuilt with their template.
+            [JOURNAL.posts]: "/journal",
+          }
+        : {}),
+    },
+  },
+  // The route that draws the editor's canvas inside this site's layout.
+  canvasPath: "/page-builder-canvas",
+  // The browser suite's stand-in Google Fonts catalogue, so adding a font
+  // there never reaches the real one. Unset everywhere else: the plugin's
+  // defaults (Fontsource and jsDelivr) apply.
+  ...(process.env.NEXTLY_E2E_FONT_CATALOGUE === undefined
+    ? {}
+    : {
+        fonts: {
+          catalogue: {
+            api: process.env.NEXTLY_E2E_FONT_CATALOGUE,
+            files: process.env.NEXTLY_E2E_FONT_CATALOGUE,
+          },
+        },
+      }),
 });
 
 export default defineConfig({
@@ -162,10 +213,17 @@ export default defineConfig({
     // fields include one the public may not read; registered for the e2e run
     // only, by the same switch.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [BoundEntries] : []),
+    // What a template's Entry content block draws, for its browser tests.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [EntryArticles] : []),
     // The browser test of a collection list's related source needs a public,
     // page-built entry holding a public to-many relation; registered for the
     // e2e run only, by the same switch.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [ListStories] : []),
+    // The blog template's own posts, authors, categories and tags, renamed,
+    // for the browser test of its post page rebuilt with a template.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? JOURNAL_COLLECTIONS
+      : []),
     // The collection the SEO plugin extends, by the plugin's own switch.
     ...(seoPluginEnabled ? [SeoPages] : []),
   ],
@@ -181,6 +239,9 @@ export default defineConfig({
     // related item the editor cannot read; registered for the e2e run only, by
     // the same switch as the style fixture below.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [RelatedLinks] : []),
+    // A Single with a field the public may not read, for the browser test of
+    // the editor marking a bound value a visitor will not see.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [ContactDetails] : []),
   ],
   fieldGroups: [
     Seo,
@@ -210,25 +271,7 @@ export default defineConfig({
     // nor discover that `(frontend)/[...slug]` is mounted at the site root, so
     // passing it is the only signal available that a minted link will land.
     // Without it every page-builder share is refused at the click.
-    pageBuilder({
-      siteStyle: SITE_STYLE_DEFAULTS,
-      pagePreviewPath: "/{slug}",
-      // The route that draws the editor's canvas inside this site's layout.
-      canvasPath: "/page-builder-canvas",
-      // The browser suite's stand-in Google Fonts catalogue, so adding a font
-      // there never reaches the real one. Unset everywhere else: the plugin's
-      // defaults (Fontsource and jsDelivr) apply.
-      ...(process.env.NEXTLY_E2E_FONT_CATALOGUE === undefined
-        ? {}
-        : {
-            fonts: {
-              catalogue: {
-                api: process.env.NEXTLY_E2E_FONT_CATALOGUE,
-                files: process.env.NEXTLY_E2E_FONT_CATALOGUE,
-              },
-            },
-          }),
-    }),
+    pageBuilderPlugin,
     // `redirectRelationships` states where each collection's documents are
     // served, for the same reason `pagePreviewPath` above does and in the same
     // syntax: the plugin cannot discover that this app mounts
@@ -249,6 +292,12 @@ export default defineConfig({
     // editor through the committed component map. Offered only in the Add
     // panel, named as test fixtures, for plugin-blocks.spec.ts.
     blockFixturePlugin,
+    // Always on: the plugin contributions a page offers (today one entry-list
+    // filter on Posts) appear only in its menus until someone chooses them,
+    // and their screenshots, and the browser tests to come, need them in every
+    // build.
+    // Named as a fixture, and inert: no tables, routes, jobs or hooks.
+    contributionsFixturePlugin,
     // The SEO plugin as it ships, for the browser test of its dashboard card
     // and its Needs attention line, by the switch above. No sitemap: a public
     // route is not what that test is about.

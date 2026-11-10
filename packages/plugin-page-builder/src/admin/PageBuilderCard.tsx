@@ -229,7 +229,9 @@ function OpenBuilder({
   const { onClick } = navigateWithin(href, onNavigate);
   return (
     <Button asChild size="sm">
-      <a href={href} onClick={onClick}>
+      {/* Marked as the way in, so the field returning from the builder can
+          hand it the focus back (see `builder-return`). */}
+      <a href={href} onClick={onClick} data-builder-open="">
         {label}
       </a>
     </Button>

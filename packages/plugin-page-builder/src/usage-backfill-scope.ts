@@ -1,8 +1,9 @@
 /**
  * What one unit of an index backfill is, and how the units are enumerated.
  *
- * A rebuild repairs ONE (collection, field, locale, variant) at a time, walking
- * every document in it. That tuple is therefore the unit of work a backfill can
+ * A rebuild repairs ONE (collection or Single, field, locale, variant) at a
+ * time, walking every document in it: every entry of a collection, or the one
+ * document a Single has. That tuple is therefore the unit of work a backfill can
  * finish, record and resume from - anything smaller is not a state the rebuild
  * can be asked to stop at, and anything larger cannot be recorded as done.
  *
@@ -28,6 +29,7 @@ import {
   type BlocksFieldDescriptor,
 } from "./class-usage-subjects";
 import type { ClassUsageVariant } from "./collections/class-usage-index";
+import type { UsageScope } from "./usage-index";
 
 /**
  * The character joining a scope key's parts.
@@ -44,7 +46,9 @@ const KEY_SEPARATOR = "\u001F";
 
 /** One unit of backfill work: everything a rebuild needs except the stores. */
 export interface BackfillScope {
-  /** The collection whose documents are walked. */
+  /** Whether `entity` names a collection or a Single. */
+  scope: UsageScope;
+  /** The collection whose documents are walked, or the Single. */
   entity: string;
   /** The blocks field on those documents. */
   field: string;
@@ -54,9 +58,11 @@ export interface BackfillScope {
   variant: ClassUsageVariant;
 }
 
-/** A collection, described by what decides its scopes. */
+/** A collection or a Single, described by what decides its scopes. */
 export interface BackfillCollection {
-  /** The collection's slug. */
+  /** Which of the two `collection` names; a collection when absent. */
+  scope?: UsageScope;
+  /** The collection's slug, or the Single's. */
   collection: string;
   /** Its blocks fields, and whether each stores per locale. */
   fields: readonly BlocksFieldDescriptor[];
@@ -83,7 +89,9 @@ export function backfillScopesFor(
     fields: collection.fields,
     locales: collection.locales,
     hasDrafts: collection.hasDrafts,
+    ...(collection.scope === undefined ? {} : { scope: collection.scope }),
   }).map(subject => ({
+    scope: subject.scope,
     entity: subject.entity,
     field: subject.field,
     locale: subject.locale,
@@ -94,14 +102,31 @@ export function backfillScopesFor(
 /**
  * The stable id a completed scope is recorded under.
  *
- * Total in the scope: the four parts are never optional and their order is
- * fixed, so two scopes are equal exactly when their keys are.
+ * Total in the scope: the five parts are never optional and their order is
+ * fixed, so two scopes are equal exactly when their keys are. The scope comes
+ * first, so a Single and a collection of the same slug never share a key.
  */
 export function backfillScopeKey(scope: BackfillScope): string {
-  return [scope.entity, scope.field, scope.locale, scope.variant].join(
-    KEY_SEPARATOR
-  );
+  return [
+    scope.scope,
+    scope.entity,
+    scope.field,
+    scope.locale,
+    scope.variant,
+  ].join(KEY_SEPARATOR);
 }
+
+/**
+ * The progress key a run records once it has swept the tables for the rows of
+ * scopes that are gone, beside the keys of the scopes it walked.
+ *
+ * Never a scope's key: a scope key joins five parts on
+ * {@link KEY_SEPARATOR}, and this holds none. Kept in the run's progress
+ * rather than beside the run, so whatever discards a run's progress (a new
+ * derivation, a failed write starting a new run) discards it too, and the next
+ * run sweeps again however little it has left to walk.
+ */
+export const GONE_SCOPES_SWEPT_KEY = "gone-scopes-swept";
 
 /**
  * Which DERIVATION a recorded scope belongs to.
@@ -127,20 +152,18 @@ export function backfillScopeKey(scope: BackfillScope): string {
  * same scope is walked again and its existing rows are reconciled rather than
  * orphaned.
  *
- * ## Why the INDEX collections are part of it
+ * ## Why the INDEX tables are part of it
  *
  * A generation says what the documents were read as; it also has to say where
- * the result was put. A host may `.rename()` either usage index, and core then
- * registers the new slug as a new code-first collection while keeping the old
- * one as an orphan — so the rows this progress certifies sit in a table nothing
- * reads any more, and the new index is EMPTY. With the bounds unchanged the
- * generation would be unchanged too, the completed-scope rows would be accepted
- * against that empty index, and health would report its zero counts as exact. A
- * count of zero reported as exact is what permits deleting a component every
- * existing document still uses, which is the outcome this index exists to stop.
+ * the result was put. Progress recorded against rows kept somewhere else
+ * certifies nothing about the tables read now: with the bounds unchanged the
+ * completed-scope rows would be accepted against an empty index, and health
+ * would report its zero counts as exact. A count of zero reported as exact is
+ * what permits deleting a component every existing document still uses, which
+ * is the outcome this index exists to stop.
  *
  * BOTH indexes, not only the one being read: a scope's walk writes to each, so a
- * scope recorded before either was remapped is not finished work after it.
+ * scope recorded before either moved is not finished work after it.
  */
 /**
  * The revision of the DERIVATION ITSELF — the code, not the configuration.
@@ -157,17 +180,28 @@ export function backfillScopeKey(scope: BackfillScope): string {
  * walk gets faster, not when a bound moves (the bounds are in the key already),
  * and not when this file is edited — only when the same document under the same
  * bounds would now yield different rows.
+ *
+ * At 2: a document's rows include the components its placements' overrides
+ * install, and the backfill walks Singles. Progress recorded under 1 is
+ * discarded, so a site upgrading reads as not whole until every scope has been
+ * walked again into the index tables.
  */
-const DERIVATION_REVISION = 1;
+const DERIVATION_REVISION = 2;
 
 export function backfillGeneration(derivation: {
   limits: DocumentLimits;
-  /** The RESOLVED slug class-usage rows were written to. */
+  /** The table class-usage rows are written to. */
   classIndex: string;
-  /** The RESOLVED slug component-usage rows were written to. */
+  /** The table component-usage rows are written to. */
   componentIndex: string;
+  /**
+   * The table variable-usage rows are written to. Part of the key, so a site
+   * walked before the variable index existed counts as not walked and its
+   * backfill fills the new index on its own.
+   */
+  tokenIndex: string;
 }): string {
-  const { limits, classIndex, componentIndex } = derivation;
+  const { limits, classIndex, componentIndex, tokenIndex } = derivation;
   // Spelled out rather than JSON-stringified: key order in a serialisation is
   // not part of the type, so a refactor that reorders the interface would
   // silently invalidate every site's progress. Naming each part means a change
@@ -184,5 +218,6 @@ export function backfillGeneration(derivation: {
     limits.maxBytes,
     classIndex,
     componentIndex,
+    tokenIndex,
   ].join("|");
 }

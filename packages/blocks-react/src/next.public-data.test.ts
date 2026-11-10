@@ -7,7 +7,10 @@
  * below them faked, so what is asserted is what reaches the database layer.
  */
 import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import type {
+  BlockDocument,
+  NamedQueryDeclaration,
+} from "@nextlyhq/blocks-engine";
 import type { PublicReader, PublicReadQuery } from "nextly/runtime";
 import type { ReactElement } from "react";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
@@ -19,7 +22,10 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 // are registered in this process, so the reader cannot read a schema and would
 // refuse every read. The fake declares no hidden field, which is what its rows
 // hold; the reader's own stripping and refusals still run.
-const cached = vi.hoisted(() => ({ calls: [] as unknown[] }));
+const cached = vi.hoisted(() => ({
+  calls: [] as unknown[],
+  asUseCache: false,
+}));
 vi.mock("nextly/runtime", async importOriginal => {
   const actual = await importOriginal<typeof import("nextly/runtime")>();
   return {
@@ -36,6 +42,14 @@ vi.mock("nextly/runtime", async importOriginal => {
       options: Parameters<typeof actual.cachedFind>[1]
     ) => {
       cached.calls.push(options);
+      if (cached.asUseCache) {
+        // What a `"use cache"` function hands back: its value, and a thrown
+        // error reduced to its message.
+        return read().then(
+          value => JSON.parse(JSON.stringify(value)) as unknown,
+          (error: Error) => Promise.reject(new Error(error.message))
+        );
+      }
       return actual.cachedFind(read, options);
     },
   };
@@ -46,6 +60,7 @@ import {
   createDefaultDataProvider,
   type BlocksPublicReader,
   type BlocksQuery,
+  type NamedQueryHost,
 } from "./context";
 import {
   createBlocksPage,
@@ -160,6 +175,34 @@ describe("a routed page's lists", () => {
     });
   });
 
+  it("keep the reader's refusal of a sort through a use-cache read, so a list can fall back to id order", async () => {
+    cached.asUseCache = true;
+    try {
+      const nextly = instance();
+      const context = await renderContext(
+        { collections: ["pages"], field: "content" },
+        nextly
+      );
+      const refusal = Object.assign(new Error("Validation failed."), {
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [{ path: "sort.gone", code: "FIELD_NOT_SORTABLE" }],
+        },
+      });
+      nextly.find.mockImplementationOnce(async () => {
+        throw refusal;
+      });
+      await expect(
+        context.data?.find({ collection: "posts", sort: "gone" })
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: refusal.publicData,
+      });
+    } finally {
+      cached.asUseCache = false;
+    }
+  });
+
   it("on a Single page are cached within the Single's own window", async () => {
     cached.calls.length = 0;
     const nextly = {
@@ -239,5 +282,127 @@ describe("the public reader's shape, written out in this package", () => {
     // The route hands nextly's reader to a provider factory written against
     // this package's, so nextly's must be usable wherever this one is asked.
     expectTypeOf<PublicReader>().toExtend<BlocksPublicReader>();
+  });
+});
+
+describe("a routed page's named queries", () => {
+  /** A declaration reading `count` collections. */
+  function declaration(count = 1): NamedQueryDeclaration {
+    return {
+      name: "events.upcoming",
+      label: "Upcoming events",
+      reads: {
+        collections: Array.from({ length: count }, (_, i) => `c${String(i)}`),
+      },
+      rows: { collection: "c0" },
+    };
+  }
+
+  /** The named-query host the route built for one render. */
+  async function hostOf(
+    nextly: ReturnType<typeof instance>
+  ): Promise<NamedQueryHost> {
+    const context = await renderContext(
+      { collections: ["pages"], field: "content", revalidate: 60 },
+      nextly
+    );
+    if (context.namedQueries === undefined) {
+      throw new Error("the page has no named-query host");
+    }
+    return context.namedQueries;
+  }
+
+  /** The run as a list stores it, which a published page's cache ignores. */
+  const ASKED = { params: {}, window: { limit: 1, offset: 0 } } as const;
+
+  /** The key parts a kept result was cached under, for one deployment. */
+  async function keyPartsIn(deployment: string): Promise<unknown> {
+    vi.stubEnv("NEXT_DEPLOYMENT_ID", deployment);
+    try {
+      const host = await hostOf(instance());
+      cached.calls.length = 0;
+      await host.cache?.({
+        declaration: declaration(),
+        key: ["events.upcoming", "same-run-source"],
+        read: () => Promise.resolve({ rows: [], reads: 0 }),
+        asked: ASKED,
+      });
+      return (cached.calls[0] as { keyParts?: unknown } | undefined)?.keyParts;
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }
+
+  it("keeps a result per deployment, whatever the run's source", async () => {
+    const first = await keyPartsIn("dep-1");
+    const second = await keyPartsIn("dep-2");
+    expect(first).toContain("deployment:dep-1");
+    expect(second).toContain("deployment:dep-2");
+    expect(first).not.toEqual(second);
+  });
+
+  it("keeps no result whose declared reads the cache could not all tag", async () => {
+    const host = await hostOf(instance());
+    const read = vi.fn(() => Promise.resolve({ rows: [], reads: 0 }));
+    cached.calls.length = 0;
+    await host.cache?.({
+      declaration: declaration(129),
+      key: ["k"],
+      read,
+      asked: ASKED,
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(cached.calls).toEqual([]);
+    // Within the bound, every declared read tags it.
+    await host.cache?.({
+      declaration: declaration(3),
+      key: ["k"],
+      read,
+      asked: ASKED,
+    });
+    expect((cached.calls[0] as { tags: string[] }).tags).toHaveLength(3);
+  });
+
+  it("resolves a query from the queries the route was handed, and from no other", async () => {
+    const definition = {
+      ...declaration(),
+      run: () => Promise.resolve({ rows: [] }),
+    };
+    const handed = await renderContext(
+      {
+        collections: ["pages"],
+        field: "content",
+        namedQueries: {
+          definitionOf: name =>
+            name === "events.upcoming" ? definition : undefined,
+        },
+      },
+      instance()
+    );
+    expect(handed.namedQueries?.definitionOf("events.upcoming")).toBe(
+      definition
+    );
+    // A route handed none knows of none, whatever another site registered.
+    expect(
+      (await hostOf(instance())).definitionOf("events.upcoming")
+    ).toBeUndefined();
+  });
+
+  it("refuses the render's day when the site's time zone cannot be read, rather than use UTC", async () => {
+    // No zone on the route, and no site settings this process can read.
+    await expect((await hostOf(instance())).today()).rejects.toThrow(
+      /time zone/
+    );
+    const zoned = await renderContext(
+      {
+        collections: ["pages"],
+        field: "content",
+        timeZone: "Asia/Karachi",
+      },
+      instance()
+    );
+    await expect(zoned.namedQueries?.today()).resolves.toMatch(
+      /^\d{4}-\d{2}-\d{2}$/
+    );
   });
 });

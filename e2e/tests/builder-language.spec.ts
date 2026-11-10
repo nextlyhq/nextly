@@ -44,7 +44,7 @@ async function translatedPage(page: Page): Promise<string> {
     ((await created.json()) as { item: { id: string } }).item.id
   );
   const spanish = await page.request.patch(`${ENTRIES}/${id}?locale=es`, {
-    data: { layout: SPANISH },
+    data: { layout: SPANISH, _overwrite: true },
   });
   expect(spanish.ok(), `writing the Spanish layout: ${spanish.status()}`).toBe(
     true

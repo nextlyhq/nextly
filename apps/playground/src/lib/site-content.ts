@@ -16,7 +16,11 @@
  */
 import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
 import { getNextly } from "nextly";
-import type { NextlyContentReader, NextlySingleReader } from "nextly/runtime";
+import type {
+  NextlyContentReader,
+  NextlySingleReader,
+  PublicSiteSettingsSource,
+} from "nextly/runtime";
 
 import nextlyConfig from "../../nextly.config";
 
@@ -59,9 +63,14 @@ type MediaLookup = Pick<NextlyInstance["media"], "findByID">;
  * `src` — resolves to null and draws nothing.
  */
 export const siteReader: NextlyContentReader &
-  NextlySingleReader & { media: MediaLookup } = {
+  NextlySingleReader &
+  PublicSiteSettingsSource & { media: MediaLookup } = {
   find: async args => (await instance()).find(args),
   findByID: async args => (await instance()).findByID(args),
+  // The site settings a page shows, its name and time zone among them. A
+  // block route reads them through the reader it is given; one that left this
+  // out would read the process's registered instance and warn once.
+  publicSiteSettings: async () => (await instance()).publicSiteSettings(),
   // A Single page reads the document itself through `findSingle` and its BLOCKS
   // through `find`/`findByID`. One reader carrying both is what keeps a page and
   // everything embedded in it coming from a single instance — which on a

@@ -49,6 +49,8 @@ vi.mock("@admin/components/ui", () => ({
   toast: { success: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
 }));
 
+import { OVERWRITE_EVERY_LANGUAGE } from "@admin/lib/document-version";
+
 import { usePublishAllLocales } from "../usePublishAllLocales";
 import { usePublishAllSingleLocales } from "../usePublishAllSingleLocales";
 
@@ -169,9 +171,10 @@ describe("publishing every language", () => {
     expect(api.publishAllSingleLocales).not.toHaveBeenCalled();
   });
 
-  it("goes unjudged, as before versions, for a caller refused the read of every language", async () => {
+  it("chooses to overwrite for a caller refused the read of every language", async () => {
     // A role may publish every language yet read only some of them: the read
-    // is refused, and the publish is still sent, with no version.
+    // is refused, so the publish can carry no version of every language, and
+    // says instead that it is made over whatever each holds.
     api.findByID.mockImplementation(
       async (_slug: string, _id: string, options: { locale?: string }) => {
         if (options.locale === "all") {
@@ -199,7 +202,7 @@ describe("publishing every language", () => {
     expect(api.publishAllEntryLocales).toHaveBeenCalledWith(
       "posts",
       "e1",
-      undefined
+      OVERWRITE_EVERY_LANGUAGE
     );
   });
 

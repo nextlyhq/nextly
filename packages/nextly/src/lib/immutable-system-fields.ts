@@ -23,6 +23,7 @@
  * @module lib/immutable-system-fields
  */
 
+import { isVirtualField } from "../collections/fields/virtual";
 import { fieldProducesColumn } from "../domains/schema/services/field-column-descriptor";
 import { hiddenColumnMatcher } from "../shared/lib/password-fields";
 
@@ -221,4 +222,51 @@ export function stripImmutableSystemFields(
     out[key] = value;
   }
   return out;
+}
+
+/**
+ * The keys of `data` an update of that entity stores nowhere: those
+ * {@link stripImmutableSystemFields} takes out of its row, except a declared
+ * field the update keeps in a table of its own (a field group's, or a
+ * many-to-many's junction), which the write paths take out of the payload and
+ * write there before the row strip runs. What is left is an immutable system
+ * column, a column schema hooks contributed, or a field stored nowhere (a
+ * virtual one).
+ *
+ * Asked of the strip itself and of {@link fieldProducesColumn}'s own causes,
+ * so neither can drift from this answer: a field it gives no column, and that
+ * is not virtual, keeps its values in its own table.
+ */
+export function keysNoUpdateStores(
+  data: Record<string, unknown>,
+  entity: WritableEntityKind,
+  /** The SQL table the payload is written to. */
+  tableName: string,
+  /** The entity's declared top-level fields. */
+  fields: Iterable<DeclaredField | null | undefined>
+): string[] {
+  const declared = [...fields];
+  const kept = stripImmutableSystemFields(data, entity, tableName, declared);
+  const ownTable = keptInOwnTable(declared);
+  return Object.keys(data).filter(
+    key => !Object.hasOwn(kept, key) && !ownTable.has(key)
+  );
+}
+
+/**
+ * The name of each declared field whose values live in a table of its own,
+ * spelt exactly as declared: the write paths take such a value out of the
+ * payload by `field.name` alone, so any other spelling of it reaches the row
+ * strip and is stored nowhere.
+ */
+function keptInOwnTable(
+  fields: readonly (DeclaredField | null | undefined)[]
+): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const field of fields) {
+    if (!field || typeof field.name !== "string") continue;
+    if (fieldProducesColumn(field) || isVirtualField(field)) continue;
+    keys.add(field.name);
+  }
+  return keys;
 }

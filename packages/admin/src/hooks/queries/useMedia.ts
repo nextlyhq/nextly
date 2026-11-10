@@ -340,6 +340,95 @@ export function useMediaResolver(): (mediaId: string) => Promise<Media | null> {
 }
 
 /**
+ * How many images one search of the library answers with: four rows of a
+ * three-column picker, the first page only.
+ */
+const MEDIA_SEARCH_LIMIT = 12;
+
+/**
+ * A promise that settles as `read` does, or rejects once `signal` aborts, so
+ * a caller that moved on to another search stops waiting on this one. The
+ * read itself is left to finish into the shared cache.
+ */
+function untilAborted<T>(read: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(abortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    read.then(
+      value => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    );
+  });
+}
+
+/**
+ * Why an aborted search was rejected: the signal's own reason when it is an
+ * error, else one named `AbortError` as the platform names an abort.
+ */
+function abortReason(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  const aborted = new Error("The search was aborted.");
+  aborted.name = "AbortError";
+  return aborted;
+}
+
+/**
+ * Search the media library's images by name, outside a component's render:
+ * for a picker that searches as the author types.
+ *
+ * Images only, newest first, the first {@link MEDIA_SEARCH_LIMIT} of them; an
+ * empty search asks for none by name, so it answers the newest images. Read
+ * through the same `["media", params]` list query as {@link useMedia}, so a
+ * search repeated is answered from the cache and an upload's invalidation of
+ * `["media"]` reaches it. Rejects when the library cannot be read, so the
+ * picker can say so rather than show an empty library, and when `signal`
+ * aborts. The function is stable for the component's life.
+ *
+ * @experimental
+ */
+export function useMediaSearcher(): (
+  search: string,
+  signal?: AbortSignal
+) => Promise<Media[]> {
+  const queryClient = useQueryClient();
+  return useCallback(
+    (search: string, signal?: AbortSignal) => {
+      const wanted = search.trim();
+      const params: MediaParams = {
+        page: 1,
+        limit: MEDIA_SEARCH_LIMIT,
+        // Left out when empty, so the empty search shares the newest
+        // images' query rather than asking for a blank name.
+        ...(wanted === "" ? {} : { search: wanted }),
+        type: "image",
+        sortBy: "uploadedAt",
+        sortOrder: "desc",
+      };
+      const read = queryClient
+        .fetchQuery<
+          MediaListResponse,
+          Error,
+          MediaListResponse,
+          readonly ["media", MediaParams]
+        >({
+          queryKey: ["media", params],
+          queryFn: () => fetchMedia(params),
+        })
+        .then(response => response.data);
+      return signal === undefined ? read : untilAborted(read, signal);
+    },
+    [queryClient]
+  );
+}
+
+/**
  * useUploadMedia - Mutation hook for uploading a single media file
  *
  * Uploads a file with progress tracking and automatically invalidates the media list cache.

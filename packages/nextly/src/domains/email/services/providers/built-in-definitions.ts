@@ -31,7 +31,11 @@ import {
   NODEMAILER_INSTALL_COMMAND,
   isNodemailerAvailable,
 } from "./nodemailer-loader";
-import { createResendProvider } from "./resend-provider";
+import {
+  createResendProvider,
+  resendDomainStatus,
+  verifyResendKey,
+} from "./resend-provider";
 import { createSendLayerProvider } from "./sendlayer-provider";
 import {
   assertTransportIsSafe,
@@ -232,6 +236,8 @@ export const resendDefinition: RegisteredEmailProvider = defineEmailProvider({
     attachments: true,
     replyTo: true,
     requiresVerifiedSender: true,
+    // A key is checked by reading the account's domains, which sends nothing.
+    connectionTest: true,
   },
   configFields: [
     {
@@ -246,6 +252,8 @@ export const resendDefinition: RegisteredEmailProvider = defineEmailProvider({
   ],
   parseConfig: input => parseOrThrow(apiKeySchema("Resend"), input, "resend"),
   createAdapter: config => createResendProvider(config),
+  testConnection: config => verifyResendKey(config),
+  domainStatus: (config, domain) => resendDomainStatus(config, domain),
 });
 
 export const sendLayerDefinition: RegisteredEmailProvider = defineEmailProvider(

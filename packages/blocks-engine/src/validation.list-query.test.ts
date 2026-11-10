@@ -14,11 +14,17 @@ import {
   LIST_FIELD_KINDS,
   LIST_ISSUE_CODES,
   LIST_KIND_OPS,
+  LIST_MAX_SORT_KEYS,
+  LIST_MAX_SORT_LENGTH,
   listFieldKind,
   listKindSortable,
+  listPageCount,
   listQueryIssues,
   listRelationTarget,
   listSortText,
+  mayPaginateList,
+  outerListOf,
+  paginatedList,
   readListQuery,
   type ListFields,
   type ListFieldSource,
@@ -60,6 +66,9 @@ const FIELDS: Readonly<Record<string, ListFields>> = {
       },
       { name: "author", type: "relationship", relationTo: "authors" },
       { name: "tags", type: "text", hasMany: true },
+      { name: "views", type: "number" },
+      { name: "startsAt", type: "date", timeOnly: true },
+      { name: "body", type: "richText" },
     ],
     ["internalScore", "editorNotes"]
   ),
@@ -415,6 +424,71 @@ describe("a collection list's query at save", () => {
     expect(issues.map(issue => issue.code)).toEqual(["list-field-unsortable"]);
   });
 
+  it("refuses a filter or a sort on a field no list offers, as the editor offers none", () => {
+    // A time of day and rich text have no one value a list compares, and a
+    // relation orders by its stored id, so the editor offers none of them.
+    const judged = (props: Record<string, unknown>) =>
+      listIssues(
+        validate(page(list("l", { collection: "posts", ...props })), withSchema)
+      ).map(issue => [issue.code, issue.message]);
+    expect(judged({ sort: "author" })).toEqual([
+      [
+        "list-field-unsortable",
+        'This list sorts by "author", which links to another entry, so it has no order an author could mean. Choose another field.',
+      ],
+    ]);
+    expect(
+      judged({
+        filters: [{ field: "startsAt", op: "exists", value: true }],
+        sort: "body",
+      })
+    ).toEqual([
+      [
+        "list-field-unfilterable",
+        'This list filters by "startsAt", which holds a value a list cannot compare, such as a time of day, rich text or media. Choose another field.',
+      ],
+      [
+        "list-field-unsortable",
+        'This list sorts by "body", which holds a value a list cannot order by, such as a time of day, rich text or media. Choose another field.',
+      ],
+    ]);
+    // The editor's own offer is still accepted.
+    expect(
+      judged({
+        filters: [{ field: "author", op: "equals", value: "a1" }],
+        sort: "-views,title",
+      })
+    ).toEqual([]);
+  });
+
+  it("refuses a number filter compared with anything but a number", () => {
+    const judged = (filters: unknown[]) =>
+      listIssues(
+        validate(page(list("l", { collection: "posts", filters })), withSchema)
+      ).map(issue => [issue.code, issue.message]);
+    expect(
+      judged([
+        { field: "views", op: "equals", value: "5" },
+        { field: "views", op: "not_equals", value: true },
+      ])
+    ).toEqual([
+      [
+        "list-filter-unsuited",
+        'Filter 1 compares "views", which holds a number, with "5". Choose a number.',
+      ],
+      [
+        "list-filter-unsuited",
+        'Filter 2 compares "views", which holds a number, with true. Choose a number.',
+      ],
+    ]);
+    expect(
+      judged([
+        { field: "views", op: "equals", value: 5 },
+        { field: "views", op: "exists", value: false },
+      ])
+    ).toEqual([]);
+  });
+
   describe("related sources", () => {
     const entryContext: ValidationContext = {
       ...withSchema,
@@ -480,6 +554,84 @@ describe("a collection list's query at save", () => {
           path: "/nodes/0/slots/children/0/slots/children/0/props/relation",
         }),
       ]);
+    });
+
+    it("judges a list in another's empty state by the item that list sits in, as it draws", () => {
+      // A list's empty state is drawn with no entry of its own, so a list
+      // there shows the related entries of the item around the outer list,
+      // never of an entry the outer list did not find.
+      const inEmpty = (inner: Record<string, unknown>, around?: unknown) => {
+        const outer = {
+          ...list("cats", { collection: "categories" }),
+          slots: { children: [], empty: [list("inner", inner)] },
+        };
+        return listIssues(
+          validate(
+            page(
+              around === undefined
+                ? outer
+                : list("posts", { collection: "posts" }, [outer])
+            ),
+            withSchema
+          )
+        ).map(issue => [issue.code, issue.path]);
+      };
+      const featured = {
+        collection: "posts",
+        relation: { of: "item", field: "featuredPosts" },
+      };
+      expect(inEmpty(featured)).toEqual([
+        ["list-relation-invalid", "/nodes/0/slots/empty/0/props/relation"],
+      ]);
+      // Inside a list of posts, the item is a post, which has no
+      // featuredPosts, and its categories are what the empty state reads.
+      expect(inEmpty(featured, "posts")).toEqual([
+        [
+          "list-field-unknown",
+          "/nodes/0/slots/children/0/slots/empty/0/props/relation",
+        ],
+      ]);
+      expect(
+        inEmpty(
+          {
+            collection: "categories",
+            relation: { of: "item", field: "categories" },
+          },
+          "posts"
+        )
+      ).toEqual([]);
+    });
+
+    it("refuses the entry's relation on a page that is no collection's entry", () => {
+      const issues = listIssues(
+        validate(
+          page(
+            list("cats", {
+              collection: "categories",
+              relation: { of: "entry", field: "categories" },
+            })
+          ),
+          { ...withSchema, bindingEntry: { single: "home" } }
+        )
+      );
+      expect(issues.map(issue => [issue.code, issue.message])).toEqual([
+        [
+          "list-relation-no-entry",
+          "This page isn't an entry in a collection, so it has no related entries to show. Choose a collection.",
+        ],
+      ]);
+      // Not knowing the page is still judged by shape alone.
+      expect(
+        listQueryIssues(
+          [
+            list("cats", {
+              collection: "categories",
+              relation: { of: "entry", field: "categories" },
+            }),
+          ],
+          { fields }
+        )
+      ).toEqual([]);
     });
 
     it("refuses an item relation outside any list", () => {
@@ -609,6 +761,38 @@ describe("readListQuery", () => {
     ]);
     expect(problems.map(problem => problem.prop)).toEqual(["limit", "filters"]);
   });
+
+  it("holds a sort to the most keys and characters a list stores", () => {
+    const keys = (count: number, name = "title") =>
+      Array.from({ length: count }, (_, index) => `${name}${String(index)}`);
+    // The most a list holds: every key naming a 63-character column.
+    const widest = keys(LIST_MAX_SORT_KEYS, "f".repeat(61)).join(",");
+    expect(readListQuery({ sort: widest }).problems).toEqual([]);
+    expect(readListQuery({ sort: widest }).query.sort).toHaveLength(
+      LIST_MAX_SORT_KEYS
+    );
+    // One key more, and the same keys padded past the length, read as no
+    // sort, told apart from none by the problem.
+    const tooMany = readListQuery({
+      sort: keys(LIST_MAX_SORT_KEYS + 1).join(","),
+    });
+    expect(tooMany.query.sort).toEqual([]);
+    expect(tooMany.problems).toEqual([
+      {
+        prop: "sort",
+        code: "list-sort-invalid",
+        message: `A list sorts by at most ${String(LIST_MAX_SORT_KEYS)} fields; this one sorts by ${String(LIST_MAX_SORT_KEYS + 1)}.`,
+      },
+    ]);
+    const padded = `title${" ".repeat(LIST_MAX_SORT_LENGTH)},`;
+    expect(readListQuery({ sort: padded }).problems).toEqual([
+      {
+        prop: "sort",
+        code: "list-sort-invalid",
+        message: `A list's sort holds at most ${String(LIST_MAX_SORT_LENGTH)} characters; this one holds ${String(padded.length)}.`,
+      },
+    ]);
+  });
 });
 
 describe("listSortText", () => {
@@ -715,5 +899,267 @@ describe("listQueryIssues", () => {
     expect(issues.map(issue => [issue.nodeId, issue.code])).toEqual([
       ["wrong", "list-limit-invalid"],
     ]);
+  });
+});
+
+describe("a list split into pages", () => {
+  /** The pagination codes found, each with the list it is about. */
+  function pageCodes(
+    nodes: unknown[],
+    documentKind?: string
+  ): { nodeId: string; code: string; message: string }[] {
+    return listQueryIssues(nodes, {
+      ...(documentKind === undefined ? {} : { documentKind }),
+    })
+      .filter(issue => issue.code.startsWith("list-paginate"))
+      .map(({ nodeId, code, message }) => ({ nodeId, code, message }));
+  }
+
+  it("reads the switch as stored: on, off, or a problem", () => {
+    expect(readListQuery({ paginate: true }).query.paginate).toBe(true);
+    for (const off of [false, undefined]) {
+      const read = readListQuery({ paginate: off });
+      expect(read.query).not.toHaveProperty("paginate");
+      expect(read.problems).toEqual([]);
+    }
+    const bad = readListQuery({ paginate: "yes" });
+    expect(bad.query).not.toHaveProperty("paginate");
+    expect(bad.problems.map(problem => problem.code)).toEqual([
+      "list-paginate-invalid",
+    ]);
+  });
+
+  it("accepts one list split into pages on a page, at save", () => {
+    const issues = validate(
+      page(list("news", { collection: "posts", paginate: true })),
+      withSchema
+    );
+    expect(listIssues(issues)).toEqual([]);
+  });
+
+  it("refuses a second list split into pages, naming the first by its name", () => {
+    const first = {
+      ...list("a", { collection: "posts", paginate: true }),
+      name: "Latest posts",
+    };
+    const found = pageCodes([
+      first,
+      list("b", { collection: "posts", paginate: true }),
+      // Not split into pages: never judged against the first.
+      list("c", { collection: "posts" }),
+    ]);
+    expect(found).toEqual([
+      {
+        nodeId: "b",
+        code: "list-paginate-twice",
+        message: expect.stringContaining('"Latest posts" already is') as string,
+      },
+    ]);
+  });
+
+  it("names an unnamed first list as another on the page", () => {
+    const [found] = pageCodes([
+      list("a", { collection: "posts", paginate: true }),
+      list("b", { collection: "posts", paginate: true }),
+    ]);
+    expect(found?.message).toContain("another list on this page already is");
+  });
+
+  it("refuses a list split into pages inside another list, and lets the outer page", () => {
+    const found = pageCodes([
+      list("outer", { collection: "posts", paginate: true }, [
+        list("inner", { collection: "posts", paginate: true }),
+      ]),
+    ]);
+    expect(found.map(({ nodeId, code }) => ({ nodeId, code }))).toEqual([
+      { nodeId: "inner", code: "list-paginate-nested" },
+    ]);
+  });
+
+  it("refuses related entries split into pages, which have no count", () => {
+    const found = pageCodes([
+      list("tags", {
+        collection: "categories",
+        relation: { of: "entry", field: "categories" },
+        paginate: true,
+      }),
+    ]);
+    expect(found.map(({ code }) => code)).toEqual(["list-paginate-related"]);
+  });
+
+  it.each([
+    ["component", "in a component"],
+    ["region", "in a Layout region"],
+  ])("refuses a list split into pages in a %s", (kind, words) => {
+    const [found] = pageCodes(
+      [list("shared", { collection: "posts", paginate: true })],
+      kind
+    );
+    expect(found?.code).toBe("list-paginate-shared");
+    expect(found?.message).toContain(words);
+  });
+
+  it.each(["page", "pattern", "template"])(
+    "lets a %s hold a list split into pages",
+    kind => {
+      expect(
+        pageCodes([list("one", { collection: "posts", paginate: true })], kind)
+      ).toEqual([]);
+    }
+  );
+
+  it("judges a component's list by the document's kind at save", () => {
+    const issues = validate(
+      {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "component",
+        nodes: [list("shared", { collection: "posts", paginate: true })],
+        exposed: [],
+      } as unknown as BlockDocument,
+      shapeOnly
+    );
+    expect(listIssues(issues).map(issue => issue.code)).toEqual([
+      "list-paginate-shared",
+    ]);
+  });
+});
+
+describe("the list a page's address pages", () => {
+  it("is the first split into pages, in document order, outside any list", () => {
+    const nodes = [
+      {
+        id: "box",
+        type: "core/box",
+        version: 1,
+        props: {},
+        slots: {
+          children: [
+            list("loop", { collection: "posts" }, [
+              list("nested", { collection: "posts", paginate: true }),
+            ]),
+            {
+              ...list("first", { collection: "posts", paginate: true }),
+              name: " News ",
+            },
+          ],
+        },
+      },
+      list("second", { collection: "posts", paginate: true }),
+    ];
+    expect(paginatedList(nodes)).toEqual({
+      id: "first",
+      name: "News",
+      props: { collection: "posts", paginate: true },
+    });
+  });
+
+  it("refuses one in another list's empty state, which is drawn only when that list is empty", () => {
+    const nodes = [
+      {
+        ...list("outer", { collection: "posts" }),
+        slots: {
+          children: [],
+          empty: [list("fallback", { collection: "posts", paginate: true })],
+        },
+      },
+    ];
+    expect(paginatedList(nodes)).toBeUndefined();
+    expect(
+      listQueryIssues(nodes)
+        .filter(issue => issue.code.startsWith("list-paginate"))
+        .map(({ nodeId, code }) => ({ nodeId, code }))
+    ).toEqual([{ nodeId: "fallback", code: "list-paginate-nested" }]);
+  });
+
+  it("skips related entries, and finds none where nothing is split", () => {
+    expect(
+      paginatedList([
+        list("rel", {
+          collection: "posts",
+          relation: { of: "entry", field: "posts" },
+          paginate: true,
+        }),
+        list("plain", { collection: "posts" }),
+      ])
+    ).toBeUndefined();
+  });
+
+  it("takes a list whose split is bound as one that may page, and none other", () => {
+    const bound = {
+      ...list("bound", { collection: "posts" }),
+      bindings: { paginate: { source: "entry", field: "paged" } },
+    };
+    expect(
+      mayPaginateList([list("plain", { collection: "posts" }), bound])
+    ).toEqual({
+      id: "bound",
+      props: { collection: "posts", paginate: true },
+    });
+    expect(paginatedList([bound])).toBeUndefined();
+    expect(
+      mayPaginateList([list("plain", { collection: "posts" })])
+    ).toBeUndefined();
+  });
+
+  it("judges each list by the props a caller reads in place of the stored ones", () => {
+    const nodes = [
+      list("stored", { collection: "posts", paginate: true }),
+      list("bound", { collection: "posts", limit: 5 }),
+    ];
+    // As a page whose binding pass turns the stored split off and the
+    // second list's bound split on: the second is the one that pages, and
+    // the answer carries its props as read.
+    expect(
+      paginatedList(nodes, Number.MAX_SAFE_INTEGER, node =>
+        node.id === "bound"
+          ? { collection: "posts", limit: 5, paginate: true }
+          : { collection: "posts", paginate: false }
+      )
+    ).toEqual({
+      id: "bound",
+      props: { collection: "posts", limit: 5, paginate: true },
+    });
+  });
+
+  it("stops at its node bound", () => {
+    const nodes = [
+      list("a", { collection: "posts" }),
+      list("b", { collection: "posts", paginate: true }),
+    ];
+    expect(paginatedList(nodes, 1)).toBeUndefined();
+    expect(paginatedList(nodes, 2)?.id).toBe("b");
+  });
+});
+
+describe("how many pages a list has", () => {
+  it("applies the offset once, before paging", () => {
+    // 25 entries, 10 skipped, 10 to a page: pages 1 and 2 only.
+    expect(listPageCount(25, 10, 10)).toBe(2);
+    expect(listPageCount(30, 0, 10)).toBe(3);
+    expect(listPageCount(31, 0, 10)).toBe(4);
+  });
+
+  it("is never fewer than one, which shows the empty state", () => {
+    expect(listPageCount(0, 0, 10)).toBe(1);
+    expect(listPageCount(5, 10, 10)).toBe(1);
+  });
+});
+
+describe("outerListOf", () => {
+  it("names the list whose entries hold a block, passing over an empty state", () => {
+    const inner = list("inner", { collection: "categories" });
+    const nodes = [
+      list("posts", { collection: "posts" }, [
+        {
+          ...list("cats", { collection: "categories" }),
+          slots: { children: [inner], empty: [list("none", {})] },
+        },
+      ]),
+    ] as never;
+    expect(outerListOf(nodes, "inner")?.id).toBe("cats");
+    // The empty state is drawn with the item around its list.
+    expect(outerListOf(nodes, "none")?.id).toBe("posts");
+    expect(outerListOf(nodes, "cats")?.id).toBe("posts");
+    expect(outerListOf(nodes, "posts")).toBeUndefined();
   });
 });

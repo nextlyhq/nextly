@@ -31,7 +31,7 @@
  *
  * ## Why a live walk rather than the usage index
  *
- * `nx_pb_component_usage` holds component-to-component edges and looks like the
+ * The component usage index holds component-to-component edges and looks like the
  * adjacency table this wants. Its maintenance runs POST-COMMIT and can
  * undercount — a document that still references something reading as
  * referencing nothing — and an undercount here is a MISSED cycle, so the index

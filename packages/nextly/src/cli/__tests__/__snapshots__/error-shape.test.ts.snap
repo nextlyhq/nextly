@@ -401,6 +401,13 @@ exports[`each cause a documented code covers, as a command ends with it > SQLITE
   Docs: https://nextlyhq.com/docs/cli/errors/nextly-migration-foreign-key-violation  (NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION)"
 `;
 
+exports[`each code, as a command ends with it > ACTION_NOT_AVAILABLE 1`] = `
+"✗ This action isn't available for this entry.
+  Why:  An action runs only on the entries its plugin declared it for, judged on each entry as its caller reads it. Nothing was run.
+  Next: Run the action on an entry the admin offers it on.
+  Docs: https://nextlyhq.com/docs/cli/errors/action-not-available  (ACTION_NOT_AVAILABLE)"
+`;
+
 exports[`each code, as a command ends with it > ADMIN_EMAIL_IN_USE 1`] = `
 "✗ An account already uses that email. Nothing was created.
   Why:  That account would be given the administrator role and keep its own password, so the password given would be ignored.
@@ -899,9 +906,9 @@ exports[`each code, as a command ends with it > MIGRATION_IRREVERSIBLE 1`] = `
 `;
 
 exports[`each code, as a command ends with it > MIGRATION_MISSING 1`] = `
-"✗ \`20261020_120000_add_posts.sql\` is recorded as applied, but its file is not in the migrations folder.
-  Why:  It ran on this database and no removal of it is recorded, so the folder may be from an older build.
-  Next: Restore the file from version control, or deploy the build that has it, then run \`nextly migrate\` again.
+"✗ The ledger records 1 applied migration this build's migrations folder lacks (\`20261020_120000_add_posts.sql\`), so \`nextly migrate\` ran nothing.
+  Why:  A newer build has migrated this database, or a file was removed from the folder after it ran.
+  Next: Deploy the build that holds the files, or put them back. If a file was removed on purpose, record that with \`nextly migrate:resolve --removed <file>\`: the migration stays applied, and is never run again if its file returns.
   Docs: https://nextlyhq.com/docs/cli/errors/migration-missing  (MIGRATION_MISSING)"
 `;
 
@@ -1091,6 +1098,13 @@ exports[`each code, as a command ends with it > PLAN_CHANGED_AFTER_CONSENT 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/plan-changed-after-consent  (PLAN_CHANGED_AFTER_CONSENT)"
 `;
 
+exports[`each code, as a command ends with it > PLUGIN_ACTION_ROW_NOT_FOUND 1`] = `
+"✗ A plugin's action named an entry that could not be found for this caller.
+  Why:  An action acts only on entries its caller may read; one they may not read is answered as one that does not exist. Nothing was run.
+  Next: Run the action on an entry the caller can open in the admin.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-action-row-not-found  (PLUGIN_ACTION_ROW_NOT_FOUND)"
+`;
+
 exports[`each code, as a command ends with it > PLUGIN_ADMIN_WIDGET_NOT_JSON 1`] = `
 "✗ Plugin "reviews" contributes an admin widget "stats" that is not JSON (keys: query).
   Why:  It is serialized into /api/admin-meta/workspace, so it may hold only strings, numbers, booleans, null, arrays and plain objects — no functions, class instances, Dates, Maps or bigints. A bigint in query.where throws while the whole workspace payload is serialized, which fails that request for every admin rather than just this card.
@@ -1140,6 +1154,20 @@ exports[`each code, as a command ends with it > PLUGIN_DISABLED 1`] = `
   Why:  A disabled plugin's hooks do not run, so an install or uninstall of it could record a state its hook never produced. Nothing was changed.
   Next: Enable it in the config to install or uninstall it.
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-disabled  (PLUGIN_DISABLED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_SURFACE_COLLISION 1`] = `
+"✗ Plugin "archive" overrides the "delete" action on "pages", which "layouts" already overrides.
+  Why:  One action can be drawn one way.
+  Next: Drop one of the two overrides.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-surface-collision  (PLUGIN_DOCUMENT_SURFACE_COLLISION)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_SURFACE_INVALID 1`] = `
+"✗ Plugin "layouts" replaces the "delete" action on "pages" with no component to open.
+  Why:  A plugin may hide or replace only the delete and unpublish actions; a replacement needs a component to open and a label of text if it has one, and a panel section needs a title and a component.
+  Next: Correct the override or section the message names in the plugin's \`contributes.admin.views\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-surface-invalid  (PLUGIN_DOCUMENT_SURFACE_INVALID)"
 `;
 
 exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_VIEW_COLLISION 1`] = `
@@ -1592,8 +1620,8 @@ exports[`each code, as a command ends with it > RESOLVE_LOCK_RELEASED 1`] = `
 
 exports[`each code, as a command ends with it > RESOLVE_MODE_REQUIRED 1`] = `
 "✗ \`nextly migrate:resolve\` needs exactly one thing to record.
-  Why:  It was given none of \`--applied\`, \`--rolled-back\` and \`--failed-cleanup\`.
-  Next: Provide exactly one of --applied, --rolled-back, or --failed-cleanup.
+  Why:  It was given none of \`--applied\`, \`--rolled-back\`, \`--failed-cleanup\` and \`--removed\`.
+  Next: Provide exactly one of --applied, --rolled-back, --failed-cleanup, or --removed.
   Docs: https://nextlyhq.com/docs/cli/errors/resolve-mode-required  (RESOLVE_MODE_REQUIRED)"
 `;
 

@@ -8,10 +8,10 @@
  * hooks/__tests__/system-resources-parity.test.ts does: the `nextly` package
  * entry is server code and does not belong in the admin's client bundle.
  */
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { PasswordSchema } from "../../../nextly/src/schemas/_zod/validation";
-import { passwordSchema } from "../lib/validation";
+import { passwordSchema } from "../lib/password-schema";
 
 import { createUserFormSchema, editUserFormSchema } from "./userform";
 
@@ -96,6 +96,12 @@ const FORMS: { name: string; accepts: (password: string) => boolean }[] = [
       editUserFormSchema.safeParse({ ...account, password }).success,
   },
 ];
+
+// The common-password list arrives in its own chunk; these verdicts are the
+// ones given once it has.
+beforeAll(async () => {
+  await vi.dynamicImportSettled();
+});
 
 describe("the server's password rule", () => {
   it.each(CASES)("decides $name as expected", ({ password, server }) => {

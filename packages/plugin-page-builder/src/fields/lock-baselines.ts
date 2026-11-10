@@ -55,6 +55,16 @@ export async function storedFormsOf(
 }
 
 /**
+ * Whether the stored read can name the field at `path`: a top-level field, or
+ * one inside named groups (`hero.body`), which is where the editor opens a
+ * blocks field. A field in a repeater's rows (`rows[2].body`) has no stored
+ * path of its own.
+ */
+export function storedReadReaches(path: string): boolean {
+  return path !== "" && !/[[\]]/.test(path) && !path.split(".").includes("");
+}
+
+/**
  * The stored forms, and whether they could be read at all.
  *
  * Two different empties. A create has nothing stored, so every placement break
@@ -87,6 +97,10 @@ export async function readStoredForms(
   if (write === undefined || document === undefined) {
     return { forms: [], readable: true };
   }
+  // A field in a repeater's rows is no path core's stored read names, and
+  // asking would fail the save. It is unreadable instead, as a language not
+  // ready is: what a stored form would excuse is kept and logged, not refused.
+  if (!storedReadReaches(field)) return { forms: [], readable: false };
   const forms: BlockDocument[] = [];
   for (const draft of changed) {
     const read = await readOneForm(

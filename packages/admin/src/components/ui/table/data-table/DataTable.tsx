@@ -19,7 +19,11 @@ import { useEffect, useMemo, useState, type JSX } from "react";
 
 import { useServerTable } from "@admin/hooks/useServerTable";
 
-import { DataTableView } from "./DataTableView";
+import {
+  DataTableView,
+  HeldPluginRegistrations,
+  useDataTablePluginRegistrations,
+} from "./DataTableView";
 import type { DataTableSelection } from "./DataTableView";
 import { getPluginBulkActions } from "./plugin-registry";
 import type {
@@ -129,6 +133,17 @@ export function DataTable<Row extends object>({
   emptyMessage,
   registryKey,
 }: DataTableProps<Row>): JSX.Element {
+  // One subscribed snapshot of the plugins' registrations, read by the
+  // selection bar's bulk actions here and handed to the view for its columns
+  // and row actions, so an action registered while the list is on screen
+  // reaches the bar as it reaches the rows.
+  const registered = useDataTablePluginRegistrations();
+  const pluginBulkActions = useMemo(
+    () =>
+      registryKey ? getPluginBulkActions<Row>(registryKey, registered) : [],
+    [registryKey, registered]
+  );
+
   const effectiveFetcher = useMemo<DataFetcher<Row>>(
     () => fetcher ?? makeStaticFetcher(data ?? []),
     [fetcher, data]
@@ -230,10 +245,7 @@ export function DataTable<Row extends object>({
             {selectedRows.length === 1 ? "" : "s"} selected
           </span>
           <div className="flex items-center gap-2">
-            {[
-              ...(bulkActions ?? []),
-              ...(registryKey ? getPluginBulkActions<Row>(registryKey) : []),
-            ].map(action => (
+            {[...(bulkActions ?? []), ...pluginBulkActions].map(action => (
               <Button
                 key={action.id}
                 size="sm"
@@ -267,38 +279,41 @@ export function DataTable<Row extends object>({
           across the parent's curve, which is the corollary the radius contract
           in `theme.css` states. */}
       <div className="overflow-hidden rounded-md border border-border bg-card text-card-foreground">
-        <DataTableView<Row>
-          columns={columns}
-          rows={rows}
-          getRowId={getRowId}
-          rowHref={rowHref}
-          onRowClick={onRowClick}
-          primaryColumn={primaryColumn}
-          selection={selection}
-          rowActions={rowActions}
-          registryKey={registryKey}
-          loading={loading}
-          error={error}
-          emptyMessage={emptyMessage}
-          bordered={false}
-          // The table owns its pager. This is the surface plugin code renders
-          // through, so a pager left beside the table here would put every
-          // consumer outside the responsive placement rather than just this
-          // component. paginationMeta.page is the 1-indexed wire value; the
-          // controls and handlePageChange both work in 0-indexed page numbers.
-          pagination={{
-            currentPage: paginationMeta.page - 1,
-            totalPages: paginationMeta.totalPages,
-            totalItems: paginationMeta.total,
-            pageSize: paginationMeta.limit,
-            pageSizeOptions: paginationConfig.pageSizeOptions,
-            showPageSizeSelector: paginationConfig.showPageSizeSelector,
-            maxVisiblePages: paginationConfig.maxVisiblePages,
-            onPageChange: handlePageChange,
-            onPageSizeChange: handlePageSizeChange,
-            isLoading: loading,
-          }}
-        />
+        {/* The view reads the bar's snapshot rather than subscribing apart. */}
+        <HeldPluginRegistrations.Provider value={registered}>
+          <DataTableView<Row>
+            columns={columns}
+            rows={rows}
+            getRowId={getRowId}
+            rowHref={rowHref}
+            onRowClick={onRowClick}
+            primaryColumn={primaryColumn}
+            selection={selection}
+            rowActions={rowActions}
+            registryKey={registryKey}
+            loading={loading}
+            error={error}
+            emptyMessage={emptyMessage}
+            bordered={false}
+            // The table owns its pager. This is the surface plugin code renders
+            // through, so a pager left beside the table here would put every
+            // consumer outside the responsive placement rather than just this
+            // component. paginationMeta.page is the 1-indexed wire value; the
+            // controls and handlePageChange both work in 0-indexed page numbers.
+            pagination={{
+              currentPage: paginationMeta.page - 1,
+              totalPages: paginationMeta.totalPages,
+              totalItems: paginationMeta.total,
+              pageSize: paginationMeta.limit,
+              pageSizeOptions: paginationConfig.pageSizeOptions,
+              showPageSizeSelector: paginationConfig.showPageSizeSelector,
+              maxVisiblePages: paginationConfig.maxVisiblePages,
+              onPageChange: handlePageChange,
+              onPageSizeChange: handlePageSizeChange,
+              isLoading: loading,
+            }}
+          />
+        </HeldPluginRegistrations.Provider>
       </div>
 
       {slots?.afterTable}

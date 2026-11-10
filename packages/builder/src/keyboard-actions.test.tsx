@@ -1321,6 +1321,44 @@ describe("Escape belongs to the editor, not to the page behind it", () => {
     expect(hostCancel).not.toHaveBeenCalled();
   });
 
+  it("with nothing selected, tells the host, which leaves a look edited on its own", () => {
+    const editor = editorSpy(pair(), null);
+    const onEscapeWithoutSelection = vi.fn();
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+          onEscapeWithoutSelection={onEscapeWithoutSelection}
+        />
+      </ShortcutProvider>
+    );
+
+    press("Escape");
+
+    expect(onEscapeWithoutSelection).toHaveBeenCalledTimes(1);
+    expect(editor.select).not.toHaveBeenCalled();
+  });
+
+  it("with a block selected, goes up a level and leaves the host's look alone", () => {
+    const editor = editorSpy(pair(), "a");
+    const onEscapeWithoutSelection = vi.fn();
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+          onEscapeWithoutSelection={onEscapeWithoutSelection}
+        />
+      </ShortcutProvider>
+    );
+
+    press("Escape");
+
+    expect(editor.select).toHaveBeenCalledWith(null);
+    expect(onEscapeWithoutSelection).not.toHaveBeenCalled();
+  });
+
   it("holds the key even with NOTHING selected", () => {
     /*
      * THE case, and the one a rule written around what Escape ACHIEVES would

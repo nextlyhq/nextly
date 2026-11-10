@@ -36,6 +36,7 @@ import {
   Quote,
   RectangleVertical,
   Repeat,
+  ScanText,
   Search,
   ShoppingCart,
   Square,
@@ -115,6 +116,9 @@ const ICONS: Record<string, LucideIcon> = {
   cart: ShoppingCart,
   star: Star,
   component: Component,
+  // An entry's own content, drawn read-only inside its template: a page of
+  // lines inside a frame, the content and the template around it.
+  entry: ScanText,
 };
 
 /**

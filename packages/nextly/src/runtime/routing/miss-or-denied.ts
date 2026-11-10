@@ -34,3 +34,20 @@ export function isMissOrDenied(error: unknown): boolean {
     NextlyError.isCode(error, "AUTH_REQUIRED")
   );
 }
+
+/**
+ * Whether a failed read was refused by access: a denial (`FORBIDDEN`), or a
+ * visitor asked to sign in (`AUTH_REQUIRED`). The read policy hides what was
+ * asked from this caller, which a route answers as not found, as it answers
+ * a miss, and a cached read keeps as its answer.
+ *
+ * The two codes only, not every 403 or 401: an unverified email, a disabled
+ * builder, a failed CSRF check or an expired session says something the
+ * caller can act on, or that the site is misconfigured, and stays an error.
+ */
+export function isReadRefusal(error: unknown): error is NextlyError {
+  return (
+    NextlyError.isCode(error, "FORBIDDEN") ||
+    NextlyError.isCode(error, "AUTH_REQUIRED")
+  );
+}

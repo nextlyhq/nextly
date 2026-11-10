@@ -43,10 +43,35 @@ Startup refuses a type outside that namespace, one of core's, one declared twice
 lower-case segments separated by dots. These are webhook types, sent to other systems; they are
 separate from `contributes.events`, the plugin's own events inside the server.
 
-An endpoint can subscribe to a declared type, and the admin's webhook form offers it. A plugin cannot
-yet send an event of its own type, so such a subscription receives nothing for now. When a plugin is
+An endpoint can subscribe to a declared type, and the admin's webhook form offers it. When a plugin is
 disabled its types are no longer offered and a new subscription to one is refused, while an endpoint
 that already subscribes keeps it, shown in the admin as unavailable.
+
+The plugin records an event of one of its types with `ctx.webhooks.record`. Inside its own
+`ctx.db.transaction`, pass the transaction's handle as `tx`: the event commits with the plugin's
+writes and is never delivered if they roll back. Without `tx` it is recorded on its own, and a call
+made while a transaction is open is refused.
+
+```ts
+await ctx.db.transaction(async tx => {
+  // … the plugin's own writes, through tx …
+  await ctx.webhooks.record({
+    type: "acme-shop.order.paid",
+    id: order.id,
+    data: { total: order.total },
+    tx,
+  });
+});
+```
+
+A type the plugin doesn't declare, another plugin's or one of core's, is refused by name before
+anything is written. The event goes to the endpoints subscribed to its type or to `*`, and to no
+other. Its resource is `{ "kind": "plugin", "plugin": "acme-shop", "id": "…" }`, with the plugin's
+admin slug and no `collection`, so an endpoint limited to certain collections never receives it, even
+one limited to a collection with the same slug as the plugin. The delivery log shows it as
+`plugin acme-shop · <id>`. `previous` is optional, and the event's changed fields are worked out from
+it as core's are. Like core's events, nothing is recorded while no endpoint exists and the audit trail
+is off. This surface is experimental.
 
 ## Signing
 
@@ -74,7 +99,8 @@ So verification is: **check the timestamp is recent, then** split the header on 
 split each token on its comma, and accept if any token matches.
 
 The freshness check is not optional. Signing the timestamp proves it was not altered; it does
-not make the delivery expire. Nextly's own `verifySignature` rejects anything outside a
+not make the delivery expire. Nextly's own verifier (what a plugin calls as
+`ctx.security.webhooks.verify` with `standardWebhooks`) rejects anything outside a
 **300-second (5 minute)** tolerance _before_ it compares signatures, and a receiver that skips
 that step will accept a captured request forever.
 
