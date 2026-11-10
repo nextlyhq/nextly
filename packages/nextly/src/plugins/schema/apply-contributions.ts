@@ -631,10 +631,13 @@ function holdBack(
   const { target, fields } = clause;
   if (type !== undefined && allOn !== undefined) {
     if (type.kind === "fieldGroup") return;
-    withheld.set(
-      scopedTypeKey(type.kind, slug),
-      fieldsOnlyIn(allOn, folded, type.kind, slug)
-    );
+    // The fold's answer first, then the clause's own declaration, in case
+    // the column was made by a scope the fold with every type on passes over
+    // (`keptScopeFields` keeps the one the column matches).
+    const key = scopedTypeKey(type.kind, slug);
+    const held =
+      withheld.get(key) ?? fieldsOnlyIn(allOn, folded, type.kind, slug);
+    withheld.set(key, [...held, ...fields]);
     return;
   }
   const candidates: ContentTypeCandidate[] =
@@ -642,7 +645,7 @@ function holdBack(
   for (const reached of typesReachedBy({ every: target.every }, candidates)) {
     if (reached.kind === "fieldGroup") continue;
     const key = scopedTypeKey(reached.kind, slug);
-    withheld.set(key, withFirstOfEachName(withheld.get(key), fields));
+    withheld.set(key, [...(withheld.get(key) ?? []), ...fields]);
   }
 }
 
@@ -727,22 +730,6 @@ function fieldsOnlyIn(
     (field as { name?: string }).name?.toLowerCase();
   const kept = new Set(of(off).map(nameOf));
   return of(on).filter(field => !kept.has(nameOf(field)));
-}
-
-/**
- * `held` with each of `fields` whose name it does not have yet, compared as
- * `tryExtend` compares them: switched on, a type takes the first clause's
- * field of a name and leaves a later one unapplied, so only that one was ever
- * its column.
- */
-function withFirstOfEachName(
-  held: readonly FieldConfig[] = [],
-  fields: readonly FieldConfig[]
-): FieldConfig[] {
-  const nameOf = (field: FieldConfig) =>
-    (field as { name?: string }).name?.toLowerCase();
-  const seen = new Set(held.map(nameOf));
-  return [...held, ...fields.filter(field => !seen.has(nameOf(field)))];
 }
 
 /** Records `fields` as `owner`'s on the type `slug`, in `added`. */

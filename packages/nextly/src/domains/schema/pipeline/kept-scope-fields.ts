@@ -22,10 +22,16 @@
  */
 
 import type { FieldConfig } from "../../../collections/config/define-collection";
+import type { SupportedDialect } from "../../../database/schema-registry";
 import { companionTableOf } from "../../i18n/migration/derive-companion-spec";
-import { columnsDeclaredBy } from "../services/field-column-descriptor";
+import {
+  columnsDeclaredBy,
+  type ColumnOrigin,
+} from "../services/field-column-descriptor";
 
-import type { NextlySchemaSnapshot } from "./diff/types";
+import { buildDesiredTableFromFields } from "./diff/build-from-fields";
+import { typesDiffer } from "./diff/declared-size";
+import type { ColumnSpec, NextlySchemaSnapshot } from "./diff/types";
 import type { DesiredSchema } from "./types";
 import {
   currentWithheldScopeFields,
@@ -33,17 +39,33 @@ import {
   type ScopedKind,
 } from "./withheld-scope-fields";
 
-/** The names of the columns each table has, from a snapshot. */
+/** The columns a set of tables has, as a snapshot of them states them. */
+export interface ExistingColumns {
+  /** The names of each table's columns. */
+  names: ReadonlyMap<string, ReadonlySet<string>>;
+  /** Each column's declaration, where the snapshot states one. */
+  specs: ReadonlyMap<string, ReadonlyMap<string, ColumnSpec>>;
+  /** The dialect the declarations are in; absent, none is compared. */
+  dialect?: SupportedDialect;
+}
+
+/** The columns each table of `snapshot` has. */
 export function columnsByTable(
-  snapshot: NextlySchemaSnapshot
-): ReadonlyMap<string, ReadonlySet<string>> {
-  const columns = new Map<string, Set<string>>();
-  const add = (table: string, names: readonly string[]) =>
-    columns.set(table, new Set([...(columns.get(table) ?? []), ...names]));
+  snapshot: NextlySchemaSnapshot,
+  dialect?: SupportedDialect
+): ExistingColumns {
+  const names = new Map<string, Set<string>>();
+  const specs = new Map<string, Map<string, ColumnSpec>>();
+  const add = (table: string, columns: readonly string[]) =>
+    names.set(table, new Set([...(names.get(table) ?? []), ...columns]));
   for (const table of snapshot.tables) {
     add(
       table.name,
       table.columns.map(column => column.name)
+    );
+    specs.set(
+      table.name,
+      new Map(table.columns.map(column => [column.name, column]))
     );
     // A migration snapshot records a translated table's companion columns on
     // the main table, as `localizedColumns`, not as a table of its own.
@@ -51,7 +73,7 @@ export function columnsByTable(
       add(companionTableOf(table.name), table.localizedColumns);
     }
   }
-  return columns;
+  return { names, specs, ...(dialect === undefined ? {} : { dialect }) };
 }
 
 interface TypeShape {
@@ -71,13 +93,13 @@ type NamedField = FieldConfig & { name: string };
 export function keptScopeFields(
   kind: ScopedKind,
   type: TypeShape,
-  existing: ReadonlyMap<string, ReadonlySet<string>>
+  existing: ExistingColumns
 ): NamedField[] {
   const withheld = withheldScopeFieldsOf(kind, type.slug);
   if (withheld.length === 0) return [];
   const held = new Set([
-    ...(existing.get(type.tableName) ?? []),
-    ...(existing.get(companionTableOf(type.tableName)) ?? []),
+    ...(existing.names.get(type.tableName) ?? []),
+    ...(existing.names.get(companionTableOf(type.tableName)) ?? []),
   ]);
   // A type that declares a field of the name itself keeps its own, as does
   // one whose own field, spelled otherwise, is stored in the same column.
@@ -90,24 +112,71 @@ export function keptScopeFields(
   const claimed = columnsDeclaredBy(
     type.fields as Parameters<typeof columnsDeclaredBy>[0]
   );
-  return withheld
-    .filter((field): field is NamedField => {
-      if (typeof field.name !== "string") return false;
-      if (declared.has(field.name.toLowerCase())) return false;
-      const columns = [...columnsDeclaredBy([field])];
-      return (
-        !columns.some(column => claimed.has(column)) &&
-        columns.some(column => held.has(column))
-      );
-    })
-    .map(asOptional);
+  const candidates = withheld.filter((field): field is NamedField => {
+    if (typeof field.name !== "string") return false;
+    if (declared.has(field.name.toLowerCase())) return false;
+    const columns = [...columnsDeclaredBy([field])];
+    return (
+      !columns.some(column => claimed.has(column)) &&
+      columns.some(column => held.has(column))
+    );
+  });
+  return onePerName(candidates, type.tableName, existing).map(asOptional);
+}
+
+/**
+ * One field to a name. Several scopes can declare a field of one name, and
+ * which of them made the column depends on which were switched off when it
+ * was made, which nothing records. So the one kept is the one whose column is
+ * the column there; the first, in the order the fold prefers them, when none
+ * or more than one matches or nothing states the column.
+ */
+function onePerName(
+  candidates: readonly NamedField[],
+  tableName: string,
+  existing: ExistingColumns
+): NamedField[] {
+  const byName = new Map<string, NamedField[]>();
+  for (const field of candidates) {
+    const name = field.name.toLowerCase();
+    byName.set(name, [...(byName.get(name) ?? []), field]);
+  }
+  return [...byName.values()].map(
+    fields =>
+      fields.find(field => storedAsDeclared(field, tableName, existing)) ??
+      fields[0]
+  );
+}
+
+/**
+ * Whether `field`'s columns are declared as the columns there, as the diff
+ * compares them, built either way a type's columns are built.
+ */
+function storedAsDeclared(
+  field: NamedField,
+  tableName: string,
+  existing: ExistingColumns
+): boolean {
+  const { dialect } = existing;
+  const there = existing.specs.get(tableName);
+  if (dialect === undefined || there === undefined) return false;
+  const columns = columnsDeclaredBy([field]);
+  const origins: ColumnOrigin[] = ["codeFirst", "collection"];
+  return origins.some(builtBy =>
+    buildDesiredTableFromFields(tableName, [field], dialect, { builtBy })
+      .columns.filter(column => columns.has(column.name))
+      .every(column => {
+        const current = there.get(column.name);
+        return current !== undefined && !typesDiffer(current, column);
+      })
+  );
 }
 
 /** `type` with its {@link keptScopeFields} added back. */
 export function withKeptScopeFields<T extends TypeShape>(
   kind: ScopedKind,
   type: T,
-  existing: ReadonlyMap<string, ReadonlySet<string>>
+  existing: ExistingColumns
 ): T {
   const kept = keptScopeFields(kind, type, existing);
   return kept.length === 0
@@ -118,9 +187,10 @@ export function withKeptScopeFields<T extends TypeShape>(
 /** `desired` with every type's kept fields, judged against `live`. */
 export function withKeptScopeFieldsIn(
   desired: DesiredSchema,
-  live: NextlySchemaSnapshot
+  live: NextlySchemaSnapshot,
+  dialect: SupportedDialect
 ): DesiredSchema {
-  const existing = columnsByTable(live);
+  const existing = columnsByTable(live, dialect);
   const keep = <T extends TypeShape>(
     kind: ScopedKind,
     types: Record<string, T>

@@ -798,7 +798,7 @@ export class PushSchemaPipeline {
       // its column while the database has it: added back here, before
       // anything reads the desired state, so neither the diff nor the tables
       // handed to drizzle-kit plans its drop (`kept-scope-fields.ts`).
-      desired = withKeptScopeFieldsIn(desired, liveSnapshot);
+      desired = withKeptScopeFieldsIn(desired, liveSnapshot, dialect);
 
       // 🔴 Contained, and its failure means "declare NEITHER registry".
       //

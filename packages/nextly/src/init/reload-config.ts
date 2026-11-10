@@ -2291,7 +2291,7 @@ async function applyReloadHolding(
   // A plugin's field held back from a type switched off keeps its column
   // while the database has it, as the apply keeps it: judged here the same
   // way, so this gate and the apply see the same table (`kept-scope-fields.ts`).
-  const liveColumns = columnsByTable(liveSnapshot);
+  const liveColumns = columnsByTable(liveSnapshot, dialect);
   const keptFor = (
     kind: "collection" | "single",
     entry: DesiredCollection | DesiredSingle

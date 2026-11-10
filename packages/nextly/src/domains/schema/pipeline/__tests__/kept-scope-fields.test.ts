@@ -8,8 +8,8 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { text } from "../../../../config";
-import { keptScopeFields } from "../kept-scope-fields";
+import { number, text } from "../../../../config";
+import { columnsByTable, keptScopeFields } from "../kept-scope-fields";
 import {
   publishWithheldScopeFields,
   scopedTypeKey,
@@ -21,14 +21,30 @@ const pages = {
   fields: [text({ name: "title" })],
 };
 
-function hold(...fields: ReturnType<typeof text>[]): void {
+function hold(
+  ...fields: (ReturnType<typeof text> | ReturnType<typeof number>)[]
+): void {
   publishWithheldScopeFields(
     new Map([[scopedTypeKey("collection", "pages"), fields]])
   );
 }
 
+/** The tables as a snapshot of them states them, each column as `text`. */
 const live = (tables: Record<string, string[]>) =>
-  new Map(Object.entries(tables).map(([name, cols]) => [name, new Set(cols)]));
+  columnsByTable(
+    {
+      tables: Object.entries(tables).map(([name, columns]) => ({
+        name,
+        columns: columns.map(column => ({
+          name: column,
+          type: "text",
+          nullable: true,
+        })),
+        indexes: [],
+      })),
+    } as never,
+    "sqlite"
+  );
 
 afterEach(() => publishWithheldScopeFields(new Map()));
 
@@ -85,6 +101,34 @@ describe("keptScopeFields", () => {
     expect(
       keptScopeFields("collection", own, live({ dc_pages: ["seo_title"] }))
     ).toEqual([]);
+  });
+
+  it("keeps, of two declarations of one name, the one the column was made as", () => {
+    // Two scopes' declarations of `seo`, the fold's preferred one first; the
+    // column there is text, as the second declares it.
+    hold(number({ name: "seo" }), text({ name: "seo" }));
+
+    const kept = keptScopeFields(
+      "collection",
+      pages,
+      live({ dc_pages: ["seo"] })
+    );
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toMatchObject({ name: "seo", type: "text" });
+  });
+
+  it("keeps the first of two declarations when the column matches neither", () => {
+    hold(text({ name: "seo" }), text({ name: "SEO", required: true }));
+
+    const kept = keptScopeFields(
+      "collection",
+      pages,
+      columnsByTable({ tables: [] }, "sqlite")
+    );
+    expect(kept).toEqual([]);
+    expect(
+      keptScopeFields("collection", pages, live({ dc_pages: ["seo"] }))
+    ).toHaveLength(1);
   });
 
   it("keeps a required field as optional", () => {

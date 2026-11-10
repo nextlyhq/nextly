@@ -407,7 +407,7 @@ function withKeptScopeFieldsOf(
   declared: GenerateArgs,
   previous: NextlySchemaSnapshot | undefined
 ): GenerateArgs {
-  const kept = columnsByTable(previous ?? EMPTY_SNAPSHOT);
+  const kept = columnsByTable(previous ?? EMPTY_SNAPSHOT, declared.dialect);
   return {
     ...declared,
     collections: declared.collections.map(entity =>
@@ -2842,7 +2842,7 @@ export function buildDesiredSnapshotFromConfig(
   existing?: NextlySchemaSnapshot
 ): NextlySchemaSnapshot {
   const tables: TableSpec[] = [];
-  const kept = columnsByTable(existing ?? { tables: [] });
+  const kept = columnsByTable(existing ?? { tables: [] }, dialect);
   for (const entity of collections) {
     const c = withKeptScopeFields("collection", entity, kept);
     // Why: forward the entity's Draft/Published flag so the snapshot

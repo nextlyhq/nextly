@@ -139,7 +139,7 @@ export async function previewDesiredSchema(
   );
   // The fields a plugin holds back from a type switched off, kept while
   // their columns are live, as the apply keeps them (`kept-scope-fields.ts`).
-  desired = withKeptScopeFieldsIn(desired, liveSnapshot);
+  desired = withKeptScopeFieldsIn(desired, liveSnapshot, dialect);
   const { snapshot: desiredSnapshot } = buildDesiredSnapshot({
     desired,
     dialect,

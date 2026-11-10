@@ -365,7 +365,7 @@ describe("extend with a scope — Schema Builder types", () => {
 });
 
 describe("extend with a scope — what a switched-off type would have had", () => {
-  it("holds back the first of two scopes' fields of one name, as the fold adds only that one", async () => {
+  it("holds back each scope's field of one name, the one the fold adds first", async () => {
     const { withheldScopeFieldsOf, publishWithheldScopeFields } = await import(
       "../../domains/schema/pipeline/withheld-scope-fields"
     );
@@ -394,9 +394,19 @@ describe("extend with a scope — what a switched-off type would have had", () =
       "seo",
     ]);
 
+    // Both declarations could have made the column, depending on which
+    // scopes were off when it was made: the one the type took when on comes
+    // first, and the one kept is the one the column matches.
     applyPluginSchemaContributionsDeferred(siteConfig(), [first, second]);
-    expect(withheldScopeFieldsOf("collection", "pages")).toEqual([
-      field("seo"),
+    expect(
+      withheldScopeFieldsOf("collection", "pages").map(f => [
+        (f as { name?: string }).name,
+        (f as { type?: string }).type,
+      ])
+    ).toEqual([
+      ["seo", "text"],
+      ["seo", "text"],
+      ["SEO", "number"],
     ]);
     publishWithheldScopeFields(new Map());
   });
@@ -434,11 +444,13 @@ describe("extend with a scope — what a switched-off type would have had, trans
       "title",
       "seo_data",
     ]);
+    // The transformed field first; the clause's own `seo` after it is kept
+    // only if a column of that name is there, and none is.
     expect(
       withheldScopeFieldsOf("collection", "pages").map(
         f => (f as { name?: string }).name
       )
-    ).toEqual(["seo_data"]);
+    ).toEqual(["seo_data", "seo"]);
     publishWithheldScopeFields(new Map());
   });
 });
