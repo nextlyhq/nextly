@@ -42,10 +42,8 @@ export interface WriteTarget<TApi> {
  *    would describe the document's PREVIOUS state and report success.
  * 2. **No usable slug.**
  * 3. **A Single.** Core namespaces a Single's hooks as `single:<slug>`, and a
- *    wildcard registration receives those too. A plugin has no supported way to
- *    read a Single's document — the one available path CREATES the row when it
- *    is absent, so asking about a Single would materialise every Single in the
- *    app as a side effect.
+ *    wildcard registration receives those too. A hook that acts on Singles
+ *    asks {@link hookTargetOf} instead, which names them.
  * 4. **A collection the caller excluded**, for a hook that writes to one of its
  *    own and would otherwise re-enter itself.
  */
@@ -53,19 +51,58 @@ export function writeTargetOf<TApi>(
   context: HookContext<unknown>,
   options: { excluded?: readonly string[] } = {}
 ): WriteTarget<TApi> | null {
+  const target = hookTargetOf<TApi>(context, options);
+  if (target === null || target.kind === "single") return null;
+  return {
+    slug: target.slug,
+    nextly: target.nextly,
+    documentId: target.documentId,
+  };
+}
+
+/** A write to a Single's one document, which has no entry id. */
+export interface SingleWriteTarget<TApi> {
+  kind: "single";
+  /** The Single's slug, without the hook namespace. */
+  slug: string;
+  /** The pooled Direct API, for reads this hook makes on its own behalf. */
+  nextly: TApi;
+}
+
+/**
+ * The document a write targets, a collection entry or a Single, or `null`
+ * when the hook must decline. The guards {@link writeTargetOf} lists, except
+ * that a Single is named rather than declined; {@link writeTargetOf} is this
+ * with Singles left out.
+ */
+export function hookTargetOf<TApi>(
+  context: HookContext<unknown>,
+  options: { excluded?: readonly string[] } = {}
+):
+  | (WriteTarget<TApi> & { kind: "collection" })
+  | SingleWriteTarget<TApi>
+  | null {
   const ctx = context as unknown as Record<string, unknown>;
   if (ctx.executor !== undefined) return null;
 
   const slug = ctx.collection;
   if (typeof slug !== "string" || slug.length === 0) return null;
-  if (slug.startsWith(SINGLE_HOOK_NAMESPACE)) return null;
-  if (options.excluded?.includes(slug) === true) return null;
 
   const nextly = directApiOf<TApi>(ctx);
-  const documentId = documentIdOf(ctx);
-  if (nextly === null || documentId === null) return null;
+  if (nextly === null) return null;
 
-  return { slug, nextly, documentId };
+  if (slug.startsWith(SINGLE_HOOK_NAMESPACE)) {
+    const single = slug.slice(SINGLE_HOOK_NAMESPACE.length);
+    return single.length === 0
+      ? null
+      : { kind: "single", slug: single, nextly };
+  }
+  if (options.excluded?.includes(slug) === true) return null;
+
+  const documentId = documentIdOf(ctx);
+  if (documentId === null) return null;
+
+  return { kind: "collection", slug, nextly, documentId };
 }
 
 /**

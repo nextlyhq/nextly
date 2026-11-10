@@ -10,10 +10,17 @@ import { createHash } from "node:crypto";
 import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import {
+  toCodeFirstCollectionConfig,
+  type CodeFirstCollectionSource,
+} from "../../domains/collections/services/collection-sync-service";
+import { assertNoMigrationInFlight } from "../../domains/field-groups/migration/sync-guard";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
+import { resolveCollectionTableName } from "../../domains/schema/utils/resolve-table-name";
 import type { DynamicCollectionInsert } from "../../schemas/dynamic-collections/types";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
+import { reportDryRun, type DryRunPlan } from "../dry-run";
 import { exitWithError } from "../errors";
 import {
   demoteCollectionNotFound,
@@ -34,6 +41,7 @@ import {
   collectionChangedAfterConsent,
   openCollectionRegistry,
   sameCollectionRecord,
+  syncRefusalOf,
   withCollectionRegistryWrite,
 } from "./db-sync-registry";
 
@@ -41,15 +49,40 @@ async function loadNextlyConfig(cwd: string) {
   return loadConfig({ cwd });
 }
 
-/** A collection as `nextly.config.ts` defines it, in the parts a demote writes. */
-export interface DemotedCollection {
-  slug: string;
-  labels?: { singular?: string; plural?: string };
+/**
+ * A collection as `nextly.config.ts` defines it, in the parts a demote reads: every option the
+ * code-first sync stores on a registry record, and the code-only options a demote has to say it
+ * cannot carry.
+ */
+export interface DemotedCollection extends CodeFirstCollectionSource<unknown> {
+  /** An older spelling of the singular label. */
   label?: string;
-  fields?: unknown[];
-  description?: string;
-  dbName?: string;
+  access?: unknown;
+  hooks?: unknown;
+  endpoints?: unknown;
+  indexes?: unknown;
+  search?: unknown;
+  workflow?: unknown;
+  custom?: unknown;
+  sanitize?: unknown;
 }
+
+/**
+ * The options a code collection can set that no registry record holds, each with what it is.
+ * Functions (access rules, hooks, endpoints, a workflow) cannot be stored as data, and the rest
+ * have no column, so the Schema Builder's collection goes without them.
+ */
+const NOT_CARRIED_BY_A_RECORD = {
+  access: "access rules",
+  hooks: "hooks",
+  endpoints: "endpoints",
+  indexes: "indexes",
+  search: "search settings",
+  workflow: "a workflow",
+  db: "database options",
+  custom: "custom settings",
+  sanitize: "its input sanitizing setting",
+} as const satisfies Partial<Record<keyof DemotedCollection, string>>;
 
 /** What a demote acts on, with its prompt and its lock wait as seams a test can stand in for. */
 export interface DemoteCollectionArgs {
@@ -81,12 +114,13 @@ export async function demoteCollection(
   const fields = collection.fields ?? [];
 
   const confirmed = await registry.getCollectionBySlug(slug);
+  const note = droppedOnDemoteNote(collection);
+  const preview = [
+    serializeCollection({ slug, fields: fields as never[] }),
+    ...note.map(line => `// ${line}`),
+  ].join("\n");
 
-  if (
-    !(await args.confirm(
-      serializeCollection({ slug, fields: fields as never[] })
-    ))
-  ) {
+  if (!(await args.confirm(preview))) {
     logger.info("Demote cancelled.");
     return "cancelled";
   }
@@ -116,7 +150,83 @@ export async function demoteCollection(
   logger.info(
     `Collection '${slug}' written to UI source. Remove its entry from your nextly.config.ts collections array, then restart dev server.`
   );
+  if (note.length > 0) logger.info(note.join("\n"));
   return "demoted";
+}
+
+/**
+ * The registry write a demote makes, given the record the registry holds for the slug now: an
+ * update of that record (a second `--demote`, or a slug the registry already holds), or a new
+ * record registered.
+ */
+type DemotedWrite =
+  | {
+      kind: "update";
+      slug: string;
+      data: Parameters<CollectionRegistryService["updateCollection"]>[1];
+    }
+  | { kind: "register"; record: DynamicCollectionInsert };
+
+/** The write a demote of `collection` makes over `current`, the record the registry holds now. */
+function demotedWrite(
+  collection: DemotedCollection,
+  current: Awaited<ReturnType<CollectionRegistryService["getCollectionBySlug"]>>
+): DemotedWrite {
+  // The options the collection already had as code, so a demote keeps its names, admin options and
+  // lifecycle (`demotedOptions`).
+  const options = demotedOptions(collection);
+  if (current) {
+    return {
+      kind: "update",
+      slug: collection.slug,
+      data: { ...options, source: "ui" },
+    };
+  }
+  return {
+    kind: "register",
+    record: {
+      slug: collection.slug,
+      ...options,
+      source: "ui",
+      schemaHash: createHash("sha256")
+        .update(JSON.stringify(options.fields))
+        .digest("hex"),
+      configPath: "demoted-from-code",
+    },
+  };
+}
+
+/**
+ * Asks the registry the questions `write` would be refused on, writing nothing: what an update
+ * refuses (such as a record defined in code), or what a registration refuses.
+ */
+async function assertDemotedWriteAllowed(
+  registry: CollectionRegistryService,
+  write: DemotedWrite
+): Promise<void> {
+  if (write.kind === "update") {
+    await registry.assertUpdatable(write.slug, write.data);
+    return;
+  }
+  await registry.assertRegistrable(write.record.slug);
+}
+
+/**
+ * The lines that go with a demote when the collection sets options no registry record holds:
+ * the Schema Builder's collection goes without them, so they stop applying once its code entry
+ * is removed. None where it sets no such option.
+ */
+export function droppedOnDemoteNote(collection: DemotedCollection): string[] {
+  const dropped: string[] = Object.entries(NOT_CARRIED_BY_A_RECORD)
+    .filter(([key]) => collection[key as keyof DemotedCollection] !== undefined)
+    .map(([, what]) => what);
+  const admin = collection.admin as { preview?: unknown } | undefined;
+  if (admin?.preview !== undefined) dropped.push("its preview link");
+  if (dropped.length === 0) return [];
+  return [
+    "It sets options the Schema Builder cannot hold, which stop once its code entry is removed:",
+    `${dropped.join(", ")}.`,
+  ];
 }
 
 /**
@@ -132,44 +242,94 @@ async function writeDemotedRecord(
   >,
   logger: Logger
 ): Promise<void> {
-  const { slug } = collection;
-  const fields = (collection.fields ?? []) as DynamicCollectionInsert["fields"];
-  if (current) {
-    await registry.updateCollection(slug, { fields, source: "ui" });
-    logger.info(`Updated existing UI record for '${slug}'.`);
+  const write = demotedWrite(collection, current);
+  if (write.kind === "update") {
+    await registry.updateCollection(write.slug, write.data);
+    logger.info(`Updated existing UI record for '${write.slug}'.`);
     return;
   }
-  await registry.registerCollection(newDemotedRecord(collection, fields));
+  await registry.registerCollection(write.record);
 }
 
 /**
- * The registry record a demoted collection is registered as. `registerCollection` expects a full
- * DynamicCollectionInsert; beyond what the config carries it needs the table name (the `dc_<slug>`
- * convention when the config names none), the source (always "ui": ownership passes to the
- * Builder) and a hash of the fields JSON, so later change detection works.
+ * What `db:sync --demote <slug> --dry-run` reports: the registry write the real demote makes, from
+ * the same record it reads, with the refusals it asks along the way, in its order (a field-group
+ * storage migration in flight, then what the registry refuses the write on), and nothing asked,
+ * locked or written.
  */
-function newDemotedRecord(
-  collection: DemotedCollection,
-  fields: DynamicCollectionInsert["fields"]
-): DynamicCollectionInsert {
-  const { slug } = collection;
+async function previewDemotion(args: {
+  collection: DemotedCollection;
+  registry: CollectionRegistryService;
+  adapter: DrizzleAdapter;
+  logger: Logger;
+}): Promise<DryRunPlan> {
+  try {
+    const current = await args.registry.getCollectionBySlug(
+      args.collection.slug
+    );
+    await assertNoMigrationInFlight({
+      adapter: args.adapter,
+      logger: args.logger,
+      action: "db:sync --demote",
+    });
+    const write = demotedWrite(args.collection, current);
+    await assertDemotedWriteAllowed(args.registry, write);
+    const note = droppedOnDemoteNote(args.collection);
+    return {
+      ...(note.length > 0 ? { notes: [note.join("\n")] } : {}),
+      changes: [
+        write.kind === "update"
+          ? {
+              action: "set",
+              target: `the registry record of collection '${write.slug}' in the collection registry to:\n${JSON.stringify(write.data, null, 2)}`,
+            }
+          : {
+              action: "record",
+              target: `collection '${write.record.slug}' in the collection registry, as:\n${JSON.stringify(write.record, null, 2)}`,
+            },
+      ],
+    };
+  } catch (error) {
+    const refusal = syncRefusalOf(error);
+    if (refusal === undefined) throw error;
+    return { changes: [], refusals: [refusal] };
+  }
+}
+
+/**
+ * Everything a demoted collection's record stores about it: its names, description, table,
+ * fields, admin options and every collection-level option that changes how it behaves (its
+ * Draft/Published lifecycle, drafts and history, translations, timestamps, cache and webhook
+ * opt-outs). Taken from the projection the code-first sync stores a collection with
+ * (`toCodeFirstCollectionConfig`), so the record is the one the collection already had while its
+ * code owned it, and promoting it again prints the same collection. An option the collection does
+ * not set is written as cleared, so an update leaves nothing of an older record behind.
+ *
+ * Besides that, the record needs a source (always "ui": ownership passes to the Builder) and a
+ * hash of its fields, which the caller adds.
+ */
+function demotedOptions(collection: DemotedCollection) {
+  const config = toCodeFirstCollectionConfig(collection);
   return {
-    slug,
     labels: {
-      singular: collection.labels?.singular ?? collection.label ?? slug,
-      plural: collection.labels?.plural ?? slug,
+      singular:
+        collection.labels?.singular ??
+        collection.label ??
+        config.labels.singular,
+      plural: config.labels.plural,
     },
-    tableName: collection.dbName ?? `dc_${slug}`,
-    fields,
-    source: "ui",
-    schemaHash: createHash("sha256")
-      .update(JSON.stringify(fields))
-      .digest("hex"),
-    ...(collection.description !== undefined && {
-      description: collection.description,
-    }),
-    configPath: "demoted-from-code",
-  };
+    description: config.description ?? null,
+    // The table the code-first sync named, so the entries stay where they are.
+    tableName: resolveCollectionTableName(collection.slug, collection.dbName),
+    fields: config.fields as DynamicCollectionInsert["fields"],
+    timestamps: config.timestamps,
+    admin: config.admin ?? null,
+    status: config.status,
+    versions: config.versions ?? null,
+    localized: config.localized,
+    revalidate: config.revalidate ?? null,
+    webhooks: config.webhooks ?? null,
+  } satisfies Partial<DynamicCollectionInsert>;
 }
 
 /** The terminal's confirmation for a demote: what will be written, then a yes or no. */
@@ -184,6 +344,60 @@ async function askToDemote(slug: string, code: string): Promise<boolean> {
   );
 }
 
+/**
+ * The collection `nextly.config.ts` defines under `slug`, which a demote moves, or undefined when it
+ * defines none, which a demote refuses. A configuration that cannot be loaded ends the run.
+ */
+async function findDemotedCollection(
+  slug: string,
+  context: CommandContext
+): Promise<DemotedCollection | undefined> {
+  let config: Awaited<ReturnType<typeof loadNextlyConfig>>["config"];
+  try {
+    config = (await loadNextlyConfig(context.cwd)).config;
+  } catch (err) {
+    exitWithError(context.logger, err);
+  }
+  const collections = (config.collections ?? []) as DemotedCollection[];
+  return collections.find(c => c.slug === slug);
+}
+
+/**
+ * `db:sync --demote <slug> --dry-run`: the demote's registry write, read over a read-only
+ * connection, with no confirmation asked and no lock taken. A collection the configuration does not
+ * define is named as the real run's refusal; a database that is not there has been said and ends
+ * the run.
+ */
+export async function runDemoteDryRun(
+  slug: string,
+  context: CommandContext
+): Promise<void> {
+  const { logger } = context;
+  const collection = await findDemotedCollection(slug, context);
+  if (!collection) {
+    reportDryRun(logger, {
+      changes: [],
+      refusals: [demoteCollectionNotFound(slug).what],
+    });
+    return;
+  }
+  const opened = await openCollectionRegistry(logger, true);
+  if (opened === undefined) return;
+  try {
+    reportDryRun(
+      logger,
+      await previewDemotion({
+        collection,
+        registry: opened.registry,
+        adapter: opened.adapter,
+        logger,
+      })
+    );
+  } finally {
+    await opened.adapter.disconnect();
+  }
+}
+
 export async function runDemote(
   slug: string,
   context: CommandContext
@@ -191,16 +405,7 @@ export async function runDemote(
   const { logger } = context;
 
   // 1. Load user config so we can find the target collection.
-  let config: Awaited<ReturnType<typeof loadNextlyConfig>>["config"];
-  try {
-    const result = await loadNextlyConfig(context.cwd);
-    config = result.config;
-  } catch (err) {
-    exitWithError(logger, err);
-  }
-
-  const collections = (config.collections ?? []) as DemotedCollection[];
-  const collection = collections.find(c => c.slug === slug);
+  const collection = await findDemotedCollection(slug, context);
   if (!collection) {
     exitWithError(logger, demoteCollectionNotFound(slug));
   }
@@ -212,7 +417,9 @@ export async function runDemote(
   }
 
   // 2. Database wiring.
-  const { registry, adapter } = await openCollectionRegistry(logger);
+  const opened = await openCollectionRegistry(logger);
+  if (opened === undefined) return;
+  const { registry, adapter } = opened;
   try {
     await demoteCollection({
       collection,

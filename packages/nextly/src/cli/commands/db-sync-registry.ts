@@ -12,11 +12,13 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { planChangedAfterConsent } from "../../domains/schema/migrate/plan-changed-after-consent";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
-import type { NextlyError } from "../../errors/nextly-error";
+import { NextlyError } from "../../errors/nextly-error";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import { CollectionRegistryService } from "../../services/collections/collection-registry-service";
+import { CliError } from "../errors/cli-error";
+import { toCliError } from "../errors/from-thrown";
 import {
-  connectOrExit,
+  openOrConnect,
   requireDatabaseEnv,
 } from "../utils/command-prerequisites";
 import type { Logger } from "../utils/logger";
@@ -28,14 +30,22 @@ export interface CollectionRegistryHandle {
   adapter: DrizzleAdapter;
 }
 
+/**
+ * The registry on the environment's database: connected for a real run, opened read-only for a
+ * dry run. Undefined only for a dry run whose database is not there, which has been said and ends
+ * the command.
+ */
 export async function openCollectionRegistry(
-  logger: Logger
-): Promise<CollectionRegistryHandle> {
+  logger: Logger,
+  dryRun = false
+): Promise<CollectionRegistryHandle | undefined> {
   const env = requireDatabaseEnv(logger);
-  const connected = await connectOrExit(
+  const connected = await openOrConnect(
     { dialect: env.dialect, databaseUrl: env.databaseUrl, logger },
+    dryRun,
     logger
   );
+  if (connected === undefined) return undefined;
   // The service expects a full DrizzleAdapter; the CLI adapter is structurally compatible.
   const adapter = connected as unknown as DrizzleAdapter;
   return { registry: collectionRegistryOn(adapter, logger), adapter };
@@ -138,4 +148,28 @@ export function collectionChangedAfterConsent(args: {
     agreed: shownAs(args.slug, args.confirmed),
     current: shownAs(args.slug, args.current),
   });
+}
+
+/** The registry's refusals a dry run names, by their code: each says what was refused. */
+const REFUSAL_CODES = new Set([
+  "FORBIDDEN",
+  "DUPLICATE",
+  "VALIDATION_ERROR",
+  "NOT_FOUND",
+  "CONFLICT",
+]);
+
+/**
+ * What a real `db:sync` would print for `error` as its refusal, for a dry run to name, or
+ * undefined when `error` is no refusal but a failure, which the dry run ends on as the real run
+ * would. A command's own refusal says what it refused; one the CLI maps, such as a field-group
+ * storage migration in flight, is worded as the CLI words it; the registry's refusals by their
+ * public message.
+ */
+export function syncRefusalOf(error: unknown): string | undefined {
+  if (error instanceof CliError) return error.what;
+  if (!NextlyError.is(error)) return undefined;
+  const mapped = toCliError(error);
+  if (mapped.code !== "UNEXPECTED_ERROR") return mapped.what;
+  return REFUSAL_CODES.has(error.code) ? error.publicMessage : undefined;
 }

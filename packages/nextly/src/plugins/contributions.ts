@@ -5,6 +5,7 @@ import type {
   FieldStoragePrimitive,
   FieldSurface,
   FieldTypeCategory,
+  PluginFieldTypeSetting,
 } from "../collections/fields/catalog";
 import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-field";
 import type { JsonValue as JobJsonValue } from "../direct-api/types/jobs";
@@ -25,6 +26,7 @@ import type {
   ComponentPath,
 } from "./admin-contributions";
 import type { PluginAuthContributions } from "./auth-contributions";
+import type { ContentTypeScope } from "./content-type-scope";
 import type { EntityTransform } from "./entity-transforms";
 import type { PluginContext } from "./plugin-context";
 import type { PrincipalKindContribution } from "./principals/types";
@@ -258,6 +260,11 @@ export interface PluginEmailTemplate {
 // surface types) so plugin authors keep importing it from the plugin surface.
 export type { FieldSurface };
 
+// Declared in the field catalog, beside the surface and category types, so the
+// admin reads the same shape the plugin writes; re-exported here so plugin
+// authors import it from the plugin surface.
+export type { PluginFieldTypeSetting };
+
 export interface PluginFieldType {
   /** Field type id used as `field.type` (e.g. `"rating"`). Must not collide with a built-in. */
   type: string;
@@ -279,6 +286,14 @@ export interface PluginFieldType {
   icon?: string;
   /** Picker grouping. Defaults to `"Advanced"`. */
   category?: FieldTypeCategory;
+  /**
+   * @experimental The type's own settings, shown in the Schema Builder's
+   * settings panel for every field of the type and stored in the field's
+   * `pluginOptions`. A malformed list refuses boot, naming the plugin, the
+   * type and the setting: a select with no options, a key used twice, or the
+   * reserved keys `type` and `name`.
+   */
+  settings?: readonly PluginFieldTypeSetting[];
   /**
    * Which admin surfaces may offer this type in their field pickers. Omitted
    * means the entry/single editing surface only — a type never auto-appears
@@ -756,9 +771,15 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
    * `fieldGroups` each arrive through a `define*` call that has already
    * narrowed them, while these are written inline with nothing to narrow them,
    * so a plugin's own contributed type has to be nameable here.
+   *
+   * `target` names entities by slug, or, as a {@link ContentTypeScope}
+   * (`@experimental`), every content type the site defines except the ones
+   * listed, including Schema Builder types made later. A scope never reaches a
+   * plugin's own types or Nextly's system ones, and leaves alone a type that
+   * already has a field of the same name rather than refusing to boot.
    */
   extend?: Array<{
-    target: string | string[];
+    target: string | string[] | ContentTypeScope;
     fields: AuthorableFieldConfig[];
   }>;
   /**
@@ -864,8 +885,15 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
   emailTemplates?: PluginEmailTemplate[];
   /** @experimental Custom field types — registry seam mapping to a storage primitive + admin component. */
   fieldTypes?: PluginFieldType[];
-  /** @experimental Custom event names this plugin may emit. No first-party plugin declares custom events yet. */
-  events?: Array<{ name: string }>;
+  /**
+   * @experimental Custom event names this plugin may emit. No first-party
+   * plugin declares custom events yet.
+   *
+   * `durable: true` makes an event one the plugin records with the work that
+   * emits it, for core to deliver to each durable subscriber until it
+   * succeeds. Only an event declared so may be emitted durably.
+   */
+  events?: Array<{ name: string; durable?: boolean }>;
   /**
    * @experimental The admin's strings this plugin's components show, by
    * interface language and then by key: `{ en: { "acme-shop.cart.title": "Cart" } }`.

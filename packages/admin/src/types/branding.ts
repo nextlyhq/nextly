@@ -1,12 +1,11 @@
 import type {
+  OverridableDocumentAction,
+  PluginDocumentActionOverride,
+  AdminContributionsMeta,
   PluginListFilterDeclaration,
   PublishedContentSource,
 } from "nextly/config";
-import type {
-  FieldStoragePrimitive,
-  FieldSurface,
-  FieldTypeCategory,
-} from "nextly/field-catalog";
+import type { PluginFieldTypeMeta } from "nextly/field-catalog";
 // The widget as the workspace payload serves it, a type only.
 import type { PublishedWidget } from "nextly/widget-result";
 
@@ -222,6 +221,23 @@ export interface PluginMetadata {
     )
   >;
   /**
+   * @experimental Overrides of a collection's built-in document actions,
+   * contributed via `contributes.admin.views[<slug>].documentActions`: on the
+   * slug the admin routes (rename map applied), `"hidden"` or the component
+   * the action opens instead. Present only for enabled plugins.
+   */
+  documentActions?: Array<{
+    slug: string;
+    action: OverridableDocumentAction;
+    override: PluginDocumentActionOverride;
+  }>;
+  /**
+   * @experimental Sections added to a collection's document panel, after
+   * Details, contributed via `contributes.admin.views[<slug>].panelSections`.
+   * Present only for enabled plugins.
+   */
+  panelSections?: Array<{ slug: string; title: string; component: string }>;
+  /**
    * @experimental The filters this plugin offers in the entry list's toolbar,
    * via `contributes.admin.filters`, as they passed the boot check. Present
    * only for enabled plugins.
@@ -235,18 +251,7 @@ export interface PluginMetadata {
    * the type opted into let each surface offer only the types meant for it
    * (see pluginFieldTypeCatalogEntries).
    */
-  fieldTypes?: Array<{
-    type: string;
-    component: string;
-    /** The primitive this type persists as; decides binding compatibility. */
-    storage: FieldStoragePrimitive;
-    layout?: "takeover";
-    label?: string;
-    description?: string;
-    icon?: string;
-    category?: FieldTypeCategory;
-    surfaces?: readonly FieldSurface[];
-  }>;
+  fieldTypes?: PluginFieldTypeMeta[];
 }
 
 export interface AdminBranding {
@@ -264,7 +269,10 @@ export interface AdminBranding {
   logoText?: string;
   favicon?: string;
   colors?: ResolvedBrandingColors;
-  /** Runtime toggle for builder-related navigation visibility. */
+  /**
+   * Whether the server offers the schema builder: never in production, and
+   * elsewhere unless `admin.branding.showBuilder` is false.
+   */
   showBuilder?: boolean;
 
   /**
@@ -295,6 +303,13 @@ export interface AdminBranding {
    * `useBrandingStatus()` before concluding anything from a plugin missing here.
    */
   plugins?: PluginMetadata[];
+
+  /**
+   * Each admin place's contributions, by kind, in order, as this reader may
+   * see them: the signed-in half's every place but the login page's, the
+   * public half's the login page's alone.
+   */
+  contributions?: AdminContributionsMeta;
 
   /**
    * Public client configuration, readable before a session exists.

@@ -2,6 +2,10 @@ import type { JSX } from "react";
 
 import { DynamicPluginNav } from "@admin/components/features/dashboard/DynamicPluginNav";
 import { DynamicPluginSectionItems } from "@admin/components/features/dashboard/DynamicPluginSectionItems";
+import {
+  PluginMenuGroups,
+  PluginMenuItems,
+} from "@admin/components/features/dashboard/PluginMenuItems";
 import * as Icons from "@admin/components/icons";
 import { Layers, Puzzle, FileText, Database } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
@@ -39,6 +43,11 @@ interface SubSidebarContentProps {
   pluginCollectionsForSection: ApiCollection[];
   // Branding
   showBuilder: boolean;
+  /**
+   * Whether a section draws a panel this reader can open; the plugin menu
+   * items of one that does not are listed under Plugins.
+   */
+  hasPanel: (section: string) => boolean;
 }
 
 export function SubSidebarContent({
@@ -55,9 +64,18 @@ export function SubSidebarContent({
   canAccessApiKeys,
   canAccessWebhooks,
   pluginCollectionsForSection,
+  hasPanel,
 }: SubSidebarContentProps): JSX.Element | null {
   if (selectedMain === "media") {
-    return <MediaSidebarContent />;
+    return (
+      <>
+        <MediaSidebarContent />
+        {/* The plugin menu items placed in Media, below its folders. */}
+        <div className="px-4 pb-6">
+          <PluginMenuItems isActive={isActive} section="media" asMenu />
+        </div>
+      </>
+    );
   }
 
   if (isContentSection(selectedMain)) {
@@ -115,6 +133,15 @@ export function SubSidebarContent({
             )}
           </SidebarMenu>
         </div>
+        {/* Each plugin's own pages (`contributes.admin.menu`), under its
+            name, apart from managing plugins above: a plugin with pages of
+            its own, such as a library, is reached here. */}
+        <PluginMenuGroups
+          isActive={isActive}
+          section="plugins"
+          search={pluginSearch}
+          hasPanel={hasPanel}
+        />
       </div>
     );
   }
@@ -159,6 +186,8 @@ export function SubSidebarContent({
               );
             })}
           </SidebarMenu>
+          {/* And the menu items the plugin places in its own section. */}
+          <PluginMenuItems isActive={isActive} section={selectedMain} asMenu />
         </div>
       </div>
     );
@@ -212,6 +241,9 @@ export function SubSidebarContent({
           </div>
         ))}
         <DynamicPluginSectionItems placement="settings" isActive={isActive} />
+        {/* Plugin menu items placed in Settings (or in Users, which shows
+            here), in a list of their own. */}
+        <PluginMenuItems isActive={isActive} section="settings" asMenu />
       </div>
     );
   }
@@ -260,6 +292,8 @@ export function SubSidebarContent({
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
+            {/* The plugin menu items placed in the builders. */}
+            <PluginMenuItems isActive={isActive} section="builders" />
           </SidebarMenu>
         </div>
       </div>

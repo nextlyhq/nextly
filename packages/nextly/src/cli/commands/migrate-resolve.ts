@@ -20,6 +20,7 @@ import type { SupportedDialect } from "../../database/schema-registry";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
 import { checksumOf } from "../../domains/schema/migrate/applied-checksums";
 import { executeTransaction } from "../../domains/schema/migrate/migration-transaction";
+import { withOldBuilderMarks } from "../../domains/schema/migrate/old-builder-ledger";
 import {
   resolveMigration,
   type ResolveMigrationArgs,
@@ -43,6 +44,7 @@ import { openMigrationCommand } from "../utils/command-prerequisites";
 import {
   discoverMigrationGroups,
   selectVariant,
+  type DeclaredNames,
 } from "../utils/migration-discovery";
 
 import { commandRun } from "./command-run";
@@ -53,6 +55,10 @@ interface ResolveCommandOptions {
   applied?: string;
   rolledBack?: string;
   failedCleanup?: string;
+  /** `--removed <file>`: record an applied migration's file removed on purpose. */
+  removed?: string;
+  /** `--file-missing`: with `--rolled-back`, the file is gone from the folder. */
+  fileMissing?: boolean;
   skipVerify?: boolean;
   /** Clear a stale migrate lock before taking it (operator escape hatch). */
   forceUnlock?: boolean;
@@ -91,6 +97,13 @@ function recordingRepo(
       record(`ledger row ${id} of ${filename} as rolled_back`),
     recordChecksum: id =>
       record(`the file's current checksum on ledger row ${id} of ${filename}`),
+    recordRemoval: () =>
+      record(`the removal of ${filename} from the migrations folder`).then(
+        () => "dry-run"
+      ),
+    listFileRemovals: () => repo.listFileRemovals(),
+    // A read, as the real run reads it: a dry run records nothing.
+    currentOldBuilderMarks: () => repo.currentOldBuilderMarks(),
   };
 }
 
@@ -113,12 +126,22 @@ function pickMode(opts: ResolveCommandOptions): {
     opts.failedCleanup !== undefined
       ? (["failed-cleanup", opts.failedCleanup] as const)
       : null,
+    opts.removed !== undefined ? (["removed", opts.removed] as const) : null,
   ].filter((x): x is readonly [ResolveMode, string] => x !== null);
 
   if (chosen.length !== 1) {
     throw resolveModeRequired(chosen.length);
   }
-  return { mode: chosen[0][0], filename: chosen[0][1] };
+  const [mode, filename] = chosen[0];
+  // `--file-missing` says what `--rolled-back` may assume, and nothing else.
+  if (opts.fileMissing === true && mode !== "rolled-back") {
+    throw new NextlyError({
+      code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+      publicMessage:
+        "--file-missing goes with --rolled-back: it says the file being recorded rolled back is gone from the migrations folder.",
+    });
+  }
+  return { mode, filename };
 }
 
 /**
@@ -127,14 +150,24 @@ function pickMode(opts: ResolveCommandOptions): {
  * undefined where the folder has none. Every read here goes through it, so
  * the file recorded is the one the run compares: a project shipping `x.sql`
  * beside `x.postgresql.sql` is recorded from the variant on PostgreSQL.
+ *
+ * Read with no declared junction tables, which the declared schema gives and
+ * this command resolves only when it must (a malformed manifest would take the
+ * recovery modes down with it): a file another reader sets aside for touching
+ * one is found here, so it can still be recorded.
  */
 export async function migrationFileIn(
   dir: string,
   filename: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /**
+   * The ledger's old Builder marks alone (`withOldBuilderMarks`), so a file
+   * as its mark recorded is no migration here either, as in every reader.
+   */
+  marked?: DeclaredNames
 ): Promise<string | undefined> {
   const base = filename.replace(/\.sql$/i, "");
-  const group = (await discoverMigrationGroups(dir)).get(base);
+  const group = (await discoverMigrationGroups(dir, dialect, marked)).get(base);
   const file = group && selectVariant(group.variants, dialect);
   return file === undefined ? undefined : resolve(dir, file);
 }
@@ -147,9 +180,10 @@ export async function migrationFileIn(
 async function migrationTextIn(
   dir: string,
   filename: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  marked: DeclaredNames
 ): Promise<string> {
-  const path = await migrationFileIn(dir, filename, dialect);
+  const path = await migrationFileIn(dir, filename, dialect, marked);
   if (path === undefined) {
     throw new NextlyError({
       code: "NEXTLY_MIGRATION_FILE_MISSING",
@@ -215,6 +249,13 @@ export async function runMigrateResolve(
   try {
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
     const repo = new SchemaEventsRepository(db, dialect);
+    // The marks only: this command reads the folder with nothing declared,
+    // so a file another reader sets aside for a declared name is found here.
+    const { declared: marked } = await withOldBuilderMarks({
+      adapter,
+      db,
+      dialect,
+    });
 
     // The checks and reads a resolve makes, the same for a real run and a
     // dry run; only where its ledger writes go differs.
@@ -222,17 +263,21 @@ export async function runMigrateResolve(
       mode,
       filename,
       skipVerify: options.skipVerify,
+      fileMissing: options.fileMissing === true,
       dialect,
       repo,
       fileExists: async name =>
-        (await migrationFileIn(migrationsDir, name, dialect)) !== undefined,
+        (await migrationFileIn(migrationsDir, name, dialect, marked)) !==
+        undefined,
       loadTargetSnapshot: () => loadSnapshot(metaDir, filename),
       marksNoTransaction: async () =>
         marksNoTransaction(
-          await migrationTextIn(migrationsDir, filename, dialect)
+          await migrationTextIn(migrationsDir, filename, dialect, marked)
         ),
       fileChecksum: async () =>
-        checksumOf(await migrationTextIn(migrationsDir, filename, dialect)),
+        checksumOf(
+          await migrationTextIn(migrationsDir, filename, dialect, marked)
+        ),
       introspectLive: async () => {
         // Config and the Builder manifest, merged as generation merges them,
         // so the verifier excludes the same derived tables the snapshot never
@@ -349,6 +394,11 @@ export async function runMigrateResolve(
         break;
       case "failed-cleanup":
         logger.success(cleanedUpMessage(filename, result.updatedIds.length));
+        break;
+      case "removed":
+        logger.success(
+          `Recorded that ${filename} was removed from the migrations folder on purpose. It stays applied, and later runs of \`nextly migrate\` go on.`
+        );
         break;
       case "noop":
         logger.info(result.reason);

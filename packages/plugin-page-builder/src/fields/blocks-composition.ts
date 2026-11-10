@@ -43,6 +43,7 @@ import {
   componentIdsIn,
   compositionFaults,
   contentOnlyExposures,
+  isPlainRecord,
   MAX_COMPOSED_DEPTH,
   contentModelKeyOf,
   nodeLocks,
@@ -64,8 +65,10 @@ import {
   type NodeLock,
   type PlacementValueProblem,
   type WorkAllowance,
+  type NamedQuerySource,
 } from "@nextlyhq/blocks-engine";
 import type {
+  PluginCollectionTransaction,
   PluginFieldValidateArgs,
   PluginFieldWrite,
   PluginStoredValueTarget,
@@ -89,19 +92,29 @@ import {
   type HeldLibrary,
   type ReadComposition,
 } from "../composition-reading";
-import { changedSinceRead } from "../host-rewrite/expectations";
 import { fenceIssues, type FencedComponents } from "../host-rewrite/fence";
 
+import type { StoredForms } from "./added-undefined-ids";
+import {
+  composedBindingIssues,
+  type DeclaredShapesReader,
+} from "./binding-judgement";
 import { isForest } from "./blocks-document";
+import type { EntryBlocksFieldsReader } from "./entry-content-judgement";
 import {
   LAYERS_LOCK_CHANGED,
   placedLockMessage,
   variantLockMessage,
 } from "./layers-lock-wording";
 import {
+  composedConditionIssues,
   composedListQueryIssues,
-  listSettingOf,
+  isStoredTemplate,
+  TEMPLATE_TARGET_UNKNOWN,
+  writeSettingOf,
+  type ComposedListIssue,
   type ListFieldsReader,
+  type TemplateTargets,
 } from "./list-query-judgement";
 import {
   composedFormsRead,
@@ -117,12 +130,14 @@ interface Issue {
   message: string;
 }
 
-/** One collection entry that places a component, as the usage index records it. */
+/** One document that places a component, as the usage index records it. */
 export interface HostRef {
-  /** The collection's slug. */
+  /** The collection's slug, or the Single's when {@link single} is set. */
   readonly slug: string;
-  /** The entry's id. */
+  /** The entry's id; empty for a Single, which has one document. */
   readonly id: string;
+  /** Whether this is a Single's document rather than a collection entry. */
+  readonly single?: boolean;
   /** The blocks field the placement is in. */
   readonly field: string;
   /** Whether the reference was recorded in one language of a localized field. */
@@ -170,6 +185,13 @@ export interface CompositionSetup {
   readonly limits: DocumentLimits;
   /** Who places a component; absent where the index cannot be reached. */
   readonly hostsOf?: HostFinder;
+  /**
+   * Whether {@link hostsOf} reads the index on the write's own transaction, so
+   * a save made inside one can list its hosts. Otherwise a save inside a
+   * transaction lists none: a read on another connection can wait on the one
+   * the transaction holds.
+   */
+  readonly hostsInTransaction?: boolean;
   /** Told about hosts a component save could not judge. */
   readonly onUnjudged?: (unjudged: UnjudgedHosts) => void;
   /**
@@ -212,11 +234,13 @@ export interface CompositionSetup {
    */
   readonly composesDocuments: boolean;
   /**
-   * The components being deleted. A write adding a reference to one is
-   * refused, judged against what the document stores now; absent where no
-   * fence is installed.
+   * The components being deleted, or deleted: among the ones named, when
+   * they are. A write adding a reference to one is refused, judged against
+   * what the document stores now; absent where no fence is installed.
    */
-  readonly fencedComponents?: () => Promise<FencedComponents>;
+  readonly fencedComponents?: (
+    among?: readonly string[]
+  ) => Promise<FencedComponents>;
   /**
    * The breakpoint removal that is open, if any: while one is, a Layers or
    * `contentOnly` lock accepts exactly the stored value with the removed
@@ -230,14 +254,53 @@ export interface CompositionSetup {
    * of it. Asked at most once per write, and only when a reference needs it.
    * A write adding a reference to anything else is refused. Absent where the
    * site style cannot be read, and then nothing is refused.
+   *
+   * Read through the Direct API when asked with no transaction, as the
+   * validation asks before the write's transaction opens; on `transaction`
+   * when handed one, as the judgement under the composition graph lock asks
+   * (`composition-rejudge`), so that read takes no second connection while
+   * the write holds one. Both resolve the record by one reading
+   * (`site-definitions`).
    */
-  readonly siteDefinitions?: () => Promise<SiteDefinitions>;
+  readonly siteDefinitions?: (
+    transaction?: PluginCollectionTransaction
+  ) => Promise<SiteDefinitions>;
   /**
    * The fields a collection declares and the public may read, for judging
    * what a page's collection lists filter and sort by. Absent where the
    * schema cannot be read, and then lists are judged by their shape alone.
    */
   readonly listFields?: ListFieldsReader;
+  /**
+   * The fields a collection or a Single declares, whoever may read them, for
+   * judging a page's bindings at save. Absent where the schema cannot be
+   * read, and then bindings are judged by their shape alone.
+   */
+  readonly bindingShapes?: DeclaredShapesReader;
+  /**
+   * Told of binding problems a save kept because the stored value they may
+   * already be part of could not be read; absent, they are kept silently.
+   */
+  readonly onBindingsUnjudged?: (found: BindingsUnjudged) => void;
+  /**
+   * This site's named queries, for a list whose source is one; absent, such
+   * a list is judged by its shape alone.
+   */
+  readonly namedQueries?: NamedQuerySource;
+  /**
+   * Where templates are stored and what a stored one draws, so a template's
+   * lists and conditions are judged against the collection it draws rather
+   * than the templates collection. Absent, a template is judged as any entry.
+   */
+  readonly templates?: TemplateTargets;
+  /**
+   * A collection's top-level blocks fields, for judging which one a
+   * template's Entry content block draws. Absent, its field is judged by
+   * its shape alone.
+   *
+   * @experimental Settles when collection templates ship.
+   */
+  readonly entryBlocksFields?: EntryBlocksFieldsReader;
 }
 
 /** What the site defines that a page refers to by id. */
@@ -246,6 +309,11 @@ export interface SiteDefinitions {
   readonly classIds: ReadonlySet<string>;
   /** The breakpoints the stylesheet is emitted under, the base included. */
   readonly breakpointIds: ReadonlySet<string>;
+  /**
+   * The identities of the variables the page may name: the engine's, the
+   * code's and the stored ones, merged as the stylesheet resolves them.
+   */
+  readonly tokenIds: ReadonlySet<string>;
 }
 
 /** Which document a write is to: a collection or a single, its slug, an id. */
@@ -261,6 +329,14 @@ export interface PlacementUnjudged extends WrittenTo {
   readonly field: string;
   /** How many breaks were kept. */
   readonly breaks: number;
+}
+
+/** Binding problems a write kept unjudged, for the server log. */
+export interface BindingsUnjudged extends WrittenTo {
+  /** The blocks field written. */
+  readonly field: string;
+  /** How many problems were kept. */
+  readonly bindings: number;
 }
 
 /** A write whose Layers locks were not judged, for the server log. */
@@ -388,6 +464,7 @@ export async function compositionIssues(
       report,
       stored,
       write,
+      data: args.data,
       field: args.path,
       writtenTo: documentOf(write),
     });
@@ -410,10 +487,144 @@ export async function compositionIssues(
 }
 
 /**
+ * The composition graph's rules judged again on a value already stored, from
+ * inside the write's transaction while it holds the graph lock
+ * (`composition-graph-lock`): no component loop, the composed nesting and
+ * depth of the document, and, for a component, of every document the index
+ * lists as placing it.
+ *
+ * {@link compositionIssues} judges the write before its transaction opens, so
+ * two writes can each pass against the graph as it stood before the other.
+ * Under the lock every definition is read as last committed, through `write`
+ * (bound to the transaction), and this write's own value is the one stored.
+ *
+ * `before` is the value as it stood before this write, which the store no
+ * longer holds: a nesting break it already composed to is kept, as the first
+ * judgement keeps one the stored forms hold, and a component's hosts are
+ * judged against it. A slot lock a placed component holds is judged here too,
+ * measured against the same value: a component can tighten one while a page
+ * fills that slot. Nothing that does not depend on other documents is judged
+ * again.
+ */
+export async function compositionGraphIssues(
+  value: unknown,
+  args: {
+    /** The write, bound to its transaction. */
+    readonly write: PluginFieldWrite;
+    /** The blocks field's path. */
+    readonly path: string;
+    /** The status the stored document is in, deciding the forms judged. */
+    readonly nextStatus: string | undefined;
+    /** The value before this write; undefined for a create. */
+    readonly before: unknown;
+  },
+  setup: CompositionSetup
+): Promise<Issue[]> {
+  if (!isForest(value)) return [];
+  const { write, nextStatus } = args;
+  const document = value as BlockDocument;
+  const source = storedComponentSource(write, setup.store);
+  const self = componentSaved(write, args.path, setup.store);
+  const report = issueReport(args.path);
+  const work: WorkAllowance = { left: MOST_COMPOSED_NODES };
+  if (self !== undefined) {
+    const cycle = await componentCycleRefusal({
+      self,
+      document,
+      nextStatus,
+      source,
+      limits: setup.limits,
+      work,
+    });
+    if (cycle !== null) {
+      report.add("COMPONENT_CYCLE", cycle);
+      return report.issues;
+    }
+  }
+  if (!setup.composesDocuments) return report.issues;
+
+  const before = isForest(args.before)
+    ? (args.before as BlockDocument)
+    : undefined;
+  const stored = (): Promise<StoredRead> =>
+    Promise.resolve({
+      forms: before === undefined ? [] : [before],
+      readable: true,
+    });
+  const tally = hostTally(self ?? "", setup);
+  for (const draft of formsChangedBy(nextStatus)) {
+    const read = documentReader(source, draft);
+    await judgeGraph({ document, self, read, setup, work, report, stored });
+    if (self !== undefined) {
+      await judgeHosts({
+        self,
+        document,
+        draft,
+        source,
+        read,
+        write,
+        setup,
+        work,
+        tally,
+        stored: { document: before },
+      });
+    }
+  }
+  tally.flush(report);
+  return report.issues;
+}
+
+/**
+ * The graph half of {@link judgeOwnComposition}: the document's composed
+ * nesting, depth and slot locks, a nesting or lock break measured against
+ * `stored`.
+ */
+async function judgeGraph(args: {
+  document: BlockDocument;
+  self: string | undefined;
+  read: BoundedReader;
+  setup: CompositionSetup;
+  work: WorkAllowance;
+  report: Report;
+  stored: () => Promise<StoredRead>;
+}): Promise<void> {
+  const { document, self, read, setup, work, report } = args;
+  const library = heldLibrary(
+    self === undefined ? undefined : new Map([[self, document]])
+  );
+  const composed = await composeWithReads({
+    host: document,
+    library,
+    read,
+    limits: setup.limits,
+    work,
+  });
+  if (read.exhausted() || work.left <= 0) {
+    report.add("COMPOSITION_UNCHECKED", OUTGROWN);
+    return;
+  }
+  const faults = await measuredAgainstStored(
+    faultsIn(document, composed.composition, setup, {
+      components: lookupOf(library),
+    }),
+    {
+      document,
+      composition: composed.composition,
+      setup,
+      reading: { library, read, limits: setup.limits, work },
+      stored: args.stored,
+      field: undefined,
+      writtenTo: undefined,
+    }
+  );
+  for (const fault of faults) report.add(fault.code, fault.message);
+}
+
+/**
  * What a rewrite of every host adds to a write's judgement, on every write:
- * a rewrite's own write is refused when the host changed since the rewrite
- * read it, and any write adding a reference to a component being deleted is
- * refused (see `host-rewrite/fence`).
+ * any write adding a reference to a component being deleted is refused (see
+ * `host-rewrite/fence`). A rewrite's own write is checked against what it
+ * read by core's conditional write, under the write's own row lock.
  */
 async function judgeHostRewrite(
   document: BlockDocument,
@@ -423,8 +634,6 @@ async function judgeHostRewrite(
   setup: CompositionSetup,
   report: Report
 ): Promise<void> {
-  const changed = await changedSinceRead(write, args.path);
-  if (changed !== undefined) report.add(changed.code, changed.message);
   if (setup.fencedComponents === undefined) return;
   const refused = await fenceIssues({
     document,
@@ -652,6 +861,8 @@ async function judgeOwnComposition(args: {
   stored: () => Promise<StoredRead>;
   /** The write, for the language and host its lists are judged in. */
   write: PluginFieldWrite;
+  /** The write's payload, for the collection a template draws. */
+  data: Readonly<Record<string, unknown>>;
   /** The blocks field being written, for the server log. */
   field?: string;
   /** Which document is being written, for the server log. */
@@ -700,7 +911,9 @@ async function judgeOwnComposition(args: {
     reading: { library, read, limits: setup.limits, work },
     stored: args.stored,
     write: args.write,
+    data: args.data,
     report,
+    unjudged: { field: args.field ?? "", ...args.writtenTo },
   });
   // Every placement's definition, the ones a condition gates included: the
   // composition never expanded those, and both checks below read them.
@@ -742,7 +955,8 @@ async function judgeOwnComposition(args: {
  * variant can change a list's source, filters, sort or bounds, and both read
  * the composed list. Its shape is judged always, and the fields it names
  * where the schema can be read; a problem the stored page already composed
- * to is kept.
+ * to is kept. A placed block's visibility conditions are judged the same way,
+ * against the entry or list item they read where the page places them.
  */
 async function judgeComposedLists(args: {
   document: BlockDocument;
@@ -756,30 +970,96 @@ async function judgeComposedLists(args: {
   };
   stored: () => Promise<StoredRead>;
   write: PluginFieldWrite;
+  /** The write's payload, for the collection a template draws. */
+  data: Readonly<Record<string, unknown>>;
   report: Report;
+  /** Which document is written, for the server log of problems kept. */
+  unjudged: Omit<PlacementUnjudged, "breaks">;
 }): Promise<void> {
   const fieldsOf = args.setup.listFields;
-  const found = await composedListQueryIssues(
+  // The stored forms composed as this page is, so a list or a condition they
+  // already composed to keeps its problem as a warning. Composed once, for
+  // both judgements, and only once one of them finds a problem. Composed only
+  // in part, they may lack a problem the stored page holds, so they count as
+  // unreadable: the problem is kept rather than blamed on this write.
+  let storedForms: Promise<StoredForms> | undefined;
+  const composeStored = async (): Promise<StoredForms> => {
+    const stored = await args.stored();
+    if (!stored.readable) return { forms: [], readable: false };
+    const composed = await composedFormsRead({
+      ...args.reading,
+      hosts: stored.forms,
+    });
+    return {
+      forms: composed.forms as BlockDocument[],
+      readable: composed.complete,
+    };
+  };
+  const site = {
+    ...(fieldsOf === undefined ? {} : { fieldsOf }),
+    ...(args.setup.namedQueries === undefined
+      ? {}
+      : { namedQueries: args.setup.namedQueries }),
+    maxNodes: args.setup.limits.maxNodes,
+    storedForms: () => (storedForms ??= composeStored()),
+    // A placement's value or variant made each such problem, so it is logged
+    // as the placement breaks a write keeps are.
+    onUnjudged: (breaks: number) =>
+      args.setup.onPlacementUnjudged?.({ ...args.unjudged, breaks }),
+  };
+  // A component's own save leaves the entry unknown: its lists and
+  // conditions read the entries of the pages placing it. A template's read
+  // the entry of the collection it draws.
+  const setting = await writeSettingOf(
+    args.write,
+    args.document,
+    args.data,
+    args.setup.templates
+  );
+  // A template whose collection cannot be known is refused by the field's
+  // own judgement of its lists, which runs on the same write; judging its
+  // composed lists by their shape here would only weaken that refusal.
+  if (setting === TEMPLATE_TARGET_UNKNOWN) return;
+  const found = [
+    ...(await composedListQueryIssues(
+      args.composed,
+      args.document,
+      setting,
+      site
+    )),
+    ...(await composedConditionIssues(
+      args.composed,
+      args.document,
+      setting,
+      site
+    )),
+  ];
+  for (const issue of found) args.report.add(issue.code, issue.message);
+  // And the bindings its placed components bring, against this page's entry.
+  const bindingShapes = args.setup.bindingShapes;
+  if (bindingShapes === undefined) return;
+  const bound = await composedBindingIssues(
     args.composed,
     args.document,
-    listSettingOf(args.write),
+    args.write,
     {
-      ...(fieldsOf === undefined ? {} : { fieldsOf }),
-      maxNodes: args.setup.limits.maxNodes,
-      // The stored forms composed as this page is, so a list they already
-      // composed to keeps its problem as a warning.
-      storedForms: async () => {
-        const stored = await args.stored();
-        if (!stored.readable) return { forms: [], readable: false };
-        const composed = await composedFormsRead({
-          ...args.reading,
-          hosts: stored.forms,
-        });
-        return { forms: composed.forms as BlockDocument[], readable: true };
-      },
-    }
+      shapesOf: bindingShapes,
+      storedForms: site.storedForms,
+      maxNodes: site.maxNodes,
+      onUnjudged: (bindings: number) =>
+        args.setup.onBindingsUnjudged?.({ ...args.unjudged, bindings }),
+      // A placed list's item bindings, against its query's rows.
+      ...(args.setup.namedQueries === undefined
+        ? {}
+        : { namedQueries: args.setup.namedQueries }),
+      // A template's, against the collection it draws.
+      ...(args.setup.templates === undefined
+        ? {}
+        : { templates: args.setup.templates }),
+    },
+    args.data
   );
-  for (const issue of found) args.report.add(issue.code, issue.message);
+  for (const issue of bound) args.report.add(issue.code, issue.message);
 }
 
 /**
@@ -1088,40 +1368,34 @@ async function judgeHosts(args: {
   setup: CompositionSetup;
   work: WorkAllowance;
   tally: Tally;
+  /**
+   * The component as it stood before this write, for a judgement made after
+   * the write stored it, when the store already holds the new document.
+   * Absent, it is read from the store.
+   */
+  stored?: { readonly document: BlockDocument | undefined };
 }): Promise<void> {
   const { self, document, draft, source, read, write, setup, work, tally } =
     args;
-  const before = await source(self, draft);
+  const before = args.stored ?? (await storedBefore(source, self, draft));
   // Not stored in this form yet: a create under a caller's own id, which pages
   // may already place. Nothing to compare against, so every host is judged.
   const was =
-    before.kind === "document" && isForest(before.document)
-      ? await footprintOf(
-          self,
-          before.document as BlockDocument,
-          read,
-          setup,
-          work
-        )
-      : undefined;
+    before.document === undefined
+      ? undefined
+      : await footprintOf(self, before.document, read, setup, work);
   const now = await footprintOf(self, document, read, setup, work);
   if (was !== undefined && !mayWorsen(was, now)) return;
 
-  // The index is read through the Direct API, on a connection of its own. Inside
-  // a transaction that read can wait on the connection the transaction holds,
-  // and the rows the batch wrote are not in it anyway.
-  if (write.inTransaction) {
+  // Unless the index is read on this transaction, it is read on a connection
+  // of its own. Inside a transaction that read can wait on the connection the
+  // transaction holds, and the rows the batch wrote are not in it anyway.
+  if (write.inTransaction && setup.hostsInTransaction !== true) {
     tally.incomplete(
       "it was saved inside a transaction, where the usage index is not read"
     );
     return;
   }
-  // Said whenever hosts are looked for, because it is true of every lookup: the
-  // index records the components a document names, not one a placement's
-  // override chooses inside the component it places.
-  tally.incomplete(
-    "a document that reaches it only through a placement's override is not in the usage index"
-  );
   const listed = await everyHost(self, setup);
   if (listed === null) {
     tally.incomplete(
@@ -1136,11 +1410,14 @@ async function judgeHosts(args: {
   }
   // Every host's lists name the same few collections: each is read once.
   const listFields = onceEach(setup.listFields);
+  // And the collections the template hosts draw, in one read for them all.
+  const templateTargets = await templateHostTargets(listed.hosts, write, setup);
   for (const host of listed.hosts) {
     await judgeOneHost({
       host,
       self,
       document,
+      was: before.document,
       draft,
       read,
       write,
@@ -1148,8 +1425,48 @@ async function judgeHosts(args: {
       work,
       tally,
       listFields,
+      templateTargets,
     });
   }
+}
+
+/**
+ * The collections the hosts stored in the templates collection draw, by
+ * host id, read in ONE read for every such host rather than one per host.
+ * Nothing is read inside a caller's transaction, where a read on another
+ * connection can wait on the one the transaction holds: those hosts are
+ * then left unjudged (`hostSettingOf`).
+ */
+async function templateHostTargets(
+  hosts: readonly HostRef[],
+  write: PluginFieldWrite,
+  setup: CompositionSetup
+): Promise<ReadonlyMap<string, string>> {
+  const templates = setup.templates;
+  if (templates === undefined || write.inTransaction) return new Map();
+  const ids = [
+    ...new Set(
+      hosts
+        .filter(host => !host.single && host.slug === templates.collection)
+        .map(host => host.id)
+    ),
+  ];
+  return ids.length === 0 ? new Map() : templates.storedTargetsOf(ids);
+}
+
+/** The component as the store holds it in one form, where it holds a forest. */
+async function storedBefore(
+  source: ComponentSource,
+  self: string,
+  draft: boolean
+): Promise<{ readonly document: BlockDocument | undefined }> {
+  const before = await source(self, draft);
+  return {
+    document:
+      before.kind === "document" && isForest(before.document)
+        ? (before.document as BlockDocument)
+        : undefined,
+  };
 }
 
 /**
@@ -1265,7 +1582,7 @@ function addDamage(
 
 /** One document, whichever of its fields placed the component. */
 function documentKey(host: HostRef): string {
-  return `${host.slug}\u0000${host.id}`;
+  return `${host.single === true ? "single" : "collection"}\u0000${host.slug}\u0000${host.id}`;
 }
 
 /** What one host is broken by: a composition fault, or a loop it now closes. */
@@ -1324,6 +1641,8 @@ function ruleBroken(code: string, setup: CompositionSetup): string {
       return "a locked slot that allows only content changes would have its design or settings changed";
     case LIST_BROKEN:
       return "a collection list would be given a source, filter or sort it can't use";
+    case CONDITION_BROKEN:
+      return "a block's visibility condition would check a field it can't use there";
     default:
       return "a block would sit where it is not allowed to";
   }
@@ -1376,8 +1695,9 @@ function admitHosts(
 ): string[] {
   const components: string[] = [];
   for (const host of hosts) {
-    const key = `${host.slug}\u0000${host.id}\u0000${host.field}`;
-    const isComponent = host.slug === setup.store.collection;
+    const key = `${documentKey(host)}\u0000${host.field}`;
+    const isComponent =
+      host.single !== true && host.slug === setup.store.collection;
     if (listing.found.has(key) || (isComponent && host.id === self)) continue;
     if (listing.found.size >= MOST_HOSTS_JUDGED) {
       listing.whole = false;
@@ -1394,6 +1714,8 @@ async function judgeOneHost(args: {
   host: HostRef;
   self: string;
   document: BlockDocument;
+  /** The component before this save, or undefined where it held none. */
+  was: BlockDocument | undefined;
   draft: boolean;
   read: BoundedReader;
   write: PluginFieldWrite;
@@ -1402,6 +1724,8 @@ async function judgeOneHost(args: {
   tally: Tally;
   /** The schema the host's lists are judged against, read once per save. */
   listFields: ListFieldsReader | undefined;
+  /** The collections the template hosts draw, read once per save. */
+  templateTargets: ReadonlyMap<string, string>;
 }): Promise<void> {
   const { host, self, document, draft, read, write, setup, work, tally } = args;
   // A localized field holds a document per language, and the read is refused
@@ -1429,7 +1753,11 @@ async function judgeOneHost(args: {
     });
     return { ...composed, components: lookupOf(library) };
   };
-  const before = await compose(undefined);
+  // Seeded with the component as it was, which the store no longer holds once
+  // the write has stored it; where it held none, the host composes without it.
+  const before = await compose(
+    args.was === undefined ? undefined : new Map([[self, args.was]])
+  );
   const after = await compose(new Map([[self, document]]));
   if (read.exhausted() || work.left <= 0) {
     tally.host(
@@ -1447,11 +1775,13 @@ async function judgeOneHost(args: {
     setup,
     tally,
     listFields: args.listFields,
+    templateTargets: args.templateTargets,
   });
 }
 
 /**
- * The collection lists the save would newly break in one host, as the host
+ * The collection lists, and the visibility conditions, the save would newly
+ * break in one host, as the host
  * composes them before and after it: an edit can aim a placement's existing
  * value at a list's sort or filters, move the list to another collection, or
  * change what a variant sets, and the page is then read with a list the
@@ -1471,27 +1801,86 @@ async function reportListsBroken(args: {
   setup: CompositionSetup;
   tally: Tally;
   listFields: ListFieldsReader | undefined;
+  templateTargets: ReadonlyMap<string, string>;
 }): Promise<void> {
   const { host, stored, before, after, setup, tally, listFields } = args;
-  const found = await composedListQueryIssues(
-    after.composition.document,
-    stored,
-    host.slug === setup.store.collection ? {} : { entryCollection: host.slug },
-    {
-      ...(listFields === undefined ? {} : { fieldsOf: listFields }),
-      maxNodes: setup.limits.maxNodes,
-      // What the host composed to before this save stands for its stored
-      // form: a problem it held there is kept.
-      storedForms: () =>
-        Promise.resolve({
-          forms: [before.composition.document],
-          readable: true,
-        }),
-    }
-  );
+  const setting = hostSettingOf(host, stored, setup, args.templateTargets);
+  if (setting === TEMPLATE_TARGET_UNKNOWN) {
+    // Never judged by shape instead: the operator is told which template
+    // went unjudged, as for any host this save could not vouch for.
+    tally.host(
+      host,
+      `${describeHost(host)} is a template whose collection could not be read`
+    );
+    return;
+  }
+  const site = {
+    ...(listFields === undefined ? {} : { fieldsOf: listFields }),
+    ...(setup.namedQueries === undefined
+      ? {}
+      : { namedQueries: setup.namedQueries }),
+    maxNodes: setup.limits.maxNodes,
+    // What the host composed to before this save stands for its stored
+    // form: a problem it held there is kept.
+    storedForms: () =>
+      Promise.resolve({
+        forms: [before.composition.document],
+        readable: true,
+      }),
+  };
+  // A placed block's visibility conditions read the host's entry, or the
+  // item of a list they land in, so they are judged the same way.
+  const judged = [
+    { code: LIST_BROKEN, judge: composedListQueryIssues },
+    { code: CONDITION_BROKEN, judge: composedConditionIssues },
+  ];
+  for (const { code, judge } of judged) {
+    const found = await judge(
+      after.composition.document,
+      stored,
+      setting,
+      site
+    );
+    reportHostIssues(host, tally, code, found);
+  }
+}
+
+/**
+ * The setting a host's lists are judged in when a component it places is
+ * saved: no entry for a host that is itself a component, the collection a
+ * template draws for a template (as its own save judges it, from the template
+ * as stored), and the host's own collection for any other entry.
+ */
+function hostSettingOf(
+  host: HostRef,
+  stored: BlockDocument,
+  setup: CompositionSetup,
+  templateTargets: ReadonlyMap<string, string>
+):
+  | { readonly entryCollection?: string | null }
+  | typeof TEMPLATE_TARGET_UNKNOWN {
+  if (host.slug === setup.store.collection) return {};
+  // Judged as a save of the template is: against the collection it draws,
+  // from the template as stored, read for every template host at once.
+  if (!host.single && isStoredTemplate(host.slug, stored, setup.templates)) {
+    const target = templateTargets.get(host.id);
+    return target === undefined
+      ? TEMPLATE_TARGET_UNKNOWN
+      : { entryCollection: target };
+  }
+  return { entryCollection: host.slug };
+}
+
+/** Each issue a save would bring to one host, as that host's fault. */
+function reportHostIssues(
+  host: HostRef,
+  tally: Tally,
+  code: string,
+  found: readonly ComposedListIssue[]
+): void {
   for (const issue of found) {
     tally.broke(host, {
-      code: LIST_BROKEN,
+      code,
       instanceId: issue.placement,
       // The log names the placement and the list's problem; the refusal
       // names neither, as for every other host fault.
@@ -1503,6 +1892,9 @@ async function reportListsBroken(args: {
 
 /** The host fault of a collection list a component save would break. */
 const LIST_BROKEN = "collection-list";
+
+/** The host fault of a visibility condition a component save would break. */
+const CONDITION_BROKEN = "visibility-condition";
 
 /**
  * What the save does to one host that was not wrong with it already.
@@ -1612,12 +2004,11 @@ async function hostDocument(
   draft: boolean,
   write: PluginFieldWrite
 ): Promise<BlockDocument | undefined | null> {
-  const target: PluginStoredValueTarget = {
-    collection: host.slug,
-    id: host.id,
-    field: host.field,
-    form: draft ? "draft" : "published",
-  };
+  const form = draft ? "draft" : "published";
+  const target: PluginStoredValueTarget =
+    host.single === true
+      ? { single: host.slug, field: host.field, form }
+      : { collection: host.slug, id: host.id, field: host.field, form };
   try {
     const read = await write.readStored(target);
     if (read.kind === "absent") return undefined;
@@ -1627,9 +2018,11 @@ async function hostDocument(
   }
 }
 
-/** A host as an operator finds it in the log: its entry id in its collection. */
+/** A host as an operator finds it in the log: its entry id in its collection, or the Single. */
 function describeHost(host: HostRef): string {
-  return `"${host.id}" in "${host.slug}"`;
+  return host.single === true
+    ? `the Single "${host.slug}"`
+    : `"${host.id}" in "${host.slug}"`;
 }
 
 /**
@@ -1675,6 +2068,12 @@ interface SelectionFootprint {
    * name fields it no longer may, with nothing a placement rule reads moved.
    */
   readonly lists: string;
+  /**
+   * Each block of the selection that carries visibility conditions, by id,
+   * with its conditions as stored. A condition changed to check another
+   * field can make a host's entry, or a list item there, one it cannot check.
+   */
+  readonly conditions: string;
 }
 
 /** The footprint of `document` stored as `self`, selection by selection. */
@@ -1721,6 +2120,7 @@ async function footprintOf(
         )
       ),
       lists: listQueries(nodes, setup),
+      conditions: conditionSets(nodes, setup),
     });
   }
   return {
@@ -1747,6 +2147,26 @@ function listQueries(
     );
   });
   return lists.sort().join("\n");
+}
+
+/**
+ * Each block of a composed tree carrying visibility conditions, by id, with
+ * its conditions as stored, as one comparable string.
+ */
+function conditionSets(
+  nodes: readonly BlockNode[],
+  setup: CompositionSetup
+): string {
+  const sets: string[] = [];
+  eachComposed(nodes, setup, entry => {
+    const visibility = (entry as { visibility?: unknown } | undefined)
+      ?.visibility;
+    if (!isPlainRecord(visibility) || visibility.conditions === undefined) {
+      return;
+    }
+    sets.push(`${String(entry.id)}|${JSON.stringify(visibility.conditions)}`);
+  });
+  return sets.sort().join("\n");
 }
 
 /** The deepest node of a composed forest, counted from its own top. */
@@ -1983,6 +2403,8 @@ function selectionWorsens(
   if (after.placement !== before.placement) return true;
   // Any list that changed may now refuse what a host gives it.
   if (after.lists !== before.lists) return true;
+  // Any condition that changed may now check a field a host's entry can't give.
+  if (after.conditions !== before.conditions) return true;
   if (after.depth > before.depth) return true;
   if (after.componentDepth > before.componentDepth) return true;
   for (const type of after.rootTypes) {

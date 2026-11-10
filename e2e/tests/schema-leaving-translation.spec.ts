@@ -53,7 +53,7 @@ async function seedTranslated(
   const { item } = (await entry.json()) as { item: { id: string } };
   const spanish = await page.request.patch(
     `${API}/collections/${slug}/entries/${item.id}?locale=es`,
-    { data: { headline: "Hola" } }
+    { data: { headline: "Hola", _overwrite: true } }
   );
   expect(spanish.ok(), await spanish.text()).toBe(true);
 }
@@ -67,7 +67,7 @@ async function makeHeadlineShared(page: Page, slug: string): Promise<void> {
     .click();
   await page.getByRole("tab", { name: "Advanced" }).click();
   await page.getByRole("switch", { name: "Localized" }).click();
-  await page.getByRole("button", { name: "Apply" }).click();
+  // No Apply: the settings panel keeps each change as it is made.
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toBeVisible();
 }

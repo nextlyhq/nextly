@@ -23,6 +23,10 @@ import { parseSnapshotFile } from "../../../domains/schema/migrate-create/snapsh
 import type { NextlySchemaSnapshot } from "../../../domains/schema/pipeline/diff/types";
 import { describeHolder } from "../../../domains/schema/pipeline/schema-lock";
 import { NextlyError } from "../../../errors/nextly-error";
+import {
+  appliedFilesMissing,
+  oldBuilderFilesChanged,
+} from "../../commands/migrate";
 import { refusalOf } from "../../commands/migrate-down";
 import { CliError, dataLossRefusal, type CliErrorCode } from "../../errors";
 import {
@@ -118,6 +122,9 @@ function resolving(
       insertEvent: () => Promise.resolve("evt_2"),
       supersede: () => Promise.resolve(),
       markRolledBack: () => Promise.resolve(),
+      currentOldBuilderMarks: () => Promise.resolve(new Map()),
+      recordRemoval: () => Promise.resolve("evt_3"),
+      listFileRemovals: () => Promise.resolve([]),
     },
     fileExists: () => Promise.resolve(true),
     loadTargetSnapshot: () => Promise.resolve(null),
@@ -208,12 +215,31 @@ export const MIGRATION_CASES = {
       why: "Its checksum no longer matches the one recorded when it ran on this database.",
       next: "Restore the file as it was when it ran, and put the change in a new migration with `nextly migrate:create`.",
     }),
+  // As `assertAppliedFilesPresent` in `cli/commands/migrate.ts` throws it.
   MIGRATION_MISSING: () =>
-    new CliError("MIGRATION_MISSING", {
-      what: "`20261020_120000_add_posts.sql` is recorded as applied, but its file is not in the migrations folder.",
-      why: "It ran on this database and no removal of it is recorded, so the folder may be from an older build.",
-      next: "Restore the file from version control, or deploy the build that has it, then run `nextly migrate` again.",
-    }),
+    appliedFilesMissing(
+      "nextly migrate",
+      ["20261020_120000_add_posts.sql"],
+      []
+    ),
+  // As `oldBuilderFilesChanged` in `cli/commands/migrate.ts` raises it.
+  OLD_BUILDER_FILE_SNAPSHOT_ADDED: () =>
+    oldBuilderFilesChanged("nextly migrate", [
+      {
+        file: "1761732000000_create_posts.sql",
+        change: "snapshot",
+        lacks: ["snapshot"],
+      },
+    ]),
+  // As `oldBuilderFilesChanged` in `cli/commands/migrate.ts` raises it.
+  OLD_BUILDER_FILE_VARIANT_ADDED: () =>
+    oldBuilderFilesChanged("nextly migrate", [
+      {
+        file: "1761732000000_create_posts.sql",
+        change: "variant",
+        lacks: ["variant"],
+      },
+    ]),
   // As `baselineCore` in `cli/commands/migrate-baseline.ts` throws it.
   BASELINE_LOCK_RELEASED: () =>
     new NextlyError({
@@ -230,12 +256,13 @@ export const MIGRATION_CASES = {
         "The migrate lock was released without resolving the migration. " +
         "Nothing was written; retry once no other schema operation is running.",
     }),
-  // As `assertNoBuilderFilesWithoutSnapshot` in `cli/commands/migrate.ts` throws it.
+  // As `refuseUnrecognisedBuilderFiles` in `cli/commands/migrate.ts` throws it.
   BUILDER_MIGRATION_SNAPSHOT_MISSING: () =>
     new NextlyError({
       code: "NEXTLY_MIGRATION_SNAPSHOT_MISSING",
       publicMessage:
-        `nextly migrate does not apply a Schema Builder migration file with no snapshot. ` +
+        `nextly migrate does not apply a file with a Schema Builder name that is not recognised as an earlier Builder's: ` +
+        `${BUILDER_FILE}, which has a statement on a table that is not its own entity's, or one that cannot be read. ` +
         builderMigrationRemedy(BUILDER_FILE),
       logContext: { files: [BUILDER_FILE] },
     }),

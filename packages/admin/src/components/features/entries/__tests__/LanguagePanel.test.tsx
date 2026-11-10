@@ -2,6 +2,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
+import type { PublishAllPreview } from "@admin/services/publishAllPreview";
 
 import {
   EntryLocaleProvider,
@@ -85,7 +86,7 @@ const COPY_IDLE = {
   confirm: vi.fn(),
 };
 /** What the server says publishing every language does here. */
-const PREVIEW = {
+const PREVIEW: PublishAllPreview = {
   languages: [
     { locale: "en", outcome: "goes-live-with-pending-change" as const },
     { locale: "de", outcome: "stays-published" as const },

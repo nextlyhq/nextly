@@ -26,6 +26,7 @@ import {
   buildRetentionRunner,
   retentionPoliciesFrom,
 } from "../domains/retention/passes";
+import type { BuilderSaveSetup } from "../domains/schema/builder-save/collection-save";
 import {
   draftSplitResponseFields,
   schemaDraftSplit,
@@ -86,6 +87,13 @@ type EveryLanguageLifecycleHandlerParams = {
    * save's are (see the entry service).
    */
   data?: Readonly<Record<string, unknown>>;
+  /**
+   * The HTTP request behind this transition, when one produced it, told to
+   * its hooks.
+   */
+  request?: Request;
+  /** Seeds the context every hook of this transition shares. */
+  context?: Record<string, unknown>;
 };
 
 /**
@@ -282,6 +290,13 @@ export class CollectionsHandler {
       this.fileManager,
       this.collectionService
     );
+    // A save through this handler writes where every Builder save writes:
+    // the app's definition file and migrations folder, as registered at boot.
+    if (container.has("builderSaveSetup")) {
+      this.metadataService.setBuilderSave(
+        container.get<BuilderSaveSetup>("builderSaveSetup")
+      );
+    }
 
     const fieldGroupDataService = container.has("fieldGroupDataService")
       ? container.get<FieldGroupDataService>("fieldGroupDataService")
@@ -368,12 +383,45 @@ export class CollectionsHandler {
   }
 
   /**
+   * Whether this caller may make a write naming `nextStatus` of the entry: the
+   * lifecycle gate an update asks, only where it moves the row into or out of
+   * published, judged without writing. See the mutation service.
+   *
+   * @experimental
+   */
+  async canMoveEntryStatus(params: {
+    collectionName: string;
+    entryId: string;
+    nextStatus: string;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+    locale?: string;
+  }): Promise<boolean> {
+    return this.entryService.canMoveEntryStatus(params);
+  }
+
+  /**
+   * Whether this caller may delete the entry, judged by the delete's own gate
+   * without deleting it or running a hook, on the instance that serves
+   * collection writes, so the decision is the one the delete would take.
+   *
+   * @experimental
+   */
+  async canDeleteEntry(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    /** API-key scope; judges the delete gate on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<boolean> {
+    return this.entryService.canDeleteEntry(params);
+  }
+
+  /**
    * What a release's write of these entries, for its action, would be
    * refused with by validation and field rules, judged without writing — on
    * the instance that serves
    * collection writes, so the judgement is the one the write would make.
-   *
-   * @experimental
    */
   async releasePublishIssues(params: {
     collectionName: string;
@@ -382,6 +430,18 @@ export class CollectionsHandler {
     action: "publish" | "unpublish";
   }): Promise<Map<string, ValidationIssue[]>> {
     return this.entryService.releasePublishIssues(params);
+  }
+
+  /**
+   * Every reason a list read would refuse this caller's query, or none, on the
+   * instance that serves collection reads. See the query service.
+   *
+   * @experimental
+   */
+  async queryReadableProblems(
+    params: Parameters<CollectionEntryService["queryReadableProblems"]>[0]
+  ): ReturnType<CollectionEntryService["queryReadableProblems"]> {
+    return this.entryService.queryReadableProblems(params);
   }
 
   /**
@@ -400,8 +460,6 @@ export class CollectionsHandler {
   /**
    * Each of these entries as a release would put it live, read as stored. See
    * the mutation service.
-   *
-   * @experimental
    */
   async releaseGoingLiveDocuments(params: {
     collectionName: string;
@@ -414,8 +472,6 @@ export class CollectionsHandler {
    * Whether a release's document-wide write of this collection would meet a
    * translation table without its per-language status. See the mutation
    * service.
-   *
-   * @experimental
    */
   async releaseCompanionLacksStatus(params: {
     collectionName: string;
@@ -426,8 +482,6 @@ export class CollectionsHandler {
   /**
    * The languages whose unreleased work a release's document-wide write of
    * these entries would be refused over.
-   *
-   * @experimental
    */
   async releaseHeldDraftLocales(params: {
     collectionName: string;

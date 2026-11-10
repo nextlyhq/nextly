@@ -491,6 +491,21 @@ export const MIGRATION_CODES = defineCodes({
         reason: PLAN_CHANGED_AFTER_CONSENT,
         describe: planChangedParts,
       },
+      {
+        // `nextly migrate` judged what each file deletes from the file as it read it under the
+        // lock, and reads the files again to run them: one edited or added in between is the
+        // judged plan changing before the run could act on it.
+        code: "INVALID_INPUT",
+        reason: "file-changed-after-judgement",
+        describe: error => {
+          const [what, next] = splitFirst(error.publicMessage);
+          return {
+            what,
+            why: "The run judged what each migration file deletes from the file as it read it, and this one was edited or added before it ran, so its deletions were never judged.",
+            next,
+          };
+        },
+      },
     ],
   },
   DATA_LOSS_DECLINED: {
@@ -620,6 +635,14 @@ export const MIGRATION_CODES = defineCodes({
   MIGRATION_MISSING: {
     cause:
       "A migration recorded as applied has no file in the migrations folder.",
+  },
+  OLD_BUILDER_FILE_SNAPSHOT_ADDED: {
+    cause:
+      "A migration file recognised as an old Schema Builder file now has a snapshot beside it, so it would be read as a migration.",
+  },
+  OLD_BUILDER_FILE_VARIANT_ADDED: {
+    cause:
+      "A dialect variant now shares the name of a migration file recognised as an old Schema Builder file, so its ledger rows and the Builder's cannot be told apart.",
   },
   BASELINE_LOCK_RELEASED: {
     cause:
@@ -935,6 +958,20 @@ export const MIGRATION_CODES = defineCodes({
           };
         },
       },
+      // A migration whose file's removal was recorded: its down section is
+      // gone with the file.
+      {
+        code: "INVALID_INPUT",
+        reason: "down-file-removed",
+        describe: error => {
+          const [what, next] = splitFirst(error.publicMessage);
+          return {
+            what,
+            why: "`nextly migrate:resolve --removed` recorded its file removed from the folder, so there is no `-- DOWN` section to run.",
+            next,
+          };
+        },
+      },
     ],
   },
   PRODUCTION_ROLLBACK_UNCONFIRMED: {
@@ -1021,21 +1058,10 @@ export function resolveModeRequired(given: number): CliError {
     what: "`nextly migrate:resolve` needs exactly one thing to record.",
     why:
       given === 0
-        ? "It was given none of `--applied`, `--rolled-back` and `--failed-cleanup`."
-        : `It was given ${given} of \`--applied\`, \`--rolled-back\` and \`--failed-cleanup\`.`,
-    next: "Provide exactly one of --applied, --rolled-back, or --failed-cleanup.",
+        ? "It was given none of `--applied`, `--rolled-back`, `--failed-cleanup` and `--removed`."
+        : `It was given ${given} of \`--applied\`, \`--rolled-back\`, \`--failed-cleanup\` and \`--removed\`.`,
+    next: "Provide exactly one of --applied, --rolled-back, --failed-cleanup, or --removed.",
   });
-}
-
-/** Builder-written files with no snapshot, as the command that found them reports them. */
-export function builderSnapshotMissing(
-  what: string,
-  files: readonly string[]
-): CliError {
-  return new CliError(
-    "BUILDER_MIGRATION_SNAPSHOT_MISSING",
-    builderSnapshotParts(what, files)
-  );
 }
 
 /** A migration file whose content differs from the hash its snapshot recorded. */

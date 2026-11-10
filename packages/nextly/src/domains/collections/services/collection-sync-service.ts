@@ -37,6 +37,7 @@ import { dirname, join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { generatedLanguages } from "../../../cli/utils/write-generated-types";
 import type {
   CollectionAdminOptions,
   CollectionConfig,
@@ -307,6 +308,7 @@ export function toPersistedAdmin(admin: CollectionConfig["admin"]) {
     defaultColumns: admin.defaultColumns,
     isPlugin: admin.isPlugin,
     disableCreate: admin.disableCreate,
+    disableDelete: admin.disableDelete,
     // Sidebar placement. Both are read by `DynamicCollectionNav`, which takes its collections
     // from the persisted registry — so omitting them here meant a code-first collection could
     // set them, type-check, and still sort by the default.
@@ -585,48 +587,9 @@ export class CollectionSyncService extends BaseService {
         }
       }
 
-      const changedSlugs = new Set([
-        ...result.sync.created,
-        ...result.sync.updated,
-      ]);
-
-      // Drizzle `.ts` schema generation was removed: nothing imports the
-      // generated files (the runtime builds its Drizzle table from
-      // dynamic_collections metadata via generateRuntimeSchema), so they
-      // were orphan output. `result.generatedSchemas` stays an empty array
-      // for backward compatibility with consumers that read it.
-      // The same folder generateZodSchemas writes to, fitted to the app's layout.
-      const zodDir = generatedZodDir(opts.cwd, config.db.schemasDir);
-      const missingZodCollections = config.collections.filter(c => {
-        const zodPath = join(zodDir, `${c.slug}.zod.ts`);
-        return !existsSync(zodPath);
-      });
-
-      const collectionsForZodGen = [
-        ...config.collections.filter(c => changedSlugs.has(c.slug)),
-        ...missingZodCollections.filter(c => !changedSlugs.has(c.slug)),
-      ];
-
-      if (opts.generateZodSchemas && collectionsForZodGen.length > 0) {
-        const zodSchemas = await this.generateZodSchemas(
-          collectionsForZodGen,
-          config.db.schemasDir,
-          opts
-        );
-        result.generatedZodSchemas = zodSchemas;
-      }
-
-      if (
-        opts.generateTypes &&
-        (changedSlugs.size > 0 || config.collections.length > 0)
-      ) {
-        const typesFile = await this.generateTypeScriptTypes(
-          config.collections,
-          config.typescript.outputFile,
-          opts
-        );
-        result.generatedTypesFile = typesFile;
-      }
+      const generated = await this.generateFiles(config, result.sync, opts);
+      result.generatedZodSchemas = generated.zodSchemas;
+      result.generatedTypesFile = generated.typesFile;
 
       result.durationMs = Date.now() - startTime;
 
@@ -653,6 +616,100 @@ export class CollectionSyncService extends BaseService {
 
       throw error;
     }
+  }
+
+  /**
+   * The files a sync generates (`--schemas`' Zod schemas, `--types`' types file) once its registry
+   * step has said which collections it created or updated: written, or with `opts.dryRun` only
+   * named. Returns their paths.
+   */
+  private async generateFiles(
+    config: SanitizedNextlyConfig,
+    sync: Pick<SyncResult, "created" | "updated">,
+    opts: {
+      generateZodSchemas: boolean;
+      generateTypes: boolean;
+      cwd: string;
+      dryRun: boolean;
+    }
+  ): Promise<{ zodSchemas: string[]; typesFile: string | undefined }> {
+    const changedSlugs = new Set([...sync.created, ...sync.updated]);
+
+    // Drizzle `.ts` schema generation was removed: nothing imports the
+    // generated files (the runtime builds its Drizzle table from
+    // dynamic_collections metadata via generateRuntimeSchema), so they
+    // were orphan output. `result.generatedSchemas` stays an empty array
+    // for backward compatibility with consumers that read it.
+    // The same folder generateZodSchemas writes to, fitted to the app's layout.
+    const zodDir = generatedZodDir(opts.cwd, config.db.schemasDir);
+    const missingZodCollections = config.collections.filter(c => {
+      const zodPath = join(zodDir, `${c.slug}.zod.ts`);
+      return !existsSync(zodPath);
+    });
+
+    const collectionsForZodGen = [
+      ...config.collections.filter(c => changedSlugs.has(c.slug)),
+      ...missingZodCollections.filter(c => !changedSlugs.has(c.slug)),
+    ];
+
+    let zodSchemas: string[] = [];
+    if (opts.generateZodSchemas && collectionsForZodGen.length > 0) {
+      zodSchemas = await this.generateZodSchemas(
+        collectionsForZodGen,
+        config.db.schemasDir,
+        opts
+      );
+    }
+
+    let typesFile: string | undefined;
+    if (
+      opts.generateTypes &&
+      (changedSlugs.size > 0 || config.collections.length > 0)
+    ) {
+      typesFile = await this.generateTypeScriptTypes(
+        config,
+        config.collections,
+        config.typescript.outputFile,
+        opts
+      );
+    }
+    return { zodSchemas, typesFile };
+  }
+
+  /**
+   * What `syncWithValidation` would do, reading the registry and writing nothing: the collections
+   * its registry step would create and update, as that step decides them, and the files it would
+   * generate for them. `registryPresent: false` answers for a registry the sync is about to create.
+   */
+  async planSync(
+    config: SanitizedNextlyConfig,
+    options: Pick<
+      SyncOptions,
+      "generateZodSchemas" | "generateTypes" | "cwd"
+    > & {
+      registryPresent?: boolean;
+    } = {}
+  ): Promise<{
+    sync: Pick<SyncResult, "created" | "updated" | "unchanged">;
+    generatedFiles: string[];
+  }> {
+    const sync = await this.registry.planCodeFirstCollections(
+      this.convertToCodeFirstConfigs(config.collections),
+      { registryPresent: options.registryPresent }
+    );
+    const generated = await this.generateFiles(config, sync, {
+      generateZodSchemas: options.generateZodSchemas ?? false,
+      generateTypes: options.generateTypes ?? false,
+      cwd: options.cwd ?? process.cwd(),
+      dryRun: true,
+    });
+    return {
+      sync,
+      generatedFiles: [
+        ...generated.zodSchemas,
+        ...(generated.typesFile === undefined ? [] : [generated.typesFile]),
+      ],
+    };
   }
 
   /**
@@ -698,6 +755,7 @@ export class CollectionSyncService extends BaseService {
     };
 
     return this.generateTypeScriptTypes(
+      config,
       config.collections,
       config.typescript.outputFile,
       opts
@@ -1042,6 +1100,7 @@ export class CollectionSyncService extends BaseService {
 
   // eslint-disable-next-line @typescript-eslint/require-await
   private async generateTypeScriptTypes(
+    config: Pick<SanitizedNextlyConfig, "localization">,
     collections: CollectionConfig[],
     outputFile: string,
     opts: { cwd: string; dryRun: boolean }
@@ -1050,7 +1109,8 @@ export class CollectionSyncService extends BaseService {
       return undefined;
     }
 
-    const generator = new TypeGenerator();
+    // The languages the configuration locks, as every writer of the types file lists them.
+    const generator = new TypeGenerator(generatedLanguages(config));
 
     // Convert to DynamicCollectionRecord format for generator
     const records = this.convertToRecords(collections);

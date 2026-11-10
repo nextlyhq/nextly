@@ -40,7 +40,10 @@ import { assertFilterableFields } from "../../../shared/lib/filterable-fields";
 import { PAGINATION_DEFAULTS } from "../../../types/pagination";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import { DOCUMENT_VERSION_KEY } from "../../versions/document-revision";
-import { sameValuesVersionRequirement } from "../../versions/stale-version";
+import {
+  sameValuesVersionRequirement,
+  versionRequiredFor,
+} from "../../versions/stale-version";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -98,6 +101,7 @@ function legacyEnvelopeToFailureFields(result: {
  * no public contract and its text may be raw driver output. Every per-item
  * failure shape in this file derives from this, so a bulk item, a legacy
  * batch item and the single-item endpoint agree on the code for one failure.
+ * A validation refusal appends its per-field issues.
  */
 function failureFieldsOf(error: unknown): {
   code: string;
@@ -107,7 +111,7 @@ function failureFieldsOf(error: unknown): {
   if (NextlyError.is(error)) {
     return {
       code: String(error.code),
-      message: error.publicMessage,
+      message: error.publicMessage + validationIssuesSuffix(error.publicData),
       // An item refused as out of date says its current version (and, to a
       // caller who may read it, who changed it and when), as the refusal of
       // a single save does, so the caller can read it again and retry.
@@ -199,11 +203,29 @@ function detailedErrorMessage(error: unknown): string {
 }
 
 /**
+ * The per-field issues a validation refusal carries, as one message suffix
+ * — " count must be a whole number." — or "" when the error has none.
+ *
+ * Every bulk accounting path appends these to the failure message: a batch
+ * result has no `publicData` of its own to carry them, and an accounting
+ * that says only "Validation failed." leaves the caller no field to fix —
+ * the one thing a validation error exists to name.
+ */
+function validationIssuesSuffix(publicData: unknown): string {
+  const issues = (
+    publicData as { errors?: Array<{ message: string }> } | undefined
+  )?.errors;
+  if (!issues?.length) return "";
+  return ` ${issues.map(issue => issue.message).join(" ")}`;
+}
+
+/**
  * The message returned accounting may carry. A typed NextlyError
  * contributes its public envelope message; anything untyped gets the
  * generic message, because a bare error carries no public contract — its
  * message or cause may be raw driver text with hostnames or credentials,
- * which belongs in the operator log alone.
+ * which belongs in the operator log alone. A validation refusal appends its
+ * per-field issues.
  */
 function batchErrorMessage(error: unknown): string {
   return failureFieldsOf(error).message;
@@ -215,6 +237,19 @@ function batchFailureFields(
 ): Omit<ReturnType<typeof failureFieldsOf>, "message"> {
   const { message: _message, ...fields } = failureFieldsOf(error);
   return fields;
+}
+
+/**
+ * The same accounting for a RETURNED failure: the workers hand back the
+ * mutation service's envelope, whose `message` alone says only "Validation
+ * failed." — the per-field issues ride the envelope's public data, so they
+ * are appended here.
+ */
+function batchVerdictMessage(result: {
+  message: string;
+  publicData?: unknown;
+}): string {
+  return result.message + validationIssuesSuffix(result.publicData);
 }
 
 /**
@@ -992,6 +1027,7 @@ export class CollectionBulkService extends BaseService {
       ids: params.ids,
       revs: params.revs,
     });
+    if (requirement.kind === "required") throw versionRequiredFor("ids");
     const revs = requirement.kind === "per-document" ? requirement.revs : {};
     // Phase 4.5: successes carry full mutated records (caller needs the
     // post-update values); failures carry canonical NextlyErrorCode.
@@ -1151,9 +1187,6 @@ export class CollectionBulkService extends BaseService {
     // read, and the gate this asks and the rows written must read the same
     // body.
     const data = { ...params.data };
-    // One set of values for every match names no one document's version, and
-    // a query names no ids to give each one's: decided before any row is found.
-    sameValuesVersionRequirement(data, { ids: undefined, revs: params.revs });
     const gate = await writeGateFor(data, "collection", () =>
       this.mutationService.hasLifecycle(params.collectionName)
     );
@@ -1185,6 +1218,15 @@ export class CollectionBulkService extends BaseService {
       }
       throw NextlyError.forbidden({ logContext });
     }
+    // One set of values for every match names no one document's version, and
+    // a query names no ids to give each one's. Decided after the access gate,
+    // so a caller who may not write here is refused for that whatever the body
+    // says, and before any row is found.
+    const requirement = sameValuesVersionRequirement(data, {
+      ids: undefined,
+      revs: params.revs,
+    });
+    if (requirement.kind === "required") throw versionRequiredFor("query");
     await assertCallerFilterReadable(params, this.queryService);
 
     // 2. Enumerate the target rows under the UPDATE rule. The collection-level
@@ -1586,16 +1628,24 @@ export class CollectionBulkService extends BaseService {
     // behind.
     const state = newLegacyBatchState();
     try {
-      await this.adapter.transaction(async tx => {
-        await this.runCreateBatch(
-          tx,
-          params,
-          transitionAuth,
-          entries,
-          { batchSize, stopOnError, skipHooks },
-          state
-        );
-      });
+      // Read committed on every dialect, as updateEntries is, so an
+      // in-transaction handler that serializes an entry's write with a row
+      // lock then reads what committed before it took it. MySQL's default,
+      // REPEATABLE READ, would answer each later read from the snapshot the
+      // batch's first read took.
+      await this.adapter.transaction(
+        async tx => {
+          await this.runCreateBatch(
+            tx,
+            params,
+            transitionAuth,
+            entries,
+            { batchSize, stopOnError, skipHooks },
+            state
+          );
+        },
+        { isolationLevel: "read committed" }
+      );
     } catch (error: unknown) {
       // Transaction was rolled back (stopOnError case). Any outbox events an
       // item recorded before the abort were rolled back too, so clear the
@@ -2514,7 +2564,7 @@ export class CollectionBulkService extends BaseService {
             }
           : {
               ok: false,
-              message: createResult.message,
+              message: batchVerdictMessage(createResult),
               envelope: createResult,
               eventRecorded: createResult.eventRecorded,
               revalidationIntent: createResult.revalidationIntent,
@@ -2606,7 +2656,7 @@ export class CollectionBulkService extends BaseService {
             }
           : {
               ok: false,
-              message: updateResult.message,
+              message: batchVerdictMessage(updateResult),
               envelope: updateResult,
               eventRecorded: updateResult.eventRecorded,
               revalidationIntent: updateResult.revalidationIntent,
@@ -2665,7 +2715,7 @@ export class CollectionBulkService extends BaseService {
             }
           : {
               ok: false,
-              message: deleteResult.message,
+              message: batchVerdictMessage(deleteResult),
               envelope: deleteResult,
               eventRecorded: deleteResult.eventRecorded,
               revalidationIntent: deleteResult.revalidationIntent,

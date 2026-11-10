@@ -289,8 +289,8 @@ export class CollectionService extends BaseService {
     });
     // Reached only on a successful commit; a rejected transaction throws above
     // and flushes nothing. The captured `collector` outlives the map binding.
-    // On SQLite this transaction may itself be a savepoint of an enclosing one,
-    // so the flush and maintenance wait for that one's commit.
+    // This transaction may have joined an enclosing one, on any dialect, so
+    // the flush and maintenance wait for that one's commit.
     const collectedIntents = collector ?? [];
     await this.afterCommit(async () => {
       if (ownsFlush && collectedIntents.length > 0) {
@@ -604,6 +604,56 @@ export class CollectionService extends BaseService {
     this.logger.info("Collection updated", { collectionName });
 
     return result.data as unknown as Collection;
+  }
+
+  /**
+   * @experimental Hold collection `collectionName`'s registry row for share
+   * inside `tx` until it ends, and answer whether the collection exists.
+   *
+   * For a write that must not outlive the collection it names: a delete of
+   * the collection holds the row for update before it removes anything, so
+   * the write either commits before the delete reads what to remove with it,
+   * or waits for the delete and is told the collection is gone. On SQLite,
+   * with one writer at a time, the row is only read. On MySQL, where a table
+   * drop commits the delete's row locks, the collection's named lock holds
+   * the two apart until the delete has removed the row.
+   *
+   * @param tx - The transaction the write runs in
+   * @param collectionName - The collection the write names
+   * @returns Whether the collection exists
+   */
+  async holdCollectionInTransaction(
+    tx: TransactionContext,
+    collectionName: string
+  ): Promise<boolean> {
+    return this.metadataService.holdCollectionIn(tx, collectionName);
+  }
+
+  /**
+   * @experimental Hold entry `entryId` of collection `collectionName` for
+   * share inside `tx` until it ends, and answer whether it exists.
+   *
+   * For a write that must not outlive the entry it names: a delete of the
+   * entry locks its row for update before it removes it, and runs its
+   * in-transaction handlers after, so the write either commits before the
+   * delete goes on, and those handlers see it, or waits for the delete and is
+   * told the entry is gone. The entry's collection is held first, as
+   * {@link holdCollectionInTransaction} holds it, so a delete of the whole
+   * collection takes turns with the write as well. On SQLite, with one writer
+   * at a time, the rows are only read. Reads only whether the collection and
+   * the row are there, on `tx`'s connection.
+   *
+   * @param tx - The transaction the write runs in
+   * @param collectionName - The collection of the entry the write names
+   * @param entryId - The entry the write names
+   * @returns Whether the entry exists
+   */
+  async holdEntryInTransaction(
+    tx: TransactionContext,
+    collectionName: string,
+    entryId: string
+  ): Promise<boolean> {
+    return this.metadataService.holdEntryIn(tx, collectionName, entryId);
   }
 
   /**

@@ -106,6 +106,8 @@ export {
   useMedia,
   useMediaItem,
   useMediaResolver,
+  // The library's images searched by name, for a picker outside a dialog.
+  useMediaSearcher,
   useUploadMedia,
   useUpdateMedia,
   useDeleteMedia,
@@ -154,6 +156,16 @@ export {
   useDocumentLocale,
   type DocumentLocale,
 } from "./components/features/entries/EntryForm/EntryFormContext";
+/**
+ * A field's address in its document, with a repeater's row named by its saved
+ * id rather than its position. Exported for the plugin surface: a field that
+ * links to a view of itself names itself by this, so the link opens the same
+ * row however the rows are reordered.
+ */
+export {
+  useFieldAddress,
+  type FieldAddress,
+} from "./components/features/entries/EntryForm/useFieldAddress";
 /**
  * How the surrounding document stands, for a field that covers the editor's own
  * chrome. Separate from the identity deliberately: which document this is does
@@ -312,8 +324,16 @@ export {
   registerKnownPlugin,
   type ComponentPath,
   type CustomEditViewProps,
+  type DocumentActionReplacementProps,
+  type DocumentChangeResult,
+  type DocumentPanelSectionProps,
+  type DocumentTabProps,
+  type SidebarSectionProps,
   type DocumentViewProps,
 } from "./lib/plugins/component-registry";
+// The app's generated component map registers through this, not a plugin:
+// it is not part of the plugin SDK's surface.
+export { registerComponentMap } from "./lib/plugins/component-registry";
 export type { DocumentLockGates } from "./components/features/entries/EntryForm/document-lock-affordances";
 // Navigation a plugin may perform: a page of this admin, judged before it moves.
 export { navigateWithinAdmin } from "./lib/navigation";
@@ -395,6 +415,20 @@ export {
 // catalogs it declared in `contributes.translations`. Re-exported by
 // `@nextlyhq/plugin-sdk/admin`.
 export { usePluginTranslate } from "./lib/i18n/I18nProvider";
+
+// The shared settings panel that adds and edits a field, configured per
+// surface. Re-exported by `@nextlyhq/plugin-sdk/admin` as experimental.
+export { FieldSettingsPanel } from "./components/field-ui";
+export type {
+  FieldSettingsControlProps,
+  FieldSettingsField,
+  FieldSettingsPanelProps,
+  FieldSettingsSurface,
+  FieldSettingsSurfaceControlProps,
+  FieldSettingsTab,
+  FieldTypeSettings,
+  FixedFieldSetting,
+} from "./components/field-ui";
 
 export {
   FieldPicker,
@@ -521,6 +555,26 @@ export type {
  * `@nextlyhq/builder`) may import.
  */
 export { useSuppressAdminChrome } from "./components/layout/ChromeSuppression";
+/**
+ * An admin place's renderer and its tab strip, for `plugin-sdk/admin`: a
+ * plugin's own page draws the contributions sent to a place it declared with
+ * the parts core's pages use.
+ */
+// A document's live values, for a plugin's component inside the editor.
+export {
+  useDocumentField,
+  useDocumentValues,
+  type DocumentField,
+} from "./components/features/entries/EntryForm/document-values";
+export { PlaceTabs, TargetSlot } from "./components/shared/target-slot";
+export type {
+  PlaceContributionProps,
+  PlaceProps,
+  PlaceTabBadge,
+  PlaceTabProps,
+  PlaceTabsProps,
+  TargetSlotProps,
+} from "./components/shared/target-slot";
 export type { AdminChromeLayer } from "./components/layout/lib/chrome-suppression";
 export type {
   CardActionProps,
@@ -816,6 +870,10 @@ export type { WidgetRenderSize } from "nextly/widget-result";
 // so a widget's own list words and moves its times as theirs do.
 export { formatRelativeTime as formatWidgetTime } from "./lib/dashboard";
 export { useNowTick as useWidgetClock } from "./hooks/useNowTick";
+// A field's key as the admin's screens word it ("membersOnly" is "Members
+// Only"), for a plugin naming a field it holds only by its key, so the plugin
+// and the admin name it alike.
+export { humanizeFieldName } from "./lib/field-label";
 // Asks the dashboard's cards and header summary again, for a widget whose own
 // write changes what they answer.
 export { useRefreshDashboard } from "./hooks/queries/useRefreshDashboard";

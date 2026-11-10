@@ -90,6 +90,7 @@ const FieldGroupsPage = lazyRoute(
   () => import("./dashboard/field-group/index")
 );
 const DashboardPage = lazyRoute(() => import("./dashboard/index"));
+const AccountPage = lazyRoute(() => import("./dashboard/account/index"));
 const MediaLibraryPage = lazyRoute(() => import("./dashboard/media/index"));
 const PluginDetailPage = lazyRoute(() => import("./dashboard/plugins/[slug]"));
 const PluginSettingsPage = lazyRoute(
@@ -214,8 +215,9 @@ interface RouteConfigBase {
   requiredPermission?: string | string[];
   /**
    * Route belongs to the schema builder, so it is only reachable where the
-   * builder is enabled (`admin.branding.showBuilder`; off in production by
-   * default). Its links are already hidden there — this covers arriving by URL.
+   * server says the builder is on (never in production; elsewhere unless
+   * `admin.branding.showBuilder` is false). Its links are already hidden
+   * there — this covers arriving by URL.
    */
   requiresBuilder?: boolean;
 }
@@ -309,6 +311,15 @@ export const routeConfig: Record<string, RouteConfig> = {
     screenName: railScreen("dashboard"),
     type: "private",
     section: "dashboard",
+  },
+  // The signed-in person's own account. No permission of its own: it reads
+  // and writes only their own row, through `/me`, which every signed-in
+  // person may. Shown under settings, where "My Account" used to land.
+  [ROUTES.ACCOUNT]: {
+    component: AccountPage,
+    screenName: "My Account",
+    type: "private",
+    section: "settings",
   },
 
   // Users routes

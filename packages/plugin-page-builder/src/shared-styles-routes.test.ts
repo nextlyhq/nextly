@@ -2,6 +2,8 @@
  * The shared styles' routes, against fakes of the store and the usage index:
  * who each asks, what each writes, and what each refuses.
  */
+import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -116,6 +118,9 @@ async function refusal(run: Promise<unknown>): Promise<unknown> {
   return undefined;
 }
 
+/** A Single reader for a listing that names no Single. */
+const NO_SINGLE = async (): Promise<string | null> => null;
+
 describe("the shared-style permission", () => {
   it("is the plugin's own, declared beside the site permission", () => {
     expect(LOCK_SHARED_STYLES_PERMISSION).toBe(
@@ -127,6 +132,7 @@ describe("the shared-style permission", () => {
     expect(declared).toEqual([
       "manage-page-builder-site",
       "lock-page-builder-shared-styles",
+      "manage-template-routing",
     ]);
   });
 
@@ -134,6 +140,7 @@ describe("the shared-style permission", () => {
     const routes = sharedStyleRoutes({
       configClassIds: new Set(),
       usage: () => usageOf(WHOLE).source,
+      limits: DEFAULT_LIMITS,
     });
     const scope = {
       plugin: "@nextlyhq/plugin-page-builder",
@@ -448,7 +455,8 @@ describe("the paths the browser asks on", () => {
     const response = await readSharedStyleUses(
       new Request(`http://local${sharedStyleWhereUsedPath("a&b", 2)}`),
       source,
-      async (_c, ids) => ids.map(id => ({ id, title: id }))
+      async (_c, ids) => ids.map(id => ({ id, title: id })),
+      NO_SINGLE
     );
     const body = (await response.json()) as {
       items: { id: string }[];
@@ -478,7 +486,7 @@ describe("where a shared style is used", () => {
           : ids.filter(id => id === "p1").map(id => ({ id, title: "Home" }))
     );
     const body = await (
-      await readSharedStyleUses(whereUsed, source, readNamed)
+      await readSharedStyleUses(whereUsed, source, readNamed, NO_SINGLE)
     ).json();
     expect(body).toEqual({
       items: [{ id: "p1", title: "Home", collection: "pages", kind: "pages" }],
@@ -492,6 +500,37 @@ describe("where a shared style is used", () => {
         hiddenCount: 2,
       },
     });
+  });
+
+  it("names a Single the caller may read, and counts one it may not", async () => {
+    const { source } = usageOf(WHOLE, {
+      "c-card": [
+        { collection: "home", documents: [""], single: true },
+        { collection: "footer", documents: [""], single: true },
+        { collection: "pages", documents: ["p1"] },
+      ],
+    });
+    const readSingle = vi.fn(async (slug: string) =>
+      slug === "home" ? "Home page" : null
+    );
+    const body = await (
+      await readSharedStyleUses(
+        whereUsed,
+        source,
+        async (_c, ids) => ids.map(id => ({ id, title: id })),
+        readSingle
+      )
+    ).json();
+    expect(body.items).toEqual([
+      { id: "", title: "Home page", collection: "home", kind: "pages" },
+      { id: "p1", title: "p1", collection: "pages", kind: "pages" },
+    ]);
+    expect(body.meta.hiddenCount).toBe(1);
+    // CONTROL: read through the Single reader, never as a collection entry.
+    expect(readSingle.mock.calls.map(([slug]) => slug).sort()).toEqual([
+      "footer",
+      "home",
+    ]);
   });
 
   describe("a style used on many documents", () => {
@@ -509,7 +548,8 @@ describe("where a shared style is used", () => {
       const response = await readSharedStyleUses(
         new Request(`http://local/shared-styles/where-used?id=c-card${query}`),
         source,
-        named
+        named,
+        NO_SINGLE
       );
       return (await response.json()) as {
         items: { id: string }[];
@@ -587,7 +627,8 @@ describe("where a shared style is used", () => {
               `http://local/shared-styles/where-used?id=c-card&page=${page}`
             ),
             source,
-            named
+            named,
+            NO_SINGLE
           )
         ).json()) as { items: { collection: string; id: string }[] }
       ).items.map(item => `${item.collection}:${item.id}`);
@@ -600,7 +641,7 @@ describe("where a shared style is used", () => {
   it("says the list may be short while the index is not whole", async () => {
     const { source } = usageOf(NOT_WHOLE);
     const body = (await (
-      await readSharedStyleUses(whereUsed, source, async () => [])
+      await readSharedStyleUses(whereUsed, source, async () => [], NO_SINGLE)
     ).json()) as { meta: Record<string, unknown> };
     expect(body.meta.notConsulted).toEqual(["uncounted-documents"]);
   });
@@ -645,7 +686,7 @@ describe("removing unused shared styles", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
-  it("refuses a used, a locked and a code-defined style, naming each", async () => {
+  it("refuses a used, a locked and a code-defined style as a conflict naming each", async () => {
     const { store, write } = storeOf([
       card,
       { ...hero, locked: true },
@@ -665,8 +706,32 @@ describe("removing unused shared styles", () => {
         )
       )
     ).toMatchObject({
-      // A style the index counts as used makes it the in-use refusal, its
-      // one issue naming every reason, as the rescan's refusal does.
+      // Not every reason is a use, so none carries the in-use code: the lock
+      // and the code's style would read as uses otherwise.
+      code: "CONFLICT",
+      publicMessage:
+        "Nothing was removed. hero is locked. code is defined in the site's code. Card is used on 2 documents.",
+    });
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("refuses styles all of whose reasons are uses as the in-use refusal, its one issue naming each", async () => {
+    const { store, write } = storeOf([card, hero]);
+    const { source } = usageOf(WHOLE, {
+      "c-card": [{ collection: "pages", documents: ["p1", "p2"] }],
+      "c-hero": [{ collection: "pages", documents: ["p3"] }],
+    });
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-card", "c-hero"] }),
+          store,
+          source,
+          new Set(),
+          NOT_STILL_USED
+        )
+      )
+    ).toMatchObject({
       code: "VALIDATION_ERROR",
       publicData: {
         errors: [
@@ -674,7 +739,7 @@ describe("removing unused shared styles", () => {
             path: "",
             code: SHARED_STYLE_IN_USE_CODE,
             message:
-              "Nothing was removed. hero is locked. code is defined in the site's code. Card is used on 2 documents.",
+              "Nothing was removed. Card is used on 2 documents. hero is used on 1 document.",
           },
         ],
       },
@@ -860,6 +925,173 @@ describe("the version a shared-style write sends", () => {
     await store.write([card, hero], {}, read);
 
     expect(updates).toEqual([{ classes: [card, hero], _rev: "4" }]);
+  });
+});
+
+/**
+ * A store whose reads answer each list of `reads` in turn, version 1, 2, …,
+ * the last one again after; a write is refused as stale while its read is
+ * not the newest.
+ */
+function changingStoreOf(...reads: Record<string, unknown>[][]) {
+  let at = 0;
+  const read = vi.fn<SharedStyleStore["read"]>(async () => {
+    const entries = reads[Math.min(at, reads.length - 1)] ?? [];
+    at += 1;
+    return { entries, rev: String(Math.min(at, reads.length)) };
+  });
+  const write = vi.fn<SharedStyleStore["write"]>(async (_list, _ctx, from) => {
+    if (from.rev !== String(reads.length)) {
+      throw NextlyError.staleVersion({
+        data: { currentVersion: String(reads.length) },
+      });
+    }
+  });
+  const store: SharedStyleStore = { read, write };
+  return { store, read, write };
+}
+
+describe("a shared-style write refused because the Single was saved meanwhile", () => {
+  const renamedHero = { ...hero, label: "Hero 2" };
+
+  it("locks again on the newest list, changing only the style's lock", async () => {
+    const { store, write } = changingStoreOf([card, hero], [card, renamedHero]);
+    const response = await lockSharedStyle(
+      post({ classId: "c-card", locked: true }),
+      store,
+      new Set()
+    );
+    expect(response.status).toBe(200);
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(write.mock.calls[1]?.[0]).toEqual([
+      { ...card, locked: true },
+      renamedHero,
+    ]);
+    expect(write.mock.calls[1]?.[2]).toMatchObject({ rev: "2" });
+  });
+
+  it("writes nothing more when the newest list already holds the lock asked", async () => {
+    const { store, write } = changingStoreOf(
+      [card, hero],
+      [{ ...card, locked: true }, hero]
+    );
+    const response = await lockSharedStyle(
+      post({ classId: "c-card", locked: true }),
+      store,
+      new Set()
+    );
+    expect(await response.json()).toMatchObject({
+      message: "Card is locked.",
+    });
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a lock on a style removed meanwhile, as one not there", async () => {
+    const { store, write } = changingStoreOf([card, hero], [hero]);
+    expect(
+      await refusal(
+        lockSharedStyle(
+          post({ classId: "c-card", locked: true }),
+          store,
+          new Set()
+        )
+      )
+    ).toMatchObject({ code: "NOT_FOUND" });
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes again from the newest list, keeping a style added meanwhile", async () => {
+    const spare = { id: "c-spare", slug: "spare", orderIndex: 2, styles: {} };
+    const { store, write } = changingStoreOf(
+      [card, hero],
+      [card, renamedHero, spare]
+    );
+    const usage = usageOf(WHOLE);
+    const stillUsed = {
+      uses: vi.fn<StillUsedCheck["uses"]>(async () => []),
+      firstReadable: async () => undefined,
+    };
+    await removeSharedStyles(
+      post({ ids: ["c-hero"] }),
+      store,
+      usage.source,
+      new Set(),
+      stillUsed
+    );
+    expect(write.mock.calls[1]?.[0]).toEqual([card, spare]);
+    // The index and the stored documents are both asked again on the
+    // retry: a page saved meanwhile may use the style the index missed.
+    expect(usage.source.health).toHaveBeenCalledTimes(2);
+    expect(stillUsed.uses).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses on the retry when a page saved meanwhile uses the style", async () => {
+    const { store, write } = changingStoreOf([card, hero], [card, hero]);
+    const usage = usageOf(WHOLE);
+    const stillUsed = {
+      uses: vi
+        .fn<StillUsedCheck["uses"]>()
+        .mockResolvedValueOnce([])
+        .mockResolvedValue([{ kind: "collection", slug: "pages", id: "p1" }]),
+      firstReadable: async () => "Home",
+    };
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-hero"] }),
+          store,
+          usage.source,
+          new Set(),
+          stillUsed
+        )
+      )
+    ).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: { errors: [{ code: "IN_USE" }] },
+    });
+    // The stale first write, and nothing after the second walk refused.
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a removal when the style was locked meanwhile, writing nothing more", async () => {
+    const { store, write } = changingStoreOf(
+      [card, hero],
+      [card, { ...hero, locked: true }]
+    );
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-hero"] }),
+          store,
+          usageOf(WHOLE).source,
+          new Set(),
+          NOT_STILL_USED
+        )
+      )
+    ).toMatchObject({
+      code: "CONFLICT",
+      publicMessage: expect.stringContaining("hero is locked."),
+    });
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers the stale refusal once three writes in all were refused", async () => {
+    const { store, write } = changingStoreOf(
+      [card, hero],
+      [card, hero],
+      [card, hero],
+      [card, hero]
+    );
+    expect(
+      await refusal(
+        lockSharedStyle(
+          post({ classId: "c-card", locked: true }),
+          store,
+          new Set()
+        )
+      )
+    ).toMatchObject({ code: "STALE_VERSION" });
+    expect(write).toHaveBeenCalledTimes(3);
   });
 });
 

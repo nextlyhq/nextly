@@ -117,6 +117,17 @@ const COLUMN_REBUILD_OPERATIONS = new Set<Operation["type"]>([
 ]);
 
 /**
+ * Whether a column's type change is made by rebuilding its table: SQLite has
+ * no statement that changes a column's type, so the table is created again
+ * with the new one and its rows copied across, as a nullability change is. A
+ * change that converts the stored values (`conversion`) is not: what each
+ * value becomes is the conversion's to judge, and it stays refused here.
+ */
+function typeChangedByRebuild(op: Operation): boolean {
+  return op.type === "change_column_type" && op.conversion === undefined;
+}
+
+/**
  * Whether SQLite's ALTER TABLE ... ADD COLUMN refuses this default on a table
  * that has rows.
  *
@@ -171,6 +182,7 @@ function performedByRebuild(
 ): boolean {
   if (REBUILD_OPERATIONS.has(op.type)) return true;
   if (COLUMN_REBUILD_OPERATIONS.has(op.type)) return true;
+  if (typeChangedByRebuild(op)) return true;
   if (op.type === "add_column") return addedByRebuild(op);
   return (
     op.type === "add_index" && addsByRebuild.has(op.tableName.toLowerCase())
@@ -600,7 +612,7 @@ export function sqliteStatements(
     ops.filter(addedByRebuild).map(op => op.tableName.toLowerCase())
   );
   const settingsByRebuild = ops.flatMap(op =>
-    COLUMN_REBUILD_OPERATIONS.has(op.type)
+    COLUMN_REBUILD_OPERATIONS.has(op.type) || typeChangedByRebuild(op)
       ? tablesOf(op).map(name => name.toLowerCase())
       : []
   );

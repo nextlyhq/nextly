@@ -4,6 +4,8 @@
  * the consent store is neither opened nor written. Without the flag, each
  * makes its change.
  */
+import { stripVTControlCharacters } from "node:util";
+
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -33,14 +35,23 @@ beforeEach(() => {
   store.calls = [];
   output = [];
   vi.spyOn(console, "log").mockImplementation((...parts: unknown[]) => {
-    output.push(parts.map(String).join(" "));
+    // Without colour codes, which CI turns on and a terminal may not: the
+    // words are what is asserted, however the logger paints them.
+    output.push(stripVTControlCharacters(parts.map(String).join(" ")));
   });
 });
 afterEach(() => vi.restoreAllMocks());
 
-/** What the logger printed as info, without its symbol. */
+/**
+ * What the logger printed as info, without its symbol. Colour codes are
+ * dropped first: the symbol is coloured wherever the terminal takes colour,
+ * which Windows does by default.
+ */
 const info = () =>
-  output.filter(line => line.startsWith("ℹ ")).map(line => line.slice(2));
+  output
+    .map(line => line.replace(/\u001b\[[0-9;]*m/g, ""))
+    .filter(line => line.startsWith("ℹ "))
+    .map(line => line.slice(2));
 
 /** A command with no global options given, as the program hands one over. */
 const command = () => new Command("telemetry").option("--no-color");

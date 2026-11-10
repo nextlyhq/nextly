@@ -25,6 +25,7 @@ import type {
 
 import { pluginOfLedgerRow } from "./ledger-scope";
 import { standingOf } from "./migration-state";
+import { newestEventsByFilename } from "./newest-event";
 import { asRepositoryDb, type RepositoryDb } from "./repository-db";
 
 /**
@@ -467,6 +468,36 @@ export class SchemaEventsRepository {
       )) as unknown as SchemaEventRow[];
   }
 
+  /**
+   * Mark that a ledger row names a file an earlier Schema Builder wrote, with
+   * the file's checksum. A one-shot record that is not an outcome: it changes
+   * no migration's state, which `file_apply` rows alone decide.
+   */
+  async recordOldBuilderMark(input: {
+    filename: string;
+    sha256: string;
+    source: SchemaEventSource;
+  }): Promise<string> {
+    return this.insertEvent({
+      eventType: "old_builder_file",
+      status: "applied",
+      source: input.source,
+      filename: input.filename,
+      sha256: input.sha256,
+    });
+  }
+
+  /** The newest mark for each file that has one, by file name. */
+  async currentOldBuilderMarks(): Promise<Map<string, SchemaEventRow>> {
+    const rows = (await this.db
+      .select()
+      .from(this.table)
+      .where(
+        sql`event_type = 'old_builder_file'`
+      )) as unknown as SchemaEventRow[];
+    return newestEventsByFilename(rows);
+  }
+
   /** All `file_apply` rows, for `nextly migrate:status` (spec §4.3.1). */
   async listFileApplies(): Promise<SchemaEventRow[]> {
     return (await this.db
@@ -487,6 +518,34 @@ export class SchemaEventsRepository {
       .select()
       .from(this.table)
       .where(sql`event_type = 'file_rollback'`)) as unknown as SchemaEventRow[];
+  }
+
+  /**
+   * Record that an applied app migration's file was removed from the folder
+   * on purpose (`migrate:resolve --removed`), with the checksum its applied
+   * outcome recorded. Its own event type, so no reader of a migration's state,
+   * which reads `file_apply` rows alone, takes it for an outcome.
+   */
+  async recordRemoval(input: {
+    filename: string;
+    sha256: string | null;
+  }): Promise<string> {
+    return this.insertEvent({
+      eventType: "file_removed",
+      status: "recorded",
+      source: "cli-migrate",
+      filename: input.filename,
+      sha256: input.sha256,
+      endedAt: new Date(),
+    });
+  }
+
+  /** Every recorded removal of an app migration's file (`recordRemoval`). */
+  async listFileRemovals(): Promise<SchemaEventRow[]> {
+    return (await this.db
+      .select()
+      .from(this.table)
+      .where(sql`event_type = 'file_removed'`)) as unknown as SchemaEventRow[];
   }
 
   /** All `file_apply` rows for a single filename (applied + failed + rolled_back). */

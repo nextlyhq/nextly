@@ -58,7 +58,10 @@ type TypeReading = Record<string, Record<(typeof TYPE)[number], string>>;
 
 async function seed(page: Page): Promise<void> {
   const stored = await page.request.patch(HOMEPAGE_API, {
-    data: { layout: { formatVersion: 1, kind: "page", nodes: NODES } },
+    data: {
+      layout: { formatVersion: 1, kind: "page", nodes: NODES },
+      _overwrite: true,
+    },
   });
   expect(stored.ok(), `seeding the homepage layout: ${stored.status()}`).toBe(
     true

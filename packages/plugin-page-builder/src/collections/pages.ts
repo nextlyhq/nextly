@@ -110,7 +110,7 @@ export interface PagesCollectionOptions {
  * the ones before it, and the call site stops being readable at exactly the
  * point it starts carrying a preview declaration.
  *
- * Which classes a page references is answered by the `nx_pb_class_usage` index
+ * Which classes a page references is answered by the class usage index
  * rather than by anything on the page row. The index is keyed by class and
  * maintained on every write, so it answers that question as a lookup; a column
  * on the page can only be read once the page is already in hand, which is the
@@ -127,6 +127,11 @@ export function pagesCollection(
   return defineCollection({
     slug: PAGES_SLUG,
     labels: { singular: "Page", plural: "Pages" },
+    // A page's address may sit beneath another (`docs/getting-started`),
+    // each part normalised as a one-part address is. A rule about the stored
+    // value only, outside the schema, so an existing site migrates nothing
+    // and every one-part address it holds stays as it is.
+    db: { slugPaths: true },
     fields: [
       text({ name: "title", required: true }),
       text({ name: "slug", required: true, unique: true }),
@@ -194,7 +199,10 @@ export function pagesCollection(
         ? {}
         : {
             preview: {
-              url: previewUrlFromTemplate(previewPath),
+              // The slug is a path (`db.slugPaths`), so its `/` stays.
+              url: previewUrlFromTemplate(previewPath, {
+                pathFields: ["slug"],
+              }),
               // Spread rather than set to `undefined`, so a collection that
               // declares none has no `breakpoints` key at all — which is what
               // `resolvePreviewViewports` reads as "offer nothing" without

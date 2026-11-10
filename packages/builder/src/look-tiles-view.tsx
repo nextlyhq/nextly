@@ -10,18 +10,21 @@ import {
   findNode,
   getBlock,
   type NamedClass,
+  type NodeStyles,
   type SiteTokenSet,
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
 import { Check } from "lucide-react";
 import * as React from "react";
 
+import { siteBaseOf } from "./block-look-rows";
 import type { EditorState } from "./editor-state";
 import { variationLabel } from "./inserter";
 import {
   boundLooksOf,
   lookChoice,
   lookTiles,
+  lookStageStyle,
   lookTileStyle,
   looksOfType,
   wornLook,
@@ -51,6 +54,42 @@ function specimenKind(blockType: string): "button" | "image" | "band" | "text" {
 
 /** The words a specimen carries, where it carries any. */
 const SPECIMEN_WORDS = { button: "Button", band: "Section", text: "Aa" };
+
+/**
+ * One look drawn as a small block of its type: the look's styles laid over the
+ * type's base as the site draws it, so a tile and a Design row show what the
+ * canvas shows.
+ */
+export function LookSpecimen({
+  blockType,
+  base,
+  styles,
+  tokens,
+  mode,
+}: {
+  readonly blockType: string;
+  readonly base: NodeStyles | undefined;
+  readonly styles: NodeStyles | undefined;
+  readonly tokens: SiteTokenSet | undefined;
+  readonly mode: TokenMode;
+}): React.JSX.Element {
+  const kind = specimenKind(blockType);
+  return (
+    <span
+      className="nx-look-tile__stage"
+      aria-hidden="true"
+      style={lookStageStyle(tokens, mode)}
+    >
+      <span
+        className="nx-look-tile__specimen"
+        data-kind={kind}
+        style={lookTileStyle(base, styles, tokens, mode)}
+      >
+        {kind === "image" ? null : SPECIMEN_WORDS[kind]}
+      </span>
+    </span>
+  );
+}
 
 /** The block's own look's name, as its definition names it. */
 function ownLookName(blockType: string): string | undefined {
@@ -96,7 +135,8 @@ export function LookTiles({
   // Every look of the type comes off when another is chosen, those the
   // library no longer offers included, so none is left to return later.
   const removable = boundLooksOf(library, node.type);
-  const base = getBlock(node.type)?.baseStyles;
+  // The base as the site draws it, its edits to the own look included.
+  const base = siteBaseOf(library, node.type);
   const choose = (tile: LookTile): void => {
     if (held !== undefined) return;
     const choice = lookChoice(node.classes, removable, tile.id);
@@ -115,7 +155,6 @@ export function LookTiles({
       );
     }
   };
-  const kind = specimenKind(node.type);
   return (
     <div
       className="nx-look-tiles"
@@ -169,15 +208,13 @@ export function LookTiles({
                   <Check size={10} strokeWidth={3} />
                 </span>
               ) : null}
-              <span className="nx-look-tile__stage" aria-hidden="true">
-                <span
-                  className="nx-look-tile__specimen"
-                  data-kind={kind}
-                  style={lookTileStyle(base, tile.styles, tokens, mode)}
-                >
-                  {kind === "image" ? null : SPECIMEN_WORDS[kind]}
-                </span>
-              </span>
+              <LookSpecimen
+                blockType={node.type}
+                base={base}
+                styles={tile.styles}
+                tokens={tokens}
+                mode={mode}
+              />
               <span className="nx-look-tile__name">
                 {tile.name}
                 {tile.id === null && tile.name !== "Default" ? (

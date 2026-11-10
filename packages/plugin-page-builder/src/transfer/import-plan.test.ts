@@ -445,6 +445,33 @@ describe("planImport", () => {
     ]);
   });
 
+  it("refuses a file showing a fallback's media it does not carry, as a prop's", () => {
+    const plan = planImport(
+      file({
+        components: [
+          component("a", [
+            {
+              id: "i",
+              type: "core/image",
+              version: 1,
+              props: {},
+              bindings: {
+                mediaId: { $bind: "cover", fallback: "m-fallback-gone" },
+              },
+            },
+          ]),
+        ],
+      }),
+      site({ mediaProps: type => (type === "core/image" ? ["mediaId"] : []) })
+    );
+    expect(plan.preview.problems).toEqual([
+      {
+        code: "MISSING_REFERENCE",
+        message: expect.stringContaining("m-fallback-gone"),
+      },
+    ]);
+  });
+
   it("lists block types the site has not registered and is not ready", () => {
     const plan = planImport(
       file({

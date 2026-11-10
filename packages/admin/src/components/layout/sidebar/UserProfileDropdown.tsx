@@ -5,12 +5,22 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
 import { User as UserIcon, LogOut } from "@admin/components/icons";
-import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { ROUTES } from "@admin/constants/routes";
+import {
+  useSetInterfaceLanguage,
+  useStoredInterfaceLanguage,
+} from "@admin/hooks/useInterfaceLanguage";
+import { useInterfaceLanguages, useT } from "@admin/lib/i18n/I18nProvider";
+import { languageName } from "@admin/lib/i18n/language-name";
 import { navigateTo } from "@admin/lib/navigation";
 
 interface UserProfileDropdownProps {
@@ -22,6 +32,68 @@ interface UserProfileDropdownProps {
   } | null;
   onLogout: () => void;
   className?: string;
+}
+
+/** The radio value standing for "no choice stored": follow the browser. */
+const FOLLOW_BROWSER = "";
+
+/**
+ * The person's own interface language: follow the browser, or one of the
+ * languages the admin has a catalog for, each named in itself. Saved through
+ * their own profile, the one place it is set.
+ */
+function InterfaceLanguageChoice(): JSX.Element {
+  const t = useT();
+  const languages = useInterfaceLanguages();
+  const stored = useStoredInterfaceLanguage(true);
+  const setInterfaceLanguage = useSetInterfaceLanguage();
+  // A stored language the admin has no catalog for (its plugin removed, say)
+  // is still shown, chosen and marked, so the person sees what is stored
+  // while the admin falls back, and that it returns with its catalog.
+  const unavailable =
+    stored != null && !languages.includes(stored) ? stored : null;
+  return (
+    <>
+      <DropdownMenuLabel className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">
+        {t("nextly.userMenu.interfaceLanguage")}
+      </DropdownMenuLabel>
+      <DropdownMenuRadioGroup
+        value={stored ?? FOLLOW_BROWSER}
+        onValueChange={value =>
+          setInterfaceLanguage(value === FOLLOW_BROWSER ? null : value)
+        }
+      >
+        <DropdownMenuRadioItem
+          value={FOLLOW_BROWSER}
+          className="cursor-pointer text-sm"
+        >
+          {t("nextly.userMenu.followBrowser")}
+        </DropdownMenuRadioItem>
+        {unavailable !== null && (
+          <DropdownMenuRadioItem
+            value={unavailable}
+            lang={unavailable}
+            className="cursor-pointer text-sm text-muted-foreground"
+          >
+            {t("nextly.userMenu.unavailable", {
+              language: languageName(unavailable),
+            })}
+          </DropdownMenuRadioItem>
+        )}
+        {languages.map(language => (
+          <DropdownMenuRadioItem
+            key={language}
+            value={language}
+            lang={language}
+            className="cursor-pointer text-sm"
+          >
+            {languageName(language)}
+          </DropdownMenuRadioItem>
+        ))}
+      </DropdownMenuRadioGroup>
+      <DropdownMenuSeparator className="my-1" />
+    </>
+  );
 }
 
 export function UserProfileDropdown({
@@ -65,12 +137,12 @@ export function UserProfileDropdown({
               </p>
             )}
           </div>
+          <InterfaceLanguageChoice />
           {/* Muted foreground so this menu label meets contrast; a faint primary alpha did not. */}
           <DropdownMenuItem
-            onClick={() => {
-              if (!user?.id) return;
-              navigateTo(buildRoute(ROUTES.USERS_EDIT, { id: user.id }));
-            }}
+            // The signed-in person's own page, which every one of them may
+            // open: the users edit page needs a permission many lack.
+            onClick={() => navigateTo(ROUTES.ACCOUNT)}
             className="group flex w-full cursor-pointer items-center gap-3 rounded-sm px-3 py-2.5 text-sm font-medium transition-colors hover-subtle-row text-muted-foreground"
           >
             <UserIcon className="h-4 w-4 transition-colors" />

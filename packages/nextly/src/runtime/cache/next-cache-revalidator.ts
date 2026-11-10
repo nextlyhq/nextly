@@ -351,7 +351,10 @@ export class NextCacheRevalidator implements CacheRevalidator {
         "[nextly] cache expiry waits for a request: a write made outside one (a script, a job) leaves its tags pending until a write inside a request expires them"
       );
     }
-    return own.length > 0 ? { deferredTags: own } : undefined;
+    // Pending in this process only: nothing records them for another.
+    return own.length > 0
+      ? { deferredTags: own, keptInProcess: own }
+      : undefined;
   }
 
   /**
@@ -370,7 +373,7 @@ export class NextCacheRevalidator implements CacheRevalidator {
     consoleLogger.error(
       `[nextly] cache expiry failed twice and was handed off (${reason}): ${deferredTags.join(", ")}`
     );
-    await this.handOff(deferredTags, reason);
+    const recorded = await this.handOff(deferredTags, reason);
     // The response says so: the change is saved, and its public pages may
     // show the previous content until the hand-off runs. A no-op outside a
     // request, where there is no response to tell.
@@ -386,20 +389,25 @@ export class NextCacheRevalidator implements CacheRevalidator {
     }
     // This write's outcome names only its own tags: an earlier write's tag
     // that failed again is handed off and logged above, but is not this
-    // response's to report.
-    return owned.length > 0 ? { deferredTags: owned } : undefined;
+    // response's to report. Unrecorded, they are this process's alone.
+    if (owned.length === 0) return undefined;
+    return recorded
+      ? { deferredTags: owned }
+      : { deferredTags: owned, keptInProcess: owned };
   }
 
   /**
    * Hands tags off through {@link handOffWithin}, to the installed hand-off,
    * and keeps them for Next.js's own cache at the next request: the in-process
    * default already keeps them for that, and an installed one records them
-   * only where nextly's cache handlers read.
+   * only where nextly's cache handlers read. Whether it recorded them where
+   * every instance reads them.
    */
-  private async handOff(tags: string[], reason: string): Promise<void> {
+  private async handOff(tags: string[], reason: string): Promise<boolean> {
     const handoff = this.handoff();
-    await handOffWithin(handoff, tags, reason);
+    const recorded = await handOffWithin(handoff, tags, reason);
     if (!isPendingExpiryHandoff(handoff)) holdForNextRequest(tags);
+    return recorded;
   }
 }
 
@@ -408,13 +416,14 @@ export class NextCacheRevalidator implements CacheRevalidator {
  * without letting the hand-off itself fail the write: one that does not answer
  * must not hold the response, or a committed write made outside a request.
  * Tags it refused, or did not take in time, are kept for this process's next
- * flush. Shared by every revalidator that hands off.
+ * flush. Shared by every revalidator that hands off. Whether the hand-off
+ * answered in time that it recorded them where every instance reads them.
  */
 export async function handOffWithin(
   handoff: ExpiryHandoff,
   tags: string[],
   reason: string
-): Promise<void> {
+): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const timedOut = new Promise<"timed-out">(resolve => {
@@ -432,13 +441,16 @@ export async function handOffWithin(
       // It may still take them, but it may not: keep them for the next flush
       // too, and retry them, since a quiet process may make no next flush.
       holdFailedRecord(tags);
+      return false;
     }
+    return answer === true;
   } catch (error) {
     consoleLogger.error(
       `[nextly] the cache expiry hand-off failed: ${error instanceof Error ? error.message : String(error)}`
     );
     // Not lost with the hand-off: the next flush in this process drains them.
     holdForNextFlush(tags);
+    return false;
   } finally {
     clearTimeout(timer);
   }

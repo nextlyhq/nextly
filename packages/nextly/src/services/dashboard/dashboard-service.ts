@@ -40,6 +40,7 @@ import {
   updateVerdict,
 } from "../../domains/widgets/reader-content";
 import type { ActivityEvent } from "../../domains/widgets/result";
+import { rethrowIfRuleCouldNotRun } from "../../errors/rule-could-not-run";
 import { entryHeading } from "../../lib/entry-heading";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
@@ -482,7 +483,13 @@ function updateDecision(
   caller: ReadCaller
 ): (slug: string) => Promise<boolean> {
   const verdict = updateVerdict(caller);
-  return slug => verdict(slug).catch(() => false);
+  return slug =>
+    verdict(slug).catch((error: unknown) => {
+      // A rule that could not run never answered: the request ends with
+      // that, not with a row offering no Edit as though refused.
+      rethrowIfRuleCouldNotRun(error);
+      return false;
+    });
 }
 
 /** Who made `save` and what it did, as a row of the table carries them. */
@@ -1100,6 +1107,9 @@ export class DashboardService extends BaseService {
           keptOffCollections: keptOff.collection.slugs,
         });
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with a figure of no recent changes.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.error("Failed to count recent changes", {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -1207,6 +1217,9 @@ export class DashboardService extends BaseService {
       });
       return result.total;
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with a count of zero.
+      rethrowIfRuleCouldNotRun(error);
       // A collection whose table is not yet created, or whose read the caller
       // is refused outright, contributes zero rather than failing the whole
       // dashboard -- the same posture `getRecentFromCollection` takes.
@@ -1570,7 +1583,12 @@ export class DashboardService extends BaseService {
     return slug =>
       disabled.has(slug)
         ? Promise.resolve(false)
-        : verdict(slug).catch(() => false);
+        : verdict(slug).catch((error: unknown) => {
+            // A rule that could not run never answered: the request ends
+            // with that, not with no + drawn as though refused.
+            rethrowIfRuleCouldNotRun(error);
+            return false;
+          });
   }
 
   /**
@@ -1691,6 +1709,9 @@ export class DashboardService extends BaseService {
         };
       });
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with the collection contributing nothing to the feed.
+      rethrowIfRuleCouldNotRun(error);
       // A collection whose table is not yet created, or which the caller
       // may not read at all, contributes nothing rather than failing the
       // feed.

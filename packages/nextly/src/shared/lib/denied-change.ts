@@ -215,7 +215,16 @@ export async function keepDeniedAtStored(input: {
   stored: Record<string, unknown>;
   /** Applies the field rules to the document it is given, in place. */
   applyRules: (document: Record<string, unknown>) => Promise<void>;
-}): Promise<Record<string, unknown>> {
+}): Promise<{
+  /** The document to write: the update, with denied values kept from the row. */
+  kept: Record<string, unknown>;
+  /**
+   * What the rules left of the update as the caller sent it — the caller's
+   * own permitted document, against which {@link storedProvenance} tells
+   * the restored document's own values from the caller's.
+   */
+  permitted: Record<string, unknown>;
+}> {
   const permitted = detachData(input.update);
   await input.applyRules(permitted);
   const stored: Record<string, unknown> = {};
@@ -242,7 +251,121 @@ export async function keepDeniedAtStored(input: {
   for (const key of Object.keys(input.update)) {
     if (!hasOwn(permitted, key)) delete out[key];
   }
-  return out;
+  return { kept: out, permitted };
+}
+
+/**
+ * The paths of the restored document that hold the row's own value — what
+ * {@link keepDeniedAtStored} put back because a rule denies it to this
+ * writer — with the value each path holds.
+ *
+ * Told apart from the caller's own values against `permitted`, what the
+ * rules left of the update AS THE CALLER SENT IT: a path the restored
+ * document holds and `permitted` does not is nobody's write — the rules
+ * removed the caller's value there and the row's own stands in its place.
+ * No rule runs again, so a rule that reads a denied sibling answers the
+ * same way it answered when the restore was decided; recomputing
+ * authorization over the restored document would see the restored sibling
+ * and could mark a value the caller sent.
+ *
+ * Lists pair by the same row identity the restore pairs by, so a restored
+ * row among kept ones is its own path and the rows its removal would shift
+ * keep their own paths. Rows without ids still fall back to position, as
+ * the restore itself does for them.
+ */
+export function storedProvenance(
+  restored: Record<string, unknown>,
+  permitted: Record<string, unknown>
+): {
+  paths: Set<string>;
+  values: Map<string, unknown>;
+} {
+  const paths = new Set<string>();
+  const values = new Map<string, unknown>();
+  storedPaths(restored, permitted, "", paths, values);
+  return { paths, values };
+}
+
+/**
+ * A value recorded as the row's own, for the hook walk to compare the write
+ * against: DETACHED, because the same object was assigned into the write's
+ * payload. A `beforeChange` hook mutates a whole-number child in place, so a
+ * snapshot sharing the payload's references would change with it, and the
+ * comparison would report the container unchanged — the very change the walk
+ * exists to judge.
+ */
+function storedSnapshot(value: unknown): unknown {
+  return detachData(value);
+}
+
+/** One stored-provenance walk: {@link storedProvenance} over one level. */
+function storedPaths(
+  before: unknown,
+  after: unknown,
+  prefix: string,
+  paths: Set<string>,
+  values: Map<string, unknown>
+): void {
+  if (Array.isArray(before)) {
+    storedListPaths(before, after, prefix, paths, values);
+    return;
+  }
+  storedRecordPaths(before, after, prefix, paths, values);
+}
+
+/** The stored paths under one list, its rows paired by identity. */
+function storedListPaths(
+  before: readonly unknown[],
+  after: unknown,
+  prefix: string,
+  paths: Set<string>,
+  values: Map<string, unknown>
+): void {
+  if (!Array.isArray(after)) {
+    if (prefix !== "") {
+      paths.add(prefix);
+      values.set(prefix, storedSnapshot(before));
+    }
+    return;
+  }
+  const pairing = rowPairing(before, after);
+  before.forEach((row, index) => {
+    const at = `${prefix}[${index}]`;
+    const paired = pairing(index);
+    if (paired === undefined) {
+      paths.add(at);
+      values.set(at, storedSnapshot(row));
+      return;
+    }
+    storedPaths(row, after[paired], at, paths, values);
+  });
+}
+
+/** The stored paths under one record: the keys `permitted` does not hold. */
+function storedRecordPaths(
+  before: unknown,
+  after: unknown,
+  prefix: string,
+  paths: Set<string>,
+  values: Map<string, unknown>
+): void {
+  if (!isRecord(before)) return;
+  if (!isRecord(after)) {
+    if (prefix !== "") {
+      paths.add(prefix);
+      values.set(prefix, storedSnapshot(before));
+    }
+    return;
+  }
+  for (const key of Object.keys(before)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (!hasOwn(after, key)) {
+      paths.add(path);
+      values.set(path, storedSnapshot(before[key]));
+      continue;
+    }
+    storedPaths(before[key], after[key], path, paths, values);
+  }
 }
 
 /**
@@ -453,9 +576,16 @@ export function rowPairing(
   };
 }
 
-/** A row's own identity, where it carries one. */
-function rowId(row: unknown): string | undefined {
-  return isRecord(row) && typeof row.id === "string" ? row.id : undefined;
+/**
+ * A row's own identity, where it carries one: a non-empty string. An empty
+ * `id` names no row, so it counts as none, and a row sending one pairs as a
+ * row sent without an id does. Every pairing of rows (denied changes, kept
+ * passwords, saved row ids) reads a row's id here.
+ */
+export function rowId(row: unknown): string | undefined {
+  return isRecord(row) && typeof row.id === "string" && row.id !== ""
+    ? row.id
+    : undefined;
 }
 
 /**

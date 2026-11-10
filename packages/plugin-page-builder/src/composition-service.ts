@@ -1,6 +1,6 @@
 /**
- * The composition API as a service: the manifest and the page and definition
- * actions, for code that serves a request of its own, such as another
+ * The composition API as a service: the manifest, the page and definition
+ * actions and the collection template actions, for code that serves a request of its own, such as another
  * plugin's route or the MCP endpoint, and should not call this plugin's
  * routes over HTTP to reach them.
  *
@@ -27,7 +27,11 @@
  * @experimental Settles when the composition API ships.
  * @module composition-service
  */
-import type { DocumentLimits, RetiredExposures } from "@nextlyhq/blocks-engine";
+import type {
+  DocumentLimits,
+  NamedQueryDeclaration,
+  RetiredExposures,
+} from "@nextlyhq/blocks-engine";
 import {
   NextlyError,
   type PluginContext,
@@ -49,7 +53,20 @@ import {
 import type { ActionAnswer } from "./composition-route-kit";
 import { runDefinitionAction } from "./definition-actions-route";
 import type { ComponentStore } from "./library-route";
-import { pageActionRequestOf, runPageAction } from "./page-actions-route";
+import {
+  pageActionRequestOf,
+  runPageAction,
+  type PageActionsSetup,
+} from "./page-actions-route";
+import type {
+  TemplateActionRequest,
+  TemplateActionResult,
+} from "./templates/template-actions-contract";
+import {
+  runTemplateAction,
+  templateActionRequestOf,
+  type TemplateActionsSetup,
+} from "./templates/template-actions-route";
 
 /** The name the service is contributed under. */
 export const COMPOSITION_SERVICE = "composition";
@@ -91,6 +108,11 @@ export interface CompositionService {
     componentId: string,
     request: DefinitionActionRequest
   ): Promise<ActionAnswer<DefinitionActionResult>>;
+  /** One action on a collection's template. See `POST /templates/actions`. */
+  templateAction(
+    caller: CompositionCaller,
+    request: TemplateActionRequest
+  ): Promise<ActionAnswer<TemplateActionResult>>;
 }
 
 /** What the plugin builds the service with: the store and bounds its routes use. */
@@ -100,6 +122,11 @@ export interface CompositionServiceSetup {
   readonly readRetired?: (
     ctx: PluginRouteContext
   ) => (componentId: string) => Promise<RetiredExposures | null>;
+  readonly templates: TemplateActionsSetup;
+  /** This site's named queries, which the manifest lists. */
+  readonly namedQueries?: () => readonly NamedQueryDeclaration[];
+  /** What a page action's bindings are judged with. */
+  readonly bindings?: PageActionsSetup["bindings"];
 }
 
 /**
@@ -143,6 +170,12 @@ export function compositionService(
         request,
         setup,
         "ask-update"
+      ),
+    templateAction: (caller, request) =>
+      runTemplateAction(
+        asRoute(caller),
+        templateActionRequestOf(request),
+        setup.templates
       ),
   };
 }

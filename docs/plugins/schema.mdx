@@ -68,6 +68,62 @@ so they're cleaned up if your plugin is removed.
 > Extending an entity that doesn't exist in the merged schema is a **fail-fast boot
 > error** — see the [error reference](/docs/plugins/error-reference).
 
+### Every content type, without naming them (`@experimental`)
+
+A plugin that belongs on every page of a site, such as SEO, can't know the site's
+collections when it is written. Give `target` a scope instead of slugs:
+
+```ts
+import { definePlugin, text } from "@nextlyhq/plugin-sdk";
+
+export function seoPlugin(options: { exclude?: string[] } = {}) {
+  return definePlugin({
+    name: "@acme/nextly-plugin-seo",
+    version: "1.0.0",
+    nextly: ">=0.0.2-alpha.75",
+    contributes: {
+      extend: [
+        {
+          // Every collection and Single the site defines, except the ones
+          // the site lists in its own nextly.config.ts.
+          target: { every: ["collection", "single"], except: options.exclude },
+          fields: [text({ name: "metaTitle" })],
+        },
+      ],
+    },
+  });
+}
+```
+
+A scope reaches:
+
+- the collections and Singles in the site's configuration, and those made in the
+  Schema Builder, including ones made after the plugin was installed (they get the
+  field on the next start);
+- never a plugin's own collections or Singles (yours included), Nextly's system
+  types such as `users` and `media`, or field groups;
+- never a type listed in `except`.
+
+A type that already has a field of the same name is left as it is and named in a
+warning at startup, instead of stopping the boot as a slug target does. The site keeps
+its own field; the plugin's field isn't added there.
+
+Put `except` behind a plugin option, as above, so the site turns a type off in its
+`nextly.config.ts`. Migrations read that file, so a type that's off before its first
+migration never gets the column.
+
+A type switched off later keeps its column and the values in it. The field stops
+showing: the API, the admin and the outputs no longer have it, and a new entry saves
+without it. Switch the type on again and the saved values are back. Dev push,
+`nextly migrate:create` and `nextly migrate:check` all keep the column: none of them
+plans a drop, and the migration records only that the type no longer has the field. A
+field marked `required` is kept as optional while its type is off, so an entry saved
+then needs no value for it. A type made in the Schema Builder takes the change when the
+site next starts.
+
+`typesReachedBy(scope, types)` gives the same answer to anything else that needs to
+know which types a scope covers.
+
 ## Change entities you don't own
 
 `contributes.transforms` (`@experimental`) changes an entity another plugin or the app

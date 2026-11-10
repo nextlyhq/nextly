@@ -11,26 +11,48 @@
  */
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
-import { blocksFieldSurvey } from "./class-usage-blocks-fields";
+import {
+  blocksFieldSurvey,
+  type FieldGroupDefinitions,
+  singleUsageDeclaration,
+} from "./class-usage-blocks-fields";
 import {
   walkPageBuilderUsageIndexes,
   type ClassUsageRebuildReport,
 } from "./class-usage-index-rebuild";
+import { classUsageIndex } from "./class-usage-reconcile";
 import {
-  classUsageIndexStore,
-  fencedIndexStore,
+  singleRebuildDocumentStore,
   usageRebuildDocumentStore,
   type ClassUsageDirectApi,
 } from "./class-usage-runtime";
+import { componentUsageIndex } from "./component-usage";
+import type { SingleToWalk } from "./host-rewrite/site";
+import { lastIdOf } from "./paged-walk";
+import { tokenUsageIndex } from "./token-usage";
 import type { BackfillStateStore } from "./usage-backfill";
-import type { UsageBackfillDeps } from "./usage-backfill-job";
+import type { GoneScopeRun, UsageBackfillDeps } from "./usage-backfill-job";
 import {
   backfillGeneration,
+  backfillScopeKey,
   backfillScopesFor,
+  GONE_SCOPES_SWEPT_KEY,
   type BackfillScope,
 } from "./usage-backfill-scope";
-import type { UsageBookkeeping, UsageRun } from "./usage-bookkeeping";
-import type { GroupedUsageReader } from "./usage-index";
+import {
+  forgetScopeProgress,
+  type UsageBookkeeping,
+  type UsageRun,
+} from "./usage-bookkeeping";
+import type { UsageRowReader } from "./usage-count";
+import {
+  fencedUsageTableStore,
+  forgetUsageRows,
+  usageTableOf,
+  usageTableRows,
+  type UsageDb,
+  type UsageTable,
+} from "./usage-index-tables";
 
 /** What the wiring must be able to ask of the host, named structurally. */
 export interface BackfillHost {
@@ -65,43 +87,42 @@ export interface BackfillHost {
   collectionSlugs: () => Promise<readonly string[] | undefined>;
   /** The resolved registry record for one slug, or null when it is gone. */
   resolveCollection: (slug: string) => Promise<unknown>;
+  /**
+   * The site's field groups as they are now, by slug, resolved once per survey.
+   *
+   * A reference to a group that holds no blocks field then leaves nothing out
+   * of the index's reach; without it, any field group on the site keeps every
+   * count a floor. A function because a definition changes after boot: a config
+   * reload syncs the registry without running the plugin's `init` again, and an
+   * admin can edit a group there, so a definition captured at install would
+   * call a group blocks-free after it gained a blocks field.
+   */
+  fieldGroups?: () => Promise<FieldGroupDefinitions>;
   /** Whether a resolved collection stores a draft beside its published row. */
   hasDrafts: (collection: unknown) => Promise<boolean> | boolean;
   /**
-   * Whether any Single declares a blocks field.
-   *
-   * A Single's content cannot be indexed at all — a plugin has no supported way
-   * to READ one, since the available path creates the row when it is absent, so
-   * `writeTargetOf` declines every `single:` hook and no scope is enumerated.
-   * The backfill therefore cannot make the index cover such a site however many
-   * collection scopes it finishes, and completeness must not claim otherwise.
+   * Every live Single whose declaration holds a blocks field, or `undefined`
+   * when the Singles registry could not be read whole, which is a refusal for
+   * the reason an unreadable collection registry is one.
    */
-  singlesHoldBlocks: () => Promise<boolean>;
+  singles: () => Promise<readonly SingleToWalk[] | undefined>;
   /** The site's configured locales, read per pass. */
   locales: () => readonly string[];
   /** The bounds the renderer draws under. */
   limits: () => DocumentLimits;
-  /** The RESOLVED slugs of the two index collections a pass writes to. */
-  slugs: () => {
-    classIndex: string;
-    componentIndex: string;
-  };
+  /** The plugin's own database, which the index rows live in. */
+  db: UsageDb;
   /** The run, its progress and the dirty mark, in the plugin's own tables. */
   bookkeeping: () => UsageBookkeeping;
-  /**
-   * A grouped read of one of the plugin's own index collections that no site
-   * hook shapes, for the health marker probe.
-   */
-  ownIndexReader: (indexCollection: string) => GroupedUsageReader;
 }
 
 /** The derivation the host's index is built under, read now. */
 export function hostGeneration(host: BackfillHost): string {
-  const slugs = host.slugs();
   return backfillGeneration({
     limits: host.limits(),
-    classIndex: slugs.classIndex,
-    componentIndex: slugs.componentIndex,
+    classIndex: usageTableOf(classUsageIndex).name,
+    componentIndex: usageTableOf(componentUsageIndex).name,
+    tokenIndex: usageTableOf(tokenUsageIndex).name,
   });
 }
 
@@ -163,14 +184,14 @@ export async function backfillScopes(
 export interface BackfillSurvey {
   scopes: readonly BackfillScope[];
   /**
-   * Whether any tracked collection declares a blocks field no scope can cover.
+   * Whether any tracked collection or Single declares a blocks field no scope
+   * can cover.
    *
    * A blocks field nested under a named group has no addressable subject, so no
    * scope is enumerated for it and no hook reconciles it — see
-   * {@link blocksFieldSurvey}. Unlike a Single, nothing else reports it, so
-   * "every scope walked" would be vacuously true for a collection whose only
-   * blocks field is nested, and health would call an index that never saw those
-   * references exact.
+   * {@link blocksFieldSurvey}. Nothing else reports it, so "every scope walked"
+   * would be vacuously true for a document whose only blocks field is nested,
+   * and health would call an index that never saw those references exact.
    *
    * Answered from the SAME walk that builds the scopes, because a second walk
    * over the registry is a second answer to one question and would also double
@@ -195,6 +216,9 @@ export async function backfillSurvey(
   }
 
   const locales = host.locales();
+  // Once per survey, so every reference in this walk is judged against one
+  // reading of the definitions and a site's document count adds no reads.
+  const fieldGroups = await host.fieldGroups?.();
   const scopes: BackfillScope[] = [];
   let unaddressable = false;
 
@@ -202,10 +226,11 @@ export async function backfillSurvey(
     const collection = await host.resolveCollection(slug);
     // A slug the registry no longer resolves contributes no scopes. Skipped
     // rather than refused: a collection removed while a backfill is in flight
-    // is an ordinary event, and its rows are the delete hook's to clear.
+    // is an ordinary event, and its rows are cleared once the run has walked
+    // every scope, as any gone scope's are (`forgetGoneScopes`).
     if (collection === null || collection === undefined) continue;
 
-    const survey = blocksFieldSurvey(collection);
+    const survey = blocksFieldSurvey(collection, fieldGroups);
     const fields = survey.addressable;
     // Recorded before the early return below, so a collection whose ONLY blocks
     // field is nested — which contributes no scope — still reports that the
@@ -222,6 +247,32 @@ export async function backfillSurvey(
         fields,
         locales,
         hasDrafts: await host.hasDrafts(collection),
+      })
+    );
+  }
+
+  const singles = await host.singles();
+  if (singles === undefined) {
+    throw new Error(
+      "[page-builder] the usage backfill could not read the Singles registry, so it cannot tell an unindexed Single from a site that has none"
+    );
+  }
+  for (const single of singles) {
+    const survey = blocksFieldSurvey(
+      singleUsageDeclaration(single),
+      fieldGroups
+    );
+    if (survey.unaddressable) unaddressable = true;
+    // Both forms, whatever the Single's versioning: the registry listing does
+    // not say whether a Single keeps a working draft, and the draft read
+    // answers absent for one that does not, which records nothing.
+    scopes.push(
+      ...backfillScopesFor({
+        scope: "single",
+        collection: single.slug,
+        fields: survey.addressable,
+        locales,
+        hasDrafts: true,
       })
     );
   }
@@ -252,19 +303,29 @@ export function usageBackfillDeps(host: BackfillHost): UsageBackfillDeps {
     },
     rebuild: async (scope, walk) => {
       const nextly = await host.nextly();
-      const slugs = host.slugs();
       const { report, finished } = await walkPageBuilderUsageIndexes(
         {
-          documents: usageRebuildDocumentStore(nextly),
+          documents:
+            scope.scope === "single"
+              ? singleRebuildDocumentStore(nextly)
+              : usageRebuildDocumentStore(nextly),
           // Fenced by the run: a pass a newer run replaced writes nothing.
-          classIndex: fencedIndexStore(
-            classUsageIndexStore(nextly, slugs.classIndex),
+          classIndex: fencedUsageTableStore(
+            host.db,
+            usageTableOf(classUsageIndex),
             write => walk.fenced(write)
           ),
-          componentIndex: fencedIndexStore(
-            classUsageIndexStore(nextly, slugs.componentIndex),
+          componentIndex: fencedUsageTableStore(
+            host.db,
+            usageTableOf(componentUsageIndex),
             write => walk.fenced(write)
           ),
+          tokenIndex: fencedUsageTableStore(
+            host.db,
+            usageTableOf(tokenUsageIndex),
+            write => walk.fenced(write)
+          ),
+          scope: scope.scope,
           collection: scope.entity,
           field: scope.field,
           locale: scope.locale,
@@ -280,6 +341,156 @@ export function usageBackfillDeps(host: BackfillHost): UsageBackfillDeps {
       return { finished };
     },
   };
+}
+
+/**
+ * Remove the rows and progress of every scope that no scope existing now
+ * names: a collection or Single removed from the site, a blocks field it no
+ * longer has, drafts it no longer keeps, a language it no longer stores the
+ * field in. No walk visits those rows, so without this they would keep
+ * counting towards their components and classes for good, and a component
+ * they name could never be deleted; and the progress left behind would read
+ * a scope that comes back as already walked.
+ *
+ * Asked only once every scope has been walked, from the scopes that pass
+ * read, so content a registry could not list is never taken for gone:
+ * reading a registry failed the pass before this point. The registries are
+ * read again here and a scope either reading names is kept, so content made
+ * while the pass walked is not taken for gone either. Every row is read, to
+ * the end of each table. Each gone scope's rows in both indexes, and the
+ * progress recorded for it, are removed in one transaction fenced by the
+ * run, so a scope that comes back is walked again rather than read as
+ * walked.
+ *
+ * Every run sweeps once, on the pass that finds every scope walked, and
+ * records that it has in its progress: a run with nothing left to walk, such
+ * as one started over a site whose last blocks field is gone, sweeps all the
+ * same, since no progress of a new run says the tables are clean. After that
+ * a pass reads nothing unless a scope the run recorded is gone, so a site
+ * whose content stays put pays no table read per pass.
+ */
+export async function forgetGoneScopes(
+  host: BackfillHost,
+  scopes: readonly BackfillScope[],
+  fenced: BackfillStateStore["fenced"],
+  run: GoneScopeRun,
+  /** How each table's rows are read; another reader only in a test. */
+  rowsOf: (table: UsageTable) => UsageRowReader = table =>
+    usageTableRows(host.db, table)
+): Promise<void> {
+  const named = new Set(scopes.map(backfillScopeKey));
+  const recordedGone = [...run.completed].filter(
+    key => key !== GONE_SCOPES_SWEPT_KEY && !named.has(key)
+  );
+  const swept = run.completed.has(GONE_SCOPES_SWEPT_KEY);
+  if (swept && recordedGone.length === 0) return;
+  const live = new Set([
+    ...named,
+    ...(await backfillScopes(host)).map(backfillScopeKey),
+  ]);
+  const tables = [
+    usageTableOf(classUsageIndex),
+    usageTableOf(componentUsageIndex),
+    usageTableOf(tokenUsageIndex),
+  ];
+  const gone = new Map<string, BackfillScope | null>();
+  for (const key of recordedGone) {
+    if (!live.has(key)) gone.set(key, null);
+  }
+  for (const table of tables) {
+    for (const scope of await goneScopes(rowsOf(table), live)) {
+      gone.set(backfillScopeKey(scope), scope);
+    }
+  }
+  for (const [key, scope] of gone) {
+    await fenced(async tx => {
+      // A scope known only from its progress has no rows: the tables were
+      // read to their end and named none.
+      if (scope !== null) {
+        for (const table of tables) {
+          await forgetUsageRows(tx, table, {
+            scope: { equals: scope.scope },
+            entity: { equals: scope.entity },
+            field: { equals: scope.field },
+            locale: { equals: scope.locale },
+            variant: { equals: scope.variant },
+          });
+        }
+      }
+      await forgetScopeProgress(tx, key);
+    });
+  }
+  if (!swept) await run.markSwept();
+}
+
+/**
+ * The scopes a table holds rows for that are not among `live`, of either
+ * kind, read to the table's end a page at a time by id. Collected whole
+ * before any is removed.
+ */
+export async function goneScopes(
+  rows: UsageRowReader,
+  live: ReadonlySet<string>
+): Promise<BackfillScope[]> {
+  const gone = new Map<string, BackfillScope>();
+  let after: string | undefined;
+  for (let page = 1; ; page += 1) {
+    const found = await rows({
+      where: {},
+      page,
+      ...(after === undefined ? {} : { after }),
+    });
+    for (const scope of found.items.map(scopeOfRow)) {
+      if (scope !== null && !live.has(backfillScopeKey(scope))) {
+        gone.set(backfillScopeKey(scope), scope);
+      }
+    }
+    const next = lastIdOf(found.items);
+    if (!found.hasNext) return [...gone.values()];
+    // A page that names no id to resume after cannot move the read on, and
+    // reading it again would never end: refused, so the run does not finish
+    // and health stays not whole.
+    if (next === undefined || next === after) {
+      throw new Error(
+        "[page-builder] the usage index's rows could not be read to their end, so the rows of scopes that are gone were not all removed"
+      );
+    }
+    after = next;
+  }
+}
+
+/** The scope a stored row is filed under, or `null` for one this cannot read. */
+function scopeOfRow(item: unknown): BackfillScope | null {
+  if (typeof item !== "object" || item === null) return null;
+  const row = item as Record<string, unknown>;
+  const scope = scopeKindOf(row.scope);
+  const names = subjectNamesOf(row);
+  const variant = variantOf(row.variant);
+  return scope === null || names === null || variant === null
+    ? null
+    : { scope, ...names, variant };
+}
+
+/** A row's `scope` column, when it names one of the two kinds. */
+function scopeKindOf(value: unknown): BackfillScope["scope"] | null {
+  return value === "collection" || value === "single" ? value : null;
+}
+
+/** A row's `variant` column, when it names one of the two forms. */
+function variantOf(value: unknown): BackfillScope["variant"] | null {
+  return value === "published" || value === "draft" ? value : null;
+}
+
+/** A row's document, field and language columns, when each is a string. */
+function subjectNamesOf(
+  row: Record<string, unknown>
+): Pick<BackfillScope, "entity" | "field" | "locale"> | null {
+  const { entity, field, locale } = row;
+  return typeof entity === "string" &&
+    typeof field === "string" &&
+    typeof locale === "string"
+    ? { entity, field, locale }
+    : null;
 }
 
 /**
@@ -324,7 +535,7 @@ export function refuseIncompleteWalk(
 ): void {
   if (report.failure === undefined && report.unrepaired === 0) return;
 
-  const where = `${scope.entity}.${scope.field} (${scope.locale || "shared"}, ${scope.variant})`;
+  const where = `${scope.scope === "single" ? "Single " : ""}${scope.entity}.${scope.field} (${scope.locale || "shared"}, ${scope.variant})`;
   throw new Error(
     `[page-builder] the usage backfill could not walk ${where} whole — ` +
       `${report.unrepaired} unrepaired — ` +

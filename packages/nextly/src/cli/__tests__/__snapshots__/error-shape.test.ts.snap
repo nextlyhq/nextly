@@ -401,6 +401,13 @@ exports[`each cause a documented code covers, as a command ends with it > SQLITE
   Docs: https://nextlyhq.com/docs/cli/errors/nextly-migration-foreign-key-violation  (NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION)"
 `;
 
+exports[`each code, as a command ends with it > ACTION_NOT_AVAILABLE 1`] = `
+"✗ This action isn't available for this entry.
+  Why:  An action runs only on the entries its plugin declared it for, judged on each entry as its caller reads it. Nothing was run.
+  Next: Run the action on an entry the admin offers it on.
+  Docs: https://nextlyhq.com/docs/cli/errors/action-not-available  (ACTION_NOT_AVAILABLE)"
+`;
+
 exports[`each code, as a command ends with it > ADMIN_EMAIL_IN_USE 1`] = `
 "✗ An account already uses that email. Nothing was created.
   Why:  That account would be given the administrator role and keep its own password, so the password given would be ignored.
@@ -493,9 +500,9 @@ exports[`each code, as a command ends with it > BUILD_STRICT_WARNINGS 1`] = `
 `;
 
 exports[`each code, as a command ends with it > BUILDER_MIGRATION_SNAPSHOT_MISSING 1`] = `
-"✗ nextly migrate does not apply a Schema Builder migration file with no snapshot.
+"✗ nextly migrate does not apply a file with a Schema Builder name that is not recognised as an earlier Builder's: 1761732000000_update_posts.sql, which has a statement on a table that is not its own entity's, or one that cannot be read.
   Why:  1761732000000_update_posts.sql was written by the Schema Builder and has no snapshot beside it (meta/1761732000000_update_posts.snapshot.json), so nothing says what the database should look like once it has run.
-  Next: Replace it with the migration \`nextly migrate:create\` writes for that change: delete 1761732000000_update_posts.sql, run \`nextly migrate:create --name=<name>\`, and commit the .sql file and its snapshot.
+  Next: Replace it with the migration \`nextly migrate:create\` writes for that change: delete 1761732000000_update_posts.sql, run \`nextly migrate:create --name=<name>\`, and commit the .sql file and its snapshot; or delete it, if the change is already in a migration or not wanted.
   Docs: https://nextlyhq.com/docs/cli/errors/builder-migration-snapshot-missing  (BUILDER_MIGRATION_SNAPSHOT_MISSING)"
 `;
 
@@ -899,9 +906,9 @@ exports[`each code, as a command ends with it > MIGRATION_IRREVERSIBLE 1`] = `
 `;
 
 exports[`each code, as a command ends with it > MIGRATION_MISSING 1`] = `
-"✗ \`20261020_120000_add_posts.sql\` is recorded as applied, but its file is not in the migrations folder.
-  Why:  It ran on this database and no removal of it is recorded, so the folder may be from an older build.
-  Next: Restore the file from version control, or deploy the build that has it, then run \`nextly migrate\` again.
+"✗ The ledger records 1 applied migration this build's migrations folder lacks (\`20261020_120000_add_posts.sql\`), so \`nextly migrate\` ran nothing.
+  Why:  A newer build has migrated this database, or a file was removed from the folder after it ran.
+  Next: Deploy the build that holds the files, or put them back. If a file was removed on purpose, record that with \`nextly migrate:resolve --removed <file>\`: the migration stays applied, and is never run again if its file returns.
   Docs: https://nextlyhq.com/docs/cli/errors/migration-missing  (MIGRATION_MISSING)"
 `;
 
@@ -970,6 +977,13 @@ exports[`each code, as a command ends with it > NEXTLY_MIGRATION_FOREIGN_KEY_VIO
   Docs: https://nextlyhq.com/docs/cli/errors/nextly-migration-foreign-key-violation  (NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION)"
 `;
 
+exports[`each code, as a command ends with it > NEXTLY_MIGRATION_HISTORY_REFUSED 1`] = `
+"✗ Applied migration 20261106_120000_000_posts_create.sql was changed after it ran. Restore it as it was applied, or record the change with \`nextly migrate:resolve --applied 20261106_120000_000_posts_create.sql\`.
+  Why:  A save writes a migration into the folder, and the folder or its ledger is in a state \`nextly migrate\` refuses: an applied file was edited or removed, or an attempt is unfinished.
+  Next: Settle what the message names, with \`nextly migrate:resolve\` or by restoring the file, then save again.
+  Docs: https://nextlyhq.com/docs/cli/errors/nextly-migration-history-refused  (NEXTLY_MIGRATION_HISTORY_REFUSED)"
+`;
+
 exports[`each code, as a command ends with it > NEXTLY_MIGRATION_PARTIALLY_APPLIED 1`] = `
 "✗ 20261020_120000_add_posts.sql ran outside a transaction, and its statement 3 of 4 failed.
   Why:  column "summary" of relation "dc_posts" already exists
@@ -1011,6 +1025,13 @@ exports[`each code, as a command ends with it > NEXTLY_ROUTE_INVALID_PATH 1`] = 
   Why:  A route's path is mounted under \`/plugins/<plugin>\`, so it must be absolute within that namespace.
   Next: Start the route's path with "/", as in "/summary".
   Docs: https://nextlyhq.com/docs/cli/errors/nextly-route-invalid-path  (NEXTLY_ROUTE_INVALID_PATH)"
+`;
+
+exports[`each code, as a command ends with it > NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED 1`] = `
+"✗ This save also converts body from text to varchar(255), from an earlier Nextly version. Review the save and confirm the conversion to write it.
+  Why:  The column's type differs from what its field makes now, and a save converts only the columns its review showed.
+  Next: Review the save in the Schema Builder and confirm the conversion, or pass the column in \`acknowledgedConversions\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/nextly-schema-conversion-unconfirmed  (NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED)"
 `;
 
 exports[`each code, as a command ends with it > NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION 1`] = `
@@ -1062,6 +1083,20 @@ exports[`each code, as a command ends with it > NO_TRANSACTION_NEEDS_BLANK 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/no-transaction-needs-blank  (NO_TRANSACTION_NEEDS_BLANK)"
 `;
 
+exports[`each code, as a command ends with it > OLD_BUILDER_FILE_SNAPSHOT_ADDED 1`] = `
+"✗ \`1761732000000_create_posts.sql\` has a snapshot beside it (\`meta/1761732000000_create_posts.snapshot.json\`) since it was recognised as a file an earlier Schema Builder wrote, so \`nextly migrate\` ran nothing.
+  Why:  A ledger row marks the file as an old Schema Builder file, which every command ignores, and it no longer carries the whole signature that recognised it, so it would be read as a migration.
+  Next: Put the file back as it was, or remove the snapshot, and it is ignored again; delete it, and its ledger rows stay ignored; or accept it as it now stands with \`nextly migrate:resolve --applied <file>\`, after which it is checked as any migration.
+  Docs: https://nextlyhq.com/docs/cli/errors/old-builder-file-snapshot-added  (OLD_BUILDER_FILE_SNAPSHOT_ADDED)"
+`;
+
+exports[`each code, as a command ends with it > OLD_BUILDER_FILE_VARIANT_ADDED 1`] = `
+"✗ \`1761732000000_create_posts.sql\` has a dialect variant sharing its ledger name since it was recognised as a file an earlier Schema Builder wrote, so \`nextly migrate\` ran nothing.
+  Why:  A ledger row marks the name as an old Schema Builder file's, which every command ignores, and a dialect variant now shares that name, so its rows and the Builder's cannot be told apart.
+  Next: Remove the dialect variant, and put its change in a migration of its own with \`nextly migrate:create\`; the marked file is then ignored again.
+  Docs: https://nextlyhq.com/docs/cli/errors/old-builder-file-variant-added  (OLD_BUILDER_FILE_VARIANT_ADDED)"
+`;
+
 exports[`each code, as a command ends with it > OWNERSHIP_TAKEOVER_REFUSED 1`] = `
 "✗ The table "seo_redirects" is recorded as belonging to "@acme/seo", so "@acme/redirects" cannot take it over.
   Why:  Each table and element has one owner, recorded in \`nextly_schema_owners\`, so no plugin or app takes over another's.
@@ -1089,6 +1124,13 @@ exports[`each code, as a command ends with it > PLAN_CHANGED_AFTER_CONSENT 1`] =
         It would act on now: dc_tags; dc_tags_locales.
   Next: Run \`nextly prune\` again to see what it would do now.
   Docs: https://nextlyhq.com/docs/cli/errors/plan-changed-after-consent  (PLAN_CHANGED_AFTER_CONSENT)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_ACTION_ROW_NOT_FOUND 1`] = `
+"✗ A plugin's action named an entry that could not be found for this caller.
+  Why:  An action acts only on entries its caller may read; one they may not read is answered as one that does not exist. Nothing was run.
+  Next: Run the action on an entry the caller can open in the admin.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-action-row-not-found  (PLUGIN_ACTION_ROW_NOT_FOUND)"
 `;
 
 exports[`each code, as a command ends with it > PLUGIN_ADMIN_WIDGET_NOT_JSON 1`] = `
@@ -1140,6 +1182,20 @@ exports[`each code, as a command ends with it > PLUGIN_DISABLED 1`] = `
   Why:  A disabled plugin's hooks do not run, so an install or uninstall of it could record a state its hook never produced. Nothing was changed.
   Next: Enable it in the config to install or uninstall it.
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-disabled  (PLUGIN_DISABLED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_SURFACE_COLLISION 1`] = `
+"✗ Plugin "archive" overrides the "delete" action on "pages", which "layouts" already overrides.
+  Why:  One action can be drawn one way.
+  Next: Drop one of the two overrides.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-surface-collision  (PLUGIN_DOCUMENT_SURFACE_COLLISION)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_SURFACE_INVALID 1`] = `
+"✗ Plugin "layouts" replaces the "delete" action on "pages" with no component to open.
+  Why:  A plugin may hide or replace only the delete and unpublish actions; a replacement needs a component to open and a label of text if it has one, and a panel section needs a title and a component.
+  Next: Correct the override or section the message names in the plugin's \`contributes.admin.views\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-surface-invalid  (PLUGIN_DOCUMENT_SURFACE_INVALID)"
 `;
 
 exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_VIEW_COLLISION 1`] = `
@@ -1592,8 +1648,8 @@ exports[`each code, as a command ends with it > RESOLVE_LOCK_RELEASED 1`] = `
 
 exports[`each code, as a command ends with it > RESOLVE_MODE_REQUIRED 1`] = `
 "✗ \`nextly migrate:resolve\` needs exactly one thing to record.
-  Why:  It was given none of \`--applied\`, \`--rolled-back\` and \`--failed-cleanup\`.
-  Next: Provide exactly one of --applied, --rolled-back, or --failed-cleanup.
+  Why:  It was given none of \`--applied\`, \`--rolled-back\`, \`--failed-cleanup\` and \`--removed\`.
+  Next: Provide exactly one of --applied, --rolled-back, --failed-cleanup, or --removed.
   Docs: https://nextlyhq.com/docs/cli/errors/resolve-mode-required  (RESOLVE_MODE_REQUIRED)"
 `;
 

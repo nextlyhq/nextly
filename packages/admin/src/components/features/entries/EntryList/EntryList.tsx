@@ -11,13 +11,22 @@
  * @since 1.0.0
  */
 
-import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
+import {
+  Alert,
+  AlertDescription,
+  Button,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from "@nextlyhq/ui";
 import { useState, useCallback, useMemo, useRef } from "react";
 import type { JSX } from "react";
 
 import { Code, Plus } from "@admin/components/icons";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { TargetSlot } from "@admin/components/shared/target-slot";
+import { usePlaceContributions } from "@admin/components/shared/target-slot/usePlaceContributions";
 import { useListColumns } from "@admin/components/ui/table/list-view";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { LOCALE_PARAM } from "@admin/constants/search-params";
@@ -33,17 +42,19 @@ import {
 import { useCollection } from "@admin/hooks/queries/useCollections";
 import { useCan } from "@admin/hooks/useCan";
 import { useDefaultLanguageAsksTranslationStatus } from "@admin/hooks/useCanRequest";
+import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
-import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import { revsFor } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
-import type { InjectionPointProps } from "@admin/lib/plugins/component-registry";
+import {
+  hasComponent,
+  type InjectionPointProps,
+} from "@admin/lib/plugins/component-registry";
 import { getSearchParam } from "@admin/lib/search-params";
 import type { Entry } from "@admin/types/collection";
-import type { ApiCollection } from "@admin/types/entities";
 
 import { BulkDeleteDialog } from "../BulkActions/BulkDeleteDialog";
 import {
@@ -56,6 +67,7 @@ import {
   getCollectionLabels,
   toCollectionForColumns,
 } from "./collection-for-columns";
+import { declaredColumns } from "./declared-columns";
 import { EntryEmptyState } from "./EntryEmptyState";
 import {
   buildEntryWhereFilter,
@@ -82,8 +94,10 @@ import {
   pluginFilterWheres,
   writePluginFilterParams,
 } from "./plugin-filters";
+import { useDeclaredBulkActions } from "./useDeclaredBulkActions";
+import { useDeclaredRowActions } from "./useDeclaredRowActions";
 import { useEntryBulkActions } from "./useEntryBulkActions";
-import type { EntryVersions } from "./useEntrySelection";
+import type { EntryRow, EntryVersions } from "./useEntrySelection";
 
 // ============================================================================
 // Types
@@ -202,6 +216,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // chosen among them (`?pf=<filter>:<value>`), each resolved by name against
   // what was declared, so a `pf` naming anything else is ignored.
   const { plugins } = useBranding();
+  // Plugins' declared row actions for this list, and the component one of
+  // them opened, drawn below in a dialog with the row it was run on.
+  const declaredActions = useDeclaredRowActions<EntryRow>(collectionSlug);
   const pluginFilters = useMemo(
     () => listFiltersFor(plugins, collectionSlug),
     [plugins, collectionSlug]
@@ -249,14 +266,6 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // Fetch collection metadata
   const { data: collection, isLoading: collectionLoading } =
     useCollection(collectionSlug);
-
-  // Auto-register plugin components when collection is loaded
-  // This ensures components like BeforeListTable are registered before rendering
-  const collectionsForRegistration = useMemo<ApiCollection[]>(
-    () => (collection ? [collection as unknown as ApiCollection] : []),
-    [collection]
-  );
-  usePluginAutoRegistration(collectionsForRegistration);
 
   // Request the per-locale translation-status overview only for localized collections
   // on a localization-enabled app — drives the list's translation-completeness column.
@@ -452,6 +461,39 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
 
   const entries = entriesResponse?.items ?? [];
   const pagination = toTablePaginationState(entriesResponse, limit);
+
+  // What a plugin's block, column or bulk action on this list is told: who is
+  // looking, at which collection. Held while the viewer is not known yet, so
+  // nothing contributed is handed an id that is not theirs.
+  const { user } = useDashboardUser();
+  const userId = user?.id;
+  const placeContext = useMemo(
+    () => (userId ? { userId, collection: collectionSlug } : null),
+    [userId, collectionSlug]
+  );
+  // Plugins' declared columns, scoped to this collection by the place's own
+  // rule, drawn after the collection's own columns.
+  const deliveredColumns = usePlaceContributions("collection.list", "column", {
+    context: placeContext,
+  });
+  const declaredTableColumns = useMemo(
+    () =>
+      placeContext === null
+        ? []
+        : declaredColumns(deliveredColumns, collectionForColumns, placeContext),
+    [deliveredColumns, collectionForColumns, placeContext]
+  );
+  // Plugins' declared bulk actions, run on the selected rows, and the
+  // component one of them opened, drawn in the same dialog a row action's is.
+  const declaredBulk = useDeclaredBulkActions<EntryRow>(
+    collectionSlug,
+    entries
+  );
+  const openedAction = declaredActions.opened ?? declaredBulk.opened;
+  const closeOpenedAction = () => {
+    declaredActions.close();
+    declaredBulk.close();
+  };
 
   // ---------------------------------------------------------------------------
   // Handlers
@@ -684,7 +726,16 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // isolated via PluginSlot.
   const beforeListTablePath = collection?.admin?.components?.BeforeListTable;
   const afterListTablePath = collection?.admin?.components?.AfterListTable;
-  const listViewPath = collection?.admin?.components?.views?.List?.Component;
+  // A collection's own List view, where the generated map registered it. One
+  // it did not register draws the default list instead of a blank page: the
+  // map registers every component before the admin draws, so nothing would
+  // bring it later. A collection removed from code is the usual case: its
+  // stored metadata still names the view, and the map no longer lists it.
+  const declaredListViewPath =
+    collection?.admin?.components?.views?.List?.Component;
+  const listViewPath = hasComponent(declaredListViewPath)
+    ? declaredListViewPath
+    : undefined;
 
   // Props for injection point components
   const injectionPointProps: InjectionPointProps = {
@@ -711,43 +762,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
           ]}
         />
       </div>
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">
-            {labels.plural}
-          </h1>
-          {collection?.description && (
-            <p className="text-sm font-normal text-muted-foreground mt-1">
-              {collection.description}
-            </p>
-          )}
-        </div>
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-          <Button
-            variant="outline"
-            onClick={handleApiPlaygroundClick}
-            className="flex-1 sm:flex-initial hover-unified"
-          >
-            <Code className="h-4 w-4" />
-            API
-          </Button>
-          {/* Machine-created collections (disableCreate) never offer "New" —
-              a hand-typed entry there would be fiction, not data — and nor
-              does a collection the caller may not create in. */}
-          {createAllowed && (
-            <Button
-              onClick={handleCreateClick}
-              className="flex-1 sm:flex-initial hover-unified"
-            >
-              <Plus className="h-4 w-4" />
-              New {labels.singular}
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {/* Above the list: why nothing here can be changed, and the next step. */}
+      {/* Why nothing here can be changed, and the next step: above the
+          place, not in its `table` part, so a plugin that replaces the list
+          cannot take the warning with it. */}
       {removedFromCode && (
         <RemovedFromCodeNotice
           entity={{
@@ -759,85 +776,154 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
           className="mb-6"
         />
       )}
+      {/* The list's own parts are the place's built-ins, `toolbar` (the
+          header) and `table` (the list itself): plugins' blocks draw around
+          them in the order sent. One gap spaces every part the place lays
+          out, built-in or contributed, so a block never sits against the
+          list; with nothing contributed it is the header's space above the
+          list, as before. */}
+      <div className="flex flex-col gap-8">
+        <TargetSlot
+          place="collection.list"
+          context={placeContext}
+          builtIns={{
+            toolbar: (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h1 className="text-xl font-semibold tracking-tight">
+                    {labels.plural}
+                  </h1>
+                  {collection?.description && (
+                    <p className="text-sm font-normal text-muted-foreground mt-1">
+                      {collection.description}
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <Button
+                    variant="outline"
+                    onClick={handleApiPlaygroundClick}
+                    className="flex-1 sm:flex-initial hover-unified"
+                  >
+                    <Code className="h-4 w-4" />
+                    API
+                  </Button>
+                  {/* Machine-created collections (disableCreate) never offer "New" —
+                      a hand-typed entry there would be fiction, not data — and nor
+                      does a collection the caller may not create in. */}
+                  {createAllowed && (
+                    <Button
+                      onClick={handleCreateClick}
+                      className="flex-1 sm:flex-initial hover-unified"
+                    >
+                      <Plus className="h-4 w-4" />
+                      New {labels.singular}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ),
+            table: (
+              // One part of the place: what the list draws inside it keeps its
+              // own spacing.
+              <div>
+                {/* BeforeListTable injection point */}
+                {beforeListTablePath && (
+                  <PluginSlot
+                    path={beforeListTablePath}
+                    props={injectionProps}
+                  />
+                )}
 
-      {/* BeforeListTable injection point */}
-      {beforeListTablePath && (
-        <PluginSlot path={beforeListTablePath} props={injectionProps} />
-      )}
+                {/* Content — a plugin List override replaces the default table (D23) */}
+                {listViewPath ? (
+                  <PluginSlot path={listViewPath} props={injectionProps} />
+                ) : tableGone ? null : lostPluginFilters ? (
+                  <Alert variant="destructive">
+                    <AlertDescription>
+                      This link chooses a plugin&apos;s filter, and the filters
+                      couldn&apos;t be loaded, so the list isn&apos;t shown.
+                      Reload the page to try again.
+                    </AlertDescription>
+                  </Alert>
+                ) : entriesError ? (
+                  // A list the server refused says so in its own words where the rows
+                  // would be. Without this a failed read has no rows and is not
+                  // loading, which draws the empty state and calls the collection empty.
+                  <Alert variant="destructive">
+                    <AlertDescription>
+                      {apiErrorMessage(
+                        entriesError,
+                        "The entries couldn't be loaded."
+                      )}
+                    </AlertDescription>
+                  </Alert>
+                ) : entries.length === 0 &&
+                  !entriesLoading &&
+                  !search &&
+                  whereFilter === undefined ? (
+                  // Only an unfiltered list is empty. A filtered one with no rows keeps
+                  // its table, and with it the toolbar that clears the filter.
+                  <EntryEmptyState
+                    collectionName={labels.plural}
+                    singularName={labels.singular}
+                    onCreateClick={
+                      createAllowed ? handleCreateClick : undefined
+                    }
+                  />
+                ) : (
+                  <EntryTable
+                    ref={tableRef}
+                    declaredRowActions={declaredActions.rowActions}
+                    declaredBulkActions={declaredBulk.bulkActions}
+                    declaredColumns={declaredTableColumns}
+                    collection={collectionForColumns}
+                    entries={entries}
+                    pagination={pagination}
+                    isLoading={entriesLoading}
+                    currentSort={sort}
+                    onPageChange={handlePageChange}
+                    onLimitChange={handleLimitChange}
+                    onSortChange={handleSortChange}
+                    onSearchChange={handleSearchChange}
+                    onEdit={handleEdit}
+                    onDelete={handleDelete}
+                    onBulkDelete={handleBulkDelete}
+                    onBulkPublish={handleBulkPublish}
+                    onBulkUnpublish={handleBulkUnpublish}
+                    isBulkPublishing={bulkUpdate.isPending}
+                    onSelectionChange={handleSelectionChange}
+                    status={status}
+                    onStatusChange={handleStatusChange}
+                    translationFilter={translationFilter}
+                    onTranslationFilterChange={handleTranslationFilterChange}
+                    pluginFilters={pluginFilters}
+                    chosenPluginFilters={chosenPluginFilterOptions}
+                    onPluginFilterChange={handlePluginFilterChange}
+                    createdFrom={createdFrom}
+                    createdTo={createdTo}
+                    updatedFrom={updatedFrom}
+                    updatedTo={updatedTo}
+                    onCreatedFromChange={handleCreatedFromChange}
+                    onCreatedToChange={handleCreatedToChange}
+                    onUpdatedFromChange={handleUpdatedFromChange}
+                    onUpdatedToChange={handleUpdatedToChange}
+                    columnsControl={columnsControl}
+                  />
+                )}
 
-      {/* Content — a plugin List override replaces the default table (D23) */}
-      {listViewPath ? (
-        <PluginSlot path={listViewPath} props={injectionProps} />
-      ) : tableGone ? null : lostPluginFilters ? (
-        <Alert variant="destructive">
-          <AlertDescription>
-            This link chooses a plugin&apos;s filter, and the filters
-            couldn&apos;t be loaded, so the list isn&apos;t shown. Reload the
-            page to try again.
-          </AlertDescription>
-        </Alert>
-      ) : entriesError ? (
-        // A list the server refused says so in its own words where the rows
-        // would be. Without this a failed read has no rows and is not
-        // loading, which draws the empty state and calls the collection empty.
-        <Alert variant="destructive">
-          <AlertDescription>
-            {apiErrorMessage(entriesError, "The entries couldn't be loaded.")}
-          </AlertDescription>
-        </Alert>
-      ) : entries.length === 0 &&
-        !entriesLoading &&
-        !search &&
-        whereFilter === undefined ? (
-        // Only an unfiltered list is empty. A filtered one with no rows keeps
-        // its table, and with it the toolbar that clears the filter.
-        <EntryEmptyState
-          collectionName={labels.plural}
-          singularName={labels.singular}
-          onCreateClick={createAllowed ? handleCreateClick : undefined}
+                {/* AfterListTable injection point (D23) */}
+                {afterListTablePath && (
+                  <PluginSlot
+                    path={afterListTablePath}
+                    props={injectionProps}
+                  />
+                )}
+              </div>
+            ),
+          }}
         />
-      ) : (
-        <EntryTable
-          ref={tableRef}
-          collection={collectionForColumns}
-          entries={entries}
-          pagination={pagination}
-          isLoading={entriesLoading}
-          currentSort={sort}
-          onPageChange={handlePageChange}
-          onLimitChange={handleLimitChange}
-          onSortChange={handleSortChange}
-          onSearchChange={handleSearchChange}
-          onEdit={handleEdit}
-          onDelete={handleDelete}
-          onBulkDelete={handleBulkDelete}
-          onBulkPublish={handleBulkPublish}
-          onBulkUnpublish={handleBulkUnpublish}
-          isBulkPublishing={bulkUpdate.isPending}
-          onSelectionChange={handleSelectionChange}
-          status={status}
-          onStatusChange={handleStatusChange}
-          translationFilter={translationFilter}
-          onTranslationFilterChange={handleTranslationFilterChange}
-          pluginFilters={pluginFilters}
-          chosenPluginFilters={chosenPluginFilterOptions}
-          onPluginFilterChange={handlePluginFilterChange}
-          createdFrom={createdFrom}
-          createdTo={createdTo}
-          updatedFrom={updatedFrom}
-          updatedTo={updatedTo}
-          onCreatedFromChange={handleCreatedFromChange}
-          onCreatedToChange={handleCreatedToChange}
-          onUpdatedFromChange={handleUpdatedFromChange}
-          onUpdatedToChange={handleUpdatedToChange}
-          columnsControl={columnsControl}
-        />
-      )}
-
-      {/* AfterListTable injection point (D23) */}
-      {afterListTablePath && (
-        <PluginSlot path={afterListTablePath} props={injectionProps} />
-      )}
+      </div>
 
       {/* Bulk Delete Confirmation Dialog */}
       <BulkDeleteDialog
@@ -848,6 +934,33 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
         onConfirm={handleConfirmDelete}
         isLoading={bulkDelete.isPending}
       />
+
+      {/* A declared action that opens its plugin's component, with its rows */}
+      <Dialog
+        open={openedAction !== null}
+        onOpenChange={open => {
+          if (!open) closeOpenedAction();
+        }}
+      >
+        <DialogContent>
+          <DialogTitle>{openedAction?.label}</DialogTitle>
+          {openedAction ? (
+            <PluginSlot
+              path={openedAction.component}
+              props={{
+                rows: openedAction.rows,
+                onClose: closeOpenedAction,
+              }}
+              fallback={
+                <p className="text-sm text-muted-foreground">
+                  This action&apos;s component isn&apos;t available in this
+                  admin.
+                </p>
+              }
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

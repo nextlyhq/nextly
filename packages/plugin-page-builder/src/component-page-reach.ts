@@ -204,6 +204,12 @@ function foldListing(
   sources: PageReachSources,
   reached: Reached
 ): readonly string[] {
+  // A Single is a page whatever its slug: only collections hold components,
+  // patterns and Layouts.
+  if (entry.single === true) {
+    reached.pages.add(pageKey(`single:${entry.collection}`, ""));
+    return [];
+  }
   if (entry.collection === sources.componentsCollection) {
     return entry.documents.filter((id): id is string => id !== null);
   }

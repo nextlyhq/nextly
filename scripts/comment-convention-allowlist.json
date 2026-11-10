@@ -35,10 +35,6 @@
     "count": 1,
     "digests": ["84381fd424963009"]
   },
-  ".github/workflows/scaffold-build.yml": {
-    "count": 1,
-    "digests": ["4466be5c8d0ef87e"]
-  },
   "packages/admin/src/components/features/entries/EntryForm/EntryForm.tsx": {
     "count": 2,
     "digests": ["69eafeb47e136856", "92043ca6e49d929a"]
@@ -110,18 +106,6 @@
   "packages/admin/src/components/features/schema-builder/builder-settings-modal/IconPicker.tsx": {
     "count": 1,
     "digests": ["ed8e1e591593b44d"]
-  },
-  "packages/admin/src/components/features/schema-builder/field-editor-sheet/GeneralTab.tsx": {
-    "count": 1,
-    "digests": ["435202709028602e"]
-  },
-  "packages/admin/src/components/features/schema-builder/field-editor-sheet/TypeSpecificEditor.tsx": {
-    "count": 3,
-    "digests": ["0894647024e30cb3", "a625d70befa5a8b8", "ad761c020a630a22"]
-  },
-  "packages/admin/src/components/features/schema-builder/field-editor-sheet/__tests__/GeneralTab.test.tsx": {
-    "count": 1,
-    "digests": ["0d8eb790d66fd949"]
   },
   "packages/admin/src/components/features/schema-builder/index.ts": {
     "count": 1,
@@ -897,13 +881,8 @@
     "digests": ["6dc3c9fa99a95657"]
   },
   "packages/nextly/src/init.ts": {
-    "count": 4,
-    "digests": [
-      "05b49cb181d380dd",
-      "48dcc79a1634abd7",
-      "581f713057345e77",
-      "f44def8bb8099406"
-    ]
+    "count": 3,
+    "digests": ["05b49cb181d380dd", "48dcc79a1634abd7", "f44def8bb8099406"]
   },
   "packages/nextly/src/init/__tests__/drift-check.test.ts": {
     "count": 1,

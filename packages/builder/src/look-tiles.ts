@@ -249,6 +249,35 @@ export function lookTileStyle(
 }
 
 /**
+ * The colours a look tile's stage is drawn in: the site's page background and
+ * text, for the mode the canvas shows.
+ *
+ * A look names colours from the site's palette, and those read only against
+ * that palette. On the editor's own surface they need not: the admin's theme
+ * and the canvas's mode are chosen apart, so a look's text meets the dark
+ * admin's stage in its light-mode colour and cannot be read. A colour the
+ * site's tokens give no text for stays the editor's.
+ */
+export function lookStageStyle(
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode
+): Record<string, string> {
+  const named = resolved(
+    {
+      backgroundColor: { $token: "color.background" },
+      color: { $token: "color.text" },
+    },
+    resolveSiteTokens(tokens),
+    mode
+  ) as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.entries(named).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string"
+    )
+  );
+}
+
+/**
  * What the bar says about a look the block wears while the block is the
  * target: that an edit here changes this block only, and how to change the
  * look itself for every block wearing it. No count: what the site knows is

@@ -172,7 +172,10 @@ export class SingleEntryService extends BaseService {
       // snapshot in its logical shape, and the live document of the language
       // it belongs to. The read service is the one that answers both, and
       // this path is built here where it already exists.
-      this.queryService
+      this.queryService,
+      // A publish is an update of the Single, so it runs the Single's
+      // in-transaction handlers, registered here as its other hooks are.
+      hookRegistry
     );
   }
 
@@ -282,8 +285,6 @@ export class SingleEntryService extends BaseService {
   /**
    * What a release's publish of this Single would be refused with by
    * validation, judged without writing. See the mutation service.
-   *
-   * @experimental
    */
   async releasePublishIssues(
     params: Parameters<SingleMutationService["releasePublishIssues"]>[0]
@@ -296,8 +297,6 @@ export class SingleEntryService extends BaseService {
   /**
    * The Single's document as a release would put it live, never creating its
    * row. See the mutation service.
-   *
-   * @experimental
    */
   async releaseGoingLiveDocument(
     params: Parameters<SingleMutationService["releaseGoingLiveDocument"]>[0]
@@ -308,8 +307,6 @@ export class SingleEntryService extends BaseService {
   /**
    * The languages whose unreleased work a release's document-wide write of
    * this Single would be refused over. See the mutation service.
-   *
-   * @experimental
    */
   async releaseHeldDraftLocales(
     params: Parameters<SingleMutationService["releaseHeldDraftLocales"]>[0]

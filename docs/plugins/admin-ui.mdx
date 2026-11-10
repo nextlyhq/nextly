@@ -41,7 +41,11 @@ An app loads these through its **component map**, two generated files beside its
 types (D60):
 
 - `plugin-admin-imports.generated.ts` imports and registers every plugin admin component, and
-  the app's admin page imports it.
+  the app's admin page imports it. That includes the views a collection names for its own
+  screens under `admin.components` (its `Edit` and `List` views, and what is drawn before and
+  after its list table and edit form), whether the collection is a plugin's or the site's own.
+  The admin imports no module by name at run time, so a component the map doesn't list draws
+  its fallback, and `next dev` names it.
 - `plugin-admin-components.generated.ts` lists the same paths as plain strings, and the admin's
   server layout passes them to `checkAdminComponents` from `nextly/runtime`.
 
@@ -88,7 +92,11 @@ import { checkAdminComponents } from "nextly/runtime";
 import config from "../../../../nextly.config";
 import { registeredComponentPaths } from "../../../types/generated/plugin-admin-components.generated";
 
-export default function AdminLayout({ children }: { children: React.ReactNode }) {
+export default function AdminLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <Suspense fallback={null}>
       <ForThisRequest>{children}</ForThisRequest>
@@ -302,19 +310,36 @@ contributes: {
 ```
 
 A view can be scoped only to a field type the same plugin contributes. A field
-counts at the top level or inside named groups, at any depth. The address names
-it by its path from the document's root (`?field=hero.body`). A field inside an
-unnamed group is named as if it were at the top level, because the group only
-arranges the form. A field inside a repeater doesn't count: a row is addressed
-by its position, and the position names another row once the rows are
-reordered. A field-type view's `path` must be unique among every document view
-any plugin declares.
+counts at the top level, inside named groups, and inside a repeater's rows, at
+any depth. The address names it by its path from the document's root
+(`?field=hero.body`). A field inside an unnamed group is named as if it were at
+the top level, because the group only arranges the form. Inside a repeater, the
+row is named by its saved id, not its position (`?field=sections.<rowId>.body`),
+so the address opens the same row after the rows are reordered:
+
+- An address whose row is gone is refused, and so is one that names a row by its
+  position (`sections.1.body`). The admin says the row can't be opened and offers
+  the way back. It never opens the row that now stands where the named one stood,
+  and it never corrects a row address to the document's only field.
+- A row gets its id when it is saved. A row added since the last save has no
+  address yet, and a field inside it offers no way in until the entry is saved
+  once. `useFieldAddress(control, name)` gives a field its address, or the
+  reason it has none.
+- A repeater whose rows declare their own `id` field gives its rows no saved id,
+  so a field in its rows doesn't count.
+
+A field-type view's `path` must be unique among every document view any plugin
+declares.
 
 The admin keeps the document's own behaviour around your view, so you don't
 build any of it yourself:
 
 - It loads the document and holds its form state.
-- It holds the document's soft lock, and shows who else is editing.
+- It holds the document's soft lock, and shows who else is editing (see
+  [Editing with others](/docs/admin/editing-together)).
+- It saves with the version of the document the form started from. A save
+  refused because someone changed the document since opens the admin's conflict dialog (see
+  [When your save is refused](/docs/admin/editing-together#when-your-save-is-refused)).
 - It offers unsaved work recovered after a crash or a reload. Restoring it
   unmounts your view, replaces the form's values, then mounts your view again.
   A view that keeps its own copy of the document, read when it mounts, starts
@@ -326,15 +351,18 @@ build any of it yourself:
 Your component replaces the form's body and receives `DocumentViewProps` from
 `@nextlyhq/plugin-sdk/admin`:
 
-| Prop                        | What it is                                                                                                                                                                                                                                                                                                   |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `collectionSlug`, `entryId` | The collection entry being shown.                                                                                                                                                                                                                                                                            |
-| `singleSlug`                | The Single being shown, instead of the two above.                                                                                                                                                                                                                                                            |
-| `control`                   | The document form's react-hook-form `control`. Write to the fields through it.                                                                                                                                                                                                                               |
-| `readOnly`                  | `true` while someone else holds the document. Don't offer edits then.                                                                                                                                                                                                                                        |
-| `exit`                      | Goes back to the document's edit form. Commit any state you hold into the form first.                                                                                                                                                                                                                        |
-| `field`                     | For a field-type view, the declaration (`FieldConfig`, as a field editor receives it) of the field it edits. When the document has several such fields, it is the one the address names (`?field=<path>`). If the address names none of them, the admin asks the author which one before it draws your view. |
-| `fieldPath`                 | For a field-type view, where that field sits in the form, from the document's root: `layout` at the top level, `hero.body` inside a named group. Bind to the field through this, not `field.name`, which names the field within its own group only. Experimental.                                            |
+| Prop                        | What it is                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collectionSlug`, `entryId` | The collection entry being shown.                                                                                                                                                                                                                                                                                                                                                                               |
+| `singleSlug`                | The Single being shown, instead of the two above.                                                                                                                                                                                                                                                                                                                                                               |
+| `control`                   | The document form's react-hook-form `control`. Write to the fields through it.                                                                                                                                                                                                                                                                                                                                  |
+| `readOnly`                  | `true` while someone else holds the document. Don't offer edits then.                                                                                                                                                                                                                                                                                                                                           |
+| `exit`                      | Goes back to the document's edit form. Commit any state you hold into the form first.                                                                                                                                                                                                                                                                                                                           |
+| `field`                     | For a field-type view, the declaration (`FieldConfig`, as a field editor receives it) of the field it edits. When the document has several such fields, it is the one the address names (`?field=<path>`). If the address names none of them, the admin asks the author which one before it draws your view.                                                                                                    |
+| `fieldPath`                 | For a field-type view, where that field sits in the form, from the document's root: `layout` at the top level, `hero.body` inside a named group. Bind to the field through this, not `field.name`, which names the field within its own group only. Experimental.                                                                                                                                               |
+| `fieldAddress`              | For a field-type view, the field's address, which the view's own address carries: the same as `fieldPath`, except inside a repeater's row, which it names by the row's saved id (`sections.<rowId>.body`) where `fieldPath` names its position (`sections.1.body`). It stays the same when the rows are reordered, so key anything that must stay with the field by it. Experimental.                           |
+| `fieldLocation`             | For a field below the top level, where it sits in words: each container's label and each row's title, as the form's row header shows it, then the field's label (`Sections · Hero banner · Body`). Experimental.                                                                                                                                                                                                |
+| `fieldPathIn`               | For a field inside a repeater's row, where it sits in a copy of the document's values (the values as stored, a recovery point, or, given none, the form's own values now), finding the row by its id, or `undefined` where the row isn't there. Ask it at the moment you write, and write only where it answers: a path read earlier could put the value in another row once the rows have moved. Experimental. |
 
 Opening that address requires the same permission as editing the document.
 A field-type view also opens only for a field the edit form would let the
@@ -377,6 +405,85 @@ Place `<DocumentSaveIndicator />` and `<DocumentPrimaryAction />`, from
 
 Both are the admin's own controls, run through the same actions as the
 header. Outside a document they render nothing.
+
+### Document actions and panel sections
+
+> **Experimental.** `documentActions`, `panelSections` and the props below may
+> change before they are marked stable. Collections only: a Single's document
+> screen is not changed by them yet.
+
+Two more keys under `views[slug]` change what a collection's document screen
+offers, for that collection only. Every other collection keeps the admin's own
+screen.
+
+`documentActions` hides or replaces a built-in action in the document's
+**More actions** menu. It takes `delete` and `unpublish`, each set to
+`"hidden"` or to `{ component, label? }`. For example,
+`documentActions: { unpublish: "hidden", delete: { component: "@acme/plugin-layouts/admin#RemoveLayoutDialog", label: "Remove layout…" } }`
+takes Unpublish away and routes Delete to the plugin's own dialog.
+
+- A hidden action is not offered at all, from the menu or from
+  `useDocumentActions().run`, which refuses it as not offered.
+- A replaced action keeps its row: its place, the permission it needs, and
+  every reason it can't run right now (a colleague holding the document, a past
+  version on screen) still apply. Choosing it mounts your component instead of
+  the admin's own confirmation and write, so a dialog renders open. Running it
+  with `run("delete")` opens your component too, and answers once it closes.
+
+Until the admin has loaded which plugins are installed, Delete and Unpublish
+can't be chosen on any collection's document, because a plugin that hides or
+replaces one isn't known yet and the built-in write must not run in the
+meantime. Each row says why:
+
+- While the list loads, the row reads "Loading this collection's plugin
+  actions…" and clears itself once the list arrives.
+- If the list failed to load, the row names its action, for example "Couldn't
+  load this collection's plugin actions, so Delete is paused.", with a
+  **Retry** row under it. Retry asks for the list again, the row reads as
+  loading while it does, and then the plugin's own override applies.
+
+`useDocumentActions().run` refuses the action with the same words. Running a
+replaced action that is already open joins it, and both callers get the same
+answer when it closes.
+
+Your component receives `DocumentActionReplacementProps` from
+`@nextlyhq/plugin-sdk/admin`:
+
+| Prop                         | What it is                                                                                                                                                                                                                                      |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `action`                     | Which action the author chose: `"delete"` or `"unpublish"`.                                                                                                                                                                                     |
+| `collectionSlug`, `entryId`  | The document.                                                                                                                                                                                                                                   |
+| `documentLock`, `mayWrite()` | What holds the document, kept current while your component is open, and whether it may be written right now. Call `mayWrite()` immediately before your write, after anything you awaited: the document can change hands while a dialog is open. |
+| `close(result?)`             | Ends it. `close("deleted")` leaves the document for its collection's list, as the built-in Delete does. `close("changed")` reads the document again. `close()` means the author backed out.                                                     |
+
+Both your replacement and your panel section are drawn inside the document's
+editor, so `useDocumentLocale()` names the language being edited (the one a
+replaced Unpublish of a translation acts on) and `useDocumentActions()` answers
+for the same document.
+
+If your component isn't registered, or throws while drawing, the admin closes
+it, tells the author the action couldn't open, and answers a waiting
+`run("delete")` as cancelled. When you report `"changed"`, the document is read
+again and the author's unsaved edits stay over it, as after their own save.
+
+`panelSections` adds sections to the document panel, after **Details**, in the
+order given: `panelSections: [{ title: "Used by", component: "@acme/plugin-layouts/admin#LayoutUsage" }]`.
+The admin draws each section's heading, spacing and divider, as it does for its
+own sections, so the section reads as part of the panel in light and dark. Your
+component draws only what goes under the heading. Nothing is drawn while a
+document is being created. It receives `DocumentPanelSectionProps`:
+
+| Prop                        | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collectionSlug`, `entryId` | The document.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `documentLock`              | `{ readOnly, actionsDisabled }`, what holds the document right now. `readOnly` follows the fields: a colleague's claim, a past version on screen, a reader's page, or the editor still readying the document. `actionsDisabled` follows the built-in Delete: a colleague's claim, a past version, a collection removed from code, or the editor readying it. A reader's page alone doesn't hold your writes, because your route judges its own permission. Hold your writes while `actionsDisabled`. |
+| `mayWrite()`                | Whether the document may be written right now. Call it immediately before a write, after anything you awaited.                                                                                                                                                                                                                                                                                                                                                                                       |
+| `documentChanged(result)`   | Tell the editor your section changed the document: `"deleted"` leaves for the collection's list, `"changed"` reads the document again.                                                                                                                                                                                                                                                                                                                                                               |
+
+Startup is refused, naming the plugins involved, when an override names an
+action other than `delete` or `unpublish`, when a replacement or a section has
+no component (or a section no title), or when two plugins override the same
+action on the same collection.
 
 ### Who is signed in
 

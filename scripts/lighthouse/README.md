@@ -13,7 +13,11 @@ visitor.
    directory.
 3. `author-dogfood-page.mjs` writes `dogfood-page.json` into the `homepage`
    single and fails if the result is not served to an anonymous visitor.
-4. `lighthouserc.json` — five desktop runs, asserted. This one gates.
+4. `lighthouserc.json` — five desktop runs, asserted. This one gates. Its user
+   agent ends in `Chrome-Lighthouse`, which Next.js's `htmlLimitedBots` serves
+   the page's metadata in `<head>` for, as it does for crawlers: to any other
+   browser Next.js streams it into the body, where the `meta-description` audit
+   does not look.
 5. `lighthouserc.mobile.json` — three mobile runs, recorded as a warning. This
    one never gates.
 

@@ -91,6 +91,12 @@ export async function newBreakpointIssues(
     readonly storedForms?: () => Promise<StoredForms>;
   }
 ): Promise<PluginFieldIssue[]> {
+  // Not judged inside a group or a repeater's row, where the stored value is
+  // not read. Unlike a shared style or a variable, a removed breakpoint's
+  // values stay stored in rows (a removal counts them as out of its reach and
+  // leaves them, undrawn), so judging a row against nothing held would refuse
+  // every later save of such an entry; and a value saved under a removed
+  // breakpoint is one the stylesheet no longer draws, as the removal intends.
   if (!judgesLayersLocks(args) || !isTopLevel(args.path)) return [];
   // The site's breakpoints are read through the pool, which inside a
   // transaction is another connection: it can wait behind the one the

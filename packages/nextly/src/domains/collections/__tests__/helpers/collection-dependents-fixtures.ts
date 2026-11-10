@@ -6,6 +6,8 @@
  * Shared by the suites for the runtime delete paths and for `migrate:create`,
  * so both refuse over exactly the same dependents.
  */
+import { buildClaims } from "../../../../auth/jwt/claims";
+import { signAccessToken } from "../../../../auth/jwt/sign";
 import {
   defineCollection,
   defineFieldGroup,
@@ -180,4 +182,45 @@ export async function columnValues(
     `SELECT ${adapter.dialect === "mysql" ? `\`${column}\`` : `"${column}"`} AS v FROM ${adapter.dialect === "mysql" ? `\`${table}\`` : `"${table}"`}`
   );
   return rows.map(row => row.v);
+}
+
+/**
+ * A super-admin's session cookie: the first user created is the super-admin.
+ * Shared by every delete suite that calls a schema route as the admin would.
+ */
+export async function superAdminSession(
+  t: TestNextly
+): Promise<Record<string, string>> {
+  const direct = t.nextly as unknown as {
+    users: {
+      create(a: {
+        email: string;
+        password: string;
+        data: Record<string, unknown>;
+      }): Promise<{ item: { id: string } }>;
+    };
+  };
+  const seeder = t.getService("permissionSeedService") as unknown as {
+    seedSystemPermissions: () => Promise<unknown>;
+  };
+  await seeder.seedSystemPermissions();
+  const userId = (
+    await direct.users.create({
+      email: "owner@example.com",
+      password: "Password123!",
+      data: { name: "Owner", isActive: true },
+    })
+  ).item.id;
+  const token = await signAccessToken(
+    buildClaims({
+      userId,
+      email: "owner@example.com",
+      name: "Owner",
+      image: null,
+      roleIds: [],
+      sessionEpoch: 0,
+    }),
+    process.env.NEXTLY_SECRET!
+  );
+  return { cookie: `nextly_session=${token}` };
 }

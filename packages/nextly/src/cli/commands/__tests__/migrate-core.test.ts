@@ -27,6 +27,8 @@ function deps(over: Record<string, unknown> = {}) {
     runFileMigrationsFn: vi.fn(async () => 0),
     refuseUnresolvedAttemptsFn: vi.fn(async () => {}),
     assertAppliedFilesUnchangedFn: vi.fn(async () => {}),
+    markOldBuilderFilesFn: vi.fn(async () => {}),
+    assertAppliedFilesPresentFn: vi.fn(async () => {}),
     syncElementOwnersFn: vi.fn(async () => {}),
     documentColumnsFn: vi.fn(async () => {}),
     reconcileMetadataFn: vi.fn(async () => ({
@@ -558,6 +560,56 @@ describe("a plugin's migration history", () => {
   });
 });
 
+describe("a build that lacks an applied migration", () => {
+  it("stops before the lock and before the core reconcile, exit 3", async () => {
+    const missing = new CliError("MIGRATION_MISSING", {
+      what: "The ledger records 1 applied migration this build's migrations folder lacks",
+      why: "A newer build has migrated this database.",
+      next: "Deploy the build that holds the file.",
+    });
+    const withLock = vi.fn(async () => ({ ran: true as const, value: 0 }));
+    const d = deps({
+      assertAppliedFilesPresentFn: vi.fn(async () => {
+        throw missing;
+      }),
+      withLock,
+    });
+    const refusal = await migrateCore(d as never).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(refusal).toBe(missing);
+    expect(migrateExitCode(refusal)).toBe(3);
+    expect(withLock).not.toHaveBeenCalled();
+    expect(d.reconcileCoreFn).not.toHaveBeenCalled();
+  });
+
+  it("is asked again under the lock, before the core reconcile", async () => {
+    const order: string[] = [];
+    let calls = 0;
+    const d = deps({
+      assertAppliedFilesPresentFn: vi.fn(async () => {
+        calls += 1;
+        order.push(`present ${String(calls)}`);
+      }),
+      withLock: async (
+        _db: unknown,
+        _d: unknown,
+        fn: () => Promise<unknown>
+      ) => {
+        order.push("lock");
+        return { ran: true as const, value: await fn() };
+      },
+      reconcileCoreFn: vi.fn(async () => {
+        order.push("core");
+        return { changed: false };
+      }),
+    });
+    await migrateCore(d as never);
+    expect(order).toEqual(["present 1", "lock", "present 2", "core"]);
+  });
+});
+
 describe("a pending plugin module that deletes data", () => {
   // Its UP runs in the plugin phase, before the app files: the consent the
   // run asks for covers it as it covers a file.
@@ -638,7 +690,7 @@ describe("a pending plugin module that deletes data", () => {
 });
 
 describe("an unresolved app attempt", () => {
-  it("is refused inside the lock, before the core reconcile writes anything", async () => {
+  it("is refused before the lock, and so before the core reconcile writes anything", async () => {
     const order: string[] = [];
     const refusal = new Error("unresolved attempt");
     const d = deps({
@@ -661,17 +713,15 @@ describe("an unresolved app attempt", () => {
       lockCommand: "boot migrations (db.runMigrationsOnBoot)",
     });
     await expect(migrateCore(d as never)).rejects.toBe(refusal);
-    // The command it names is the one holding the lock, the boot step's here.
-    expect(order).toEqual([
-      "lock",
-      "refusal:boot migrations (db.runMigrationsOnBoot)",
-    ]);
+    // Asked read-only before the lock is waited on, and again under it once
+    // held; the command it names is the boot step's here.
+    expect(order).toEqual(["refusal:boot migrations (db.runMigrationsOnBoot)"]);
     expect(d.runFileMigrationsFn).not.toHaveBeenCalled();
   });
 });
 
 describe("an applied file edited since it ran", () => {
-  it("is refused inside the lock, after the attempt check and before the core reconcile", async () => {
+  it("is refused after the attempt check and before the core reconcile", async () => {
     const order: string[] = [];
     const refusal = new CliError("MIGRATION_TAMPERED", {
       what: "edited",
@@ -699,11 +749,88 @@ describe("an applied file edited since it ran", () => {
     // The code the guide documents, so a deploy script can tell it apart.
     expect(migrateExitCode(refusal)).toBe(2);
     expect(migrateExitCode(new Error("anything else"))).toBe(1);
+    // An app migration the folder lacks ends with its own code, 3.
     expect(
       migrateExitCode(
         new CliError("MIGRATION_MISSING", { what: "x", why: "x", next: "x" })
       )
-    ).toBe(1);
+    ).toBe(3);
+  });
+});
+
+describe("a Builder-named file the signature does not recognise", () => {
+  it("is refused again inside the lock, before the core reconcile", async () => {
+    // Checked before the lock too; a file changed while waiting for the lock
+    // must not reach the first write unrefused.
+    const order: string[] = [];
+    const d = deps({
+      refuseUnrecognisedBuilderFiles: true,
+      refuseUnrecognisedBuilderFilesFn: vi.fn(async () => {
+        order.push("refuse");
+      }),
+      assertAppliedFilesUnchangedFn: vi.fn(async () => {
+        order.push("checksums");
+      }),
+      withLock: vi.fn(
+        async (_a: unknown, _d: unknown, fn: () => Promise<unknown>) => {
+          order.push("lock");
+          return { ran: true as const, value: await fn() };
+        }
+      ),
+      reconcileCoreFn: vi.fn(async () => {
+        order.push("core");
+        return { changed: false };
+      }),
+    });
+    await migrateCore(d as never);
+    // Ahead of the checksum check, which records a missing checksum: a run
+    // refused for an unrecognised file writes nothing.
+    // Before the lock the checksum check only reads (records nothing), so the
+    // unrecognised file is refused there after it, as it is inside the lock.
+    expect(order).toEqual([
+      "checksums",
+      "refuse",
+      "lock",
+      "refuse",
+      "checksums",
+      "core",
+    ]);
+  });
+});
+
+describe("the marks of old Schema Builder files", () => {
+  it("are written after the core reconcile, the run's first write", async () => {
+    const order: string[] = [];
+    const d = deps({
+      reconcileCoreFn: vi.fn(async () => {
+        order.push("core");
+        return { changed: false };
+      }),
+      markOldBuilderFilesFn: vi.fn(async () => {
+        order.push("marks");
+      }),
+      runFileMigrationsFn: vi.fn(async () => {
+        order.push("files");
+        return 0;
+      }),
+    });
+    await migrateCore(d as never);
+    expect(order.slice(0, 2)).toEqual(["core", "marks"]);
+  });
+
+  it("are never written when a history check refuses", async () => {
+    const refusal = new CliError("MIGRATION_TAMPERED", {
+      what: "edited",
+      why: "edited",
+      next: "restore it",
+    });
+    const d = deps({
+      assertAppliedFilesUnchangedFn: vi.fn(async () => {
+        throw refusal;
+      }),
+    });
+    await expect(migrateCore(d as never)).rejects.toBe(refusal);
+    expect(d.markOldBuilderFilesFn).not.toHaveBeenCalled();
   });
 });
 

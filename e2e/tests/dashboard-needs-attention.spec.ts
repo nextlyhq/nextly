@@ -3,8 +3,9 @@
  * while something is.
  *
  * A stopped and an overdue release are left as the release runner would leave
- * them. The card then draws a critical row for each, with its reason, and each
- * Review opens Releases' Needs attention tab narrowed to that row's part. A
+ * them. The card then draws a critical row for each, with its reason and the
+ * release named under it, linked to its page, and each Review opens Releases'
+ * Needs attention tab narrowed to that row's part. A
  * reader who may not read releases has nothing waiting, so their dashboard
  * draws no card at all, rather than one that says all is clear.
  *
@@ -15,6 +16,7 @@ import { expect, type Page, type Route } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 import { isLayoutRead } from "./support/dashboard-layout";
+import { cardHeightPx, defaultSizeOf } from "./support/dashboard-sizes";
 import { signInAsLimitedUser } from "./support/limited-user";
 import { LOCK } from "./support/locks";
 import {
@@ -58,6 +60,18 @@ test("rows for stopped and overdue releases, each with its reason and Review; no
     const overdue = row("Overdue releases");
     await expect(overdue).toContainText("Still scheduled after its time.");
     await expect(overdue.getByTestId("needs-attention-critical")).toBeVisible();
+    // Each row names its releases as well as counting them, each linked to
+    // its page.
+    for (const { id, outcome } of seeded) {
+      const named = (outcome === "stopped" ? stopped : overdue).getByRole(
+        "link",
+        { name: `Attention e2e ${outcome} ${stamp}` }
+      );
+      await expect(named).toHaveAttribute(
+        "href",
+        new RegExp(`/admin/releases/${id}$`)
+      );
+    }
     // Nothing on the card dismisses an item.
     await expect(
       card.getByRole("button", { name: /dismiss|mark/i })
@@ -301,5 +315,122 @@ test("a return whose waiting work was done meanwhile keeps the card in place", a
     await expect(card).toBeVisible();
   } finally {
     if (!cancelled) await cancel(page, id);
+  }
+});
+
+const RELEASES = "core/upcoming-releases";
+
+/**
+ * A slot's answer with its list cut to its first item: the server's own shape, so the card draws
+ * what it would for one item whatever other specs left in the shared database.
+ */
+function withOneItem(slot: unknown): unknown {
+  const answer = slot as {
+    result?: { data?: { items?: unknown[] } };
+  };
+  const items = answer.result?.data?.items;
+  if (!Array.isArray(items)) return slot;
+  return {
+    ...answer,
+    result: {
+      ...answer.result,
+      data: { ...answer.result?.data, items: items.slice(0, 1) },
+    },
+  };
+}
+
+/** A batch answer with the slots at `at` cut to one item, whole or streamed as lines. */
+function withOneItemAt(text: string, at: readonly number[]): string {
+  const whole = wholeAnswer(text);
+  if (whole !== undefined) {
+    for (const index of at)
+      whole.results[index] = withOneItem(whole.results[index]);
+    return JSON.stringify(whole);
+  }
+  return text
+    .split("\n")
+    .map(line => {
+      if (line.trim() === "") return line;
+      const settled = JSON.parse(line) as { index: number; slot: unknown };
+      return at.includes(settled.index)
+        ? JSON.stringify({ ...settled, slot: withOneItem(settled.slot) })
+        : line;
+    })
+    .join("\n");
+}
+
+/** Passes the dashboard's batch through with `widgets`' answers cut to one item each. */
+async function answerWithOneItem(
+  page: Page,
+  widgets: readonly string[]
+): Promise<void> {
+  await page.route(isBatchRead, async (route: Route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    const asked =
+      (
+        route.request().postDataJSON() as {
+          queries?: Array<{ widget?: string }>;
+        }
+      ).queries ?? [];
+    const at = asked.flatMap((entry, index) =>
+      entry.widget !== undefined && widgets.includes(entry.widget)
+        ? [index]
+        : []
+    );
+    // Aborted rather than thrown when the read is given up, as in `readCardAsEmpty`.
+    let response: Awaited<ReturnType<Route["fetch"]>>;
+    try {
+      response = await route.fetch();
+    } catch {
+      await route.abort().catch(() => {});
+      return;
+    }
+    const body =
+      at.length === 0 ? undefined : withOneItemAt(await response.text(), at);
+    await route
+      .fulfill(body === undefined ? { response } : { response, body })
+      .catch(() => {});
+  });
+}
+
+test("stands at its one item's height, its row beside Upcoming releases at the same height", async ({
+  page,
+}) => {
+  // Something waiting, so both cards are drawn; their answers are then cut to one item each.
+  const id = await overdueRelease(page, Date.now().toString(36));
+  try {
+    await answerWithOneItem(page, [CARD, RELEASES]);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoAdmin(page, "");
+    const card = page
+      .getByTestId(`widget-cell-${CARD}`)
+      .filter({ visible: true });
+    const releases = page
+      .getByTestId(`widget-cell-${RELEASES}`)
+      .filter({ visible: true });
+    await expect(card.getByTestId("needs-attention-item")).toHaveCount(1);
+    await expect(releases).toBeVisible();
+
+    // 🔴 At least a row shorter than its stored rows: fixed rows draw it at their full height,
+    // one item over three empty rows. The row it shares sizes to the taller of the two, and
+    // both stand at it, their tops and bottoms aligned.
+    const stored = cardHeightPx((await defaultSizeOf(page, CARD)).h);
+    const heightOf = async (cell: typeof card) =>
+      (await cell.boundingBox())?.height ?? Number.POSITIVE_INFINITY;
+    await expect.poll(() => heightOf(card)).toBeLessThan(stored - 72);
+    const [attentionBox, releasesBox] = await Promise.all([
+      card.boundingBox(),
+      releases.boundingBox(),
+    ]);
+    if (attentionBox === null || releasesBox === null) {
+      throw new Error("[e2e] a card of the pair has no box");
+    }
+    expect(Math.abs(attentionBox.y - releasesBox.y)).toBeLessThan(1);
+    expect(
+      Math.abs(attentionBox.height - releasesBox.height)
+    ).toBeLessThanOrEqual(1);
+  } finally {
+    await page.unroute(isBatchRead).catch(() => {});
+    await cancel(page, id);
   }
 });

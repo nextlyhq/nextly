@@ -28,14 +28,14 @@
  */
 
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { relative, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { assertValidCollectionConfig } from "../../collections/config/validate-config";
+import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { describeError } from "../../errors/index";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
@@ -45,7 +45,7 @@ import { generatedZodDir } from "../../shared/lib/generated-output-paths";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import type { SingleConfig } from "../../singles/config/types";
 import { assertValidSingleConfig } from "../../singles/config/validate-single";
-import { reportDryRun, type DryRunChange } from "../dry-run";
+import { projectPath, reportDryRun, type DryRunChange } from "../dry-run";
 import { exitWithError, type CliError } from "../errors";
 import {
   buildDeclarationsInvalid,
@@ -69,9 +69,8 @@ import type { LoadConfigResult } from "../utils/config-loader";
 import { hasSchemaToSync } from "../utils/has-schema";
 import { formatDuration, formatCount } from "../utils/logger";
 import {
-  discoverMigrationGroups,
-  selectVariant,
-  getSortedBaseNames,
+  readableMigrationFiles,
+  type DeclaredNames,
 } from "../utils/migration-discovery";
 import {
   generateTypesFile,
@@ -394,7 +393,7 @@ export async function runBuild(
       for (const file of generationResult.files) {
         dryRunChanges.push({
           action: "write",
-          target: relative(options.cwd ?? process.cwd(), file.path),
+          target: projectPath(options.cwd ?? process.cwd(), file.path),
         });
       }
 
@@ -924,7 +923,15 @@ async function checkMigrationStatus(
 
     // Discover migration files
     const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
-    const migrationFiles = await discoverMigrations(migrationsDir, dialect);
+    // The files counted are the ones `nextly migrate` reads.
+    const migrationFiles = await discoverMigrations(
+      migrationsDir,
+      dialect,
+      await declaredNamesOf(
+        { ...configResult, projectRoot: cwd },
+        { orNone: true }
+      )
+    );
 
     // Get applied migrations from database
     const appliedMigrations = await getAppliedMigrations(
@@ -962,33 +969,16 @@ async function checkMigrationStatus(
  */
 async function discoverMigrations(
   migrationsDir: string,
-  dialect?: SupportedDialect
+  dialect: SupportedDialect,
+  declared: DeclaredNames | undefined
 ): Promise<ParsedMigration[]> {
-  // Use shared migration discovery to group dialect variants
-  const groups = await discoverMigrationGroups(migrationsDir);
-  const migrations: ParsedMigration[] = [];
-
-  // Process each migration group in sorted order
-  for (const baseName of getSortedBaseNames(groups)) {
-    const group = groups.get(baseName)!;
-    const selectedFile = selectVariant(group.variants, dialect);
-
-    if (!selectedFile) {
-      continue;
-    }
-
-    const filePath = resolve(migrationsDir, selectedFile);
-
-    try {
-      const content = await readFile(filePath, "utf-8");
-      const checksum = createHash("sha256").update(content).digest("hex");
-      migrations.push({ name: baseName, filePath, checksum });
-    } catch {
-      // Skip files that can't be read
-    }
-  }
-
-  return migrations;
+  return (await readableMigrationFiles(migrationsDir, dialect, declared)).map(
+    ({ baseName, filePath, content }) => ({
+      name: baseName,
+      filePath,
+      checksum: createHash("sha256").update(content).digest("hex"),
+    })
+  );
 }
 
 /**

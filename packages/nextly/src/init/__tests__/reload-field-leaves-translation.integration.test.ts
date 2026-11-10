@@ -235,7 +235,24 @@ describe.each(getConfiguredTestDialects())(
       "never loses a write made between the final copy and the drop",
       async () => {
         await seed({ e1: { en: "Hello", es: "Hola" } });
-        const late: { write?: Promise<unknown> } = {};
+        // The late write is another request's: started here, in this test's own flow and outside
+        // the reload's transaction, on another connection. It waits for the final copy, and the
+        // reload's transaction only says when that is; a write it started itself would be the
+        // transaction's own flow writing past it.
+        const late: { signalled?: boolean } = {};
+        let copied: () => void = () => {};
+        const write = new Promise<void>(resolve => {
+          copied = resolve;
+        })
+          .then(() =>
+            handle.adapter.executeQuery(
+              `UPDATE ${q(COMPANION)} SET ${q("body")} = 'Late' WHERE ${q("_parent")} = 'e1' AND ${q("_locale")} = 'en'`
+            )
+          )
+          .then(
+            () => "taken",
+            () => "refused"
+          );
         const textOf = (query: unknown) =>
           JSON.stringify(
             (query as { queryChunks?: unknown }).queryChunks ?? ""
@@ -262,18 +279,12 @@ describe.each(getConfiguredTestDialects())(
                           const text = textOf(query);
                           // Right after the final copy onto main, from another connection.
                           if (
-                            late.write === undefined &&
+                            late.signalled !== true &&
                             text.includes(`UPDATE \\"${TABLE}\\"`) &&
                             text.includes(COMPANION)
                           ) {
-                            late.write = handle.adapter
-                              .executeQuery(
-                                `UPDATE ${q(COMPANION)} SET ${q("body")} = 'Late' WHERE ${q("_parent")} = 'e1' AND ${q("_locale")} = 'en'`
-                              )
-                              .then(
-                                () => "taken",
-                                () => "refused"
-                              );
+                            late.signalled = true;
+                            copied();
                             await new Promise(resolve =>
                               setTimeout(resolve, 300)
                             );
@@ -291,8 +302,8 @@ describe.each(getConfiguredTestDialects())(
         loaded.config = configWith({ localized: false });
         await reloadNextlyConfig();
 
-        expect(late.write).toBeDefined();
-        const outcome = await late.write;
+        expect(late.signalled).toBe(true);
+        const outcome = await write;
         expect(await columnsOf(COMPANION)).not.toContain("body");
         expect(await mainBodies()).toEqual({
           e1: outcome === "taken" ? "Late" : "Hello",
@@ -562,6 +573,78 @@ describe.each(getConfiguredTestDialects())(
       expect(await columnsOf(TABLE)).not.toContain("body");
       expect(await columnsOf(COMPANION)).toContain("body");
       expect(await archived()).toEqual([]);
+    });
+  }
+);
+
+// Under `experimental.perLanguageStorage` a collection that is not translated keeps its
+// translatable fields per language too, so a field made shared leaves its per-language table on a
+// reload as a translated collection's does: its default language's value moves to the main table.
+describe.each(getConfiguredTestDialects())(
+  "a config reload that makes a field shared under per-language storage (%s)",
+  dialect => {
+    const slug = "rlleavesps";
+    const table = `dc_${slug}`;
+    let handle: TestNextly;
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+
+    /** The collection, not marked translatable, with `body` translatable or shared. */
+    const config = (bodyShared: boolean) =>
+      defineConfig({
+        experimental: { perLanguageStorage: true },
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug,
+            fields: [
+              { name: "title", type: "text", localized: false },
+              {
+                name: "body",
+                type: "text",
+                ...(bodyShared ? { localized: false } : {}),
+              },
+            ] as never,
+          }),
+        ],
+      });
+
+    beforeEach(async () => {
+      handle = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        perLanguageStorage: true,
+      });
+      vi.stubEnv("NODE_ENV", "development");
+      loaded.config = config(false);
+      await reloadNextlyConfig();
+    });
+
+    afterEach(async () => {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+      await handle?.destroy();
+    });
+
+    it("moves the default language's value to the main table", async () => {
+      await handle.adapter.executeQuery(
+        `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('e1', 'e1', 'e1')`
+      );
+      for (const [locale, value] of [
+        ["en", "Hello"],
+        ["es", "Hola"],
+      ]) {
+        await handle.adapter.executeQuery(
+          `INSERT INTO ${q(`${table}_locales`)} (${q("_parent")}, ${q("_locale")}, ${q("body")}) VALUES ('e1', '${locale}', '${value}')`
+        );
+      }
+
+      loaded.config = config(true);
+      await reloadNextlyConfig();
+
+      const rows = await handle.adapter.executeQuery<{ body: string | null }>(
+        `SELECT ${q("body")} AS body FROM ${q(table)} WHERE ${q("id")} = 'e1'`
+      );
+      expect(rows).toEqual([{ body: "Hello" }]);
     });
   }
 );

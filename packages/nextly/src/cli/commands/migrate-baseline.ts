@@ -24,7 +24,7 @@
  * @module cli/commands/migrate-baseline
  */
 import { mkdir, readdir, writeFile } from "node:fs/promises";
-import { relative, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -45,6 +45,10 @@ import {
   EMPTY_SNAPSHOT,
   planBaseline,
 } from "../../domains/schema/migrate/baseline";
+import {
+  readOldBuilderLedger,
+  withOldBuilderMarks,
+} from "../../domains/schema/migrate/old-builder-ledger";
 import {
   resolveDeclaredSchema,
   type ResolvedEntity,
@@ -73,13 +77,27 @@ import {
 import { generateStatements } from "../../domains/schema/pipeline/sql-templates/index";
 import { NextlyError } from "../../errors/index";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
-import { reportDryRun, type DryRunChange, type DryRunPlan } from "../dry-run";
+import {
+  projectPath,
+  reportDryRun,
+  type DryRunChange,
+  type DryRunPlan,
+} from "../dry-run";
 import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
 import { openMigrationCommand } from "../utils/command-prerequisites";
+import {
+  readMigrationFolder,
+  type DeclaredNames,
+} from "../utils/migration-discovery";
 
-import { maybeForceUnlock } from "./migrate";
+import {
+  assertAppHistoryHolds,
+  historyRefusalOf,
+  maybeForceUnlock,
+  migrateExitCode,
+} from "./migrate";
 import { DEFAULT_BASELINE_NAME } from "./migrate-baseline.command";
 import { dryRunRefusalOf } from "./migrate-create";
 
@@ -119,19 +137,31 @@ async function listManagedTables(
 }
 
 /**
- * The migration files already on disk, earliest first.
+ * The migration files already on disk, earliest first, old Schema Builder
+ * files left out as every reader leaves them out: one is no history.
  *
  * A missing directory is a project that has never generated one, which is the
  * normal state for everything this command exists to adopt.
  */
-async function listMigrationFiles(migrationsDir: string): Promise<string[]> {
+async function listMigrationFiles(
+  migrationsDir: string,
+  dialect: SupportedDialect,
+  declared: DeclaredNames | undefined
+): Promise<string[]> {
+  let entries: string[];
   try {
-    const entries = await readdir(migrationsDir);
-    return entries.filter(f => f.endsWith(".sql")).sort();
+    entries = await readdir(migrationsDir);
   } catch (err) {
     if ((err as { code?: string }).code === "ENOENT") return [];
     throw err;
   }
+  const { oldBuilderFiles } = await readMigrationFolder(
+    migrationsDir,
+    dialect,
+    declared
+  );
+  const ignored = new Set(oldBuilderFiles.map(f => f.file));
+  return entries.filter(f => f.endsWith(".sql") && !ignored.has(f)).sort();
 }
 
 /**
@@ -145,13 +175,23 @@ async function listMigrationFiles(migrationsDir: string): Promise<string[]> {
  */
 async function firstAppliedMigration(
   repo: SchemaEventsRepository,
-  adapter: CLIDatabaseAdapter
+  adapter: CLIDatabaseAdapter,
+  folder: {
+    migrationsDir: string;
+    dialect: SupportedDialect;
+    declared: DeclaredNames | undefined;
+  }
 ): Promise<string | undefined> {
   if (!(await ledgerExists(adapter))) return undefined;
   // Past the existence check, a failure is a real one — permissions, a wrong
   // schema, a broken table. Swallowing it would read as "never migrated" and
   // write a second origin beside whatever history the ledger already holds.
-  const rows = await repo.listFileApplies();
+  const all = await repo.listFileApplies();
+  // An old Schema Builder file's rows are no history (`readOldBuilderLedger`).
+  const { ignoredRows } = await readOldBuilderLedger(folder, repo, all);
+  const rows = all.filter(
+    r => r.filename === null || !ignoredRows.has(r.filename)
+  );
   const names = rows
     .map(r => (r as { filename?: string | null }).filename)
     .filter((n): n is string => typeof n === "string" && n.length > 0)
@@ -357,6 +397,8 @@ export interface BaselineCoreDeps {
    * undeclared table and emit `DROP TABLE`, taking the relationship rows.
    */
   knownJunctions?: ReadonlySet<string>;
+  /** What the declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
   /**
    * From `config.db.migrateLockTtlSeconds`.
    *
@@ -505,7 +547,11 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
   const metaDir = resolve(migrationsDir, "meta");
   const repo = new SchemaEventsRepository(db, dialect);
   const latest = await loadLatestSnapshot(metaDir);
-  const existingMigrations = await listMigrationFiles(migrationsDir);
+  const existingMigrations = await listMigrationFiles(
+    migrationsDir,
+    dialect,
+    deps.declared
+  );
 
   const known = deps.knownJunctions ?? new Set<string>();
   const managed = await listManagedTables(adapter, known);
@@ -534,7 +580,11 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
     live,
     latestSnapshotName: latest?.filename,
     existingMigrationFile: existingMigrations[0],
-    appliedMigration: await firstAppliedMigration(repo, adapter),
+    appliedMigration: await firstAppliedMigration(repo, adapter, {
+      migrationsDir,
+      dialect,
+      declared: deps.declared,
+    }),
   });
 
   if (plan.kind !== "baseline") return notAdopting(plan);
@@ -636,8 +686,19 @@ export async function baselineCore(
 
   // A dry run plans as a run does and writes nothing, so it takes no lock: it changes nothing a
   // concurrent run could see half of.
+  // The app history checks every command that records migrations makes
+  // before its first write (`assertAppHistoryHolds`); a dry run refuses as a
+  // run would, recording no checksum.
   if (deps.dryRun === true) {
-    const planned = await planAdoption(deps);
+    // The folder read under the ledger's old Builder marks, as every reader
+    // that has the database reads it.
+    const marked = await withOldBuilderMarks(deps);
+    await assertAppHistoryHolds({
+      ...marked,
+      command: "nextly migrate:baseline",
+      recordChecksums: false,
+    });
+    const planned = await planAdoption(marked);
     if (planned.kind !== "adopt") return planned;
     return {
       kind: "would-baseline",
@@ -657,7 +718,17 @@ export async function baselineCore(
     adapter as unknown as DrizzleAdapter,
     dialect,
     async () => {
-      const planned = await planAdoption(deps);
+      // Under the lock, before the plan and the first write, from the ledger
+      // no other run changes now. Read-only: any applied history stops the
+      // adoption anyway, so a refused baseline writes nothing.
+      // The marks read here too, as the ledger holds them under the lock.
+      const marked = await withOldBuilderMarks(deps);
+      await assertAppHistoryHolds({
+        ...marked,
+        command: "nextly migrate:baseline",
+        recordChecksums: false,
+      });
+      const planned = await planAdoption(marked);
       if (planned.kind !== "adopt") return planned;
       const { baseName, sqlContent, sqlPath } = planned;
 
@@ -802,6 +873,7 @@ export async function runMigrateBaseline(
       deferredExtends: configResult.deferredExtends,
     });
 
+    // A dry run reports a history refusal as the real run's, and exits 0.
     const result = await baselineCore({
       adapter,
       db,
@@ -816,9 +888,20 @@ export async function runMigrateBaseline(
       defaultLocale: config.localization?.defaultLocale,
       ttlSeconds: config.db.migrateLockTtlSeconds,
       knownJunctions: resolved.knownJunctions,
+      declared: {
+        junctions: resolved.junctionsByEntity,
+        tables: resolved.declaredTables,
+      },
       adoptUnknown: options.adoptUnknown,
       dryRun: options.dryRun === true,
+    }).catch((error: unknown) => {
+      const refusal =
+        options.dryRun === true ? historyRefusalOf(error) : undefined;
+      if (refusal === undefined) throw error;
+      reportPlan({ changes: [], refusals: [refusal] });
+      return undefined;
     });
+    if (result === undefined) return;
 
     if (result.kind === "would-baseline") {
       reportPlan({ changes: baselineChanges(result, cwd) });
@@ -882,8 +965,8 @@ function baselineChanges(
   cwd: string
 ): DryRunChange[] {
   return [
-    { action: "write", target: relative(cwd, result.sqlPath) },
-    { action: "write", target: relative(cwd, result.snapshotPath) },
+    { action: "write", target: projectPath(cwd, result.sqlPath) },
+    { action: "write", target: projectPath(cwd, result.snapshotPath) },
     ...(result.createsLedger
       ? [
           {
@@ -963,6 +1046,7 @@ export async function migrateBaselineAction(
       context
     );
   } catch (error) {
-    exitWithError(context.logger, error);
+    // Exit 2 for an edited applied file, 3 for one the folder lacks.
+    exitWithError(context.logger, error, migrateExitCode(error));
   }
 }

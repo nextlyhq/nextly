@@ -46,8 +46,14 @@ export {
   type PluginTransaction,
   type PluginFilterRegistry,
   type PluginHookRegistry,
+  // `ctx.hooks.onInTransaction`'s handler and what it is handed.
+  type InTransactionContext,
+  type InTransactionHandler,
   type PluginSettingsApi,
 } from "./plugin-context";
+// `ctx.cache`, and the tag spelling its reads and expiries share.
+export type { PluginCacheApi } from "./plugin-cache";
+export { pluginCacheTag } from "../revalidation/compute-tags";
 export type {
   PluginPinOptions,
   PluginPinTransaction,
@@ -67,6 +73,20 @@ export type {
   TxOption,
 } from "./security/one-time-secrets";
 export type { OpaqueSecrets } from "./security/opaque-secrets";
+export {
+  standardWebhooks,
+  type InboundWebhookDelivery,
+  type InboundWebhookReading,
+  type InboundWebhookScheme,
+  type ClaimDeliveryOptions,
+  type DeliveryClaim,
+  type DeliveryClaimResult,
+  type PluginReceivedWebhooks,
+  type VerifiedWebhook,
+  type VerifyWebhookOptions,
+  type WebhookRefusal,
+  type WebhookVerification,
+} from "./security/inbound-webhooks";
 
 // What each hook point carries, by name; a plugin augments the map.
 export type {
@@ -117,14 +137,28 @@ export type {
   PluginAdminContributions,
   PluginAdminPage,
   PluginCollectionView,
+  OverridableDocumentAction,
+  PluginDocumentActionOverride,
+  PluginDocumentActionOverrides,
   PluginDocumentView,
   PluginFieldTypeDocumentView,
+  PluginPanelSection,
   PluginAdminPlaceDeclaration,
+  AdminBlockContribution,
+  AdminBulkActionContribution,
+  AdminColumnContribution,
+  AdminContribution,
+  AdminContributionAction,
+  AdminRowActionContribution,
+  AdminSidebarSectionContribution,
+  AdminTabContribution,
   PluginListFilterDeclaration,
   PluginListFilterOption,
   PluginMenuItem,
   PluginNavSection,
 } from "./admin-contributions";
+export type { RowPredicate, RowPredicateValue } from "./row-predicate";
+export type { AdminContributionKind } from "./admin-places";
 
 // The places on admin pages plugins add to, and the ids every surface takes.
 export {

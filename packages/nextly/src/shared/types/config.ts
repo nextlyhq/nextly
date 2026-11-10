@@ -655,19 +655,14 @@ export interface AdminBrandingConfig {
   colors?: AdminBrandingColors;
 
   /**
-   * Toggle visibility of builder-related navigation (Collections/Singles/Components builders).
+   * Turn the schema builder (Collections, Singles and Field Groups builders) off outside
+   * production with `false`: its navigation is hidden and its schema writes are refused.
    *
-   * This is evaluated at runtime via the `/api/admin-meta` response.
+   * The builder is always off in production, whatever this says: schema reaches production
+   * through migrations, and a production start that finds `true` here logs that it has no
+   * effect. Evaluated at runtime and sent to the admin in the `/api/admin-meta` response.
    *
-   * Default behavior follows `NODE_ENV`:
-   * - `production` => hidden
-   * - `development` / `test` => visible
-   *
-   * Precedence:
-   * 1) `admin.branding.showBuilder` (this field)
-   * 2) `NODE_ENV` default mapping
-   *
-   * @default `process.env.NODE_ENV !== "production"`
+   * @default on outside production
    */
   showBuilder?: boolean;
 }
@@ -821,6 +816,28 @@ export interface AuthConfig {
    * in order; the built-in `password` strategy always runs last.
    */
   strategies?: AuthStrategy[];
+
+  /**
+   * @experimental Plugins allowed to finish logins, by name.
+   *
+   * A plugin that declares `capabilities.auth.login` — or contributes a
+   * `determineUser` auth hook, which decides who is signed in — finishes
+   * logins with `ctx.auth.completeLogin`, which signs in whichever account it
+   * names. Declaring it is not enough: the app lists the plugin here too, and
+   * an enabled plugin that declares it without being listed refuses the boot,
+   * naming the line to add.
+   *
+   * Not a sandbox: a plugin is trusted code, and its own code can still reach
+   * core's internals. The listing keeps the grant in the app's code review,
+   * so a plugin update cannot add it quietly.
+   *
+   * @default []
+   * @example
+   * ```ts
+   * auth: { loginPlugins: ["@acme/google-auth"] }
+   * ```
+   */
+  loginPlugins?: readonly string[];
 }
 
 /**
@@ -835,6 +852,12 @@ export interface SanitizedAuthConfig {
   minPasswordLength: number;
   /** @experimental Opt-in auth strategies (D71); built-in password runs last. */
   strategies?: AuthStrategy[];
+  /**
+   * @experimental Plugins allowed to finish logins (`auth.loginPlugins`).
+   * Optional here so a consumer's existing `auth` object stays assignable;
+   * sanitization always fills it, defaulting to `[]`.
+   */
+  loginPlugins?: readonly string[];
 }
 
 /**
@@ -844,6 +867,7 @@ export const DEFAULT_AUTH_CONFIG: SanitizedAuthConfig = {
   revealRegistrationConflict: false,
   allowRegistration: false,
   minPasswordLength: 8,
+  loginPlugins: [],
 };
 
 // ============================================================
@@ -1440,6 +1464,10 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       minPasswordLength: authMinPasswordLength(config.auth?.minPasswordLength),
       // Pass opt-in auth strategies through unchanged (D71).
       strategies: config.auth?.strategies,
+      // Copied and frozen like `db.rawSqlPlugins`: the boot and the CLI read
+      // the app's login grants from here, and plugin code that could add a
+      // name to this list would grant itself on the next read.
+      loginPlugins: Object.freeze([...(config.auth?.loginPlugins ?? [])]),
     },
     storage: config.storage ?? [],
     plugins: config.plugins ?? [],

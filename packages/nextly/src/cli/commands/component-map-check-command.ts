@@ -15,15 +15,18 @@
  * @module cli/commands/component-map-check-command
  */
 
-import { relative, sep } from "node:path";
-
 import {
   checkComponentMapFiles,
   componentMapAgrees,
   type ComponentMapAgreement,
 } from "../../plugins/codegen/check-component-map";
 import { describeComponentUse } from "../../plugins/codegen/component-import-map";
+import {
+  describeUnbackedContribution,
+  unbackedContributions,
+} from "../../plugins/codegen/unbacked-contributions";
 import { generatedTypesFile } from "../../shared/lib/generated-output-paths";
+import { projectPath } from "../dry-run";
 import { componentMapOutOfDate } from "../errors/areas/commands";
 import { printCliError } from "../errors/report";
 import type { CommandContext } from "../program";
@@ -51,14 +54,30 @@ export async function runComponentMapCheck(
   let found: ComponentMapAgreement;
   try {
     const loaded = await loadConfig({ configPath: options.config, cwd });
+    const typesFile = generatedTypesFile(
+      cwd,
+      loaded.config.typescript.outputFile
+    );
     found = await checkComponentMapFiles(
       loaded.config.plugins ?? [],
-      generatedTypesFile(cwd, loaded.config.typescript.outputFile),
+      typesFile,
       cwd,
       loaded.configPath,
       // The site's own widgets, which the map lists beside the plugins'.
-      loaded.config.admin?.dashboard
+      loaded.config.admin?.dashboard,
+      // And the views the site's own collections name.
+      loaded.config.collections
     );
+    // The contributions the map leaves out, named as `generate:types` names
+    // them: the check passes without them, and their places draw fallbacks.
+    for (const each of unbackedContributions(
+      loaded.config.plugins ?? [],
+      typesFile,
+      cwd,
+      loaded.config.admin?.dashboard
+    )) {
+      logger.warn(describeUnbackedContribution(each));
+    }
   } catch (error) {
     // What stopped the check, in the error shape; the status still says it was not an answer.
     printCliError(logger, error);
@@ -77,7 +96,7 @@ function outOfDateReport(
   found: ComponentMapAgreement,
   cwd: string
 ): { files: string; disagreements: string[] } {
-  const shown = (file: string) => relative(cwd, file).split(sep).join("/");
+  const shown = (file: string) => projectPath(cwd, file);
   const [map, list] = found.files.map(shown) as [string, string];
   return {
     files: `${map} and ${list}`,

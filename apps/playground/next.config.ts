@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
 
+import { nextlyHtmlLimitedBots } from "nextly/next";
+
 import { playgroundCacheComponents } from "./cache-components";
 
 // Payload-style env-conditional source-mode (see packages/next/src/withPayload/withPayload.js
@@ -56,6 +58,9 @@ const NEXTLY_DYNAMIC_PACKAGES = [
 const CACHE_COMPONENTS = playgroundCacheComponents();
 
 const nextConfig: NextConfig = {
+  // Search engines and AI crawlers read each page's whole head in the first
+  // HTML, as a Nextly site's config sets it.
+  htmlLimitedBots: nextlyHtmlLimitedBots,
   ...(CACHE_COMPONENTS
     ? { cacheComponents: true, partialPrefetching: true }
     : { cacheComponents: false }),
@@ -236,6 +241,20 @@ const nextConfig: NextConfig = {
       "@nextly/types/*": ["../../packages/nextly/src/types/*"],
       "@nextly/validation": ["../../packages/nextly/src/validation/index.ts"],
       "@nextly/validation/*": ["../../packages/nextly/src/validation/*"],
+      // The root layout imports `@/nextly/cached-read`, the app's "use cache"
+      // read function, which registers it, and how Nextly starts, for every
+      // route (`<SiteCode>` refuses to read under Cache Components without
+      // it). Next.js refuses to compile `"use cache"` with Cache Components
+      // off, so that leg points the import at a variant that registers only
+      // how Nextly starts. An exact key, so it takes precedence over
+      // tsconfig's `@/*` wildcard, which type-checking follows to the Cache
+      // Components file.
+      ...(CACHE_COMPONENTS
+        ? {}
+        : {
+            "@/nextly/cached-read":
+              "./src/nextly/cached-read.cache-components-off.ts",
+          }),
       // Stubs / native-deps resolution. pg + mysql2 stubs predate this commit
       // and remain load-bearing for Turbopack's optional-peer-dep handling
       // inside nextly.

@@ -113,6 +113,26 @@ describe("runProdMigrationsIfEnabled", () => {
    * than returning `ran: false`, so a catch that rethrew only the refusal let
    * MySQL serve the unmigrated schema this change exists to prevent.
    */
+  it("refuses to start an older build that lacks a migration the database records applied", async () => {
+    process.env.NODE_ENV = "production";
+    const missing = new NextlyError({
+      code: "MIGRATION_MISSING",
+      publicMessage:
+        "The ledger records 1 applied migration this build's migrations folder lacks.",
+    });
+    const a = args({
+      migrateCore: vi.fn(async () => {
+        throw missing;
+      }),
+    });
+
+    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toBe(missing);
+    // The refusal stands: a later boot in this process refuses at once.
+    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toMatchObject({
+      code: "MIGRATION_MISSING",
+    });
+  });
+
   it("refuses when the lock was busy on a dialect that throws instead", async () => {
     process.env.NODE_ENV = "production";
     const a = args({
@@ -276,15 +296,14 @@ describe("runProdMigrationsIfEnabled", () => {
     expect(a.migrateCore.mock.calls[0][0].lockMode).toBe("wait");
   });
 
-  it("refuses a Schema Builder file with no snapshot, as nextly migrate does", async () => {
+  it("refuses a Builder-named file it cannot recognise, as nextly migrate does", async () => {
     // The boot applies the same pending files the CLI does, so it asks for the
-    // same refusal: off, a production boot would apply a Builder-written file
-    // with no snapshot that the command refuses.
+    // same refusal: off, a production boot would run a file the command refuses.
     const a = args();
     await runProdMigrationsIfEnabled(a as never);
-    expect(
-      a.migrateCore.mock.calls[0][0].refuseBuilderFilesWithoutSnapshot
-    ).toBe(true);
+    expect(a.migrateCore.mock.calls[0][0].refuseUnrecognisedBuilderFiles).toBe(
+      true
+    );
   });
 
   it("hands migrateCore a full logger (with .success) so runFileMigrations cannot crash on boot", async () => {

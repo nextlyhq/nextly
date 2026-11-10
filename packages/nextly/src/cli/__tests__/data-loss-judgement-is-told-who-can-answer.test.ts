@@ -88,7 +88,8 @@ function configResult() {
     config: {
       collections: [],
       plugins: [],
-      db: { migrationsDir: seen.migrationsDir },
+      // A sanitized config always names its definition file; none is there.
+      db: { migrationsDir: seen.migrationsDir, uiSchemaFile: "ui-schema.json" },
     },
     appConfig: { collections: [], plugins: [], db: {} },
     projectRoot: seen.migrationsDir,
@@ -121,6 +122,14 @@ vi.mock("../../domains/schema/events/schema-events-repository", () => ({
     listFileApplies() {
       return Promise.resolve(seen.ledger);
     }
+    // No migration's removal is recorded.
+    listFileRemovals() {
+      return Promise.resolve([]);
+    }
+    // No old Schema Builder file is marked.
+    currentOldBuilderMarks() {
+      return Promise.resolve(new Map());
+    }
   },
 }));
 vi.mock(
@@ -139,8 +148,13 @@ vi.mock("../../domains/schema/ownership/drop-guard", async importOriginal => ({
   readLiveTables: () => Promise.resolve(new Set()),
   readLiveIndexTables: () => Promise.resolve(new Map()),
 }));
-vi.mock("../commands/migrate", () => ({
-  refuseUnresolvedAppAttempts: () => Promise.resolve(),
+// `migrate:down` asks the app's history first; here it holds, so the
+// command reaches its judgement.
+vi.mock("../commands/migrate", async importOriginal => ({
+  migrateExitCode: (
+    await importOriginal<typeof import("../commands/migrate")>()
+  ).migrateExitCode,
+  assertAppHistoryHolds: () => Promise.resolve(),
 }));
 
 // plugins uninstall: what the command hands its judgement is recorded, and

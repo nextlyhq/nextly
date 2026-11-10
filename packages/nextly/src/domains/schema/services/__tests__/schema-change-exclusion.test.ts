@@ -194,6 +194,8 @@ function makeService(adapter: ReturnType<typeof makeAdapter>) {
     deleteSingle: vi.fn(async () => {
       trace.push("registry:write");
     }),
+    // A delete asks what depends on the Single before it removes anything; nothing does here.
+    assertNothingDependsOn: vi.fn(async () => undefined),
   };
   const service = new SingleMetadataService(
     registry as unknown as SingleRegistryService,

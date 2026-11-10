@@ -68,6 +68,11 @@ export interface BreakpointRun extends WalkedRun {
    * slot, and walked by nobody until that save publishes it (`publish`).
    */
   readonly preparing: boolean;
+  /**
+   * Set on a run that puts a removal back rather than making one: the id of
+   * the removal it undoes. `null` for a removal.
+   */
+  readonly undoes: string | null;
 }
 
 /** The removal runs' table, through the plugin's database surface. */
@@ -79,7 +84,9 @@ export interface RemovalRunStore extends RunStore {
   open(
     removedIds: readonly string[],
     before: { readonly stored: unknown; readonly emitted: unknown },
-    startedBy: string
+    startedBy: string,
+    /** For a run that undoes a removal: that removal's id. */
+    undoes?: string
   ): Promise<BreakpointRun>;
   /** One run by its id, open or done; `null` when there is none. */
   runById(runId: string): Promise<BreakpointRun | null>;
@@ -129,7 +136,11 @@ export interface RemovalRunStore extends RunStore {
    * claim up (`readdedIds`). An open run is never changed here; a set
    * defining an id an open run claims is refused before it is stored.
    */
-  retire(ids: readonly string[]): Promise<void>;
+  retire(
+    ids: readonly string[],
+    /** Only this run gives them up, rather than every run claiming them. */
+    only?: string
+  ): Promise<void>;
   /**
    * The save that opened a run has stored its set: the run goes on its
    * converting walk, where the walk starts. Nothing for a run past preparing.
@@ -143,6 +154,16 @@ export interface RemovalRunStore extends RunStore {
     reason: string,
     limit: number
   ): Promise<{ runId: string; documentKey: string }[]>;
+}
+
+/**
+ * Every breakpoint id a run removed: those it still claims and those the site
+ * defined again since. What undoing it defines again, and puts back under.
+ */
+export function removedEver(
+  run: Pick<BreakpointRun, "removedIds" | "readdedIds">
+): ReadonlySet<string> {
+  return new Set([...run.removedIds, ...run.readdedIds]);
 }
 
 /** A run that still holds what it removed, and why. */
@@ -193,9 +214,10 @@ function stringsOf(value: unknown): string[] | undefined {
 /**
  * The stored ids, read strictly. A record that cannot be read is refused
  * rather than read as empty: an empty list would strip nothing and report the
- * run finished.
+ * run finished. An undo's run removes nothing, so its list is empty
+ * (`undoing`).
  */
-function storedIdsOf(text: string, runId: string): StoredIds {
+function storedIdsOf(text: string, runId: string, undoing: boolean): StoredIds {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text) as unknown;
@@ -208,7 +230,11 @@ function storedIdsOf(text: string, runId: string): StoredIds {
       : {};
   const ids = stringsOf(record.ids);
   const readded = stringsOf(record.readded);
-  if (ids !== undefined && ids.length > 0 && readded !== undefined) {
+  if (
+    ids !== undefined &&
+    (ids.length > 0 || undoing) &&
+    readded !== undefined
+  ) {
     return { ids, readded };
   }
   throw NextlyError.internal({
@@ -243,9 +269,14 @@ function runOf(row: {
   phase: string;
   cursor: string | null;
   openKey: string | null;
+  undoes?: string | null;
 }): BreakpointRun {
   const before = beforeOf(row.before);
-  const stored = storedIdsOf(row.removedIds, row.id);
+  const stored = storedIdsOf(
+    row.removedIds,
+    row.id,
+    row.undoes !== null && row.undoes !== undefined
+  );
   const readded = new Set(stored.readded);
   return {
     id: row.id,
@@ -258,6 +289,7 @@ function runOf(row: {
     cursor: row.cursor,
     open: row.openKey !== null,
     preparing: row.phase === PREPARING,
+    undoes: row.undoes ?? null,
   };
 }
 
@@ -307,7 +339,7 @@ export function removalRunStore(
   // Resolved per call, as the fence's are.
   const columns = () => db.table(breakpointRemovals);
   return {
-    open: async (removedIds, before, startedBy) => {
+    open: async (removedIds, before, startedBy, undoes) => {
       try {
         const row = await db.transaction(tx =>
           tx.insertReturning(breakpointRemovals, {
@@ -322,6 +354,7 @@ export function removalRunStore(
             startedBy,
             phase: PREPARING,
             openKey: OPEN,
+            undoes: undoes ?? null,
           })
         );
         return runOf(row);
@@ -407,7 +440,7 @@ export function removalRunStore(
         return "left";
       }
     },
-    retire: async ids => {
+    retire: async (ids, only) => {
       if (ids.length === 0) return;
       const asked = new Set(ids);
       const t = columns();
@@ -415,10 +448,17 @@ export function removalRunStore(
       // save read the runs would otherwise keep its claim. Giving it up is
       // safe for an open run too, since a walk strips only the ids the site
       // does not define, and these are about to be defined.
-      for (const first of await db.select(breakpointRemovals).all()) {
+      const rows = await db.select(breakpointRemovals).all();
+      for (const first of rows.filter(
+        row => only === undefined || row.id === only
+      )) {
         let row: typeof first | null = first;
         for (let attempt = 1; row !== null; attempt += 1) {
-          const stored = storedIdsOf(row.removedIds, row.id);
+          const stored = storedIdsOf(
+            row.removedIds,
+            row.id,
+            row.undoes !== null && row.undoes !== undefined
+          );
           const readded = new Set(stored.readded);
           const fresh = stored.ids.filter(
             id => asked.has(id) && !readded.has(id)

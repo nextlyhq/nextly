@@ -3,13 +3,14 @@
  * string (pages, settings, views, slots, field-type editors) so they load
  * without manual host imports. */
 
-import { registerComponents } from "@nextlyhq/admin";
+import { registerComponentMap } from "@nextlyhq/admin";
 import { registerBlockEditorModules } from "@nextlyhq/plugin-page-builder/admin";
 import * as _p0 from "../../src/dashboard/site-notes";
 import * as _p1 from "@/plugins/block-fixture/editor";
-import * as _p2 from "@/plugins/widget-kit-fixture/admin";
-import * as _p3 from "@nextlyhq/plugin-form-builder/admin";
-import * as _p4 from "@nextlyhq/plugin-page-builder/admin";
+import * as _p2 from "@/plugins/contributions-fixture/components";
+import * as _p3 from "@/plugins/widget-kit-fixture/admin";
+import * as _p4 from "@nextlyhq/plugin-form-builder/admin";
+import * as _p5 from "@nextlyhq/plugin-page-builder/admin";
 import { registeredComponentPaths as listed } from "./plugin-admin-components.generated";
 import type { DeclaredComponentMap } from "nextly";
 import type * as siteConfig from "../../nextly.config";
@@ -17,13 +18,31 @@ import type * as siteConfig from "../../nextly.config";
 const registered = {
   "./src/dashboard/site-notes#SiteNotesCard": _p0.SiteNotesCard, // widget "playground/site-notes" of the site config
   "@/plugins/block-fixture/editor#FixtureInspector": _p1.FixtureInspector,
-  "@/plugins/widget-kit-fixture/admin#KitCard": _p2.KitCard, // widget "widget-kit-fixture/kit" of plugin "widget-kit-fixture"
-  "@/plugins/widget-kit-fixture/admin#ThrowingCard": _p2.ThrowingCard, // widget "widget-kit-fixture/throws" of plugin "widget-kit-fixture"
-  "@/plugins/widget-kit-fixture/admin#UnlabelledControlCard": _p2.UnlabelledControlCard, // widget "widget-kit-fixture/unlabelled-control" of plugin "widget-kit-fixture"
-  "@nextlyhq/plugin-form-builder/admin#NewSubmissionsCard": _p3.NewSubmissionsCard, // widget "form-builder/new-submissions" of plugin "@nextlyhq/plugin-form-builder"
-  "@nextlyhq/plugin-page-builder/admin#BlocksField": _p4.BlocksField,
-  "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p4.PageBuilderView,
-  "@nextlyhq/plugin-page-builder/admin#RemoveLayoutToolbarSlot": _p4.RemoveLayoutToolbarSlot,
+  "@/plugins/contributions-fixture/components#FixtureActionDialog": _p2.FixtureActionDialog,
+  "@/plugins/contributions-fixture/components#FixtureBlock": _p2.FixtureBlock,
+  "@/plugins/contributions-fixture/components#FixtureCell": _p2.FixtureCell,
+  "@/plugins/contributions-fixture/components#FixtureGatedBlock": _p2.FixtureGatedBlock,
+  "@/plugins/contributions-fixture/components#FixtureReplacement": _p2.FixtureReplacement,
+  "@/plugins/contributions-fixture/components#FixtureSection": _p2.FixtureSection,
+  "@/plugins/contributions-fixture/components#FixtureTab": _p2.FixtureTab,
+  "@/plugins/widget-kit-fixture/admin#KitCard": _p3.KitCard, // widget "widget-kit-fixture/kit" of plugin "widget-kit-fixture"
+  "@/plugins/widget-kit-fixture/admin#ThrowingCard": _p3.ThrowingCard, // widget "widget-kit-fixture/throws" of plugin "widget-kit-fixture"
+  "@/plugins/widget-kit-fixture/admin#UnlabelledControlCard": _p3.UnlabelledControlCard, // widget "widget-kit-fixture/unlabelled-control" of plugin "widget-kit-fixture"
+  "@nextlyhq/plugin-form-builder/admin#FormBuilderView": _p4.FormBuilderView,
+  "@nextlyhq/plugin-form-builder/admin#NewSubmissionsCard": _p4.NewSubmissionsCard, // widget "form-builder/new-submissions" of plugin "@nextlyhq/plugin-form-builder"
+  "@nextlyhq/plugin-form-builder/admin#SubmissionsView": _p4.SubmissionsView,
+  "@nextlyhq/plugin-page-builder/admin#BindingsToFixCard": _p5.BindingsToFixCard, // widget "page-builder/bindings-to-fix" of plugin "@nextlyhq/plugin-page-builder"
+  "@nextlyhq/plugin-page-builder/admin#BindingsToFixPage": _p5.BindingsToFixPage,
+  "@nextlyhq/plugin-page-builder/admin#BlocksField": _p5.BlocksField,
+  "@nextlyhq/plugin-page-builder/admin#ComponentListTools": _p5.ComponentListTools,
+  "@nextlyhq/plugin-page-builder/admin#DeleteComponentReplacement": _p5.DeleteComponentReplacement,
+  "@nextlyhq/plugin-page-builder/admin#EntryDesignSection": _p5.EntryDesignSection,
+  "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p5.PageBuilderView,
+  "@nextlyhq/plugin-page-builder/admin#RemoveLayoutToolbarSlot": _p5.RemoveLayoutToolbarSlot,
+  "@nextlyhq/plugin-page-builder/admin#TemplateDeleteAction": _p5.TemplateDeleteAction,
+  "@nextlyhq/plugin-page-builder/admin#TemplateDesignDetails": _p5.TemplateDesignDetails,
+  "@nextlyhq/plugin-page-builder/admin#TemplateOwnDesigns": _p5.TemplateOwnDesigns,
+  "@nextlyhq/plugin-page-builder/admin#TransferImport": _p5.TransferImport,
 } satisfies DeclaredComponentMap<typeof siteConfig>;
 
 /** The modules exporting each plugin's block definitions, for the page builder's editor. */
@@ -55,7 +74,7 @@ if (
   );
 }
 
-registerComponents(registered);
+registerComponentMap(registered);
 registerBlockEditorModules({
   entries: blockEditorEntries,
   components: {

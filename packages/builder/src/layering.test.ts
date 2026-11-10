@@ -83,6 +83,11 @@ const ALLOWED_RUNTIME_IMPORTS = [
   // code reads through `useBlockEnvironment`. A client entry of its own, and
   // React alone: it reaches neither `next/*` nor the CMS.
   "@nextlyhq/blocks-react/environment",
+  // The icon set, for the Icon control's picker and the canvas's icons. Plain
+  // data and search, reaching neither `next/*` nor the CMS, and imported only
+  // through a dynamic `import()` (`lucide-icon-source.ts`), so the set is a
+  // lazy chunk rather than part of the editor's bundle.
+  "@nextlyhq/blocks-react/icons/lucide",
   "@nextlyhq/ui",
   // The `cn` helper only. A separate subpath because the root barrel carries a
   // `"use client"` banner and this one is plain string joining.
@@ -115,6 +120,10 @@ const ALLOWED_RUNTIME_IMPORTS = [
 
 /** Node built-ins and test-only tooling, which never reach a consumer's bundle. */
 const ALLOWED_IN_TESTS = [
+  // The core block library, for the test that walks every core block's props
+  // and expects a bind button on each bindable one: the definitions alone,
+  // which the editor itself never imports.
+  "@nextlyhq/blocks-react/blocks",
   "@nextlyhq/module-specifiers",
   "@testing-library/react",
   "node:fs",

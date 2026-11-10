@@ -10,6 +10,8 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
+
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import {
   buildCompanionReconcileStatements,
@@ -39,6 +41,8 @@ export function planFieldAddedToTranslationMigration(args: {
   status: boolean;
   recorded: readonly CompanionFieldLike[];
   added: readonly CompanionFieldLike[];
+  /** The column rule the entity's tables are made by: a Builder collection's is the Builder's. */
+  builtBy: ColumnOrigin;
 }): FieldAddedToTranslationPlan {
   const { dialect } = args;
   const withAdded = [...args.recorded, ...args.added];
@@ -57,7 +61,7 @@ export function planFieldAddedToTranslationMigration(args: {
       newLocalized,
       dialect,
       status: args.status,
-      builtBy: "codeFirst",
+      builtBy: args.builtBy,
       companionExists: true,
       companionHasStatus: args.status,
       companionHasUpdatedAt: true,
@@ -74,10 +78,41 @@ export function planFieldAddedToTranslationMigration(args: {
       defaultLocale: args.defaultLocale,
       parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
       columns: args.added.flatMap(
-        f => fieldToLocalizedColumnSpec(f, dialect, "codeFirst") ?? []
+        f => fieldToLocalizedColumnSpec(f, dialect, args.builtBy) ?? []
       ),
     },
     upSql: asFile(between([...args.recorded], withAdded)),
     downSql: asFile(between(withAdded, [...args.recorded])),
   };
+}
+
+/**
+ * The statements of an `adds` file with each ADD of a column the translations table already has
+ * left out, so a run adopts the column it finds instead of failing on a duplicate column name.
+ *
+ * A companion file is snapshotless and runs verbatim, and the column it adds may already be
+ * there: a dev push or the Schema Builder added it, or a change that stopped part-way left it.
+ * The companion reconcile it is rendered by adds only a missing column, and the file does the
+ * same. Whether a column already there can hold the field is not judged here: `nextly migrate`
+ * judges it once its files have applied, against the registry as the run found it
+ * (`refuseCompanionColumnsThatCannotHold`), which refuses one that cannot.
+ *
+ * Matched on the table and column the statement adds, as the builder spells it: one column per
+ * `ALTER TABLE ... ADD COLUMN`.
+ */
+export function withoutColumnsAlreadyThere(
+  statements: readonly string[],
+  companionTable: string,
+  live: ReadonlySet<string>
+): string[] {
+  if (live.size === 0) return [...statements];
+  return statements.filter(statement => {
+    const added =
+      /^\s*ALTER\s+TABLE\s+[`"]?([^`"\s]+)[`"]?\s+ADD\s+COLUMN\s+[`"]?([^`"\s]+)[`"]?/i.exec(
+        statement
+      );
+    return (
+      added === null || added[1] !== companionTable || !live.has(added[2] ?? "")
+    );
+  });
 }

@@ -123,9 +123,6 @@ vi.mock("@admin/hooks/useTranslationMode", () => ({
     exitTranslationMode: vi.fn(),
   }),
 }));
-vi.mock("@admin/hooks/usePluginAutoRegistration", () => ({
-  usePluginAutoRegistration: () => undefined,
-}));
 
 import EditEntryPage from "./index";
 
@@ -509,8 +506,9 @@ describe("a routed document view", () => {
     registerDocumentViews([
       { fieldType: "blocks", path: "builder", component: VIEW },
     ]);
-    // Only inside a repeater's rows, which a view does not reach: a row is
-    // addressed by its position, which names another row after a reorder.
+    // Only inside the rows of a repeater that declares its own `id`, which a
+    // view does not reach: those rows get no saved id to address one by, and
+    // a position names another row after a reorder.
     collectionSchema = {
       ...collectionSchema,
       fields: [
@@ -518,7 +516,10 @@ describe("a routed document view", () => {
         {
           name: "extra",
           type: "repeater",
-          fields: [{ name: "body", type: "blocks" }],
+          fields: [
+            { name: "id", type: "text" },
+            { name: "body", type: "blocks" },
+          ],
         },
       ],
     };
@@ -632,5 +633,40 @@ describe("a custom edit view that gains the entry", () => {
     view.rerender(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
 
     expect(await screen.findByText("editing Ada's post")).toBeInTheDocument();
+  });
+});
+
+describe("a site collection's own edit view", () => {
+  // The site's own collection names its view relative to its config, and the
+  // generated component map registers it under exactly that path. Nothing else
+  // loads it: the admin imports no module by name.
+  const SITE_VIEW = "./views/orders#OrderEditor";
+
+  it("draws in place of the default editor once the map has registered it", () => {
+    registerComponent(SITE_VIEW, () => <div>site order editor</div>);
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: SITE_VIEW } } } },
+    };
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(screen.getByText("site order editor")).toBeInTheDocument();
+    expect(entryFormProps).toBeUndefined();
+  });
+
+  it("leaves the default editor when the map does not register it, and nothing loads it later", async () => {
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: SITE_VIEW } } } },
+    };
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(entryFormProps).toBeDefined();
+    // Given every chance to: a run-time import resolved in a later task.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(screen.queryByText("site order editor")).toBeNull();
+    expect(entryFormProps).toBeDefined();
   });
 });

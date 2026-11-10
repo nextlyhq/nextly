@@ -40,7 +40,7 @@ Global flags inherited from the root `nextly` command: `--config <path>` (custom
 - `nextly migrate:baseline` -- `--name <name>` (the migration's name; defaults to `baseline`), `--force-unlock`, `--dry-run` (name the migration and snapshot it would write, whether it would create the ledger table, and the ledger row it would record, without writing any of them or taking the migrate lock; where a run would refuse, it says why and still exits 0).
 - `nextly migrate:create` -- `[name]` positional or `--name <name>` flag, `--blank` (empty file for custom SQL), `--no-transaction` (with `--blank`, a file whose first line is the [no-transaction marker](#running-a-file-outside-a-transaction); with `--plugin`, a module with `transaction: false`), `--non-interactive` (a global option every command accepts), `--accept-renames`, `--record-snapshot` (a migration that changes nothing, whose snapshot records which fields are translated as the database holds them, for a project whose snapshots [predate that record](/docs/localization#when-your-migrations-predate-the-record-of-translated-fields); it reads the database, so run it against one that has applied every migration), `--dry-run` (print the migration it would write and name it and its snapshot, or with `--plugin` the module and its barrel, without writing any of them; it still asks about possible renames, whose answers shape the migration, and where a run would refuse, it says why and still exits 0).
 - `nextly migrate:status` -- `--json` (machine-readable output for CI scripting), `--plugin <name>` (list that plugin's migration modules instead of the app's files).
-- `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`; `--skip-verify` (with `--applied`, skip the live-vs-snapshot check; a file with no snapshot is recorded without it when it is marked `-- nextly:no-transaction`, or on MySQL when its newest attempt failed or never finished); `--dry-run` (run the same checks and name the ledger rows it would record, recording none).
+- `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`, `--removed <file>` (record an applied migration's file removed on purpose; it stays applied); `--file-missing` (with `--rolled-back`, say the file is gone from the folder, so it is not read); `--skip-verify` (with `--applied`, skip the live-vs-snapshot check; a file with no snapshot is recorded without it when it is marked `-- nextly:no-transaction`, or on MySQL when its newest attempt failed or never finished); `--dry-run` (run the same checks and name the ledger rows it would record, recording none).
 - `nextly migrate:fresh` -- `--accept-data-loss` (skip confirmation; `-f, --force` still works for one release, with a notice, and `--yes` is refused), `--seed` (run seeders after migrations), `--dry-run` (name every table it would drop and each migration it would run again, needing no consent and dropping nothing).
 - `nextly migrate:down` -- `--step <n>` (roll back the last N migrations, going on through the files that move a field between translated and shared when the step would end inside them), `--allow-data-loss` (required when the DOWN drops a table or column), `--yes` (required in production), `--dry-run` (show targets + DOWN SQL without executing), `--plugin <name>` (roll back that plugin's modules instead of the app's files), `--force-unlock`.
 - `nextly upgrade` -- `--confirm-backed-up` (required outside a terminal, when a step has work: your statement that the database is backed up), `-f, --force` (skip the backup prompt), `--target-table-name <name>` (use another name for the events table when one of that name already exists), `--reconcile-core` (see [Core schema drift after `nextly upgrade`](#core-schema-drift-after-nextly-upgrade)), `--force-unlock`, `--dry-run` (count each step's pending work, all taken before any step runs, and name what a run would refuse, with no backup question and no lock; with `--reconcile-core`, name each statement the reconcile would run and each drop it would leave in place).
@@ -79,6 +79,19 @@ writing two files:
 
 Commit both. From then on the normal loop applies: edit `nextly.config.ts`, run
 `nextly migrate:create`, and get a file containing only what changed.
+
+To see what a sync would do before it does it, add `--dry-run` to any form of it:
+`nextly db:sync --dry-run` names each table and column operation the schema push would run,
+and each rename or data-loss question it would ask, and a note says what it does not show (the
+registry rows, the core, translation, Single and component tables, `user_ext` and the
+permissions it seeds), since the plan is made against the registry as it stands before the
+sync rewrites it. With `--remove-orphaned` it also names each table it would delete, in the
+words the data-loss consent uses; with `--promote <slug>` it shows the commented snippet it
+would append and the registry row it would remove (the table is kept); with `--demote <slug>`
+it shows the registry record it would write. A dry run opens the database read-only, takes no
+schema lock, asks nothing, and exits 0; where the real run would refuse (a slug that is not
+there, a collection defined in code, a field-group storage migration in flight), it says so and
+still exits 0. It cannot be combined with `--watch`.
 
 <Callout type="warn">
 **Do not keep using `db:sync` against a database that holds content.** It compares your
@@ -283,7 +296,7 @@ Specific examples:
 
 1. Connects to the database via `DATABASE_URL`.
 2. Reads the `nextly_schema_events` ledger to see which `.sql` files have been applied (a `file_apply` event per file).
-3. Verifies SHA-256 hashes of already-applied files. **Hash mismatch = abort with `MIGRATION_TAMPERED` (exit 2).** No partial state, nothing else runs.
+3. Checks the app's history against the folder before it changes anything, core tables included. **An applied migration the folder lacks = abort with `MIGRATION_MISSING` (exit 3)**: a newer build migrated this database, or a file was removed (see [A build older than the database](#a-build-older-than-the-database)). An unresolved attempt stops it as [Recovering from a failed migration](#recovering-from-a-failed-migration) says. **A hash mismatch on an applied file = abort with `MIGRATION_TAMPERED` (exit 2).** No partial state, nothing else runs. `migrate:down`, `migrate:baseline` and `nextly upgrade --reconcile-core` run the same checks first, with the same exit codes.
 4. Discovers pending `.sql` files in your `migrations/` directory (sorted by filename timestamp).
 5. Applies each pending file in one transaction on one connection (on MySQL each DDL statement still commits as it runs; see [database support](/docs/database/support) for MySQL caveats). What a file may contain is below.
 6. Records each applied file in `nextly_schema_events` as a `file_apply` event, opened with `started_at`, `filename` and `sha256` and closed with `ended_at` and `statements_executed`.
@@ -296,6 +309,20 @@ Specific examples:
 | 1         | A migration failed during execution                                      |
 | 2         | `MIGRATION_TAMPERED`. Abort before running any.                          |
 | 3         | `MIGRATION_MISSING`. Abort; file referenced in DB but missing from disk. |
+
+### A build older than the database
+
+Stop every build released before this check, preview deployments that share production's database
+included, before the first `nextly migrate` of this version. From this version on, a build whose
+migrations folder lacks a migration the database records applied stops with exit code 3 instead
+of reporting the database up to date, and names each missing migration. Deploy the build that
+holds the files. If a file was removed on purpose, record that with
+`nextly migrate:resolve --removed <file>`: the migration stays applied, later runs go on, and if
+its file returns it is never run again and is checked against its recorded checksum.
+`migrate:down` refuses to roll back such a migration while its file is absent.
+`nextly migrate:status` lists it as `applied (file removed)`, as information, where an applied
+migration whose file is gone with no removal recorded shows as `applied (file missing)`. The
+`--json` output carries the same value in `status`.
 
 ## Where the registry and the tables disagree
 
@@ -502,6 +529,13 @@ Collections and Singles additionally carry the Versions, Revalidate and Webhooks
 Groups have none of those, and the Field Group registry has no columns for them under either name.
 The runtime reads its Drizzle table from that row, so the row matters as much as the columns do.
 
+The Builder itself never runs in production. A production server refuses every Builder save,
+preview, repair and delete with `BUILDER_DISABLED`, and so does a field-group save through the
+Direct API or a collection save through a plugin's `ctx.services.collections`, whatever
+`admin.branding.showBuilder` says; a production start that finds `showBuilder: true` logs that it
+has no effect there. Make schema changes in development, commit them with their migration, and let
+`nextly migrate` apply them. Entry writes are unaffected.
+
 ### Commit `ui-schema.json`
 
 The Builder dual-writes every entity it creates or saves into the UI-schema manifest — the file
@@ -511,10 +545,17 @@ entity exists, and a Builder change missing from the commit cannot appear in any
 
 Two things to know before relying on it:
 
-- **The Builder's own `.sql` file is unpaired.** Saving a Collection writes a timestamped migration
-  but no `meta/*.snapshot.json`, and `nextly migrate:check` reports an unpaired `.sql` as
-  `MISSING_SNAPSHOT`. Run `nextly migrate:create` to regenerate the pair, and commit the `.sql` and
-  its snapshot together rather than committing the Builder's file as-is.
+- **The Builder's own `.sql` file is ignored.** Saving a Collection writes a timestamped migration
+  but no `meta/*.snapshot.json`. Every command ignores such a file, naming it with "ignored:
+  written by an earlier Schema Builder", so run `nextly migrate:create` to write the change as a
+  migration with its snapshot, and commit that pair. Only a file with the whole signature is
+  ignored. A file with the Builder's name and no snapshot that lacks another part of it, for
+  example one that also changes another entity's tables or has a dialect variant
+  (`.mysql.sql`) beside it, is refused by `nextly migrate` and a
+  production boot, as `BUILDER_MIGRATION_SNAPSHOT_MISSING`, naming the part it lacks: replace it
+  with the migration `migrate:create` writes, or delete it. `nextly migrate:check` names it too.
+  Keep the files an earlier Builder wrote until the first `nextly migrate` after upgrading has
+  run, which records the ledger rows that name them.
 - **A collection created with a starting field is mirrored without it.** The create call writes the
   manifest entry with an empty field list, so the fields arrive only on the next save. Open the new
   collection and save it once before generating the migration.
@@ -726,6 +767,7 @@ If `nextly migrate` fails partway through:
    - **A failed attempt is blocking retries and the `.sql` needs editing first:** `nextly migrate:resolve --failed-cleanup <file>` flips the stuck attempts (every attempt since the file's last other event that failed, or recorded no outcome because the process running it stopped) to `rolled_back`; each keeps its start time and its error in the ledger, and a failed one its end time. Edit the file, then run `nextly migrate` again.
    - **A file [marked to run outside a transaction](#running-a-file-outside-a-transaction) stopped part-way:** finish its remaining statements by hand and mark it with `nextly migrate:resolve --applied <file>`, rather than running it again, or reverse the statements that ran, clear the attempt with `nextly migrate:resolve --failed-cleanup <file>`, and run `nextly migrate` again. For a plugin module, `--failed-cleanup plugin:<name>/<module>` followed by `nextly migrate` records it once its statements are finished.
    - **You need to re-run a file** that was recorded as applied: `nextly migrate:resolve --rolled-back <file>` — the next `nextly migrate` treats it as pending again.
+   - **A migration whose file is gone stopped part-way** (a newer build tried it; `nextly migrate` exits 3 naming it): reverse what of it ran by hand, then `nextly migrate:resolve --rolled-back <file> --file-missing`. Without `--file-missing`, `--rolled-back` needs the file in the folder.
 4. Otherwise, fix the SQL (revert + regenerate via `migrate:create`) or the underlying database state, then re-run `nextly migrate`.
 
 For MySQL specifically, partial state is possible because MySQL DDL auto-commits per statement. Manual cleanup may be needed; see [MySQL caveats](/docs/database/support) for the recovery playbook.

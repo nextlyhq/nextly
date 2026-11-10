@@ -39,6 +39,7 @@ import { consoleLogger } from "../../../shared/types";
 import { FieldGroupSchemaService } from "../../field-groups/services/field-group-schema-service";
 import { resolveRegistryNameFromCatalog } from "../../field-groups/storage/resolve-storage-names";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import { hasRetiredSizesColumn } from "../../media/retired-image-sizes-store";
 import { getActiveExtensionSchema } from "../extension/build-extension-schema";
 import {
   refusingNewDanglingReferences,
@@ -58,6 +59,8 @@ import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
+import { relationSwitches } from "./companion-shape-switches";
+import { withoutCopyOnlyRebuilds, type LiveTable } from "./copy-only-rebuilds";
 import {
   canEmitWithoutDrizzleKit,
   emitDdl,
@@ -87,6 +90,7 @@ import {
   stripKitDropsOfLiveUniqueConstraints,
 } from "./filter-unsafe-statements";
 import { indexRestoreStatements } from "./index-restore";
+import { withKeptScopeFieldsIn } from "./kept-scope-fields";
 import { kitRouteConstraintStatements } from "./kit-route-constraints";
 import {
   desiredUniqueColumns,
@@ -127,9 +131,16 @@ import type {
   RenameCandidate,
   RenameDetector,
 } from "./pushschema-pipeline-interfaces";
+import { withRecordedShapes } from "./recorded-shapes";
 import { builtByFor } from "./registered-collections";
 import { refuseNotNullOverNulls } from "./required-column-gate";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
+import { withRetainedSizesColumn } from "./retained-core-columns";
+import {
+  refuseSeveralReferencesForOne,
+  refuseSwitchesWithRename,
+  refuseTargetSwitchesOverValues,
+} from "./several-references-refusal";
 import {
   sqliteRebuiltTables,
   untrackedConstraintCounts,
@@ -139,6 +150,7 @@ import {
 import { withCapturedStdout } from "./stdout-capture";
 import type { DesiredSchema } from "./types";
 import { uniqueColumnLookup } from "./unique-columns";
+import { currentWithheldScopeFields } from "./withheld-scope-fields";
 
 // F5 PR 4: produces a copy of `desired` where any field targeted by a
 // make_optional resolution has its `required` flag flipped to false (or
@@ -670,7 +682,7 @@ export class PushSchemaPipeline {
     // snapshot the diff compares and the Drizzle tables drizzle-kit turns into DDL — and resolving
     // inside either leaves the other on the raw fields, so a table would converge and then report a
     // type change against itself on every following diff.
-    const desired = args.desired;
+    let desired = args.desired;
     // Merged HERE rather than at each call site. `apply` has many callers —
     // HMR, the collection/single/component dispatchers, the dev server, the
     // DI registration — and adding extensions at each would miss some: a UI
@@ -715,9 +727,13 @@ export class PushSchemaPipeline {
     // Without the fingerprint, editing only a schema hook leaves `desired`
     // byte-identical and the push is skipped, so the hook's change never
     // reaches the database and nothing reports that it did not.
+    // And on what plugins' scopes hold back from switched-off types: a type
+    // switched on again, or its plugin removed, leaves `desired` as it was
+    // while its kept column is no longer kept (`kept-scope-fields.ts`).
     const cacheKey = {
       desired,
       extensions: extensions?.fingerprint ?? null,
+      withheld: currentWithheldScopeFields(),
     };
     const cachedSnapshot = getCachedSnapshot();
     if (cachedSnapshot !== undefined && dequal(cacheKey, cachedSnapshot)) {
@@ -778,6 +794,11 @@ export class PushSchemaPipeline {
             ? (cached as NextlySchemaSnapshot)
             : await introspectLiveSnapshot(db, dialect, managedTableNames);
       }
+      // A field a plugin's scope holds back from a type switched off keeps
+      // its column while the database has it: added back here, before
+      // anything reads the desired state, so neither the diff nor the tables
+      // handed to drizzle-kit plans its drop (`kept-scope-fields.ts`).
+      desired = withKeptScopeFieldsIn(desired, liveSnapshot, dialect);
 
       // 🔴 Contained, and its failure means "declare NEITHER registry".
       //
@@ -799,7 +820,23 @@ export class PushSchemaPipeline {
       const { snapshot: snapshotBeforeRenames, fieldGroupTypeColumns } =
         buildDesiredSnapshot({ desired, dialect, liveSnapshot, extensions });
 
-      const allOperations = diffSnapshots(liveSnapshot, snapshotBeforeRenames);
+      // The live columns given the shape each relation's recorded field stored: a switch the
+      // column's type does not show is planned from it (`withRecordedShapes`).
+      //
+      // A translated relation's switch, planned on its companion from the same rule, joins the
+      // operations here, so the confirmation, the refusals and the apply read one set, as the
+      // preview does (`relationSwitches`).
+      const liveWithShapes = withRecordedShapes(liveSnapshot, desired);
+      const diffed = diffSnapshots(liveWithShapes, snapshotBeforeRenames);
+      const switches = await relationSwitches({
+        db,
+        dialect,
+        desired,
+        live: liveSnapshot,
+        desiredSnapshot: snapshotBeforeRenames,
+        planned: diffed,
+      });
+      const allOperations = [...diffed, ...switches.ops];
 
       // A UI save owns only the entity being edited. An operation targeting a code-first or
       // plugin-owned table is dropped here, BEFORE anything reads the operation set, because those
@@ -949,6 +986,32 @@ export class PushSchemaPipeline {
         dispatchResult,
         resolvedOps
       );
+      // A relationship switched to or from naming several target collections, while a row holds a
+      // value no conversion can carry across; then one switched from many related entries to one,
+      // while a row holds several.
+      // A translated relation's companion is among these (`relationSwitches`), its rows counted
+      // with the main tables'.
+      // A relation renamed and switched at once: the rename carries its values to the new name as
+      // they are, which the switch's conversion, planned for one name, never reaches.
+      refuseSwitchesWithRename({
+        desired: args.desired,
+        operations: resolvedOps,
+        previous: liveWithShapes,
+        next: snapshotBeforeRenames,
+      });
+      await refuseTargetSwitchesOverValues({
+        db: args.db,
+        dialect: args.dialect,
+        desired: args.desired,
+        operations: resolvedOps,
+      });
+      await refuseSeveralReferencesForOne({
+        db: args.db,
+        dialect: args.dialect,
+        desired: args.desired,
+        live: { tables: [...liveSnapshot.tables, ...switches.tables] },
+        operations: resolvedOps,
+      });
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       //
@@ -986,7 +1049,14 @@ export class PushSchemaPipeline {
                 rebuildLosses.get(tableName.toLowerCase())?.unique ?? [],
                 renames,
                 desiredUnique
-              )
+              ),
+            // Asked only where drizzle-kit may run and the runtime tables are
+            // built here: the fast path emits from this apply's own operations
+            // and never reads the media table. A catalogue read, which cannot
+            // abort the PostgreSQL transaction it may be in.
+            canEmitWithoutDrizzleKit(resolvedOps, dialect)
+              ? false
+              : await hasRetiredSizesColumn(db, dialect)
           );
 
       // Scope drizzleSchema down to the table(s) actually touched by
@@ -1378,7 +1448,27 @@ export class PushSchemaPipeline {
               desiredUnique
             )
           );
-          emittedStatements = keptUniques.kept;
+          // A SQLite rebuild this apply never asked for that only copies a
+          // table onto itself (a column DEFAULT an earlier release did not
+          // write, say) is left out rather than refusing the whole apply.
+          // Every other unapproved rebuild stays for the destructive scan
+          // below, which still refuses it.
+          const copyOnly =
+            dialect === "sqlite"
+              ? withoutCopyOnlyRebuilds(
+                  keptUniques.kept,
+                  approvedRebuilds,
+                  table => liveTableForCopyRule(liveSnapshot, table)
+                )
+              : { kept: keptUniques.kept, skipped: [] };
+          for (const table of copyOnly.skipped) {
+            consoleLogger.warn(
+              `[Nextly schema] Left out drizzle-kit's rebuild of "${table}": ` +
+                `it copies every column and row onto the same columns and this ` +
+                `apply changes nothing on that table, so the table stays as it is.`
+            );
+          }
+          emittedStatements = copyOnly.kept;
           if (keptUniques.strippedCount > 0) {
             consoleLogger.debug(
               `[Nextly schema] Kept ${keptUniques.strippedCount} live unique ` +
@@ -1723,7 +1813,9 @@ export class PushSchemaPipeline {
      * The live single-column UNIQUEs a SQLite runtime table declares
      * (`uniqueColumnsToKeep`); none off SQLite's drizzle-kit route.
      */
-    uniqueColumnsFor: (tableName: string) => string[]
+    uniqueColumnsFor: (tableName: string) => string[],
+    /** Whether the live media table still has the retired `sizes` column. */
+    retainedSizes: boolean
   ): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     const foreignKeysOf = (tableName: string) =>
@@ -1759,6 +1851,9 @@ export class PushSchemaPipeline {
         out[sqlName] = value;
       }
     }
+    // The media table with the retired `sizes` column while the database
+    // still has it, so drizzle-kit plans no drop of a column Nextly keeps.
+    Object.assign(out, withRetainedSizesColumn(out, dialect, retainedSizes));
 
     // User-defined collections override system entries on conflict.
     for (const c of Object.values(desired.collections)) {
@@ -2009,6 +2104,27 @@ function sqliteSessionOf(db: unknown): SqliteForeignKeySession {
     run: async statement => {
       await client.run(sql.raw(statement));
     },
+  };
+}
+
+/**
+ * A table as the live snapshot this apply diffed against has it, for the
+ * copy-only rebuild rule, or `undefined` for one the snapshot does not hold.
+ */
+function liveTableForCopyRule(
+  live: NextlySchemaSnapshot,
+  table: string
+): LiveTable | undefined {
+  const found = live.tables.find(
+    candidate => candidate.name.toLowerCase() === table.toLowerCase()
+  );
+  if (found === undefined) return undefined;
+  return {
+    columns: found.columns.map(column => ({
+      name: column.name,
+      type: column.type,
+    })),
+    indexes: (found.indexes ?? []).map(index => index.name),
   };
 }
 

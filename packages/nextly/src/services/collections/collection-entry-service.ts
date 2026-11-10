@@ -148,6 +148,13 @@ type EveryLanguageLifecycleParams = {
    * and every language is judged against that version.
    */
   data?: Readonly<Record<string, unknown>>;
+  /**
+   * The HTTP request behind this transition, when one produced it, told to
+   * its hooks.
+   */
+  request?: Request;
+  /** Seeds the context every hook of this transition shares. */
+  context?: Record<string, unknown>;
 };
 
 /**
@@ -331,6 +338,21 @@ export class CollectionEntryService extends BaseService {
       withRuleLanguage(this.readLanguages(params), () =>
         this.queryService.listEntries(params)
       )
+    );
+  }
+
+  /**
+   * Every reason a list read would refuse this caller's query, or none. See
+   * the query service; judged in the language the read it stands for would
+   * judge its rules in, as `listEntries` is.
+   *
+   * @experimental
+   */
+  async queryReadableProblems(
+    params: Parameters<CollectionQueryService["queryReadableProblems"]>[0]
+  ): ReturnType<CollectionQueryService["queryReadableProblems"]> {
+    return withRuleLanguage(this.readLanguages(params), () =>
+      this.queryService.queryReadableProblems(params)
     );
   }
 
@@ -735,11 +757,47 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
-   * What a release's write of these entries, for its action, would be
-   * refused with by validation and field rules, judged without writing. See
+   * Whether this caller may make a write naming `nextStatus` of the entry: the
+   * lifecycle gate an update asks, only where it moves the row into or out of
+   * published, judged without writing. See the mutation service.
+   *
+   * @experimental
+   */
+  async canMoveEntryStatus(params: {
+    collectionName: string;
+    entryId: string;
+    nextStatus: string;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+    locale?: string;
+  }): Promise<boolean> {
+    return this.mutationService.canMoveEntryStatus(params);
+  }
+
+  /**
+   * Whether this caller may delete the entry, judged by the delete's own gate
+   * in every language it holds, without deleting it or running a hook. See
    * the mutation service.
    *
    * @experimental
+   */
+  async canDeleteEntry(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    /** API-key scope; judges the delete gate on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<boolean> {
+    // In every language, as `deleteEntry` asks its gate.
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.canDeleteEntry(params)
+    );
+  }
+
+  /**
+   * What a release's write of these entries, for its action, would be
+   * refused with by validation and field rules, judged without writing. See
+   * the mutation service.
    */
   async releasePublishIssues(params: {
     collectionName: string;
@@ -787,8 +845,6 @@ export class CollectionEntryService extends BaseService {
   /**
    * Each of these entries as a release would put it live, read as stored. See
    * the mutation service.
-   *
-   * @experimental
    */
   async releaseGoingLiveDocuments(params: {
     collectionName: string;
@@ -801,8 +857,6 @@ export class CollectionEntryService extends BaseService {
    * Whether a release's document-wide write of this collection would meet a
    * translation table without its per-language status. See the mutation
    * service.
-   *
-   * @experimental
    */
   async releaseCompanionLacksStatus(params: {
     collectionName: string;
@@ -813,8 +867,6 @@ export class CollectionEntryService extends BaseService {
   /**
    * The languages whose unreleased work a release's document-wide write of
    * these entries would be refused over.
-   *
-   * @experimental
    */
   async releaseHeldDraftLocales(params: {
     collectionName: string;

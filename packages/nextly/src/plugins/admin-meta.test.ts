@@ -80,6 +80,38 @@ describe("buildPluginAdminMeta", () => {
     });
   });
 
+  it("serves a field type's declared settings as declared, for the settings panel", () => {
+    const settings = [
+      { key: "max", label: "Most stars", control: "number" },
+      {
+        key: "shape",
+        label: "Shape",
+        control: "select",
+        tab: "display",
+        options: [{ label: "Star", value: "star" }],
+      },
+    ];
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            fieldTypes: [
+              {
+                type: "rating",
+                storage: "number",
+                component: "@acme/p/admin#Rating",
+                settings,
+              },
+            ],
+          },
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0].fieldTypes?.[0].settings).toEqual(settings);
+  });
+
   it("omits presentation and surfaces keys a field type does not declare", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([
@@ -190,6 +222,51 @@ describe("buildPluginAdminMeta", () => {
       undefined
     );
     expect(disabled.documentViews).toBeUndefined();
+  });
+
+  it("publishes document action overrides and panel sections on their routed slug, for an enabled plugin only", () => {
+    const declaration = {
+      ...base,
+      renameMap: { layouts: "site-layouts" },
+      contributes: {
+        admin: {
+          views: {
+            layouts: {
+              documentActions: {
+                unpublish: "hidden",
+                delete: { component: "@acme/p/admin#Remove" },
+              },
+              panelSections: [
+                { title: "Used by", component: "@acme/p/admin#Usage" },
+              ],
+            },
+          },
+        },
+      },
+    };
+    const [enabled] = buildPluginAdminMeta(asPlugins([declaration]), undefined);
+    expect(enabled.documentActions).toEqual([
+      { slug: "site-layouts", action: "unpublish", override: "hidden" },
+      {
+        slug: "site-layouts",
+        action: "delete",
+        override: { component: "@acme/p/admin#Remove" },
+      },
+    ]);
+    expect(enabled.panelSections).toEqual([
+      {
+        slug: "site-layouts",
+        title: "Used by",
+        component: "@acme/p/admin#Usage",
+      },
+    ]);
+
+    const [disabled] = buildPluginAdminMeta(
+      asPlugins([{ ...declaration, enabled: false }]),
+      undefined
+    );
+    expect(disabled.documentActions).toBeUndefined();
+    expect(disabled.panelSections).toBeUndefined();
   });
 
   it("folds contributes.admin menu/pages/settings for enabled plugins", () => {

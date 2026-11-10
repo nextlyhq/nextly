@@ -132,7 +132,8 @@ function NothingToDraw({
       <section
         aria-label="Dashboard widgets"
         data-testid="widget-grid-loading"
-        // The grid the cards will be drawn on, so the placeholders take the rows a card would.
+        // The grid the cards will be drawn on, on its fixed rows: the placeholders hold nothing a
+        // row could take its height from, so each takes the two rows a two-row card would.
         className={GRID_CLASS}
       >
         {[0, 1, 2].map(row => (

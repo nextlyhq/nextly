@@ -1979,7 +1979,11 @@ describeEachDialect("a translated field that is renamed", dialect => {
       (error: unknown) => error
     );
 
-    expect(reported(refusal)).toMatch(/nothing was changed/);
+    // Refused before any statement runs, naming the column in the way, rather than by the
+    // database once the RENAME is tried.
+    expect(reported(refusal)).toMatch(
+      /RENAME_TARGET_TAKEN.*table 'single_hero_locales' already has a column 'title2'/
+    );
     expect(await companionValues("single_hero", "heading", id)).toEqual({
       en: "Hello",
       es: "Hola",
